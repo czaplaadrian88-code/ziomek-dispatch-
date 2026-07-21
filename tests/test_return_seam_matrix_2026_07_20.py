@@ -165,17 +165,6 @@ def isolated_return_seam(tmp_path, monkeypatch):
     monkeypatch.setattr(PW, "touch_check_cursor", lambda *_a, **_kw: None)
     monkeypatch.setattr(PW, "_ignored_ids", set())
     monkeypatch.setattr(
-        PW.durable_event_apply,
-        "drain_pending",
-        lambda **_kw: {
-            "seen": 0,
-            "state_ready": 0,
-            "downstream": 0,
-            "superseded": 0,
-            "failed": 0,
-        },
-    )
-    monkeypatch.setattr(
         PCG,
         "evaluate",
         lambda *_a, **_kw: {"freeze_new": False, "suspicious": False},
@@ -187,17 +176,37 @@ def isolated_return_seam(tmp_path, monkeypatch):
     )
 
     old_release = {"enabled": False}
+    sweeper = {"enabled": False}
+    real_drain_pending = PW.durable_event_apply.drain_pending
     monkeypatch.setattr(
         PW,
         "decision_flag",
         lambda name: (
             old_release["enabled"]
             if name == "ENABLE_REASSIGN_OLD_PLAN_RELEASE"
+            else sweeper["enabled"]
+            if name == "ENABLE_STATE_OUTBOX_SWEEPER"
             else False
         ),
     )
     monkeypatch.setattr(PW, "flag", lambda *_a, **_kw: False)
     monkeypatch.setattr(C, "flag", lambda *_a, **_kw: False)
+    monkeypatch.setattr(
+        PW.durable_event_apply,
+        "drain_pending",
+        lambda **kwargs: (
+            real_drain_pending(**kwargs)
+            if sweeper["enabled"]
+            else {
+                "seen": 0,
+                "state_ready": 0,
+                "downstream": 0,
+                "superseded": 0,
+                "failed": 0,
+                "completed": 0,
+            }
+        ),
+    )
 
     # _remove_stops_on_return stays real.  Its recanon import is replaced with
     # a tiny observer so importing this lifecycle-layer test cannot reach the
@@ -205,7 +214,14 @@ def isolated_return_seam(tmp_path, monkeypatch):
     recanons = []
     fake_plan_recheck = ModuleType("dispatch_v2.plan_recheck")
 
-    def record_recanon(cid, *, reason, _raise_on_error=False):
+    def record_recanon(
+        cid,
+        *,
+        reason,
+        _raise_on_error=False,
+        _enabled_by_receipt=None,
+        _expected_order_generation=None,
+    ):
         recanons.append((str(cid), reason, bool(_raise_on_error)))
         return True
 
@@ -221,13 +237,13 @@ def isolated_return_seam(tmp_path, monkeypatch):
     real_remove_stops = PM.remove_stops
     real_write_raw = PM._write_raw
 
-    def record_remove_stops(cid, oid):
+    def record_remove_stops(cid, oid, **kwargs):
         cid = str(cid)
         oid = str(oid)
         remove_calls.append((cid, oid))
         if cid in fail_remove_for:
             raise RuntimeError("synthetic snapshot plan write failure")
-        return real_remove_stops(cid, oid)
+        return real_remove_stops(cid, oid, **kwargs)
 
     def record_write_raw(data):
         writes.append(copy.deepcopy(data))
@@ -257,6 +273,7 @@ def isolated_return_seam(tmp_path, monkeypatch):
         plans_path=plans_path,
         snapshot=snapshot,
         old_release=old_release,
+        sweeper=sweeper,
         fail_remove_for=fail_remove_for,
         remove_calls=remove_calls,
         writes=writes,
@@ -286,7 +303,7 @@ def isolated_return_seam(tmp_path, monkeypatch):
         "flag_on_raw_empty",
         "flag_on_raw_diff",
         "pending_retry_closed_duplicate",
-        "snapshot_cleanup_gap",
+        "snapshot_cleanup_retry",
     ],
 )
 def test_return_seam_matrix(case, isolated_return_seam, monkeypatch):
@@ -324,7 +341,7 @@ def test_return_seam_matrix(case, isolated_return_seam, monkeypatch):
         # plan_manager.remove_stops; the helper recanons after both calls.
         assert seam.recanons == [
             (SNAPSHOT_CID, "return", True),
-            (SNAPSHOT_CID, "return", False),
+            (SNAPSHOT_CID, "return", True),
         ]
 
     elif case == "flag_on_raw_empty":
@@ -340,7 +357,7 @@ def test_return_seam_matrix(case, isolated_return_seam, monkeypatch):
         assert len(seam.writes) == 1
         assert seam.recanons == [
             (SNAPSHOT_CID, "return", True),
-            (SNAPSHOT_CID, "return", False),
+            (SNAPSHOT_CID, "return", True),
         ]
 
     elif case == "flag_on_raw_diff":
@@ -357,7 +374,7 @@ def test_return_seam_matrix(case, isolated_return_seam, monkeypatch):
             ]
         assert seam.recanons == [
             (RAW_CID, "return", True),
-            (SNAPSHOT_CID, "return", False),
+            (SNAPSHOT_CID, "return", True),
         ]
 
     elif case == "pending_retry_closed_duplicate":
@@ -412,16 +429,20 @@ def test_return_seam_matrix(case, isolated_return_seam, monkeypatch):
             seam.recanons,
         ) == effects_after_retry, "closed duplicate must not repeat either cleanup"
 
-    elif case == "snapshot_cleanup_gap":
+    elif case == "snapshot_cleanup_retry":
         seam.fail_remove_for.add(SNAPSHOT_CID)
         seam.run(RAW_CID)
 
         first = seam.outcomes[-1]
         receipt = seam.receipt(first.event_id)
         assert first.event_created is True
-        assert first.downstream_executed is True
+        assert first.downstream_executed is False
+        assert first.failure_stage == "downstream"
         assert receipt["state_status"] == "applied"
-        assert receipt["downstream_status"] == "applied"
+        assert receipt["downstream_status"] == "pending"
+        assert receipt["state_event"]["payload"][
+            "return_snapshot_cleanup_courier_id"
+        ] == SNAPSHOT_CID
         assert seam.remove_calls == [
             (RAW_CID, ORDER_ID),
             (SNAPSHOT_CID, ORDER_ID),
@@ -432,20 +453,417 @@ def test_return_seam_matrix(case, isolated_return_seam, monkeypatch):
             for s in seam.plans()[SNAPSHOT_CID]["stops"]
         )
 
+        seam.fail_remove_for.clear()
+        with sqlite3.connect(seam.events_db) as conn:
+            conn.execute(
+                "UPDATE state_apply_outbox "
+                "SET updated_at='2000-01-01T00:00:00+00:00' "
+                "WHERE event_id=?",
+                (first.event_id,),
+            )
+        seam.sweeper["enabled"] = True
+        sweep = seam.PW._sweep_state_apply_outbox()
+
+        assert sweep["state_outbox_sweeper_completed"] == 1
+        assert sweep["durable_downstream_recovered"] == 1
+        assert seam.receipt(first.event_id)["downstream_status"] == "applied"
+        assert seam.remove_calls == [
+            (RAW_CID, ORDER_ID),
+            (SNAPSHOT_CID, ORDER_ID),
+            (RAW_CID, ORDER_ID),
+            (SNAPSHOT_CID, ORDER_ID),
+        ]
+        assert len(seam.writes) == 2
+        assert [
+            s["order_id"] for s in seam.plans()[SNAPSHOT_CID]["stops"]
+        ] == [f"keep-{SNAPSHOT_CID}"]
+
+        effects_after_sweep = (
+            list(seam.remove_calls),
+            len(seam.writes),
+            list(seam.recanons),
+        )
         seam.run(RAW_CID)
         duplicate = seam.outcomes[-1]
         assert duplicate.event_created is False
         assert duplicate.downstream_executed is False
-        # znana luka, poza receipt: snapshot-cleanup runs after the durable
-        # callback is closed; its swallowed failure is not retried by duplicate.
-        assert seam.remove_calls == [
-            (RAW_CID, ORDER_ID),
-            (SNAPSHOT_CID, ORDER_ID),
-        ]
-        assert any(
-            s["order_id"] == ORDER_ID
-            for s in seam.plans()[SNAPSHOT_CID]["stops"]
-        )
+        assert (
+            seam.remove_calls,
+            len(seam.writes),
+            seam.recanons,
+        ) == effects_after_sweep, "closed receipt must remain side-effect free"
 
     else:  # pragma: no cover - parametrization is exhaustive
         raise AssertionError(case)
+
+
+@pytest.mark.parametrize("tick_authorized", [False, True])
+def test_return_snapshot_and_receipt_share_one_flag_snapshot(
+    isolated_return_seam, monkeypatch, tick_authorized
+):
+    """Hot-flip w środku emisji nie może rozdzielić snapshot CID od markera."""
+    seam = isolated_return_seam
+    release_reads = []
+
+    def tick_flag(name):
+        if name == "ENABLE_REASSIGN_OLD_PLAN_RELEASE":
+            release_reads.append(name)
+            return tick_authorized
+        return False
+
+    monkeypatch.setattr(seam.PW, "decision_flag", tick_flag)
+
+    seam.run(RAW_CID)
+
+    receipt = seam.receipt(seam.outcomes[-1].event_id)["state_event"]
+    assert release_reads == ["ENABLE_REASSIGN_OLD_PLAN_RELEASE"]
+    assert receipt.get("return_previous_cleanup_authorized") is tick_authorized
+    assert (
+        receipt["payload"].get("return_snapshot_cleanup_courier_id")
+        == SNAPSHOT_CID
+    ) is tick_authorized
+
+
+def test_return_retry_after_effect_before_receipt_is_plan_write_idempotent(
+    isolated_return_seam, monkeypatch
+):
+    """At-least-once callback po crash-window nie powtarza mutacji planu."""
+    seam = isolated_return_seam
+    seam.old_release["enabled"] = True
+    real_mark = seam.EB.mark_state_apply_downstream
+    mark_attempts = {"count": 0}
+
+    def fail_first_receipt_mark(event_id):
+        mark_attempts["count"] += 1
+        if mark_attempts["count"] == 1:
+            return False
+        return real_mark(event_id)
+
+    monkeypatch.setattr(
+        seam.EB, "mark_state_apply_downstream", fail_first_receipt_mark
+    )
+    seam.run(RAW_CID)
+
+    first = seam.outcomes[-1]
+    assert first.failure_stage == "downstream"
+    assert seam.receipt(first.event_id)["downstream_status"] == "pending"
+    assert len(seam.writes) == 2
+    for cid in (RAW_CID, SNAPSHOT_CID):
+        assert [s["order_id"] for s in seam.plans()[cid]["stops"]] == [
+            f"keep-{cid}"
+        ]
+
+    # Legalna nowsza generacja: order jest znow przypisany do snapshot CID,
+    # a jego nowy plan ponownie zawiera ten sam stop. Fixture zapisuje stan
+    # po ASSIGNED bez uruchamiania drugiego lifecycle callbacku w tym tescie.
+    seam.SM.upsert_order(
+        ORDER_ID,
+        {
+            "status": "assigned",
+            "commitment_level": "assigned",
+            "courier_id": SNAPSHOT_CID,
+            "last_lifecycle_event_id": "assign-after-return-callback",
+            "last_lifecycle_event_id_courier_assigned": (
+                "assign-after-return-callback"
+            ),
+        },
+        event="TEST_NEW_ASSIGNMENT_GENERATION",
+    )
+    newer_plans = seam.plans()
+    newer_plans[SNAPSHOT_CID]["stops"].insert(
+        0, {"order_id": ORDER_ID, "type": "dropoff"}
+    )
+    newer_plans[SNAPSHOT_CID]["plan_version"] += 1
+    seam.plans_path.write_text(json.dumps(newer_plans), encoding="utf-8")
+
+    with sqlite3.connect(seam.events_db) as conn:
+        conn.execute(
+            "UPDATE state_apply_outbox "
+            "SET updated_at='2000-01-01T00:00:00+00:00' WHERE event_id=?",
+            (first.event_id,),
+        )
+    seam.sweeper["enabled"] = True
+    sweep = seam.PW._sweep_state_apply_outbox()
+
+    assert sweep["state_outbox_sweeper_completed"] == 1
+    assert seam.receipt(first.event_id)["downstream_status"] == "applied"
+    assert len(seam.writes) == 2, "retry nie moze ponownie zapisac planu"
+    assert any(
+        stop["order_id"] == ORDER_ID
+        for stop in seam.plans()[SNAPSHOT_CID]["stops"]
+    ), "stary RETURN nie moze usunac stopa nowszej generacji"
+    assert seam.remove_calls == [
+        (RAW_CID, ORDER_ID),
+        (SNAPSHOT_CID, ORDER_ID),
+        (RAW_CID, ORDER_ID),
+    ]
+    # Callback jest świadomie at-least-once: retry powtarza recanon RAW_CID,
+    # żeby crash po remove_stops, ale przed recanonem nie zgubil drugiej fazy.
+    # Snapshot CID jest juz aktywna nowsza generacja, wiec stary callback go
+    # nie dotyka.
+    assert len(seam.recanons) == 3
+
+
+def test_return_persisted_snapshot_cleanup_survives_flag_off_before_retry(
+    isolated_return_seam,
+):
+    """OFF blokuje nowe wpisy, lecz exact receipt ON musi zostac domkniety."""
+    seam = isolated_return_seam
+    seam.old_release["enabled"] = True
+    seam.fail_remove_for.add(SNAPSHOT_CID)
+    seam.run(RAW_CID)
+
+    first = seam.outcomes[-1]
+    assert seam.receipt(first.event_id)["downstream_status"] == "pending"
+    assert any(
+        stop["order_id"] == ORDER_ID
+        for stop in seam.plans()[SNAPSHOT_CID]["stops"]
+    )
+
+    seam.fail_remove_for.clear()
+    seam.old_release["enabled"] = False
+    with sqlite3.connect(seam.events_db) as conn:
+        conn.execute(
+            "UPDATE state_apply_outbox "
+            "SET updated_at='2000-01-01T00:00:00+00:00' WHERE event_id=?",
+            (first.event_id,),
+        )
+    seam.sweeper["enabled"] = True
+    sweep = seam.PW._sweep_state_apply_outbox()
+
+    assert sweep["state_outbox_sweeper_completed"] == 1
+    assert seam.receipt(first.event_id)["downstream_status"] == "applied"
+    assert not any(
+        stop["order_id"] == ORDER_ID
+        for stop in seam.plans()[SNAPSHOT_CID]["stops"]
+    ), "OFF nie moze uciac cleanupu autoryzowanego w exact receipt"
+
+
+def test_return_cleans_raw_current_and_snapshot_courier_provenance(
+    isolated_return_seam,
+):
+    """Wyścig A(snapshot)->B(current), raw=C nie może zgubić planu B."""
+    seam = isolated_return_seam
+    current_cid = "300"
+    seam.old_release["enabled"] = True
+    seam.SM.upsert_order(
+        ORDER_ID,
+        {
+            "status": "assigned",
+            "commitment_level": "assigned",
+            "courier_id": current_cid,
+        },
+        event="TEST_CURRENT_CID_CHANGED_AFTER_SNAPSHOT",
+    )
+    plans = seam.plans()
+    plans[current_cid] = _plan(current_cid)
+    seam.plans_path.write_text(json.dumps(plans), encoding="utf-8")
+
+    seam.run(RAW_CID)
+
+    receipt = seam.receipt(seam.outcomes[-1].event_id)
+    assert receipt["state_event"]["previous_courier_id"] == current_cid
+    assert seam.remove_calls == [
+        (RAW_CID, ORDER_ID),
+        (current_cid, ORDER_ID),
+        (SNAPSHOT_CID, ORDER_ID),
+    ]
+    for cid in (RAW_CID, current_cid, SNAPSHOT_CID):
+        assert all(
+            stop["order_id"] != ORDER_ID
+            for stop in seam.plans()[cid]["stops"]
+        )
+
+
+def test_return_retry_replays_recanon_after_flag_off_if_remove_was_durable(
+    isolated_return_seam, monkeypatch
+):
+    """Flip OFF po remove nie moze zamknac receipt bez brakujacego recanonu."""
+    seam = isolated_return_seam
+    seam.old_release["enabled"] = True
+    recanon_attempts = []
+    failed_snapshot = {"value": False}
+
+    def fail_snapshot_recanon_once(
+        cid,
+        *,
+        reason,
+        _raise_on_error=False,
+        _enabled_by_receipt=None,
+        _expected_order_generation=None,
+    ):
+        recanon_attempts.append((str(cid), reason, bool(_raise_on_error)))
+        if str(cid) == SNAPSHOT_CID and not failed_snapshot["value"]:
+            failed_snapshot["value"] = True
+            raise RuntimeError("synthetic crash after snapshot remove")
+        return True
+
+    monkeypatch.setattr(
+        sys.modules["dispatch_v2.plan_recheck"],
+        "recanon_courier",
+        fail_snapshot_recanon_once,
+    )
+    seam.run(RAW_CID)
+
+    first = seam.outcomes[-1]
+    assert first.failure_stage == "downstream"
+    assert seam.receipt(first.event_id)["downstream_status"] == "pending"
+    assert len(seam.writes) == 2
+
+    seam.old_release["enabled"] = False
+    with sqlite3.connect(seam.events_db) as conn:
+        conn.execute(
+            "UPDATE state_apply_outbox "
+            "SET updated_at='2000-01-01T00:00:00+00:00' WHERE event_id=?",
+            (first.event_id,),
+        )
+    seam.sweeper["enabled"] = True
+    sweep = seam.PW._sweep_state_apply_outbox()
+
+    assert sweep["state_outbox_sweeper_completed"] == 1
+    assert seam.receipt(first.event_id)["downstream_status"] == "applied"
+    assert len(seam.writes) == 2, "retry remove_stops pozostaje store no-op"
+    assert recanon_attempts == [
+        (RAW_CID, "return", True),
+        (SNAPSHOT_CID, "return", True),
+        (RAW_CID, "return", True),
+        (SNAPSHOT_CID, "return", True),
+    ]
+
+
+def test_return_cleanup_race_cas_preserves_new_generation(
+    isolated_return_seam, monkeypatch
+):
+    """Nowy plan po prechecku wygrywa CAS; retry zamyka receipt bez usunięcia."""
+    seam = isolated_return_seam
+    seam.old_release["enabled"] = True
+    monkeypatch.setattr(
+        seam.PW,
+        "flag",
+        lambda name, *args, **kwargs: (
+            name == "ENABLE_INVALIDATE_PLAN_ON_BAG_CHANGE"
+        ),
+    )
+    monkeypatch.setattr(
+        seam.C,
+        "flag",
+        lambda name, *args, **kwargs: (
+            name == "ENABLE_INVALIDATE_PLAN_ON_BAG_CHANGE"
+        ),
+    )
+    real_cleanup = seam.PW._remove_stops_on_return
+    raced = {"value": False}
+
+    def assign_and_write_new_plan_before_cleanup(cid, oid, **kwargs):
+        if not raced["value"]:
+            raced["value"] = True
+            seam.SM.upsert_order(
+                ORDER_ID,
+                {
+                    "status": "assigned",
+                    "commitment_level": "assigned",
+                    "courier_id": SNAPSHOT_CID,
+                    "last_lifecycle_event_id": "assign-raced-return",
+                    "last_lifecycle_event_id_courier_assigned": (
+                        "assign-raced-return"
+                    ),
+                },
+                event="TEST_RACING_ASSIGNMENT",
+            )
+            plans = seam.plans()
+            plans[SNAPSHOT_CID]["plan_version"] += 1
+            seam.plans_path.write_text(json.dumps(plans), encoding="utf-8")
+        return real_cleanup(cid, oid, **kwargs)
+
+    monkeypatch.setattr(
+        seam.PW,
+        "_remove_stops_on_return",
+        assign_and_write_new_plan_before_cleanup,
+    )
+    seam.run(SNAPSHOT_CID)
+
+    outcome = seam.outcomes[-1]
+    plan = seam.plans()[SNAPSHOT_CID]
+    assert outcome.failure_stage == "downstream"
+    assert seam.receipt(outcome.event_id)["downstream_status"] == "pending"
+    assert plan["invalidated_at"] is None
+    assert any(str(s.get("order_id")) == ORDER_ID for s in plan["stops"])
+    assert seam.SM.get_order_strict(ORDER_ID)["courier_id"] == SNAPSHOT_CID
+
+    with sqlite3.connect(seam.events_db) as conn:
+        conn.execute(
+            "UPDATE state_apply_outbox "
+            "SET updated_at='2000-01-01T00:00:00+00:00' WHERE event_id=?",
+            (outcome.event_id,),
+        )
+    seam.sweeper["enabled"] = True
+    sweep = seam.PW._sweep_state_apply_outbox()
+    assert sweep["state_outbox_sweeper_completed"] == 1
+    assert seam.receipt(outcome.event_id)["downstream_status"] == "applied"
+    assert any(
+        str(s.get("order_id")) == ORDER_ID
+        for s in seam.plans()[SNAPSHOT_CID]["stops"]
+    )
+
+
+def test_return_cleanup_race_flag_off_cas_preserves_new_generation(
+    isolated_return_seam, monkeypatch
+):
+    """CAS chroni nową generację także gdy receipt nie autoryzuje repair."""
+    seam = isolated_return_seam
+    seam.old_release["enabled"] = True
+    real_cleanup = seam.PW._remove_stops_on_return
+    raced = {"value": False}
+
+    def assign_and_write_new_plan_before_cleanup(cid, oid, **kwargs):
+        if not raced["value"]:
+            raced["value"] = True
+            seam.SM.upsert_order(
+                ORDER_ID,
+                {
+                    "status": "assigned",
+                    "commitment_level": "assigned",
+                    "courier_id": SNAPSHOT_CID,
+                    "last_lifecycle_event_id": "assign-raced-return-off",
+                    "last_lifecycle_event_id_courier_assigned": (
+                        "assign-raced-return-off"
+                    ),
+                },
+                event="TEST_RACING_ASSIGNMENT_OFF",
+            )
+            plans = seam.plans()
+            plans[SNAPSHOT_CID]["plan_version"] += 1
+            seam.plans_path.write_text(json.dumps(plans), encoding="utf-8")
+        return real_cleanup(cid, oid, **kwargs)
+
+    monkeypatch.setattr(
+        seam.PW,
+        "_remove_stops_on_return",
+        assign_and_write_new_plan_before_cleanup,
+    )
+    seam.run(SNAPSHOT_CID)
+
+    outcome = seam.outcomes[-1]
+    receipt = seam.receipt(outcome.event_id)
+    plan = seam.plans()[SNAPSHOT_CID]
+    assert receipt["state_event"][
+        "invalidate_plan_on_bag_change_authorized"
+    ] is False
+    assert outcome.failure_stage == "downstream"
+    assert receipt["downstream_status"] == "pending"
+    assert plan["invalidated_at"] is None
+    assert any(
+        str(stop.get("order_id")) == ORDER_ID for stop in plan["stops"]
+    )
+    assert seam.SM.get_order_strict(ORDER_ID)["courier_id"] == SNAPSHOT_CID
+
+    with sqlite3.connect(seam.events_db) as conn:
+        conn.execute(
+            "UPDATE state_apply_outbox "
+            "SET updated_at='2000-01-01T00:00:00+00:00' WHERE event_id=?",
+            (outcome.event_id,),
+        )
+    seam.sweeper["enabled"] = True
+    sweep = seam.PW._sweep_state_apply_outbox()
+    assert sweep["state_outbox_sweeper_completed"] == 1
+    assert seam.receipt(outcome.event_id)["downstream_status"] == "applied"

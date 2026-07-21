@@ -24,7 +24,7 @@ import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from dispatch_v2 import plan_manager
 # D.3 fala A (2026-07-02): flagi route/kanon czytane z flags.json (KANON) przez
@@ -210,6 +210,131 @@ def _load_orders_state() -> Dict[str, Any]:
     except Exception as e:
         _log.warning(f"orders_state load fail: {e}")
         return {}
+
+
+def _active_bag_oids(cid: str, orders_state: Dict[str, Any]) -> List[str]:
+    return [
+        str(oid)
+        for oid, record in orders_state.items()
+        if isinstance(record, dict)
+        and record.get("status") in ACTIVE_STATUSES
+        and str(record.get("courier_id") or "") == str(cid)
+    ]
+
+
+def _state_bag_fence_token(
+    oids: List[str], orders_state: Dict[str, Any]
+) -> Tuple[Tuple[str, bool, str, str, str, str], ...]:
+    """Strong generation token; F2 bag_signature is intentionally weaker."""
+    rows = []
+    for oid in sorted(map(str, oids)):
+        raw = orders_state.get(oid)
+        record = raw if isinstance(raw, dict) else {}
+        rows.append(
+            (
+                oid,
+                isinstance(raw, dict),
+                str(record.get("status") or ""),
+                str(record.get("courier_id") or ""),
+                str(record.get("updated_at") or ""),
+                str(record.get("last_lifecycle_event_id") or ""),
+            )
+        )
+    return tuple(rows)
+
+
+def _run_if_bag_current(
+    cid: str,
+    oids: List[str],
+    orders_state: Dict[str, Any],
+    mutation_fn: Callable[[], None],
+    *,
+    writer: str,
+    current_state_fn: Optional[Callable[[], Dict[str, Any]]] = None,
+    expected_order_generations: Optional[
+        List[Tuple[str, Optional[dict]]]
+    ] = None,
+) -> bool:
+    """Serialize final state-generation validation with one plan mutation.
+
+    Plan-recheck reads state before plans.  Without a final state fence it can
+    read returned/assigned state T1, observe a plan only after RETURN/reassign
+    removed T1's stop, and then legally CAS-write that stale stop back.  The
+    shared lifecycle lock makes the final bag validation and plan save atomic
+    with respect to every canonical orders_state transition.
+    """
+    from dispatch_v2 import state_machine
+
+    expected_token = _state_bag_fence_token(oids, orders_state)
+    with state_machine.lifecycle_apply_lock():
+        current = (
+            current_state_fn()
+            if current_state_fn is not None
+            else state_machine.get_all_strict()
+        )
+        if not isinstance(current, dict):
+            raise RuntimeError(
+                f"state fence reader returned {type(current).__name__}, expected dict"
+            )
+        current_oids = _active_bag_oids(cid, current)
+        current_token = _state_bag_fence_token(current_oids, current)
+        if current_token != expected_token:
+            _log.warning(
+                "PLAN_STATE_FENCE_SKIP writer=%s cid=%s "
+                "expected_count=%s current_count=%s",
+                writer,
+                cid,
+                len(expected_token),
+                len(current_token),
+            )
+            return False
+        for expected_oid, expected_record in expected_order_generations or []:
+            expected_one = _state_bag_fence_token(
+                [str(expected_oid)],
+                {
+                    str(expected_oid): expected_record
+                    if isinstance(expected_record, dict)
+                    else None
+                },
+            )
+            current_one = _state_bag_fence_token(
+                [str(expected_oid)], current
+            )
+            if current_one != expected_one:
+                _log.warning(
+                    "PLAN_STATE_FENCE_SKIP writer=%s cid=%s oid=%s "
+                    "reason=lifecycle_generation_changed",
+                    writer,
+                    cid,
+                    expected_oid,
+                )
+                return False
+        mutation_fn()
+    return True
+
+
+def _save_plan_if_bag_current(
+    cid: str,
+    oids: List[str],
+    orders_state: Dict[str, Any],
+    save_fn: Callable[[], None],
+) -> bool:
+    """Final fence for periodic gap-fill/retime plan writes."""
+    return _run_if_bag_current(
+        cid, oids, orders_state, save_fn, writer="gap_fill"
+    )
+
+
+def _save_recanon_plan_if_bag_current(
+    cid: str,
+    oids: List[str],
+    orders_state: Dict[str, Any],
+    save_fn: Callable[[], None],
+) -> bool:
+    """Final fence dla recanonu wywołanego przez durable lifecycle."""
+    return _run_if_bag_current(
+        cid, oids, orders_state, save_fn, writer="recanon"
+    )
 
 
 def _now_utc() -> datetime:
@@ -660,7 +785,9 @@ def _last_known_pos_anchor(cid: str, now: datetime) -> Optional[Tuple[float, flo
 
 def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
                       gps_positions: Dict[str, Any], now: datetime,
-                      R: Any, *, expected_version: int) -> bool:
+                      R: Any, *, expected_version: int,
+                      _raise_on_corrupt: bool = False,
+                      _state_fenced_save: Optional[Callable[..., bool]] = None) -> bool:
     """Wygeneruj+zapisz plan Ziomka dla faktycznego worka kuriera.
 
     Zwraca True gdy zapisano, False gdy skip (worek za duży / brak GPS / brak
@@ -1038,8 +1165,25 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
                 f"fresh_r6={_fresh_breach.get('r6_max_min')} "
                 f"exist_r6={(_exist_breach or {}).get('r6_max_min')} — zapisuję świeży")
 
+    def _save() -> None:
+        if _raise_on_corrupt:
+            plan_manager.save_plan(
+                cid,
+                body,
+                expected_version=expected_version,
+                _raise_on_corrupt=True,
+            )
+        else:
+            plan_manager.save_plan(
+                cid, body, expected_version=expected_version
+            )
+
     try:
-        plan_manager.save_plan(cid, body, expected_version=expected_version)
+        if (_state_fenced_save is not None
+                and not _state_fenced_save(cid, oids, orders_state, _save)):
+            return False
+        if _state_fenced_save is None:
+            _save()
     except plan_manager.ConcurrencyError as e:
         _log.warning(
             f"PLAN_CAS_SKIP writer=regen cid={cid} "
@@ -2049,7 +2193,9 @@ def _operator_pin_hard_report(cid, final_stops, orders_state,
 
 def _retime_one_bag_plan(cid: str, plan: Dict[str, Any], oids: List[str],
                          orders_state: Dict[str, Any],
-                         gps_positions: Dict[str, Any], now: datetime) -> bool:
+                         gps_positions: Dict[str, Any], now: datetime, *,
+                         _raise_on_corrupt: bool = False,
+                         _state_fenced_save: Optional[Callable[..., bool]] = None) -> bool:
     """F2 RE-CZASOWANIE: przelicz predicted_at wzdłuż ISTNIEJĄCEJ, STAŁEJ sekwencji.
 
     Ziomek zdecydował kolejność przy zmianie worka; tu tylko odświeżamy czasy
@@ -2142,8 +2288,25 @@ def _retime_one_bag_plan(cid: str, plan: Dict[str, Any], oids: List[str],
         "bag_signature": plan.get("bag_signature") or _bag_signature(oids, orders_state),
         "retimed_at": now.isoformat(),
     }
+    def _save() -> None:
+        if _raise_on_corrupt:
+            plan_manager.save_plan(
+                cid,
+                body,
+                expected_version=expected_version,
+                _raise_on_corrupt=True,
+            )
+        else:
+            plan_manager.save_plan(
+                cid, body, expected_version=expected_version
+            )
+
     try:
-        plan_manager.save_plan(cid, body, expected_version=expected_version)
+        if (_state_fenced_save is not None
+                and not _state_fenced_save(cid, oids, orders_state, _save)):
+            return False
+        if _state_fenced_save is None:
+            _save()
     except plan_manager.ConcurrencyError as e:
         _log.warning(
             f"PLAN_CAS_SKIP writer=retime cid={cid} "
@@ -2379,7 +2542,8 @@ def redecide_courier(courier_id: str, orders_state: Optional[Dict[str, Any]] = N
                      gps_positions: Optional[Dict[str, Any]] = None,
                      now: Optional[datetime] = None,
                      reason: str = "override", *,
-                     _raise_on_error: bool = False) -> bool:
+                     _raise_on_error: bool = False,
+                     _enabled_by_receipt: Optional[bool] = None) -> bool:
     """F3: natychmiastowa decyzja sekwencji dla JEDNEGO kuriera (wywoływana z
     panel_watcher na zmianę worka: override/reassign LUB odebranie zlecenia),
     bez czekania na 5-min tick.
@@ -2392,10 +2556,16 @@ def redecide_courier(courier_id: str, orders_state: Optional[Dict[str, Any]] = N
     nigdy nie rzuca. reason: 'override' (flaga F3) / 'pickup' (osobna flaga).
     """
     _refresh_d3_fala_a_flags()  # D.3 fala A: hot-reload flag kanonu w pw przed bramką
-    if reason == "pickup":
-        if not ENABLE_IMMEDIATE_REDECIDE_ON_PICKUP:
-            return False
-    elif not ENABLE_IMMEDIATE_REDECIDE_ON_OVERRIDE:
+    enabled = (
+        (
+            ENABLE_IMMEDIATE_REDECIDE_ON_PICKUP
+            if reason == "pickup"
+            else ENABLE_IMMEDIATE_REDECIDE_ON_OVERRIDE
+        )
+        if _enabled_by_receipt is None
+        else bool(_enabled_by_receipt)
+    )
+    if not enabled:
         return False
     try:
         from dispatch_v2 import route_simulator_v2 as R
@@ -2422,7 +2592,11 @@ def redecide_courier(courier_id: str, orders_state: Optional[Dict[str, Any]] = N
         # nadpisywałby świeże trasy z propozycji).
         # Jeden surowy snapshot daje jednoczesnie tresc i token CAS, takze dla
         # wpisu invalidated (load_plan ukrywa go jako None).
-        _raw_plan = plan_manager.load_plans().get(cid)
+        _raw_plan = (
+            plan_manager.load_plans(_raise_on_corrupt=True)
+            if _raise_on_error
+            else plan_manager.load_plans()
+        ).get(cid)
         expected_version = (_raw_plan or {}).get("plan_version", 0)
         if (not isinstance(expected_version, int)
                 or isinstance(expected_version, bool)):
@@ -2447,6 +2621,7 @@ def redecide_courier(courier_id: str, orders_state: Optional[Dict[str, Any]] = N
         ok = _gen_one_bag_plan(
             cid, oids, orders_state, gps_positions, now, R,
             expected_version=expected_version,
+            _raise_on_corrupt=_raise_on_error,
         )
         if ok:
             _log.info(f"REDECIDE_ON_{reason.upper()} cid={cid} bag={len(oids)}")
@@ -2461,7 +2636,11 @@ def redecide_courier(courier_id: str, orders_state: Optional[Dict[str, Any]] = N
 def recanon_courier(courier_id: str, orders_state: Optional[Dict[str, Any]] = None,
                     gps_positions: Optional[Dict[str, Any]] = None,
                     now: Optional[datetime] = None, reason: str = "event", *,
-                    _raise_on_error: bool = False) -> bool:
+                    _raise_on_error: bool = False,
+                    _enabled_by_receipt: Optional[bool] = None,
+                    _expected_order_generation: Optional[
+                        Tuple[str, Optional[dict]]
+                    ] = None) -> bool:
     """RECANON-ON-WRITE: re-egzekwuj niezmienniki kanonu (carried-first floor +
     odbiory wg committed + relax „po drodze") na ISTNIEJĄCYM planie kuriera
     NATYCHMIAST po zdarzeniu worka (odbiór/dostawa/przydział), bez czekania ≤5 min
@@ -2475,7 +2654,12 @@ def recanon_courier(courier_id: str, orders_state: Optional[Dict[str, Any]] = No
     Determinizm niezmienników (carried-first + committed) gwarantuje brak oscylacji
     między zdarzeniem a tickiem (ta sama transformacja co F6/F2)."""
     _refresh_d3_fala_a_flags()  # D.3 fala A: hot-reload flag kanonu w pw przed bramką
-    if not ENABLE_RECANON_ON_WRITE:
+    enabled = (
+        ENABLE_RECANON_ON_WRITE
+        if _enabled_by_receipt is None
+        else bool(_enabled_by_receipt)
+    )
+    if not enabled:
         return False
     try:
         cid = str(courier_id)
@@ -2492,7 +2676,12 @@ def recanon_courier(courier_id: str, orders_state: Optional[Dict[str, Any]] = No
                 and rec.get("status") in ACTIVE_STATUSES]
         if not oids:
             return False
-        plan = plan_manager.load_plan(cid)
+        if _raise_on_error:
+            plan = plan_manager.load_plan(cid, _raise_on_corrupt=True)
+        else:
+            # Zachowaj publiczny legacy call-shape dla best-effort callerów i
+            # ich adapterów; prywatny strict-read istnieje tylko dla receiptu.
+            plan = plan_manager.load_plan(cid)
         if not plan or not plan.get("stops"):
             return False  # brak/invalidated plan → decyzja należy do _gen/ticku
         covered = {str(s.get("order_id")) for s in plan.get("stops", [])}
@@ -2502,7 +2691,43 @@ def recanon_courier(courier_id: str, orders_state: Optional[Dict[str, Any]] = No
             gps_positions = _load_gps_positions()
         if now is None:
             now = datetime.now(timezone.utc)
-        ok = _retime_one_bag_plan(cid, plan, oids, orders_state, gps_positions, now)
+        state_fenced_save = None
+        if _raise_on_error:
+            if _expected_order_generation is None:
+                state_fenced_save = _save_recanon_plan_if_bag_current
+            else:
+                def state_fenced_save(
+                    fenced_cid, fenced_oids, fenced_state, save_fn
+                ):
+                    return _run_if_bag_current(
+                        fenced_cid,
+                        fenced_oids,
+                        fenced_state,
+                        save_fn,
+                        writer="recanon",
+                        expected_order_generations=[
+                            _expected_order_generation
+                        ],
+                    )
+
+        ok = _retime_one_bag_plan(
+            cid,
+            plan,
+            oids,
+            orders_state,
+            gps_positions,
+            now,
+            _raise_on_corrupt=_raise_on_error,
+            # Durable callback działa poza krótkim state lockiem, bo OSRM może
+            # być wolny. Sam zapis musi jednak ponownie wejść pod ten lock i
+            # porównać dokładną generację worka; CAS plan_version nie wykrywa
+            # równoległej zmiany orders_state bez writera planu.
+            _state_fenced_save=state_fenced_save,
+        )
+        # False jest poprawnym, trwałym no-opem (brak kotwicy/OSRM albo state
+        # fence wykrył nowszą generację). Nie może trzymać causal FIFO w
+        # nieskończoność; okresowy recheck lub własny receipt nowszej generacji
+        # domknie kanon. Prawdziwe błędy/CAS nadal rzucają w trybie strict.
         if ok:
             _log.info(f"RECANON_ON_{reason.upper()} cid={cid} bag={len(oids)}")
         return ok
@@ -2512,6 +2737,8 @@ def recanon_courier(courier_id: str, orders_state: Optional[Dict[str, Any]] = No
             f"expected={e.expected_version} current={e.current_version} "
             f"policy=keep_current"
         )
+        if _raise_on_error:
+            raise
         return False
     except Exception as e:
         _log.warning(f"recanon_courier cid={courier_id} fail: {type(e).__name__}: {e}")
@@ -2551,7 +2778,8 @@ def _pickup_approaching(oids: List[str], orders_state: Dict[str, Any],
 
 def _gap_fill_plans(orders_state: Dict[str, Any], plans: Dict[str, Any],
                     gps_positions: Dict[str, Any], now: datetime,
-                    summary: Dict[str, Any]) -> None:
+                    summary: Dict[str, Any], *,
+                    _state_fenced_save: Optional[Callable[..., bool]] = None) -> None:
     """Dla kuriera z realnym workiem bez planu LUB z planem CZĘŚCIOWYM →
     wygeneruj plan Ziomka i zapisz, by apka pokazała ziomek_plan zamiast
     fallback_nn.
@@ -2609,7 +2837,10 @@ def _gap_fill_plans(orders_state: Dict[str, Any], plans: Dict[str, Any],
             if valid and existing.get("bag_signature") == _bag_signature(oids, orders_state):
                 # Worek bez zmian (skład + picked_up) → TYLKO re-czasuj, nie permutuj.
                 try:
-                    if _retime_one_bag_plan(cid, existing, oids, orders_state, gps_positions, now):
+                    if _retime_one_bag_plan(
+                        cid, existing, oids, orders_state, gps_positions, now,
+                        _state_fenced_save=_state_fenced_save,
+                    ):
                         summary["bag_plans_retimed"] += 1
                         _bug4_reseq_shadow(cid, oids, existing, orders_state,
                                            gps_positions, now, R, summary)
@@ -2627,6 +2858,7 @@ def _gap_fill_plans(orders_state: Dict[str, Any], plans: Dict[str, Any],
                 ok = _gen_one_bag_plan(
                     cid, oids, orders_state, gps_positions, now, R,
                     expected_version=expected_version,
+                    _state_fenced_save=_state_fenced_save,
                 )
             except Exception as e:
                 summary["bag_plans_skipped"] += 1
@@ -2656,6 +2888,7 @@ def _gap_fill_plans(orders_state: Dict[str, Any], plans: Dict[str, Any],
             ok = _gen_one_bag_plan(
                 cid, oids, orders_state, gps_positions, now, R,
                 expected_version=expected_version,
+                _state_fenced_save=_state_fenced_save,
             )
         except Exception as e:
             summary["bag_plans_skipped"] += 1
@@ -2712,7 +2945,10 @@ def _refresh_live_eta_from_plans(plans: Dict[str, Any], summary: Dict[str, Any])
 
 def _gc_courier_plans(orders_state: Dict[str, Any], now: datetime,
                       summary: Dict[str, Any], dry_run: bool,
-                      max_age_h: float) -> Dict[str, Any]:
+                      max_age_h: float, *,
+                      _current_state_fn: Optional[
+                          Callable[[], Dict[str, Any]]
+                      ] = None) -> Dict[str, Any]:
     """L3 (F2/K2) — GC courier_plans.json. WYŁĄCZNIE istniejące plan_manager API
     pod fcntl-lockiem (remove_stops / invalidate_plan / gc_invalidated) — ZERO
     nowej ścieżki mutacji, ZERO gołego json.dump.
@@ -2735,6 +2971,7 @@ def _gc_courier_plans(orders_state: Dict[str, Any], now: datetime,
         summary.update(rep)
         return rep
     cutoff = now.timestamp() - float(max_age_h) * 3600.0
+    age_gc_candidates: List[str] = []
     for cid, plan in list(plans.items()):
         if not isinstance(plan, dict):
             continue
@@ -2747,20 +2984,52 @@ def _gc_courier_plans(orders_state: Dict[str, Any], now: datetime,
                 inv_ts = None  # bad ts → gc_invalidated też pominie (parytet)
             if inv_ts is not None and inv_ts < cutoff:
                 rep["gc_age_removed"] += 1
+                age_gc_candidates.append(str(cid))
                 _log.info(f"GC_AGE_ZOMBIE cid={cid} created={plan.get('created_at')} "
                           f"inv={inv} dry_run={dry_run}")
             continue
         active = _l3_active_dropoff_oids(plan, orders_state)
         if not active:
+            classified_plan_version = plan.get("plan_version")
+            if (not isinstance(classified_plan_version, int)
+                    or isinstance(classified_plan_version, bool)):
+                _log.warning(
+                    "PLAN_CAS_TOKEN_MISSING writer=gc_no_active cid=%s "
+                    "value=%r policy=keep_current",
+                    cid,
+                    classified_plan_version,
+                )
+                continue
             rep["gc_no_active_invalidated"] += 1
             _log.info(f"GC_NO_ACTIVE cid={cid} created={plan.get('created_at')} "
                       f"stops={len(plan.get('stops') or [])} dry_run={dry_run}")
             if not dry_run:
                 try:
-                    plan_manager.invalidate_plan(
+                    def _invalidate_no_active() -> None:
+                        current_plan = plan_manager.load_plans(
+                            _raise_on_corrupt=True
+                        ).get(cid)
+                        if (not isinstance(current_plan, dict)
+                                or current_plan.get("invalidated_at") is not None):
+                            return
+                        plan_manager.invalidate_plan(
+                            cid,
+                            "GC_NO_ACTIVE",
+                            # Token nalezy do planu, ktory faktycznie zostal
+                            # sklasyfikowany jako "no active". Pobranie wersji
+                            # z current_plan czyniloby CAS tautologia i mogloby
+                            # uniewaznic nowszy gap-fill przy niezmienionym
+                            # orders_state.
+                            expected_version=classified_plan_version,
+                        )
+
+                    _run_if_bag_current(
                         cid,
-                        "GC_NO_ACTIVE",
-                        expected_version=plan.get("plan_version", 0),
+                        _active_bag_oids(cid, orders_state),
+                        orders_state,
+                        _invalidate_no_active,
+                        writer="gc_no_active",
+                        current_state_fn=_current_state_fn,
                     )
                 except plan_manager.ConcurrencyError as e:
                     _log.warning(
@@ -2783,15 +3052,74 @@ def _gc_courier_plans(orders_state: Dict[str, Any], now: datetime,
             _log.info(f"GC_TERMINAL_STOP_PRUNE cid={cid} oid={oid} dry_run={dry_run}")
             if not dry_run:
                 try:
-                    plan_manager.remove_stops(cid, oid)
+                    def _remove_terminal_stop() -> None:
+                        current_plan = plan_manager.load_plans(
+                            _raise_on_corrupt=True
+                        ).get(cid)
+                        if (not isinstance(current_plan, dict)
+                                or current_plan.get("invalidated_at") is not None):
+                            return
+                        plan_manager.remove_stops(
+                            cid,
+                            oid,
+                            expected_version=current_plan.get(
+                                "plan_version", 0
+                            ),
+                        )
+
+                    _run_if_bag_current(
+                        cid,
+                        _active_bag_oids(cid, orders_state),
+                        orders_state,
+                        _remove_terminal_stop,
+                        writer="gc_terminal_prune",
+                        current_state_fn=_current_state_fn,
+                    )
+                except plan_manager.ConcurrencyError as e:
+                    _log.warning(
+                        f"PLAN_CAS_SKIP writer=gc-prune cid={cid} "
+                        f"expected={e.expected_version} current={e.current_version} "
+                        f"policy=keep_current"
+                    )
                 except Exception as e:
                     _log.warning(f"GC remove_stops cid={cid} oid={oid} "
                                  f"fail: {type(e).__name__}: {e}")
     if not dry_run:
-        try:
-            rep["gc_age_removed_applied"] = plan_manager.gc_invalidated(float(max_age_h))
-        except Exception as e:
-            _log.warning(f"GC gc_invalidated fail: {type(e).__name__}: {e}")
+        rep["gc_age_removed_applied"] = 0
+        for cid in age_gc_candidates:
+            snapshot_bag = _active_bag_oids(cid, orders_state)
+            if snapshot_bag:
+                _log.warning(
+                    "PLAN_STATE_FENCE_SKIP writer=gc_age cid=%s "
+                    "reason=active_snapshot count=%s",
+                    cid,
+                    len(snapshot_bag),
+                )
+                continue
+            removed: List[int] = []
+
+            def _remove_old_invalidated() -> None:
+                removed.append(
+                    plan_manager.gc_invalidated(
+                        float(max_age_h), courier_ids={cid}
+                    )
+                )
+
+            try:
+                if _run_if_bag_current(
+                    cid,
+                    snapshot_bag,
+                    orders_state,
+                    _remove_old_invalidated,
+                    writer="gc_age",
+                    current_state_fn=_current_state_fn,
+                ):
+                    rep["gc_age_removed_applied"] += removed[0]
+            except Exception as e:
+                _log.warning(
+                    f"GC gc_invalidated cid={cid} fail: "
+                    f"{type(e).__name__}: {e}"
+                )
     summary.update(rep)
     _log.info(f"GC_COURIER_PLANS {rep}")
     return rep
@@ -2814,7 +3142,9 @@ def _l3_maybe_gc(orders_state: Dict[str, Any], now: datetime,
         _log.warning(f"GC courier_plans fail: {type(_e).__name__}: {_e}")
 
 
-def run_recheck() -> Dict[str, Any]:
+def run_recheck(*, _current_state_fn: Optional[
+                    Callable[[], Dict[str, Any]]
+                ] = None) -> Dict[str, Any]:
     """Main entry point. Returns summary dict."""
     _cas_conflicts_before = plan_manager.cas_conflicts_total()
     # ETAP 4 (2026-06-10, Z-04): fingerprint flag decyzyjnych — MUSI być
@@ -2850,9 +3180,10 @@ def run_recheck() -> Dict[str, Any]:
         if plan.get("invalidated_at") is not None:
             continue
         summary["active_plans"] += 1
+        state_bag_oids = _active_bag_oids(cid, orders_state)
         # KROK 2: dosuń pickupy planu do ustalonego czas_kuriera (źródłowy fix).
-        # refloor liczy deltę pod lockiem na świeżym pliku, więc przekazanie
-        # nieaktualnego snapshotu planu jest bezpieczne (re-read wewnątrz).
+        # Refloor re-readuje plan pod własnym lockiem, a wspólny state fence
+        # nie pozwala mu zastosować czasu z nieaktualnej generacji worka.
         if ENABLE_PICKUP_REFLOOR:
             for s in plan.get("stops", []):
                 if s.get("type") != "pickup":
@@ -2862,7 +3193,21 @@ def run_recheck() -> Dict[str, Any]:
                 kur = order.get("czas_kuriera_warsaw") if isinstance(order, dict) else None
                 if not kur:
                     continue
-                shifted_min = plan_manager.refloor_pickup(cid, oid, kur)
+                shifted: List[float] = []
+
+                def _refloor() -> None:
+                    shifted.append(plan_manager.refloor_pickup(cid, oid, kur))
+
+                if not _run_if_bag_current(
+                    cid,
+                    state_bag_oids,
+                    orders_state,
+                    _refloor,
+                    writer="refloor",
+                    current_state_fn=_current_state_fn,
+                ):
+                    continue
+                shifted_min = shifted[0]
                 if shifted_min > 0:
                     summary["pickup_refloored"] += 1
                     _log.info(
@@ -2900,10 +3245,20 @@ def run_recheck() -> Dict[str, Any]:
             invalidation_conflicted = False
             if AUTO_INVALIDATE_STALE and finding.get("auto_invalidate_reason"):
                 try:
-                    plan_manager.invalidate_plan(
+                    def _auto_invalidate() -> None:
+                        plan_manager.invalidate_plan(
+                            cid,
+                            finding["auto_invalidate_reason"],
+                            expected_version=expected_version,
+                        )
+
+                    invalidated = _run_if_bag_current(
                         cid,
-                        finding["auto_invalidate_reason"],
-                        expected_version=expected_version,
+                        state_bag_oids,
+                        orders_state,
+                        _auto_invalidate,
+                        writer="auto_invalidate",
+                        current_state_fn=_current_state_fn,
                     )
                 except plan_manager.ConcurrencyError as e:
                     invalidation_conflicted = True
@@ -2913,20 +3268,33 @@ def run_recheck() -> Dict[str, Any]:
                         f"policy=keep_current"
                     )
                 else:
-                    expected_version += 1
-                    summary["auto_invalidated"] += 1
-                    _log.info(
-                        f"AUTO_INVALIDATE cid={cid} "
-                        f"reason={finding['auto_invalidate_reason']}"
-                    )
+                    if invalidated:
+                        expected_version += 1
+                        summary["auto_invalidated"] += 1
+                        _log.info(
+                            f"AUTO_INVALIDATE cid={cid} "
+                            f"reason={finding['auto_invalidate_reason']}"
+                        )
+                    else:
+                        invalidation_conflicted = True
             if finding.get("gps_drift"):
                 summary["gps_drift_detected"] += 1
                 if ENABLE_GPS_DRIFT_INVALIDATION and not invalidation_conflicted:
                     try:
-                        plan_manager.mark_stale(
+                        def _gps_invalidate() -> None:
+                            plan_manager.mark_stale(
+                                cid,
+                                "GPS_DRIFT",
+                                expected_version=expected_version,
+                            )
+
+                        gps_invalidated = _run_if_bag_current(
                             cid,
-                            "GPS_DRIFT",
-                            expected_version=expected_version,
+                            state_bag_oids,
+                            orders_state,
+                            _gps_invalidate,
+                            writer="gps_invalidate",
+                            current_state_fn=_current_state_fn,
                         )
                     except plan_manager.ConcurrencyError as e:
                         _log.warning(
@@ -2935,17 +3303,25 @@ def run_recheck() -> Dict[str, Any]:
                             f"policy=keep_current"
                         )
                     else:
-                        summary["gps_drift_invalidated"] += 1
-                        _log.info(
-                            f"GPS_DRIFT_INVALIDATE cid={cid} "
-                            f"drift={finding['gps_drift']['drift_m']}m"
-                        )
+                        if gps_invalidated:
+                            summary["gps_drift_invalidated"] += 1
+                            _log.info(
+                                f"GPS_DRIFT_INVALIDATE cid={cid} "
+                                f"drift={finding['gps_drift']['drift_m']}m"
+                            )
         else:
             summary["healthy"] += 1
 
     # Gap-fill: kurierzy z realnym workiem ale bez aktywnego planu → plan Ziomka.
     if ENABLE_PLAN_FOR_ACTUAL_BAG:
-        _gap_fill_plans(orders_state, plans, gps_positions, now, summary)
+        _gap_fill_plans(
+            orders_state,
+            plans,
+            gps_positions,
+            now,
+            summary,
+            _state_fenced_save=_save_plan_if_bag_current,
+        )
 
     # L3 (F2/K2): fold liczników bramki ZAPISU regenu (compare-and-keep R6) do
     # summary (→ log PLAN_RECHECK). OFF = brak wpisów (bramka nietknięta).

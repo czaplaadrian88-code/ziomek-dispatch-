@@ -716,6 +716,11 @@ def get_all() -> dict:
     return _read_state()
 
 
+def get_all_strict() -> dict:
+    """Fail-closed pełny snapshot dla granic state→zewnętrzny writer."""
+    return _read_state_strict()
+
+
 def get_order(order_id: str) -> Optional[dict]:
     """Zwraca pojedyncze zlecenie lub None."""
     return _read_state().get(order_id)

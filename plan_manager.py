@@ -73,8 +73,19 @@ def _locked(exclusive: bool):
             fcntl.flock(lockfh.fileno(), fcntl.LOCK_UN)
 
 
+def ensure_storage_durable(path: Optional[Path] = None) -> None:
+    """Utrwal rename courier_plans przed zamknieciem durable receiptu."""
+    target = PLANS_FILE if path is None else Path(path)
+    dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    dir_fd = os.open(str(target.parent), dir_flags)
+    try:
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)
+
+
 def _atomic_write(path: Path, data: Any) -> None:
-    """Write JSON atomically: temp file in same dir → fsync → os.replace."""
+    """Write JSON atomically and durably: fsync file + rename + fsync dir."""
     _ensure_parent()
     fd, tmp_name = tempfile.mkstemp(
         prefix=path.name + ".",
@@ -87,6 +98,7 @@ def _atomic_write(path: Path, data: Any) -> None:
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp_name, path)
+        ensure_storage_durable(path)
     except Exception as _e:
         # A1: log path PRZED re-raise żeby caller widział co fail'owało.
         # Re-raise pattern OK (cleanup tmpfile + propagate do callera).
@@ -98,7 +110,7 @@ def _atomic_write(path: Path, data: Any) -> None:
         raise
 
 
-def _read_raw() -> Dict[str, Any]:
+def _read_raw(*, _raise_on_corrupt: bool = False) -> Dict[str, Any]:
     """Load entire plans dict. Must be called under shared or exclusive lock."""
     if not PLANS_FILE.exists():
         return {}
@@ -107,10 +119,14 @@ def _read_raw() -> Dict[str, Any]:
             data = json.load(fh)
         if not isinstance(data, dict):
             _log.warning("courier_plans.json is not an object; treating as empty")
+            if _raise_on_corrupt:
+                raise ValueError("courier_plans.json is not an object")
             return {}
         return data
     except json.JSONDecodeError as e:
         _log.error(f"courier_plans.json corrupt: {e}")
+        if _raise_on_corrupt:
+            raise
         return {}
 
 
@@ -182,8 +198,11 @@ def _read_raw_shared() -> Dict[str, Any]:
 
 # ---- public API ----
 
-def load_plans() -> Dict[str, Any]:
+def load_plans(*, _raise_on_corrupt: bool = False) -> Dict[str, Any]:
     """Load all plans (read-only copy). Shared lock (perf-lazy: mtime-cache)."""
+    if _raise_on_corrupt:
+        with _locked(exclusive=False):
+            return _read_raw(_raise_on_corrupt=True)
     if _perf_lazy_on():
         return copy.deepcopy(_read_raw_shared())
     with _locked(exclusive=False):
@@ -194,6 +213,8 @@ def load_plan(
     courier_id: str,
     active_bag_oids: Optional[set] = None,
     invalidate_on_mismatch: bool = True,
+    *,
+    _raise_on_corrupt: bool = False,
 ) -> Optional[Dict[str, Any]]:
     """Load a single plan. If active_bag_oids provided and any plan stop's
     order_id is outside that set → mismatch with reality (return None).
@@ -215,8 +236,14 @@ def load_plan(
     Returns None if no plan or plan invalidated.
     """
     cid = str(courier_id)
-    _lazy = _perf_lazy_on()
-    if _lazy:
+    _lazy = _perf_lazy_on() and not _raise_on_corrupt
+    if _raise_on_corrupt:
+        # Durable callback musi odczytać świeży store i odróżnić brak planu od
+        # uszkodzonego JSON-u. Cache ani legacy fallback ``{}`` nie mogą wtedy
+        # pozwolić na przedwczesne zamknięcie receiptu.
+        with _locked(exclusive=False):
+            plans = _read_raw(_raise_on_corrupt=True)
+    elif _lazy:
         plans = _read_raw_shared()  # WSPÓLNY — tylko czytamy, zwracamy deepcopy
     else:
         with _locked(exclusive=False):
@@ -275,6 +302,8 @@ def save_plan(
     courier_id: str,
     plan_body: Dict[str, Any],
     expected_version: Optional[int] = None,
+    *,
+    _raise_on_corrupt: bool = False,
 ) -> Dict[str, Any]:
     """Persist a plan. plan_body must contain: start_pos, start_ts, stops,
     optimization_method. plan_version and timestamps are managed here.
@@ -287,7 +316,7 @@ def save_plan(
     cid = str(courier_id)
     _validate_plan_body(plan_body)
     with _locked(exclusive=True):
-        plans = _read_raw()
+        plans = _read_raw(_raise_on_corrupt=_raise_on_corrupt)
         current = plans.get(cid)
         prev_version = (current or {}).get("plan_version", 0)
         _check_expected_version(cid, expected_version, prev_version)
@@ -321,6 +350,8 @@ def invalidate_plan(
     courier_id: str,
     reason: str,
     expected_version: Optional[int] = None,
+    *,
+    _raise_on_corrupt: bool = False,
 ) -> None:
     """Mark plan invalidated. Plan stays in file for debug + GC-able.
 
@@ -332,7 +363,7 @@ def invalidate_plan(
     if reason not in INVALIDATION_REASONS:
         _log.warning(f"invalidate_plan: unknown reason {reason!r}, allowing")
     with _locked(exclusive=True):
-        plans = _read_raw()
+        plans = _read_raw(_raise_on_corrupt=_raise_on_corrupt)
         plan = plans.get(cid)
         current_version = (plan or {}).get("plan_version", 0)
         _check_expected_version(cid, expected_version, current_version)
@@ -345,7 +376,12 @@ def invalidate_plan(
         _write_raw(plans)
 
 
-def touch_plan(courier_id: str, reason: str = "SIGNAL") -> bool:
+def touch_plan(
+    courier_id: str,
+    reason: str = "SIGNAL",
+    *,
+    _raise_on_corrupt: bool = False,
+) -> bool:
     """FIX-E (2026-06-13, B1): LEKKI sygnał zmiany dla apki — bump plan_version +
     last_modified_at BEZ invalidacji. Plan ZOSTAJE w obecnym stanie (ważny zostaje
     ważny, invalidated zostaje invalidated) → plan_recheck NIE jest zmuszany do
@@ -362,7 +398,7 @@ def touch_plan(courier_id: str, reason: str = "SIGNAL") -> bool:
     Zwraca True gdy bumpnięto. Bump monotoniczny — spójny z save_plan/advance_plan."""
     cid = str(courier_id)
     with _locked(exclusive=True):
-        plans = _read_raw()
+        plans = _read_raw(_raise_on_corrupt=_raise_on_corrupt)
         plan = plans.get(cid)
         if plan is None:
             return False
@@ -379,6 +415,8 @@ def advance_plan(
     delivered_order_id: str,
     delivered_at: str,
     delivery_coords: Optional[Tuple[float, float]] = None,
+    *,
+    _raise_on_corrupt: bool = False,
 ) -> None:
     """Remove the dropoff stop for delivered_order_id; update start_pos to the
     delivery location + start_ts to delivered_at. If no stops remain, invalidate
@@ -387,7 +425,7 @@ def advance_plan(
     cid = str(courier_id)
     doid = str(delivered_order_id)
     with _locked(exclusive=True):
-        plans = _read_raw()
+        plans = _read_raw(_raise_on_corrupt=_raise_on_corrupt)
         plan = plans.get(cid)
         if plan is None or plan.get("invalidated_at") is not None:
             return
@@ -420,7 +458,13 @@ def advance_plan(
         _write_raw(plans)
 
 
-def remove_stops(courier_id: str, order_id: str) -> None:
+def remove_stops(
+    courier_id: str,
+    order_id: str,
+    *,
+    _raise_on_corrupt: bool = False,
+    expected_version: Optional[int] = None,
+) -> None:
     """Remove ALL stops (pickup AND dropoff) for order_id.
 
     Used by cancel/return, REASSIGN-RELEASE and GC terminal-prune. If no stops
@@ -433,12 +477,18 @@ def remove_stops(courier_id: str, order_id: str) -> None:
     powodu. Decyzja zapada WEWNĄTRZ tego samego exclusive locka co zapis
     (race-safe — pre-check poza lockiem był TOCTOU: nowszy plan bez stopa
     mógł wejść między odczyt a wywołanie).
+
+    ``expected_version`` wiąże durable cleanup z planem odczytanym pod lockiem
+    lifecycle state. Nowszy plan/generacja powoduje CAS conflict zamiast
+    usunięcia jej stopa.
     """
     cid = str(courier_id)
     oid = str(order_id)
     with _locked(exclusive=True):
-        plans = _read_raw()
+        plans = _read_raw(_raise_on_corrupt=_raise_on_corrupt)
         plan = plans.get(cid)
+        current_version = (plan or {}).get("plan_version", 0)
+        _check_expected_version(cid, expected_version, current_version)
         if plan is None or plan.get("invalidated_at") is not None:
             return
         stops = plan.get("stops", [])
@@ -467,7 +517,8 @@ def mark_stale(
 
 
 def mark_picked_up(courier_id: str, order_id: str,
-                   picked_up_at: Optional[str] = None) -> None:
+                   picked_up_at: Optional[str] = None, *,
+                   _raise_on_corrupt: bool = False) -> None:
     """V3.19c sub A: update stop.status_at_plan_time to 'picked_up' for this
     order. Prune pickup stop (definitionally done). No-op if plan absent/
     invalidated or order_id not in plan.stops.
@@ -475,7 +526,7 @@ def mark_picked_up(courier_id: str, order_id: str,
     cid = str(courier_id)
     oid = str(order_id)
     with _locked(exclusive=True):
-        plans = _read_raw()
+        plans = _read_raw(_raise_on_corrupt=_raise_on_corrupt)
         plan = plans.get(cid)
         if plan is None or plan.get("invalidated_at") is not None:
             return
@@ -639,16 +690,30 @@ def log_read_shadow_diff(
         _log.warning(f"log_read_shadow_diff fail cid={cid}: {e}")
 
 
-def gc_invalidated(older_than_hours: float = 24.0) -> int:
+def gc_invalidated(
+    older_than_hours: float = 24.0,
+    *,
+    courier_ids: Optional[set[str]] = None,
+) -> int:
     """V3.19c sub A: garbage-collect invalidated plans older than threshold.
     Returns count removed. Manual / cron hook — no auto-schedule.
+
+    ``courier_ids`` jest addytywnym ograniczeniem dla state-fenced callera
+    okresowego. Legacy/manual bez argumentu zachowuje dotychczasowy zakres.
     """
     cutoff_ts = datetime.now(timezone.utc).timestamp() - (older_than_hours * 3600)
     removed = 0
+    only_cids = (
+        {str(item) for item in courier_ids}
+        if courier_ids is not None
+        else None
+    )
     with _locked(exclusive=True):
         plans = _read_raw()
         to_del = []
         for cid, p in plans.items():
+            if only_cids is not None and str(cid) not in only_cids:
+                continue
             inv = p.get("invalidated_at")
             if not inv:
                 continue

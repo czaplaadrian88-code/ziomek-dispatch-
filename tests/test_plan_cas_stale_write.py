@@ -188,13 +188,14 @@ def test_recheck_refreshes_after_refloor_and_stale_invalidation_skips(
     monkeypatch.setattr(PR, "_refresh_d3_fala_a_flags", lambda: None)
     monkeypatch.setattr(PR, "_now_utc", lambda: datetime(
         2026, 7, 9, 12, 0, tzinfo=timezone.utc))
-    monkeypatch.setattr(PR, "_load_orders_state", lambda: {
+    orders = {
         "ORDER": {
             "status": "assigned",
             "courier_id": "9",
             "czas_kuriera_warsaw": "2026-07-09T14:20:00+02:00",
         },
-    })
+    }
+    monkeypatch.setattr(PR, "_load_orders_state", lambda: orders)
     monkeypatch.setattr(PR, "_load_gps_positions", lambda: {})
     monkeypatch.setattr(PR, "_check_plan", _check)
     monkeypatch.setattr(PR, "_log_recheck_entry", lambda finding: None)
@@ -206,7 +207,7 @@ def test_recheck_refreshes_after_refloor_and_stale_invalidation_skips(
     monkeypatch.setattr(PR, "ENABLE_PLAN_RECHECK_LIVE_ETA_REFRESH", False)
     monkeypatch.setattr(PM, "refloor_pickup", _refloor)
 
-    summary = PR.run_recheck()
+    summary = PR.run_recheck(_current_state_fn=lambda: orders)
 
     current = PM.load_plans()["9"]
     assert checked_versions == [2]
@@ -215,6 +216,95 @@ def test_recheck_refreshes_after_refloor_and_stale_invalidation_skips(
     assert current["start_pos"]["source"] == "newer-current"
     assert summary["auto_invalidated"] == 0
     assert summary["plan_cas_conflicts"] == 1
+
+
+def _isolate_recheck_tick(monkeypatch, orders):
+    monkeypatch.setattr(PR, "_refresh_d3_fala_a_flags", lambda: None)
+    monkeypatch.setattr(PR, "_now_utc", lambda: datetime(
+        2026, 7, 20, 12, 0, tzinfo=timezone.utc))
+    monkeypatch.setattr(PR, "_load_orders_state", lambda: orders)
+    monkeypatch.setattr(PR, "_load_gps_positions", lambda: {})
+    monkeypatch.setattr(PR, "_log_recheck_entry", lambda finding: None)
+    monkeypatch.setattr(PR, "_l3_maybe_gc", lambda *a, **k: None)
+    monkeypatch.setattr(PR, "ENABLE_GPS_DRIFT_INVALIDATION", False)
+    monkeypatch.setattr(PR, "ENABLE_PLAN_FOR_ACTUAL_BAG", False)
+    monkeypatch.setattr(PR, "ENABLE_PLAN_RECHECK_LIVE_ETA_REFRESH", False)
+
+
+def test_state_fence_blocks_refloor_from_previous_assignment_generation(
+        isolated_store, monkeypatch):
+    """RETURN/reassign po snapshotcie nie dostaje starego czasu pickup."""
+    plan = _body("ORDER")
+    plan["stops"].insert(0, {
+        "order_id": "ORDER",
+        "type": "pickup",
+        "coords": {"lat": 53.13, "lng": 23.15},
+        "predicted_at": "2026-07-20T12:10:00+00:00",
+        "dwell_min": 2.0,
+        "status_at_plan_time": "assigned",
+    })
+    PM.save_plan("9", plan)
+    stale = {
+        "ORDER": {
+            "status": "assigned",
+            "courier_id": "9",
+            "czas_kuriera_warsaw": "2026-07-20T14:20:00+02:00",
+            "updated_at": "2026-07-20T11:59:00+00:00",
+            "last_lifecycle_event_id": "assign-old",
+        }
+    }
+    current = {
+        "ORDER": {
+            "status": "returned",
+            "courier_id": None,
+            "updated_at": "2026-07-20T12:00:01+00:00",
+            "last_lifecycle_event_id": "return-new",
+        }
+    }
+    _isolate_recheck_tick(monkeypatch, stale)
+    monkeypatch.setattr(PR, "ENABLE_PICKUP_REFLOOR", True)
+    monkeypatch.setattr(PR, "AUTO_INVALIDATE_STALE", False)
+    calls = []
+    monkeypatch.setattr(
+        PM, "refloor_pickup", lambda *a, **k: calls.append(a) or 5.0
+    )
+
+    summary = PR.run_recheck(_current_state_fn=lambda: current)
+
+    assert calls == []
+    assert summary["pickup_refloored"] == 0
+    assert PM.load_plan("9")["plan_version"] == 1
+
+
+def test_state_fence_blocks_auto_invalidate_from_terminal_snapshot(
+        isolated_store, monkeypatch):
+    """Nowa generacja ASSIGNED wygrywa ze starym terminalnym snapshotem."""
+    PM.save_plan("9", _body("ORDER"))
+    stale = {
+        "ORDER": {
+            "status": "delivered",
+            "courier_id": "9",
+            "updated_at": "2026-07-20T11:59:00+00:00",
+            "last_lifecycle_event_id": "deliver-old",
+        }
+    }
+    current = {
+        "ORDER": {
+            "status": "assigned",
+            "courier_id": "9",
+            "updated_at": "2026-07-20T12:00:01+00:00",
+            "last_lifecycle_event_id": "assign-new",
+        }
+    }
+    _isolate_recheck_tick(monkeypatch, stale)
+    monkeypatch.setattr(PR, "ENABLE_PICKUP_REFLOOR", False)
+    monkeypatch.setattr(PR, "AUTO_INVALIDATE_STALE", True)
+
+    summary = PR.run_recheck(_current_state_fn=lambda: current)
+
+    assert summary["with_issues"] == 1
+    assert summary["auto_invalidated"] == 0
+    assert PM.load_plan("9")["plan_version"] == 1
 
 
 @pytest.mark.parametrize("mutation", ["invalidate", "advance_last", "remove_last"])

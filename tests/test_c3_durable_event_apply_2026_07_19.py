@@ -1,15 +1,20 @@
 """C3-01 — atomowy outbox event->state->downstream."""
 
 import json
+import logging
+import multiprocessing
 import sqlite3
 import stat
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
 from dispatch_v2 import durable_event_apply as DEA
+from dispatch_v2 import common as C
 from dispatch_v2 import event_bus as EB
 from dispatch_v2 import lifecycle_downstream as LD
 from dispatch_v2 import panel_watcher as PW
@@ -21,10 +26,33 @@ from dispatch_v2 import state_machine as SM
 _REAL_LIFECYCLE_DOWNSTREAM_APPLY = PW.lifecycle_downstream.apply
 
 
+def _multiprocess_drain_worker(start_gate, callback_path):
+    """Fork-only helper: inherited hermetic stores, independent process lock."""
+    if not start_gate.wait(timeout=10):
+        raise RuntimeError("multiprocess drain start timeout")
+
+    def record_callback(event):
+        with open(callback_path, "a", encoding="utf-8") as fh:
+            fh.write(f"{event['event_id']}\n")
+            fh.flush()
+        # Poszerz okno tak, aby brak cross-process locka deterministycznie
+        # wpuscil drugi callback przed zapisaniem downstream receipt.
+        time.sleep(0.2)
+
+    DEA.drain_pending(
+        state_update_fn=SM.update_from_event,
+        effect_status_fn=SM.event_effect_status,
+        get_order_fn=SM.get_order_strict,
+        downstream_fn=record_callback,
+        min_age_seconds=0,
+    )
+
+
 @pytest.fixture
 def isolated_stores(tmp_path, monkeypatch):
     events_db = tmp_path / "events.db"
     state_path = tmp_path / "orders_state.json"
+    plans_path = tmp_path / "courier_plans.json"
     with sqlite3.connect(events_db) as conn:
         conn.executescript(
             """
@@ -61,11 +89,18 @@ def isolated_stores(tmp_path, monkeypatch):
         ),
         encoding="utf-8",
     )
+    plans_path.write_text("{}", encoding="utf-8")
     monkeypatch.setattr(EB, "_db_path", lambda: str(events_db))
     monkeypatch.setattr(EB, "_audit_log_initialized", False)
     monkeypatch.setattr(EB, "_state_apply_outbox_initialized", False)
     monkeypatch.setattr(EB, "_state_apply_outbox_db_path", None)
     monkeypatch.setattr(SM, "_state_path", lambda: str(state_path))
+    # Durable lifecycle callbacks now capture a plan generation before their
+    # compare-and-swap cleanup.  Keep that strict read in the same hermetic
+    # fixture as events/state; mocked cleanup helpers must never fall through
+    # to the production courier_plans store.
+    monkeypatch.setattr(PM, "PLANS_FILE", plans_path)
+    monkeypatch.setattr(PM, "LOCK_FILE", tmp_path / "courier_plans.lock")
     monkeypatch.setattr(PW, "emit", EB.emit)
     monkeypatch.setattr(PW, "emit_audit", EB.emit_audit)
     monkeypatch.setattr(PW, "update_from_event", SM.update_from_event)
@@ -166,6 +201,9 @@ def test_outbox_schema_migration_is_additive_and_thread_serialized(
         columns = {
             row[1] for row in conn.execute("PRAGMA table_info(state_apply_outbox)")
         }
+        indexes = {
+            row[1] for row in conn.execute("PRAGMA index_list(state_apply_outbox)")
+        }
         migrated_attempts = conn.execute(
             "SELECT downstream_attempts FROM state_apply_outbox "
             "WHERE event_id='legacy-indeterminate'"
@@ -177,8 +215,11 @@ def test_outbox_schema_migration_is_additive_and_thread_serialized(
         "expected_state_token",
         "predecessor_event_id",
         "downstream_attempts",
+        "state_retry_seq",
+        "downstream_retry_seq",
     } <= columns
     assert migrated_attempts == 1
+    assert "idx_state_apply_outbox_retry" in indexes
     new_id = "new-row-explicit-zero"
     new_event = {
         "event_type": "NEW_ORDER",
@@ -739,6 +780,7 @@ def test_crash_after_state_before_downstream_is_drained_once(
         "downstream": 1,
         "superseded": 0,
         "failed": 0,
+        "completed": 1,
     }
     assert len(recovered) == 1
     assert again.downstream_executed is False
@@ -778,14 +820,19 @@ def test_internal_plan_error_keeps_downstream_receipt_pending(
     assert _state(state_path)["status"] == "returned_to_pool"
     row = EB.get_state_apply_outbox(first.event_id)
     assert row["downstream_status"] == "pending"
+    assert row["state_attempts"] == 1
+    assert row["downstream_attempts"] == 1
     assert "synthetic inner plan failure" in row["last_error"]
 
     recovered = []
     monkeypatch.setattr(
         plan_manager,
         "remove_stops",
-        lambda courier_id, order_id: recovered.append((courier_id, order_id)),
+        lambda courier_id, order_id, **_kwargs: recovered.append(
+            (courier_id, order_id)
+        ),
     )
+    monkeypatch.setattr(plan_manager, "ensure_storage_durable", lambda: None)
     counts = DEA.drain_pending(
         state_update_fn=SM.update_from_event,
         effect_status_fn=SM.event_effect_status,
@@ -795,7 +842,10 @@ def test_internal_plan_error_keeps_downstream_receipt_pending(
 
     assert counts["downstream"] == 1
     assert recovered == [("100", "c3-order")]
-    assert EB.get_state_apply_outbox(first.event_id)["downstream_status"] == "applied"
+    closed = EB.get_state_apply_outbox(first.event_id)
+    assert closed["downstream_status"] == "applied"
+    assert closed["state_attempts"] == 1
+    assert closed["downstream_attempts"] == 2
 
 
 def test_downstream_state_read_is_fail_closed_and_retryable(
@@ -901,6 +951,174 @@ def test_plan_recanon_strict_mode_propagates_internal_read_error(
     assert plan_recheck.recanon_courier("100") is False
     with pytest.raises(FileNotFoundError):
         plan_recheck.recanon_courier("100", _raise_on_error=True)
+
+    orders_state = {
+        "c3-order": {
+            "status": "assigned",
+            "courier_id": "100",
+        }
+    }
+    monkeypatch.setattr(
+        plan_recheck.plan_manager,
+        "load_plan",
+        lambda _cid, **_kwargs: {
+            "plan_version": 2,
+            "stops": [{"order_id": "c3-order", "type": "dropoff"}],
+        },
+    )
+    monkeypatch.setattr(
+        plan_recheck,
+        "_retime_one_bag_plan",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            PM.ConcurrencyError("100", 2, 3)
+        ),
+    )
+    assert plan_recheck.recanon_courier(
+        "100", orders_state=orders_state, gps_positions={}
+    ) is False
+    with pytest.raises(PM.ConcurrencyError):
+        plan_recheck.recanon_courier(
+            "100",
+            orders_state=orders_state,
+            gps_positions={},
+            _raise_on_error=True,
+        )
+
+    monkeypatch.setattr(
+        plan_recheck,
+        "_retime_one_bag_plan",
+        lambda *_args, **_kwargs: False,
+    )
+    assert plan_recheck.recanon_courier(
+        "100", orders_state=orders_state, gps_positions={}
+    ) is False
+    assert plan_recheck.recanon_courier(
+        "100",
+        orders_state=orders_state,
+        gps_positions={},
+        _raise_on_error=True,
+    ) is False
+
+    # Exact receipt zachowuje decyzje flagi przez retry po czesciowym efekcie.
+    monkeypatch.setattr(plan_recheck, "ENABLE_RECANON_ON_WRITE", False)
+    monkeypatch.setattr(
+        plan_recheck,
+        "_retime_one_bag_plan",
+        lambda *_args, **_kwargs: True,
+    )
+    assert plan_recheck.recanon_courier(
+        "100",
+        orders_state=orders_state,
+        gps_positions={},
+        _raise_on_error=True,
+        _enabled_by_receipt=True,
+    ) is True
+    assert plan_recheck.recanon_courier(
+        "100",
+        orders_state=orders_state,
+        gps_positions={},
+        _raise_on_error=True,
+        _enabled_by_receipt=False,
+    ) is False
+
+
+def test_durable_recanon_state_fence_blocks_stale_generation_save(monkeypatch):
+    """CAS planu nie wystarcza: RETURN bez zapisu planu musi zatrzymać recanon."""
+    from dispatch_v2 import plan_recheck
+
+    stale = {
+        "c3-order": {
+            "status": "assigned",
+            "courier_id": "100",
+            "updated_at": "2026-07-20T10:00:00+00:00",
+            "last_lifecycle_event_id": "assign-old",
+        }
+    }
+    current = {
+        "c3-order": {
+            "status": "returned_to_pool",
+            "courier_id": None,
+            "updated_at": "2026-07-20T10:01:00+00:00",
+            "last_lifecycle_event_id": "return-new",
+        }
+    }
+    monkeypatch.setattr(plan_recheck, "_refresh_d3_fala_a_flags", lambda: None)
+    monkeypatch.setattr(plan_recheck, "ENABLE_RECANON_ON_WRITE", True)
+    monkeypatch.setattr(
+        plan_recheck.plan_manager,
+        "load_plan",
+        lambda *_a, **_k: {
+            "plan_version": 5,
+            "stops": [{"order_id": "c3-order", "type": "dropoff"}],
+        },
+    )
+    monkeypatch.setattr(SM, "get_all_strict", lambda: current)
+    saved = []
+
+    def run_fenced_retime(cid, _plan, oids, orders, _gps, _now, **kwargs):
+        fence = kwargs.get("_state_fenced_save")
+        assert fence is not None
+        return fence(cid, oids, orders, lambda: saved.append(True))
+
+    monkeypatch.setattr(plan_recheck, "_retime_one_bag_plan", run_fenced_retime)
+
+    assert plan_recheck.recanon_courier(
+        "100",
+        orders_state=stale,
+        gps_positions={},
+        _raise_on_error=True,
+    ) is False
+    assert saved == []
+
+
+def test_durable_recanon_exact_receipt_generation_blocks_newer_plan_save(
+    monkeypatch,
+):
+    """Stary receipt nie recanonizuje planu odtworzonego przez nowy ASSIGNED."""
+    from dispatch_v2 import plan_recheck
+
+    old_return_generation = {
+        "status": "returned_to_pool",
+        "courier_id": None,
+        "updated_at": "2026-07-20T10:01:00+00:00",
+        "last_lifecycle_event_id": "return-old",
+    }
+    current_assignment = {
+        "c3-order": {
+            "status": "assigned",
+            "courier_id": "100",
+            "updated_at": "2026-07-20T10:02:00+00:00",
+            "last_lifecycle_event_id": "assign-new",
+        }
+    }
+    monkeypatch.setattr(plan_recheck, "_refresh_d3_fala_a_flags", lambda: None)
+    monkeypatch.setattr(plan_recheck, "ENABLE_RECANON_ON_WRITE", True)
+    monkeypatch.setattr(
+        plan_recheck.plan_manager,
+        "load_plan",
+        lambda *_a, **_k: {
+            "plan_version": 6,
+            "stops": [{"order_id": "c3-order", "type": "dropoff"}],
+        },
+    )
+    monkeypatch.setattr(SM, "get_all_strict", lambda: current_assignment)
+    saved = []
+
+    def run_fenced_retime(cid, _plan, oids, orders, _gps, _now, **kwargs):
+        fence = kwargs.get("_state_fenced_save")
+        assert fence is not None
+        return fence(cid, oids, orders, lambda: saved.append(True))
+
+    monkeypatch.setattr(plan_recheck, "_retime_one_bag_plan", run_fenced_retime)
+
+    assert plan_recheck.recanon_courier(
+        "100",
+        orders_state=current_assignment,
+        gps_positions={},
+        _raise_on_error=True,
+        _expected_order_generation=("c3-order", old_return_generation),
+    ) is False
+    assert saved == []
 
 
 def test_two_threads_cannot_double_apply_or_downstream(isolated_stores, monkeypatch):
@@ -1043,6 +1261,670 @@ def test_pending_downstream_is_drained_in_state_apply_fifo(isolated_stores):
     assert counts["failed"] == 0
 
 
+def test_sweeper_age_gate_handles_only_stale_state_and_downstream(
+    isolated_stores,
+):
+    """Grace period obejmuje oba lane'y; swiezy receipt nie jest dotykany."""
+    events_db, _state_path = isolated_stores
+
+    def emit_new(oid: str, *, applied: bool) -> str:
+        event_id = f"{oid}_NEW_ORDER_v1"
+        event = {
+            "event_type": "NEW_ORDER",
+            "event_id": event_id,
+            "order_id": oid,
+            "courier_id": None,
+            "payload": {"first_seen": "2026-07-20T10:00:00+00:00"},
+        }
+        assert EB.emit(
+            "NEW_ORDER",
+            order_id=oid,
+            event_id=event_id,
+            state_event=event,
+            event_key=f"{oid}_NEW_ORDER_first",
+        ) == event_id
+        if applied:
+            assert EB.mark_state_apply_applied(event_id) is True
+        return event_id
+
+    stale_state = emit_new("sweeper-stale-state", applied=False)
+    fresh_state = emit_new("sweeper-fresh-state", applied=False)
+    stale_downstream = emit_new("sweeper-stale-downstream", applied=True)
+    fresh_downstream = emit_new("sweeper-fresh-downstream", applied=True)
+    with sqlite3.connect(events_db) as conn:
+        conn.executemany(
+            "UPDATE state_apply_outbox SET updated_at=? WHERE event_id=?",
+            [
+                ("2000-01-01T00:00:00+00:00", stale_state),
+                ("2999-01-01T00:00:00+00:00", fresh_state),
+                ("2000-01-01T00:00:00+00:00", stale_downstream),
+                ("2999-01-01T00:00:00+00:00", fresh_downstream),
+            ],
+        )
+
+    callbacks = []
+    counts = DEA.drain_pending(
+        state_update_fn=SM.update_from_event,
+        effect_status_fn=SM.event_effect_status,
+        get_order_fn=SM.get_order_strict,
+        downstream_fn=lambda event: callbacks.append(event["event_id"]),
+        min_age_seconds=30,
+    )
+
+    assert counts["seen"] == 1
+    assert counts["state_ready"] == 1
+    assert counts["downstream"] == 2
+    assert counts["completed"] == 2
+    assert callbacks == [stale_downstream, stale_state]
+    assert EB.get_state_apply_outbox(stale_state)["state_status"] == "applied"
+    assert EB.get_state_apply_outbox(stale_state)["downstream_status"] == "applied"
+    assert EB.get_state_apply_outbox(fresh_state)["state_status"] == "pending"
+    assert EB.get_state_apply_outbox(fresh_downstream)["downstream_status"] == "pending"
+
+
+def test_same_sweep_promotion_cannot_starve_older_downstream(
+    isolated_stores,
+):
+    """Token age-bypass nie daje priorytetu przed starszym callbackiem.
+
+    Przy stałym limicie i napływie starych state rows uprzywilejowanie wpisu
+    awansowanego w bieżącym sweepie mogło bez końca omijać wcześniejszy
+    downstream receipt. Wyjątek od age gate ma tylko dopuścić wpis do kolejki;
+    naturalne FIFO po ``updated_at`` nadal rozstrzyga kolejność.
+    """
+    events_db, _state_path = isolated_stores
+
+    def emit_new(oid: str, *, applied: bool) -> str:
+        event_id = f"{oid}_NEW_ORDER_v1"
+        event = {
+            "event_type": "NEW_ORDER",
+            "event_id": event_id,
+            "order_id": oid,
+            "courier_id": None,
+            "payload": {"first_seen": "2026-07-20T10:00:00+00:00"},
+        }
+        assert EB.emit(
+            "NEW_ORDER",
+            order_id=oid,
+            event_id=event_id,
+            state_event=event,
+            event_key=f"{oid}_NEW_ORDER_first",
+        ) == event_id
+        if applied:
+            assert EB.mark_state_apply_applied(event_id) is True
+        return event_id
+
+    older_callback = emit_new("sweeper-older-callback", applied=True)
+    promoted_this_sweep = emit_new("sweeper-promoted", applied=False)
+    with sqlite3.connect(events_db) as conn:
+        conn.executemany(
+            "UPDATE state_apply_outbox SET updated_at=? WHERE event_id=?",
+            [
+                ("1999-01-01T00:00:00+00:00", older_callback),
+                ("2000-01-01T00:00:00+00:00", promoted_this_sweep),
+            ],
+        )
+
+    callbacks = []
+    counts = DEA.drain_pending(
+        state_update_fn=SM.update_from_event,
+        effect_status_fn=SM.event_effect_status,
+        get_order_fn=SM.get_order_strict,
+        downstream_fn=lambda event: callbacks.append(event["event_id"]),
+        limit=1,
+        min_age_seconds=30,
+    )
+
+    assert counts["seen"] == 1
+    assert counts["downstream"] == 1
+    assert callbacks == [older_callback]
+    assert EB.get_state_apply_outbox(older_callback)["downstream_status"] == "applied"
+    promoted = EB.get_state_apply_outbox(promoted_this_sweep)
+    assert promoted["state_status"] == "applied"
+    assert promoted["downstream_status"] == "pending"
+
+
+def test_sweeper_rechecks_stale_state_version_under_apply_lock(
+    isolated_stores, monkeypatch
+):
+    """Drugi worker nie omija cooldownu po bledzie pierwszego workera."""
+    events_db, _state_path = isolated_stores
+    event_id = "sweeper-state-race_NEW_ORDER_v1"
+    state_event = {
+        "event_type": "NEW_ORDER",
+        "event_id": event_id,
+        "order_id": "sweeper-state-race",
+        "courier_id": None,
+        "payload": {"first_seen": "2026-07-20T10:00:00+00:00"},
+    }
+    assert EB.emit(
+        "NEW_ORDER",
+        order_id="sweeper-state-race",
+        event_id=event_id,
+        state_event=state_event,
+        event_key="sweeper-state-race_NEW_ORDER_first",
+    ) == event_id
+    stale_time = "2000-01-01T00:00:00+00:00"
+    frozen_retry_time = stale_time
+    with sqlite3.connect(events_db) as conn:
+        conn.execute(
+            "UPDATE state_apply_outbox SET updated_at=? WHERE event_id=?",
+            (stale_time, event_id),
+        )
+    monkeypatch.setattr(EB, "now_iso", lambda: frozen_retry_time)
+
+    real_list = EB.list_unresolved_state_applies
+
+    def race_after_selection(*args, **kwargs):
+        selected = real_list(*args, **kwargs)
+        assert EB.record_state_apply_error(event_id, "concurrent state failure")
+        return selected
+
+    monkeypatch.setattr(DEA.event_bus, "list_unresolved_state_applies", race_after_selection)
+    updates = []
+    counts = DEA.drain_pending(
+        state_update_fn=lambda event: updates.append(event),
+        effect_status_fn=lambda *_args: "pending",
+        get_order_fn=lambda _oid: None,
+        downstream_fn=lambda _event: None,
+        min_age_seconds=30,
+    )
+
+    assert counts["seen"] == 0
+    assert counts["failed"] == 0
+    assert updates == []
+    receipt = EB.get_state_apply_outbox(event_id)
+    assert receipt["state_status"] == "pending"
+    assert receipt["state_attempts"] == 1
+
+
+def test_same_sweep_age_bypass_requires_exact_receipt_version(
+    isolated_stores, monkeypatch
+):
+    """Fresh failure invalidates same-tick token and restores 30 s cooldown."""
+    events_db, _state_path = isolated_stores
+    event_id = "sweeper-token-race_NEW_ORDER_v1"
+    state_event = {
+        "event_type": "NEW_ORDER",
+        "event_id": event_id,
+        "order_id": "sweeper-token-race",
+        "courier_id": None,
+        "payload": {"first_seen": "2026-07-20T10:00:00+00:00"},
+    }
+    assert EB.emit(
+        "NEW_ORDER",
+        order_id="sweeper-token-race",
+        event_id=event_id,
+        state_event=state_event,
+        event_key="sweeper-token-race_NEW_ORDER_first",
+    ) == event_id
+    stale_time = "2000-01-01T00:00:00+00:00"
+    frozen_retry_time = datetime.now(timezone.utc).isoformat()
+    with sqlite3.connect(events_db) as conn:
+        conn.execute(
+            "UPDATE state_apply_outbox SET updated_at=? WHERE event_id=?",
+            (stale_time, event_id),
+        )
+    monkeypatch.setattr(EB, "now_iso", lambda: frozen_retry_time)
+
+    real_get = EB.get_oldest_pending_downstream
+    selections = {"count": 0}
+
+    def fail_between_selection_and_lock(**kwargs):
+        selected = real_get(**kwargs)
+        selections["count"] += 1
+        if selections["count"] == 1:
+            assert selected["event_id"] == event_id
+            assert EB.begin_state_apply_downstream(event_id) == 1
+            assert EB.record_state_apply_downstream_error(
+                event_id, "concurrent downstream failure"
+            )
+        return selected
+
+    monkeypatch.setattr(
+        DEA.event_bus,
+        "get_oldest_pending_downstream",
+        fail_between_selection_and_lock,
+    )
+    callbacks = []
+    first = DEA.drain_pending(
+        state_update_fn=SM.update_from_event,
+        effect_status_fn=SM.event_effect_status,
+        get_order_fn=SM.get_order_strict,
+        downstream_fn=lambda event: callbacks.append(event["event_id"]),
+        min_age_seconds=30,
+    )
+
+    assert first["state_ready"] == 1
+    assert first["downstream"] == 0
+    assert first["failed"] == 0
+    assert callbacks == []
+    assert EB.get_state_apply_outbox(event_id)["downstream_status"] == "pending"
+
+    immediate = DEA.drain_pending(
+        state_update_fn=SM.update_from_event,
+        effect_status_fn=SM.event_effect_status,
+        get_order_fn=SM.get_order_strict,
+        downstream_fn=lambda event: callbacks.append(event["event_id"]),
+        min_age_seconds=30,
+    )
+    assert immediate["downstream"] == 0
+    assert callbacks == []
+
+    with sqlite3.connect(events_db) as conn:
+        conn.execute(
+            "UPDATE state_apply_outbox SET updated_at=? WHERE event_id=?",
+            ("2000-01-01T00:00:00+00:00", event_id),
+        )
+    recovered = DEA.drain_pending(
+        state_update_fn=SM.update_from_event,
+        effect_status_fn=SM.event_effect_status,
+        get_order_fn=SM.get_order_strict,
+        downstream_fn=lambda event: callbacks.append(event["event_id"]),
+        min_age_seconds=30,
+    )
+    assert recovered["downstream"] == 1
+    assert recovered["completed"] == 1
+    assert callbacks == [event_id]
+
+
+def test_sweeper_never_attributes_reselected_downstream_to_old_target(
+    isolated_stores, monkeypatch
+):
+    """Zmiana headu pod lockiem nie miesza callbacku B z metryka A."""
+    events_db, _state_path = isolated_stores
+
+    def emit_ready(oid: str) -> str:
+        event_id = f"{oid}_NEW_ORDER_v1"
+        event = {
+            "event_type": "NEW_ORDER",
+            "event_id": event_id,
+            "order_id": oid,
+            "courier_id": None,
+            "payload": {"first_seen": "2026-07-20T10:00:00+00:00"},
+        }
+        assert EB.emit(
+            "NEW_ORDER",
+            order_id=oid,
+            event_id=event_id,
+            state_event=event,
+            event_key=f"{oid}_NEW_ORDER_first",
+        ) == event_id
+        assert EB.mark_state_apply_applied(event_id)
+        return event_id
+
+    first_id = emit_ready("sweeper-retarget-a")
+    second_id = emit_ready("sweeper-retarget-b")
+    with sqlite3.connect(events_db) as conn:
+        conn.execute(
+            "UPDATE state_apply_outbox SET updated_at=?",
+            ("2000-01-01T00:00:00+00:00",),
+        )
+    monkeypatch.setattr(
+        EB, "now_iso", lambda: "2000-01-01T00:00:00+00:00"
+    )
+
+    real_get = EB.get_oldest_pending_downstream
+    selections = {"count": 0}
+
+    def refresh_first_head(**kwargs):
+        selected = real_get(**kwargs)
+        selections["count"] += 1
+        if selections["count"] == 1:
+            assert selected["event_id"] == first_id
+            assert EB.begin_state_apply_downstream(first_id) == 1
+            assert EB.record_state_apply_downstream_error(
+                first_id, "concurrent failure"
+            )
+        return selected
+
+    monkeypatch.setattr(
+        DEA.event_bus, "get_oldest_pending_downstream", refresh_first_head
+    )
+    callbacks = []
+    counts = DEA.drain_pending(
+        state_update_fn=SM.update_from_event,
+        effect_status_fn=SM.event_effect_status,
+        get_order_fn=SM.get_order_strict,
+        downstream_fn=lambda event: callbacks.append(event["event_id"]),
+        min_age_seconds=30,
+    )
+
+    assert callbacks == [second_id]
+    assert counts["downstream"] == 1
+    assert counts["completed"] == 1
+    assert counts["failed"] == 0
+    assert EB.get_state_apply_outbox(first_id)["downstream_status"] == "pending"
+    assert EB.get_state_apply_outbox(second_id)["downstream_status"] == "applied"
+
+
+def test_panel_sweeper_flag_on_differs_from_off_and_logs_metric(
+    monkeypatch, caplog
+):
+    """Helper OFF nie dodaje I/O; ON przekazuje wiek i loguje completed."""
+    enabled = {"value": False}
+    calls = []
+    monkeypatch.setattr(
+        PW,
+        "decision_flag",
+        lambda name: enabled["value"]
+        if name == "ENABLE_STATE_OUTBOX_SWEEPER"
+        else False,
+    )
+
+    def fake_drain(**kwargs):
+        calls.append(kwargs)
+        return {
+            "seen": 3,
+            "state_ready": 1,
+            "downstream": 2,
+            "superseded": 0,
+            "failed": 0,
+            "completed": 2,
+        }
+
+    monkeypatch.setattr(DEA, "drain_pending", fake_drain)
+    assert PW._sweep_state_apply_outbox() == {}
+    assert calls == []
+
+    enabled["value"] = True
+    with caplog.at_level(logging.INFO):
+        stats = PW._sweep_state_apply_outbox()
+
+    assert len(calls) == 1
+    assert calls[0]["min_age_seconds"] == C.STATE_OUTBOX_SWEEPER_MIN_AGE_S
+    assert stats["state_outbox_sweeper_completed"] == 2
+    assert "STATE_OUTBOX_SWEEPER completed=2" in caplog.text
+    assert C.ENABLE_STATE_OUTBOX_SWEEPER is False
+    assert "ENABLE_STATE_OUTBOX_SWEEPER" in C.ETAP4_DECISION_FLAGS
+
+
+@pytest.mark.parametrize("sweeper_enabled", [False, True])
+def test_foreground_respects_sweeper_cooldown_without_delaying_new_target(
+    isolated_stores, monkeypatch, sweeper_enabled
+):
+    """ON: nowy B nie hammeruje świeżo nieudanego callbacku A; OFF=legacy."""
+    events_db, _state_path = isolated_stores
+    stuck_id = "stuck-order_ORDER_RETURNED_foreground-cooldown"
+    stuck_event = {
+        "event_type": "ORDER_RETURNED_TO_POOL",
+        "event_id": stuck_id,
+        "order_id": "stuck-order",
+        "courier_id": "900",
+        "payload": {"source": "cooldown-test"},
+    }
+    assert EB.emit_audit(
+        "ORDER_RETURNED_TO_POOL",
+        order_id="stuck-order",
+        courier_id="900",
+        payload={"source": "cooldown-test"},
+        event_id=stuck_id,
+        state_event=stuck_event,
+        event_key=stuck_id,
+    ) == stuck_id
+    assert EB.mark_state_apply_applied(stuck_id) is True
+    with sqlite3.connect(events_db) as conn:
+        conn.execute(
+            "UPDATE state_apply_outbox "
+            "SET updated_at='2000-01-01T00:00:00+00:00' WHERE event_id=?",
+            (stuck_id,),
+        )
+
+    callbacks = []
+
+    def callback(event):
+        callbacks.append(event["event_id"])
+        if event["event_id"] == stuck_id:
+            raise RuntimeError("permanent A callback failure")
+
+    first = DEA.drain_pending(
+        state_update_fn=SM.update_from_event,
+        effect_status_fn=SM.event_effect_status,
+        get_order_fn=SM.get_order_strict,
+        downstream_fn=callback,
+        min_age_seconds=30,
+    )
+    assert first["failed"] == 1
+    assert callbacks == [stuck_id]
+
+    real_decision_flag = C.decision_flag
+    monkeypatch.setattr(
+        C,
+        "decision_flag",
+        lambda name: (
+            sweeper_enabled
+            if name == "ENABLE_STATE_OUTBOX_SWEEPER"
+            else real_decision_flag(name)
+        ),
+    )
+    outcome = DEA.emit_and_apply(
+        "ORDER_RETURNED_TO_POOL",
+        order_id="c3-order",
+        courier_id="100",
+        payload={"reason": "cancelled", "source": "foreground-cooldown"},
+        state_payload=None,
+        event_key="c3-order_ORDER_RETURNED_foreground-cooldown",
+        emit_fn=EB.emit_audit,
+        state_update_fn=SM.update_from_event,
+        effect_status_fn=SM.event_effect_status,
+        get_order_fn=SM.get_order_strict,
+        downstream_fn=callback,
+    )
+
+    if sweeper_enabled:
+        assert callbacks == [stuck_id, outcome.event_id]
+        assert outcome.failure_stage is None
+        assert EB.get_state_apply_outbox(outcome.event_id)[
+            "downstream_status"
+        ] == "applied"
+    else:
+        assert callbacks == [stuck_id, stuck_id]
+        assert outcome.failure_stage == "downstream"
+        assert EB.get_state_apply_outbox(outcome.event_id)[
+            "downstream_status"
+        ] == "pending"
+
+
+@pytest.mark.parametrize("sweeper_enabled", [False, True])
+def test_foreground_matching_state_retry_respects_sweeper_cooldown(
+    isolated_stores, monkeypatch, sweeper_enabled
+):
+    """ON odracza ponowny state writer; OFF zachowuje natychmiastowy legacy retry."""
+    real_decision_flag = C.decision_flag
+    monkeypatch.setattr(
+        C,
+        "decision_flag",
+        lambda name: (
+            sweeper_enabled
+            if name == "ENABLE_STATE_OUTBOX_SWEEPER"
+            else real_decision_flag(name)
+        ),
+    )
+    attempts = []
+
+    def fail_state(event):
+        attempts.append(event["event_id"])
+        raise RuntimeError("synthetic state writer failure")
+
+    kwargs = dict(
+        event_type="ORDER_RETURNED_TO_POOL",
+        order_id="state-cooldown-order",
+        courier_id="100",
+        payload={"source": "state-cooldown"},
+        state_payload=None,
+        event_key="state-cooldown-order_ORDER_RETURNED_test",
+        emit_fn=EB.emit_audit,
+        state_update_fn=fail_state,
+        effect_status_fn=lambda _event, _current: "pending",
+        get_order_fn=lambda _oid: None,
+        downstream_fn=lambda _event: None,
+    )
+    first = DEA.emit_and_apply(**kwargs)
+    second = DEA.emit_and_apply(**kwargs)
+
+    assert first.failure_stage == "state_apply"
+    if sweeper_enabled:
+        assert second.failure_stage == "state_cooldown"
+        assert len(attempts) == 1
+    else:
+        assert second.failure_stage == "state_apply"
+        assert len(attempts) == 2
+
+
+@pytest.mark.parametrize("sweeper_enabled", [False, True])
+def test_foreground_new_key_respects_predecessor_state_cooldown(
+    isolated_stores, monkeypatch, sweeper_enabled
+):
+    """ON nie ponawia świeżego T1 także gdy one-shot T2 ma inny event_key."""
+    real_decision_flag = C.decision_flag
+    monkeypatch.setattr(
+        C,
+        "decision_flag",
+        lambda name: (
+            sweeper_enabled
+            if name == "ENABLE_STATE_OUTBOX_SWEEPER"
+            else real_decision_flag(name)
+        ),
+    )
+    attempts = []
+
+    def fail_state(event):
+        attempts.append(event["event_id"])
+        raise RuntimeError("synthetic predecessor state failure")
+
+    def emit(source, event_key):
+        return DEA.emit_and_apply(
+            "ORDER_RETURNED_TO_POOL",
+            order_id="state-cooldown-predecessor",
+            courier_id="100",
+            payload={"source": source},
+            state_payload=None,
+            event_key=event_key,
+            emit_fn=EB.emit_audit,
+            state_update_fn=fail_state,
+            effect_status_fn=lambda _event, _current: "pending",
+            get_order_fn=lambda _oid: None,
+            downstream_fn=lambda _event: None,
+        )
+
+    first = emit("predecessor-a", "state-cooldown-predecessor_KEY_A")
+    second = emit("successor-b", "state-cooldown-predecessor_KEY_B")
+
+    assert first.failure_stage == "state_apply"
+    assert second.failure_stage == "state_predecessor"
+    assert second.event_id != first.event_id
+    assert EB.get_state_apply_outbox(second.event_id)[
+        "predecessor_event_id"
+    ] == first.event_id
+    if sweeper_enabled:
+        assert attempts == [first.event_id]
+        assert EB.get_state_apply_outbox(first.event_id)["state_attempts"] == 1
+    else:
+        assert attempts == [first.event_id, first.event_id]
+        assert EB.get_state_apply_outbox(first.event_id)["state_attempts"] == 2
+
+
+def test_panel_tick_runs_sweeper_even_when_panel_fetch_fails(monkeypatch):
+    """Wiring recovery nie zalezy od udanego fetchu ani kolejnego eventu."""
+    monkeypatch.setattr(PW, "_fail_count", 0)
+    sweep_calls = []
+    monkeypatch.setattr(
+        PW,
+        "decision_flag",
+        lambda name: name == "ENABLE_STATE_OUTBOX_SWEEPER",
+    )
+    monkeypatch.setattr(
+        PW,
+        "_sweep_state_apply_outbox",
+        lambda **kwargs: sweep_calls.append(kwargs) or {
+            "state_outbox_sweeper_completed": 1
+        },
+    )
+    monkeypatch.setattr(
+        PW,
+        "fetch_panel_html",
+        lambda: (_ for _ in ()).throw(RuntimeError("synthetic panel outage")),
+    )
+
+    stats, parsed = PW.tick(77)
+
+    assert parsed is None
+    assert sweep_calls == [{"enabled": True}]
+    assert stats["state_outbox_sweeper_completed"] == 1
+    assert stats["error"] == "RuntimeError: synthetic panel outage"
+
+
+def test_panel_tick_snapshots_sweeper_flag_and_sums_recovery_errors(monkeypatch):
+    """Jeden odczyt flagi steruje obu drainami; errors nie ginie przy update."""
+    flag_calls = []
+    sweep_calls = []
+    diff_calls = []
+    durable_snapshots = []
+    monkeypatch.setattr(PW, "_fail_count", 0)
+    monkeypatch.setattr(PW, "_cold_start_done", True)
+
+    def read_flag(name):
+        flag_calls.append(name)
+        return True
+
+    monkeypatch.setattr(PW, "decision_flag", read_flag)
+    monkeypatch.setattr(
+        PW,
+        "_sweep_state_apply_outbox",
+        lambda **kwargs: sweep_calls.append(kwargs) or {
+            "durable_apply_failed": 1,
+            "errors": 1,
+        },
+    )
+    monkeypatch.setattr(PW, "fetch_panel_html", lambda: "<html />")
+    monkeypatch.setattr(
+        PW,
+        "parse_panel_html",
+        lambda _html: {
+            "order_ids": [],
+            "assigned_ids": set(),
+            "courier_packs": {},
+        },
+    )
+    monkeypatch.setattr(
+        DEA,
+        "emit_and_apply",
+        lambda *args, **kwargs: durable_snapshots.append(
+            kwargs.get("sweeper_enabled")
+        ) or DEA.DurableApplyOutcome(
+            event_id="snapshot-test",
+            event_key="snapshot-test",
+            event_created=True,
+            state_ready=True,
+            state_transitioned=True,
+            downstream_executed=True,
+        ),
+    )
+
+    def fake_diff(parsed, csrf, **kwargs):
+        diff_calls.append(kwargs)
+        PW._emit_and_apply_state(
+            "ORDER_RETURNED_TO_POOL",
+            order_id="snapshot-test",
+            courier_id="100",
+            payload={"source": "snapshot-test"},
+            event_id="snapshot-test",
+            audit=True,
+        )
+        return {"errors": 2}
+
+    monkeypatch.setattr(PW, "_diff_and_emit", fake_diff)
+
+    stats, _parsed = PW.tick(78)
+
+    assert flag_calls == ["ENABLE_STATE_OUTBOX_SWEEPER"]
+    assert sweep_calls == [{"enabled": True}]
+    assert diff_calls == [{"_state_outbox_sweeper_on": True}]
+    assert durable_snapshots == [True]
+    assert stats["errors"] == 3
+    assert stats["durable_apply_failed"] == 1
+
+
 def test_none_downstream_is_an_explicit_successful_noop(isolated_stores):
     """Brak callbacku domyka receipt zamiast tworzyc wieczny pending row."""
     outcome = DEA.emit_and_apply(
@@ -1063,6 +1945,49 @@ def test_none_downstream_is_an_explicit_successful_noop(isolated_stores):
     assert outcome.failure_stage is None
     assert outcome.downstream_executed is False
     assert EB.get_state_apply_outbox(outcome.event_id)["downstream_status"] == "applied"
+
+
+def test_none_downstream_sweeper_counts_its_receipt_transition(
+    isolated_stores,
+):
+    """Metryka completed liczy no-op terminalizowany przez ten consumer."""
+    events_db, _state_path = isolated_stores
+
+    def fail_callback(_event):
+        raise RuntimeError("leave receipt pending for explicit no-op retry")
+
+    first = DEA.emit_and_apply(
+        "ORDER_RETURNED_TO_POOL",
+        order_id="c3-order",
+        courier_id="100",
+        payload={"reason": "cancelled", "source": "no_downstream_sweep"},
+        state_payload=None,
+        event_key="c3-order_ORDER_RETURNED_no_downstream_sweep",
+        emit_fn=EB.emit_audit,
+        state_update_fn=SM.update_from_event,
+        effect_status_fn=SM.event_effect_status,
+        get_order_fn=SM.get_order_strict,
+        downstream_fn=fail_callback,
+    )
+    assert first.failure_stage == "downstream"
+    with sqlite3.connect(events_db) as conn:
+        conn.execute(
+            "UPDATE state_apply_outbox "
+            "SET updated_at='2000-01-01T00:00:00+00:00' WHERE event_id=?",
+            (first.event_id,),
+        )
+
+    counts = DEA.drain_pending(
+        state_update_fn=SM.update_from_event,
+        effect_status_fn=SM.event_effect_status,
+        get_order_fn=SM.get_order_strict,
+        downstream_fn=None,
+        min_age_seconds=30,
+    )
+
+    assert counts["completed"] == 1
+    assert counts["downstream"] == 0
+    assert EB.get_state_apply_outbox(first.event_id)["downstream_status"] == "applied"
 
 
 def test_none_downstream_cannot_swallow_an_older_receipt(isolated_stores):
@@ -1193,6 +2118,142 @@ def test_retry_order_is_fair_after_permanent_failures_with_frozen_clock(
     assert SM.get_order(target_oid)["status"] == "planned"
 
 
+def test_older_failed_receipt_is_not_starved_by_fresh_zero_attempt_rows(
+    isolated_stores,
+):
+    """Wiek ostatniej próby ma pierwszeństwo przed licznikiem prób."""
+    events_db, _state_path = isolated_stores
+
+    def emit_pending(idx: int) -> str:
+        oid = f"age-fair-{idx}"
+        event_id = f"{oid}_NEW_ORDER_v1"
+        event = {
+            "event_type": "NEW_ORDER",
+            "event_id": event_id,
+            "order_id": oid,
+            "courier_id": None,
+            "payload": {},
+        }
+        assert EB.emit(
+            "NEW_ORDER",
+            order_id=oid,
+            event_id=event_id,
+            state_event=event,
+            event_key=event_id,
+        ) == event_id
+        return event_id
+
+    old_id = emit_pending(0)
+    fresh_ids = [emit_pending(idx) for idx in range(1, 102)]
+    with sqlite3.connect(events_db) as conn:
+        conn.execute(
+            "UPDATE state_apply_outbox SET state_attempts=9, updated_at=? "
+            "WHERE event_id=?",
+            ("2000-01-01T00:00:00+00:00", old_id),
+        )
+        conn.executemany(
+            "UPDATE state_apply_outbox SET updated_at=? WHERE event_id=?",
+            [
+                ("2000-01-02T00:00:00+00:00", event_id)
+                for event_id in fresh_ids
+            ],
+        )
+
+    selected = EB.list_unresolved_state_applies(
+        limit=100,
+        updated_before="2000-01-03T00:00:00+00:00",
+    )
+    assert selected[0]["event_id"] == old_id
+    assert len(selected) == 100
+
+    for event_id in [old_id, *fresh_ids]:
+        assert EB.mark_state_apply_applied(event_id)
+    with sqlite3.connect(events_db) as conn:
+        conn.execute(
+            "UPDATE state_apply_outbox SET downstream_attempts=9, updated_at=? "
+            "WHERE event_id=?",
+            ("2000-01-01T00:00:00+00:00", old_id),
+        )
+        conn.executemany(
+            "UPDATE state_apply_outbox SET updated_at=? WHERE event_id=?",
+            [
+                ("2000-01-02T00:00:00+00:00", event_id)
+                for event_id in fresh_ids
+            ],
+        )
+    assert EB.get_oldest_pending_downstream(
+        updated_before="2000-01-03T00:00:00+00:00"
+    )["event_id"] == old_id
+
+
+def test_retry_sequence_prevents_state_starvation_with_tied_or_backward_clock(
+    isolated_stores, monkeypatch
+):
+    """Nowe rowy nie przeskakują retry nawet przy identycznym/cofniętym czasie."""
+    monkeypatch.setattr(EB, "now_iso", lambda: "2000-01-01T00:00:00+00:00")
+
+    def emit_pending(event_id):
+        event = {
+            "event_type": "NEW_ORDER",
+            "event_id": event_id,
+            "order_id": event_id,
+            "courier_id": None,
+            "payload": {},
+        }
+        assert EB.emit(
+            "NEW_ORDER",
+            order_id=event_id,
+            event_id=event_id,
+            state_event=event,
+            event_key=event_id,
+        ) == event_id
+
+    emit_pending("retry-old")
+    assert EB.record_state_apply_error("retry-old", "first failure")
+    for idx in range(100):
+        emit_pending(f"fresh-{idx:03d}")
+
+    selected = EB.list_unresolved_state_applies(
+        limit=100,
+        updated_before="2000-01-02T00:00:00+00:00",
+    )
+    assert selected[0]["event_id"] == "retry-old"
+    assert "retry-old" in {row["event_id"] for row in selected}
+
+
+def test_retry_sequence_prevents_downstream_starvation_with_tied_clock(
+    isolated_stores, monkeypatch
+):
+    monkeypatch.setattr(EB, "now_iso", lambda: "2000-01-01T00:00:00+00:00")
+
+    def emit_ready(event_id):
+        event = {
+            "event_type": "NEW_ORDER",
+            "event_id": event_id,
+            "order_id": event_id,
+            "courier_id": None,
+            "payload": {},
+        }
+        assert EB.emit(
+            "NEW_ORDER",
+            order_id=event_id,
+            event_id=event_id,
+            state_event=event,
+            event_key=event_id,
+        ) == event_id
+        assert EB.mark_state_apply_applied(event_id)
+
+    emit_ready("callback-old")
+    assert EB.begin_state_apply_downstream("callback-old") == 1
+    for idx in range(100):
+        emit_ready(f"callback-fresh-{idx:03d}")
+
+    selected = EB.get_oldest_pending_downstream(
+        updated_before="2000-01-02T00:00:00+00:00"
+    )
+    assert selected["event_id"] == "callback-old"
+
+
 def test_same_timestamp_fifo_uses_insert_order_not_event_id(
     isolated_stores, monkeypatch
 ):
@@ -1263,10 +2324,10 @@ def test_unknown_version_without_storage_token_fails_closed(
     assert EB.get_state_apply_outbox(outcome.event_id)["state_status"] == "pending"
 
 
-def test_missing_baseline_token_terminalizes_after_storage_recovers_and_unblocks_fifo(
+def test_missing_baseline_token_stays_pending_and_does_not_block_other_lane(
     isolated_stores, monkeypatch
 ):
-    """An unprovable double-read failure is loud/terminal, never global poison."""
+    """Nieudowodniona intencja nie ginie i nie blokuje callbacku innego orderu."""
     reads = 0
     token_reads = 0
     updates = []
@@ -1334,7 +2395,8 @@ def test_missing_baseline_token_terminalizes_after_storage_recovers_and_unblocks
     )
 
     first_row = EB.get_state_apply_outbox(first.event_id)
-    assert first_row["state_status"] == "superseded"
+    assert first_row["state_status"] == "pending"
+    assert first_row["downstream_status"] == "pending"
     assert "missing expected state storage token" in first_row["last_error"]
     assert EB.get_state_apply_outbox(later_id)["downstream_status"] == "applied"
     assert downstream == [later_id]
@@ -1366,6 +2428,59 @@ def test_lifecycle_lock_excludes_threads_in_same_process(isolated_stores):
         first.result(timeout=5)
         second.result(timeout=5)
     assert second_entered.is_set()
+
+
+def test_downstream_sweeper_excludes_duplicate_callbacks_across_processes(
+    isolated_stores, tmp_path
+):
+    """Dwa niezalezne ticki nie mogą wykonać tego samego callbacku 2x."""
+    outcome = DEA.emit_and_apply(
+        "ORDER_RETURNED_TO_POOL",
+        order_id="c3-order",
+        courier_id="100",
+        payload={"reason": "cancelled", "source": "multiprocess-lock-test"},
+        state_payload=None,
+        event_key="c3-order_RETURNED_multiprocess-lock-test",
+        emit_fn=EB.emit_audit,
+        state_update_fn=SM.update_from_event,
+        effect_status_fn=SM.event_effect_status,
+        get_order_fn=SM.get_order_strict,
+        downstream_fn=lambda _event: (_ for _ in ()).throw(
+            RuntimeError("hold for parallel sweepers")
+        ),
+    )
+    assert outcome.failure_stage == "downstream"
+
+    try:
+        ctx = multiprocessing.get_context("fork")
+    except ValueError:
+        pytest.skip("test wymaga fork, aby dziedziczyć hermetyczne pathy")
+    callback_path = tmp_path / "multiprocess-callbacks.log"
+    start_gate = ctx.Event()
+    processes = [
+        ctx.Process(
+            target=_multiprocess_drain_worker,
+            args=(start_gate, str(callback_path)),
+        )
+        for _ in range(2)
+    ]
+    for process in processes:
+        process.start()
+    start_gate.set()
+    for process in processes:
+        process.join(timeout=10)
+    for process in processes:
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=5)
+
+    assert [process.exitcode for process in processes] == [0, 0]
+    assert callback_path.read_text(encoding="utf-8").splitlines() == [
+        outcome.event_id
+    ]
+    assert EB.get_state_apply_outbox(outcome.event_id)[
+        "downstream_status"
+    ] == "applied"
 
 
 def test_older_delivered_is_superseded_by_newer_returned(
@@ -1819,6 +2934,120 @@ def test_retry_exact_pending_successor_does_not_fork_third_generation(
             "SELECT COUNT(*) FROM state_apply_outbox WHERE event_key=?",
             (event_key,),
         ).fetchone()[0] == 2
+
+
+def test_repeated_intent_behind_pending_tail_creates_new_generation(
+    isolated_stores,
+):
+    """A1(pending)->B(pending)->A2 nie może zostać zredukowane do A1->B."""
+    events_db, state_path = isolated_stores
+
+    def fail_state(_event):
+        raise RuntimeError("synthetic state outage")
+
+    def assign(cid: str, update_fn):
+        return DEA.emit_and_apply(
+            "COURIER_ASSIGNED",
+            order_id="c3-order",
+            courier_id=cid,
+            payload={"source": "pending-cycle-test"},
+            state_payload=None,
+            event_key=f"c3-order_COURIER_ASSIGNED_{cid}_pending-cycle",
+            emit_fn=EB.emit_audit,
+            state_update_fn=update_fn,
+            effect_status_fn=SM.event_effect_status,
+            get_order_fn=SM.get_order_strict,
+            downstream_fn=lambda _event: None,
+        )
+
+    a1 = assign("200", fail_state)
+    to_b = assign("300", fail_state)
+    a2 = assign("200", SM.update_from_event)
+
+    assert a1.failure_stage == "state_apply"
+    assert to_b.state_ready is False
+    assert a2.event_created is True
+    assert a2.event_id != a1.event_id
+    assert a2.state_ready is False
+    assert EB.get_state_apply_outbox(a2.event_id)["predecessor_event_id"] == (
+        to_b.event_id
+    )
+
+    callbacks = []
+    counts = DEA.drain_pending(
+        state_update_fn=SM.update_from_event,
+        effect_status_fn=SM.event_effect_status,
+        get_order_fn=SM.get_order_strict,
+        downstream_fn=lambda event: callbacks.append(event["event_id"]),
+    )
+
+    assert counts["failed"] == 0
+    assert _state(state_path)["courier_id"] == "200"
+    assert callbacks == [a1.event_id, to_b.event_id, a2.event_id]
+    with sqlite3.connect(events_db) as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM state_apply_outbox"
+        ).fetchone()[0] == 3
+
+
+def test_repeated_intent_after_applied_callback_and_pending_tail_is_not_lost(
+    isolated_stores,
+):
+    """A1(applied/callback pending)->B(pending)->A2 utrwala trzy generacje."""
+    events_db, state_path = isolated_stores
+
+    def emit(cid: str, update_fn, downstream_fn):
+        return DEA.emit_and_apply(
+            "COURIER_ASSIGNED",
+            order_id="c3-order",
+            courier_id=cid,
+            payload={"source": "applied-pending-cycle-test"},
+            state_payload=None,
+            event_key=f"c3-order_COURIER_ASSIGNED_{cid}_applied-pending-cycle",
+            emit_fn=EB.emit_audit,
+            state_update_fn=update_fn,
+            effect_status_fn=SM.event_effect_status,
+            get_order_fn=SM.get_order_strict,
+            downstream_fn=downstream_fn,
+        )
+
+    a1 = emit(
+        "200",
+        SM.update_from_event,
+        lambda _event: (_ for _ in ()).throw(RuntimeError("hold A1 callback")),
+    )
+    assert a1.state_ready is True
+    assert a1.failure_stage == "downstream"
+
+    def fail_state(_event):
+        raise RuntimeError("hold successor state")
+
+    to_b = emit("300", fail_state, lambda _event: None)
+    a2 = emit("200", fail_state, lambda _event: None)
+
+    assert to_b.failure_stage == "state_apply"
+    assert a2.event_created is True
+    assert a2.event_id != a1.event_id
+    assert a2.state_ready is False
+    assert EB.get_state_apply_outbox(a2.event_id)["predecessor_event_id"] == (
+        to_b.event_id
+    )
+    with sqlite3.connect(events_db) as conn:
+        assert conn.execute(
+            "SELECT COUNT(*) FROM state_apply_outbox"
+        ).fetchone()[0] == 3
+
+    callbacks = []
+    counts = DEA.drain_pending(
+        state_update_fn=SM.update_from_event,
+        effect_status_fn=SM.event_effect_status,
+        get_order_fn=SM.get_order_strict,
+        downstream_fn=lambda event: callbacks.append(event["event_id"]),
+    )
+
+    assert counts["failed"] == 0
+    assert _state(state_path)["courier_id"] == "200"
+    assert callbacks == [a1.event_id, to_b.event_id, a2.event_id]
 
 
 def test_resurrection_invalidates_crash_marker_before_delivered_recovery(
@@ -3027,7 +4256,7 @@ def test_legacy_malformed_outbox_row_is_terminalized_without_poisoning_fifo(
         ).fetchone()[0] == "processed"
 
 
-def test_projected_learning_effect_does_not_depend_on_rotation_history(
+def test_projected_learning_receipt_prevents_reappend_without_log_history(
     isolated_stores, monkeypatch, tmp_path
 ):
     pending_path = tmp_path / "pending.json"
@@ -3117,6 +4346,220 @@ def test_learning_projection_first_classification_wins_across_retry(
         ).fetchone()[0] == 1
 
 
+def test_learning_retry_projects_sqlite_record_before_live_reclassification(
+    isolated_stores, monkeypatch, tmp_path
+):
+    """Prepared AGREE survives later flag OFF and disappeared proposal file."""
+    learning_path = tmp_path / "learning.jsonl"
+    lifecycle_event_id = "assignment-learning-resume-before-gates"
+    canonical = {
+        "action": "PANEL_AGREE",
+        "order_id": "c3-order",
+        "lifecycle_event_id": lifecycle_event_id,
+    }
+    EB.prepare_durable_learning_projection(
+        lifecycle_event_id, "panel_assignment_learning", canonical
+    )
+    monkeypatch.setattr(PW, "_LEARNING_LOG_PATH", str(learning_path))
+    monkeypatch.setattr(
+        PW, "_PENDING_PROPOSALS_PATH", str(tmp_path / "already-gone.json")
+    )
+    monkeypatch.setattr(PW, "_panel_agree_enabled", lambda: False)
+    monkeypatch.setattr(PW, "_durable_downstream_attempt", lambda *a, **k: 2)
+
+    PW._check_panel_agree(
+        "c3-order",
+        "200",
+        "panel_diff",
+        lifecycle_event_id=lifecycle_event_id,
+        _raise_on_error=True,
+    )
+
+    assert [
+        json.loads(line)
+        for line in learning_path.read_text(encoding="utf-8").splitlines()
+    ] == [canonical]
+    projection = EB.get_durable_learning_projection(
+        f"{lifecycle_event_id}:panel_assignment_learning"
+    )
+    assert projection is not None and projection["projected_at"] is not None
+
+
+def test_negative_learning_classification_is_durable_across_retry(
+    isolated_stores, monkeypatch, tmp_path
+):
+    """OFF/no-op na próbie 1 nie może stać się AGREE/OVERRIDE po zmianie pliku."""
+    lifecycle_event_id = "assignment-learning-negative-receipt"
+    pending_path = tmp_path / "pending.json"
+    learning_path = tmp_path / "learning.jsonl"
+    pending_path.write_text(
+        json.dumps(
+            {
+                "c3-order": {
+                    "decision_record": {
+                        "best": {"courier_id": "200", "score": 1.0}
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(PW, "_PENDING_PROPOSALS_PATH", str(pending_path))
+    monkeypatch.setattr(PW, "_LEARNING_LOG_PATH", str(learning_path))
+
+    PW._check_panel_agree(
+        "c3-order",
+        "200",
+        "panel_diff",
+        lifecycle_event_id=lifecycle_event_id,
+        _raise_on_error=True,
+        _enabled_by_receipt=False,
+    )
+    PW._check_panel_override(
+        "c3-order",
+        "200",
+        "panel_diff",
+        lifecycle_event_id=lifecycle_event_id,
+        _raise_on_error=True,
+    )
+
+    effect_id = f"{lifecycle_event_id}:panel_assignment_learning"
+    projection = EB.get_durable_learning_projection(effect_id)
+    assert projection is not None
+    assert projection["record"]["action"] == "PANEL_LEARNING_NONE"
+    assert projection["projected_at"] is not None
+    assert not learning_path.exists()
+
+    pending_path.write_text(
+        json.dumps(
+            {
+                "c3-order": {
+                    "decision_record": {
+                        "best": {"courier_id": "999", "score": 2.0}
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    PW._check_panel_agree(
+        "c3-order",
+        "200",
+        "panel_diff",
+        lifecycle_event_id=lifecycle_event_id,
+        _raise_on_error=True,
+        _enabled_by_receipt=True,
+    )
+    PW._check_panel_override(
+        "c3-order",
+        "200",
+        "panel_diff",
+        lifecycle_event_id=lifecycle_event_id,
+        _raise_on_error=True,
+    )
+
+    assert not learning_path.exists()
+    assert EB.get_durable_learning_projection(effect_id)["record"] == projection[
+        "record"
+    ]
+
+
+def test_assignment_receipt_snapshots_learning_before_first_projection(
+    isolated_stores, monkeypatch, tmp_path
+):
+    """Crash przed callbackiem nie może związać ASSIGN z późniejszą propozycją."""
+    events_db, _state_path = isolated_stores
+    pending_path = tmp_path / "pending.json"
+    learning_path = tmp_path / "learning.jsonl"
+    sent_at = "2026-07-20T10:00:00+00:00"
+    monkeypatch.setattr(PW, "now_iso", lambda: "2026-07-20T10:10:00+00:00")
+    monkeypatch.setattr(PW, "_PANEL_AGREE_MAX_AGE_MIN", 15.0)
+    pending_path.write_text(
+        json.dumps(
+            {
+                "c3-order": {
+                    "sent_at": sent_at,
+                    "decision_record": {
+                        "ts": sent_at,
+                        "best": {"courier_id": "200", "score": 1.0},
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(PW, "_PENDING_PROPOSALS_PATH", str(pending_path))
+    monkeypatch.setattr(PW, "_LEARNING_LOG_PATH", str(learning_path))
+    monkeypatch.setattr(PW, "_save_plan_on_assign_signal", lambda *_a, **_k: None)
+
+    def crash_before_first_projection(_event):
+        raise RuntimeError("synthetic crash before lifecycle callback")
+
+    monkeypatch.setattr(PW.lifecycle_downstream, "apply", crash_before_first_projection)
+    first = PW._emit_and_apply_state(
+        "COURIER_ASSIGNED",
+        order_id="c3-order",
+        courier_id="200",
+        payload={"source": "panel_diff"},
+        event_id="c3-order_ASSIGN_learning-snapshot",
+        audit=True,
+    )
+    receipt = EB.get_state_apply_outbox(first.event_id)
+    context = receipt["state_event"]["panel_learning_context"]
+    assert first.failure_stage == "downstream"
+    assert context["capture_status"] == "pending"
+    assert context["panel_agree_max_age_min"] == 15.0
+    assert context["pending_record"]["decision_record"]["best"][
+        "courier_id"
+    ] == "200"
+
+    # Zmienny plik wskazuje teraz innego kuriera; retry ma użyć receiptu.
+    pending_path.write_text(
+        json.dumps(
+            {
+                "c3-order": {
+                    "sent_at": sent_at,
+                    "decision_record": {
+                        "ts": sent_at,
+                        "best": {"courier_id": "999", "score": 9.0},
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    with sqlite3.connect(events_db) as conn:
+        conn.execute(
+            "UPDATE state_apply_outbox "
+            "SET updated_at='2000-01-01T00:00:00+00:00' WHERE event_id=?",
+            (first.event_id,),
+        )
+    monkeypatch.setattr(
+        PW.lifecycle_downstream, "apply", _REAL_LIFECYCLE_DOWNSTREAM_APPLY
+    )
+    # Restart/config drift po commicie receiptu nie zmienia klasyfikacji.
+    monkeypatch.setattr(PW, "_PANEL_AGREE_MAX_AGE_MIN", 5.0)
+    counts = DEA.drain_pending(
+        state_update_fn=SM.update_from_event,
+        effect_status_fn=SM.event_effect_status,
+        get_order_fn=SM.get_order_strict,
+        downstream_fn=_REAL_LIFECYCLE_DOWNSTREAM_APPLY,
+        min_age_seconds=30,
+    )
+
+    rows = [
+        json.loads(line)
+        for line in learning_path.read_text(encoding="utf-8").splitlines()
+    ]
+    assert counts["completed"] == 1
+    assert [row["action"] for row in rows] == ["PANEL_AGREE"]
+    assert rows[0]["proposed_courier_id"] == "200"
+    assert rows[0]["actual_courier_id"] == "200"
+    assert EB.get_state_apply_outbox(first.event_id)[
+        "downstream_status"
+    ] == "applied"
+
+
 def test_delayed_assignment_callback_skips_old_courier_and_prunes_previous(
     monkeypatch,
 ):
@@ -3137,6 +4580,10 @@ def test_delayed_assignment_callback_skips_old_courier_and_prunes_previous(
     monkeypatch.setattr(PW, "_save_plan_on_assign_signal", lambda oid, cid, **k: saved.append((oid, cid)))
     monkeypatch.setattr(PW, "_check_panel_agree", lambda *a, **k: None)
     monkeypatch.setattr(PW, "_check_panel_override", lambda *a, **k: None)
+    monkeypatch.setattr(LD, "_cleanup_plan_version", lambda _cid: 0)
+    monkeypatch.setattr(
+        PW, "_recanon_after_plan_cleanup", lambda *_a, **_k: True
+    )
 
     LD.apply(
         {"event_type": "COURIER_ASSIGNED", "event_id": "assign-T1", "order_id": "A", "courier_id": "100", "payload": {}}
@@ -3148,12 +4595,134 @@ def test_delayed_assignment_callback_skips_old_courier_and_prunes_previous(
             "order_id": "A",
             "courier_id": "200",
             "previous_courier_id": "100",
+            "reassign_old_plan_release_authorized": True,
             "payload": {},
         }
     )
 
     assert removed == [("100", "A")]
     assert saved == [("A", "200")]
+
+
+def test_delayed_assignment_never_prunes_reassigned_previous_courier(
+    monkeypatch,
+):
+    """A->B callback po B->A nie moze usunac stopa nowej generacji A."""
+    current = {
+        "order_id": "A",
+        "status": "assigned",
+        "courier_id": "100",
+        "last_lifecycle_event_id_courier_assigned": "assign-A2",
+    }
+    monkeypatch.setattr(LD.state_machine, "get_order_strict", lambda _oid: current)
+    monkeypatch.setattr(PM, "load_plans", lambda **_kwargs: {})
+    removed = []
+    saved = []
+    repaired = []
+    monkeypatch.setattr(
+        PW,
+        "_release_plan_on_reassign",
+        lambda cid, oid, **kw: removed.append((cid, oid)),
+    )
+    monkeypatch.setattr(
+        PW,
+        "_save_plan_on_assign_signal",
+        lambda oid, cid, **kw: saved.append((oid, cid)),
+    )
+    monkeypatch.setattr(
+        PW,
+        "_invalidate_plan_on_bag_change",
+        lambda oid, cid, **kw: repaired.append((oid, cid)),
+    )
+
+    LD.apply(
+        {
+            "event_type": "COURIER_ASSIGNED",
+            "event_id": "assign-B1",
+            "order_id": "A",
+            "courier_id": "200",
+            "previous_courier_id": "100",
+            "reassign_old_plan_release_authorized": True,
+            "payload": {},
+        }
+    )
+
+    assert removed == []
+    assert saved == []
+    assert repaired == [], "stary receipt nie naprawia planu nowszej generacji"
+
+
+def test_assignment_cleanup_defers_raced_generation_to_its_own_receipt(
+    monkeypatch,
+):
+    """B->A po prechecku naprawi własny receipt, nie historyczne flagi A->B."""
+    current = {
+        "order_id": "A",
+        "status": "assigned",
+        "courier_id": "200",
+    }
+    monkeypatch.setattr(
+        LD.state_machine, "get_order_strict", lambda _oid: dict(current)
+    )
+    monkeypatch.setattr(PM, "load_plans", lambda **_kwargs: {})
+    removed = []
+    repaired = []
+
+    def release_then_reassign(cid, oid, **_kwargs):
+        removed.append((cid, oid))
+        current.update(
+            {
+                "courier_id": "100",
+                "last_lifecycle_event_id_courier_assigned": "assign-A2",
+            }
+        )
+        return True
+
+    monkeypatch.setattr(PW, "_release_plan_on_reassign", release_then_reassign)
+    monkeypatch.setattr(LD, "_cleanup_plan_version", lambda _cid: 0)
+    monkeypatch.setattr(
+        PW, "_recanon_after_plan_cleanup", lambda *_a, **_k: True
+    )
+    monkeypatch.setattr(
+        PW,
+        "_invalidate_plan_on_bag_change",
+        lambda oid, cid, **_kwargs: repaired.append((oid, cid)),
+    )
+
+    LD.apply(
+        {
+            "event_type": "COURIER_ASSIGNED",
+            "event_id": "assign-B1",
+            "order_id": "A",
+            "courier_id": "200",
+            "previous_courier_id": "100",
+            "reassign_old_plan_release_authorized": True,
+            "payload": {},
+        }
+    )
+
+    assert removed == [("100", "A")]
+    assert repaired == []
+    saved = []
+    monkeypatch.setattr(
+        PW,
+        "_save_plan_on_assign_signal",
+        lambda oid, cid, **_kwargs: saved.append((oid, cid)),
+    )
+
+    LD.apply(
+        {
+            "event_type": "COURIER_ASSIGNED",
+            "event_id": "assign-A2",
+            "order_id": "A",
+            "courier_id": "100",
+            "previous_courier_id": "200",
+            "reassign_old_plan_release_authorized": False,
+            "payload": {"source": "test"},
+        }
+    )
+
+    assert saved == [("A", "100")]
 
 
 def test_return_callback_recovers_prior_courier_after_state_clears_it(
@@ -3181,11 +4750,40 @@ def test_return_callback_recovers_prior_courier_after_state_clears_it(
     assert removed == [("100", "c3-order")]
 
 
+def test_return_previous_courier_is_atomic_with_outbox_before_state_apply(
+    isolated_stores, monkeypatch
+):
+    """Crash przed JSON update nie może zostawić receiptu bez provenance."""
+    monkeypatch.setattr(
+        PW,
+        "update_from_event",
+        lambda _event: (_ for _ in ()).throw(
+            RuntimeError("synthetic crash before state apply")
+        ),
+    )
+
+    outcome = PW._emit_and_apply_state(
+        "ORDER_RETURNED_TO_POOL",
+        order_id="c3-order",
+        courier_id="300",
+        payload={"reason": "cancelled"},
+        event_id="return-atomic-previous-cid",
+        audit=True,
+    )
+
+    receipt = EB.get_state_apply_outbox(outcome.event_id)
+    assert outcome.failure_stage == "state_apply"
+    assert receipt["state_status"] == "pending"
+    assert receipt["state_event"]["courier_id"] == "300"
+    assert receipt["state_event"]["previous_courier_id"] == "100"
+
+
 def test_assignment_chain_prunes_every_event_local_previous_courier(
     isolated_stores, monkeypatch
 ):
     """A plan cannot survive merely because state reached C before B callback."""
     _events_db, _state_path = isolated_stores
+    monkeypatch.setattr(C, "ENABLE_REASSIGN_OLD_PLAN_RELEASE", True)
 
     def hold_b(_event):
         raise RuntimeError("hold B callback")
@@ -3218,6 +4816,9 @@ def test_assignment_chain_prunes_every_event_local_previous_courier(
     )
     monkeypatch.setattr(PW, "_check_panel_agree", lambda *a, **k: None)
     monkeypatch.setattr(PW, "_check_panel_override", lambda *a, **k: None)
+    monkeypatch.setattr(
+        PW, "_recanon_after_plan_cleanup", lambda *_a, **_k: True
+    )
     monkeypatch.setattr(PW.lifecycle_downstream, "apply", _REAL_LIFECYCLE_DOWNSTREAM_APPLY)
 
     to_c = PW._emit_and_apply_state(
@@ -3232,6 +4833,377 @@ def test_assignment_chain_prunes_every_event_local_previous_courier(
     assert to_c.downstream_executed is True
     assert removed == [("100", "c3-order"), ("200", "c3-order")]
     assert saved == [("c3-order", "300")]
+
+
+def test_assignment_release_failure_is_retried_by_age_gated_sweeper(
+    isolated_stores, monkeypatch
+):
+    """Bliźniak ASSIGNED ma provenance i retry w tym samym receipt/outboxie."""
+    events_db, _state_path = isolated_stores
+    monkeypatch.setattr(C, "ENABLE_REASSIGN_OLD_PLAN_RELEASE", True)
+    attempts = []
+    fail = {"value": True}
+
+    def release(cid, oid, **_kwargs):
+        attempts.append(
+            (
+                cid,
+                oid,
+                _kwargs.get("_authorized_by_receipt"),
+                _kwargs.get("_recanon_authorized_by_receipt"),
+            )
+        )
+        if fail["value"]:
+            raise RuntimeError("synthetic old-plan release failure")
+        return True
+
+    monkeypatch.setattr(PW, "_release_plan_on_reassign", release)
+    monkeypatch.setattr(
+        PW, "_recanon_after_plan_cleanup", lambda *_a, **_k: True
+    )
+    saved = []
+    monkeypatch.setattr(
+        PW,
+        "_save_plan_on_assign_signal",
+        lambda oid, cid, **kwargs: saved.append((oid, cid, kwargs)),
+    )
+    monkeypatch.setattr(PW.lifecycle_downstream, "apply", _REAL_LIFECYCLE_DOWNSTREAM_APPLY)
+
+    first = PW._emit_and_apply_state(
+        "COURIER_ASSIGNED",
+        order_id="c3-order",
+        courier_id="200",
+        payload={"source": "test"},
+        event_id="assign-old-plan-retry",
+        audit=True,
+    )
+
+    receipt = EB.get_state_apply_outbox(first.event_id)
+    assert first.failure_stage == "downstream"
+    assert receipt["state_event"]["previous_courier_id"] == "100"
+    assert receipt["state_event"][
+        "reassign_old_plan_release_authorized"
+    ] is True
+    assert receipt["state_event"]["recanon_on_write_authorized"] is True
+    assert receipt["downstream_status"] == "pending"
+    assert attempts == [("100", "c3-order", True, True)]
+
+    fail["value"] = False
+    # OFF zatrzymuje nowe autoryzacje, ale nie moze uciac retry exact receipt
+    # po czesciowo wykonanym callbacku.
+    monkeypatch.setattr(C, "ENABLE_REASSIGN_OLD_PLAN_RELEASE", False)
+    with sqlite3.connect(events_db) as conn:
+        conn.execute(
+            "UPDATE state_apply_outbox "
+            "SET updated_at='2000-01-01T00:00:00+00:00' WHERE event_id=?",
+            (first.event_id,),
+        )
+    counts = DEA.drain_pending(
+        state_update_fn=SM.update_from_event,
+        effect_status_fn=SM.event_effect_status,
+        get_order_fn=SM.get_order_strict,
+        downstream_fn=_REAL_LIFECYCLE_DOWNSTREAM_APPLY,
+        min_age_seconds=30,
+    )
+
+    assert counts["completed"] == 1
+    assert attempts == [
+        ("100", "c3-order", True, True),
+        ("100", "c3-order", True, True),
+    ]
+    assert saved == [
+        (
+            "c3-order",
+            "200",
+            {
+                "_raise_on_error": True,
+                    "_saved_plans_authorized_by_receipt": True,
+                    "_recanon_authorized_by_receipt": True,
+                    "_redecide_authorized_by_receipt": True,
+                    "_invalidate_authorized_by_receipt": True,
+                },
+        )
+    ]
+    assert EB.get_state_apply_outbox(first.event_id)["downstream_status"] == "applied"
+
+
+@pytest.mark.parametrize(
+    ("event_type", "courier_id", "expect_redecide"),
+    [
+        ("COURIER_ASSIGNED", "200", True),
+        ("COURIER_DELIVERED", "100", False),
+        ("COURIER_PICKED_UP", "100", True),
+    ],
+)
+def test_receipt_snapshots_flags_for_all_composite_plan_callbacks(
+    isolated_stores, monkeypatch, event_type, courier_id, expect_redecide
+):
+    """Sweeper odtwarza intencję z enqueue, nie bieżący stan flag."""
+    monkeypatch.setattr(C, "ENABLE_RECANON_ON_WRITE", True)
+    monkeypatch.setattr(C, "ENABLE_IMMEDIATE_REDECIDE_ON_OVERRIDE", True)
+    monkeypatch.setattr(C, "ENABLE_IMMEDIATE_REDECIDE_ON_PICKUP", True)
+    oid = f"flag-snapshot-{event_type.lower()}"
+
+    def fail_state(_event):
+        raise RuntimeError("hold receipt pending")
+
+    outcome = DEA.emit_and_apply(
+        event_type,
+        order_id=oid,
+        courier_id=courier_id,
+        payload={"source": "flag-snapshot-test"},
+        state_payload=None,
+        event_key=f"{oid}_{event_type}_test",
+        emit_fn=(
+            EB.emit_audit if event_type == "COURIER_ASSIGNED" else EB.emit
+        ),
+        state_update_fn=fail_state,
+        effect_status_fn=lambda _event, _current: "pending",
+        get_order_fn=lambda _oid: None,
+        downstream_fn=lambda _event: None,
+    )
+
+    event = EB.get_state_apply_outbox(outcome.event_id)["state_event"]
+    assert event["saved_plans_authorized"] is True
+    assert event["recanon_on_write_authorized"] is True
+    assert "return_previous_cleanup_authorized" not in event
+    assert ("immediate_redecide_authorized" in event) is expect_redecide
+    if expect_redecide:
+        assert event["immediate_redecide_authorized"] is True
+    if event_type == "COURIER_ASSIGNED":
+        assert event["panel_agree_authorized"] is True
+
+
+def test_receipt_flag_read_failure_is_explicitly_fail_closed(
+    isolated_stores, monkeypatch
+):
+    """Brak snapshotu nie może później znaczyć: użyj bieżącego ON."""
+    monkeypatch.setattr(
+        C,
+        "decision_flag",
+        lambda _name: (_ for _ in ()).throw(OSError("flags unreadable")),
+    )
+
+    outcome = DEA.emit_and_apply(
+        "COURIER_ASSIGNED",
+        order_id="flag-read-failure",
+        courier_id="200",
+        payload={"source": "flag-read-failure-test"},
+        state_payload=None,
+        event_key="flag-read-failure_COURIER_ASSIGNED_test",
+        emit_fn=EB.emit_audit,
+        state_update_fn=lambda _event: (_ for _ in ()).throw(
+            RuntimeError("hold receipt pending")
+        ),
+        effect_status_fn=lambda _event, _current: "pending",
+        get_order_fn=lambda _oid: None,
+        downstream_fn=lambda _event: None,
+    )
+
+    event = EB.get_state_apply_outbox(outcome.event_id)["state_event"]
+    assert event["saved_plans_authorized"] is True
+    assert event["recanon_on_write_authorized"] is False
+    assert event["immediate_redecide_authorized"] is False
+    assert "reassign_old_plan_release_authorized" not in event
+
+
+@pytest.mark.parametrize(
+    ("event_type", "marker"),
+    [
+        ("COURIER_ASSIGNED", "invalidate_plan_on_bag_change_authorized"),
+        ("ORDER_RESURRECTED", "invalidate_plan_on_bag_change_authorized"),
+        ("CZAS_KURIERA_UPDATED", "committed_invalidates_view_authorized"),
+        ("PICKUP_TIME_UPDATED", "committed_invalidates_view_authorized"),
+    ],
+)
+def test_receipt_snapshots_remaining_plan_callback_gates_fail_closed(
+    isolated_stores, monkeypatch, event_type, marker
+):
+    """Retry nie może odczytać późniejszego ON dla bag/committed callbacku."""
+    monkeypatch.setattr(C, "flag", lambda _name, _default=False: False)
+    oid = f"remaining-gate-{event_type.lower()}"
+    outcome = DEA.emit_and_apply(
+        event_type,
+        order_id=oid,
+        courier_id="200",
+        payload={"source": "remaining-gate-test"},
+        state_payload=None,
+        event_key=f"{oid}_{event_type}_test",
+        emit_fn=EB.emit_audit if event_type == "COURIER_ASSIGNED" else EB.emit,
+        state_update_fn=lambda _event: (_ for _ in ()).throw(
+            RuntimeError("hold receipt pending")
+        ),
+        effect_status_fn=lambda _event, _current: "pending",
+        get_order_fn=lambda _oid: None,
+        downstream_fn=lambda _event: None,
+    )
+
+    event = EB.get_state_apply_outbox(outcome.event_id)["state_event"]
+    assert event["saved_plans_authorized"] is True
+    assert event[marker] is False
+
+
+def test_lifecycle_forwards_assignment_invalidation_snapshot(monkeypatch):
+    event_id = "assign-invalidate-snapshot"
+    current = {
+        "order_id": "c3-order",
+        "status": "assigned",
+        "courier_id": "200",
+        "last_lifecycle_event_id_courier_assigned": event_id,
+    }
+    monkeypatch.setattr(LD.state_machine, "get_order_strict", lambda _oid: current)
+    calls = []
+    monkeypatch.setattr(
+        PW,
+        "_save_plan_on_assign_signal",
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    LD.apply(
+        {
+            "event_type": "COURIER_ASSIGNED",
+            "event_id": event_id,
+            "order_id": "c3-order",
+            "courier_id": "200",
+            "saved_plans_authorized": True,
+            "invalidate_plan_on_bag_change_authorized": True,
+            "payload": {"source": "test"},
+        }
+    )
+
+    assert calls[0][1]["_invalidate_authorized_by_receipt"] is True
+
+
+def test_lifecycle_forwards_resurrection_and_committed_snapshots(monkeypatch):
+    current = {
+        "order_id": "c3-order",
+        "status": "assigned",
+        "courier_id": "100",
+        "last_lifecycle_event_id_order_resurrected": "resurrect-gate",
+    }
+    monkeypatch.setattr(LD.state_machine, "get_order_strict", lambda _oid: current)
+    invalidates = []
+    committed = []
+    monkeypatch.setattr(
+        PW,
+        "_invalidate_plan_on_bag_change",
+        lambda *args, **kwargs: invalidates.append((args, kwargs)) or True,
+    )
+    monkeypatch.setattr(
+        PW,
+        "_invalidate_plan_on_committed_change",
+        lambda *args, **kwargs: committed.append((args, kwargs)),
+    )
+
+    LD.apply(
+        {
+            "event_type": "ORDER_RESURRECTED",
+            "event_id": "resurrect-gate",
+            "order_id": "c3-order",
+            "courier_id": "100",
+            "saved_plans_authorized": True,
+            "invalidate_plan_on_bag_change_authorized": False,
+            "payload": {},
+        }
+    )
+    LD.apply(
+        {
+            "event_type": "CZAS_KURIERA_UPDATED",
+            "event_id": "committed-gate",
+            "order_id": "c3-order",
+            "courier_id": "100",
+            "saved_plans_authorized": True,
+            "committed_invalidates_view_authorized": False,
+            "payload": {},
+        }
+    )
+
+    assert invalidates[0][1]["_saved_plans_authorized_by_receipt"] is True
+    assert invalidates[0][1]["_enabled_by_receipt"] is False
+    assert committed[0][1]["_saved_plans_authorized_by_receipt"] is True
+    assert committed[0][1]["_enabled_by_receipt"] is False
+
+
+@pytest.mark.parametrize(
+    ("event_type", "status", "helper_name", "expect_redecide"),
+    [
+        ("COURIER_DELIVERED", "delivered", "_advance_plan_on_deliver", False),
+        ("COURIER_PICKED_UP", "picked_up", "_update_plan_on_picked_up", True),
+    ],
+)
+def test_lifecycle_forwards_receipt_flags_to_plan_helpers(
+    monkeypatch, event_type, status, helper_name, expect_redecide
+):
+    """Router nie może zgubić utrwalonej decyzji między receipt a helperem."""
+    event_id = f"flag-forward-{event_type.lower()}"
+    current = {
+        "order_id": "c3-order",
+        "status": status,
+        "courier_id": "100",
+        f"last_lifecycle_event_id_{event_type.lower()}": event_id,
+    }
+    monkeypatch.setattr(LD.state_machine, "get_order_strict", lambda _oid: current)
+    calls = []
+    monkeypatch.setattr(
+        PW,
+        helper_name,
+        lambda *args, **kwargs: calls.append((args, kwargs)),
+    )
+
+    LD.apply(
+        {
+            "event_type": event_type,
+            "event_id": event_id,
+            "order_id": "c3-order",
+            "courier_id": "100",
+            "saved_plans_authorized": True,
+            "recanon_on_write_authorized": True,
+            "immediate_redecide_authorized": False,
+            "payload": {"timestamp": "2026-07-20T10:00:00+00:00"},
+        }
+    )
+
+    assert len(calls) == 1
+    kwargs = calls[0][1]
+    assert kwargs["_raise_on_error"] is True
+    assert kwargs["_saved_plans_authorized_by_receipt"] is True
+    assert kwargs["_recanon_authorized_by_receipt"] is True
+    assert (
+        "_redecide_authorized_by_receipt" in kwargs
+    ) is expect_redecide
+    if expect_redecide:
+        assert kwargs["_redecide_authorized_by_receipt"] is False
+
+
+def test_assignment_release_flag_off_is_not_authorized_in_receipt(
+    isolated_stores, monkeypatch
+):
+    """ON≠OFF: OFF utrwala assignment bez polecenia cleanupu starego planu."""
+    monkeypatch.setattr(C, "ENABLE_REASSIGN_OLD_PLAN_RELEASE", False)
+    releases = []
+    monkeypatch.setattr(
+        PW,
+        "_release_plan_on_reassign",
+        lambda cid, oid, **kwargs: releases.append((cid, oid, kwargs)),
+    )
+    monkeypatch.setattr(PW, "_save_plan_on_assign_signal", lambda *_a, **_kw: None)
+    monkeypatch.setattr(
+        PW.lifecycle_downstream, "apply", _REAL_LIFECYCLE_DOWNSTREAM_APPLY
+    )
+
+    outcome = PW._emit_and_apply_state(
+        "COURIER_ASSIGNED",
+        order_id="c3-order",
+        courier_id="200",
+        payload={"source": "test"},
+        event_id="assign-old-plan-off",
+        audit=True,
+    )
+
+    receipt = EB.get_state_apply_outbox(outcome.event_id)
+    assert outcome.failure_stage is None
+    assert "reassign_old_plan_release_authorized" not in receipt["state_event"]
+    assert releases == []
 
 
 def test_delayed_return_prunes_old_not_new_courier(monkeypatch):
@@ -3249,6 +5221,10 @@ def test_delayed_return_prunes_old_not_new_courier(monkeypatch):
         "_remove_stops_on_return",
         lambda cid, oid, **_kwargs: removed.append((cid, oid)),
     )
+    monkeypatch.setattr(LD, "_cleanup_plan_version", lambda _cid: 0)
+    monkeypatch.setattr(
+        PW, "_recanon_after_plan_cleanup", lambda *_a, **_k: True
+    )
     LD.apply(
         {
             "event_type": "ORDER_RETURNED_TO_POOL",
@@ -3261,6 +5237,89 @@ def test_delayed_return_prunes_old_not_new_courier(monkeypatch):
     )
 
     assert removed == [("100", "c3-order")]
+
+
+def test_return_without_snapshot_payload_prunes_raw_and_atomic_previous(
+    monkeypatch,
+):
+    """Każdy writer RETURN konsumuje raw A i previous B, nie tylko panel diff."""
+    removed = []
+    current = {
+        "order_id": "c3-order",
+        "status": "returned_to_pool",
+        "courier_id": None,
+    }
+    monkeypatch.setattr(LD.state_machine, "get_order_strict", lambda _oid: current)
+    monkeypatch.setattr(
+        PW,
+        "_remove_stops_on_return",
+        lambda cid, oid, **_kwargs: removed.append((cid, oid)) or True,
+    )
+    monkeypatch.setattr(LD, "_cleanup_plan_version", lambda _cid: 0)
+    monkeypatch.setattr(
+        PW, "_recanon_after_plan_cleanup", lambda *_a, **_k: True
+    )
+
+    LD.apply(
+        {
+            "event_type": "ORDER_RETURNED_TO_POOL",
+            "event_id": "return-raw-A-current-B",
+            "order_id": "c3-order",
+            "courier_id": "100",
+            "previous_courier_id": "200",
+            "return_previous_cleanup_authorized": True,
+            "recanon_on_write_authorized": True,
+            "payload": {"reason": "cancelled", "source": "reconcile"},
+        }
+    )
+
+    assert removed == [("100", "c3-order"), ("200", "c3-order")]
+
+
+def test_delayed_return_never_prunes_same_courier_new_generation(monkeypatch):
+    """RETURN T1/A po ponownym assign A nie moze usunac nowego planu A."""
+    removed = []
+    repaired = []
+    current = {
+        "order_id": "c3-order",
+        "status": "assigned",
+        "courier_id": "100",
+        "last_lifecycle_event_id_courier_assigned": "assign-A2",
+    }
+    monkeypatch.setattr(LD.state_machine, "get_order_strict", lambda _oid: current)
+    monkeypatch.setattr(PM, "load_plans", lambda **_kwargs: {})
+    monkeypatch.setattr(
+        PW,
+        "decision_flag",
+        lambda name: name == "ENABLE_REASSIGN_OLD_PLAN_RELEASE",
+    )
+    monkeypatch.setattr(
+        PW,
+        "_remove_stops_on_return",
+        lambda cid, oid, **_kwargs: removed.append((cid, oid)),
+    )
+    monkeypatch.setattr(
+        PW,
+        "_invalidate_plan_on_bag_change",
+        lambda oid, cid, **_kwargs: repaired.append((oid, cid)),
+    )
+
+    LD.apply(
+        {
+            "event_type": "ORDER_RETURNED_TO_POOL",
+            "event_id": "return-T1",
+            "order_id": "c3-order",
+            "courier_id": "",
+            "previous_courier_id": "100",
+            "payload": {
+                "reason": "cancelled",
+                "return_snapshot_cleanup_courier_id": "100",
+            },
+        }
+    )
+
+    assert removed == []
+    assert repaired == []
 
 
 def test_stale_pickup_for_different_courier_is_superseded_not_queued(
@@ -3618,6 +5677,89 @@ def test_durable_resurrection_repairs_plan_when_delivery_callback_wins_race(
     assert effects == ["delivery-pruned", "resurrection-repaired"]
     assert EB.get_state_apply_outbox(delivered.event_id)["downstream_status"] == "applied"
     assert EB.get_state_apply_outbox(correction.event_id)["downstream_status"] == "applied"
+
+
+def test_delayed_pickup_callback_cannot_mutate_resurrected_assignment(
+    isolated_stores, monkeypatch
+):
+    """PICKUP T1 po DELIVERED->RESURRECTED nie dotyka planu nowej generacji."""
+    def hold(_event):
+        raise RuntimeError("hold downstream until all state phases advance")
+
+    pickup = DEA.emit_and_apply(
+        "COURIER_PICKED_UP",
+        order_id="c3-order",
+        courier_id="100",
+        payload={"timestamp": "2026-07-19T08:04:00+00:00"},
+        state_payload=None,
+        event_key="c3-order_COURIER_PICKED_UP_before-resurrection",
+        emit_fn=EB.emit,
+        state_update_fn=SM.update_from_event,
+        effect_status_fn=SM.event_effect_status,
+        get_order_fn=SM.get_order_strict,
+        downstream_fn=hold,
+    )
+    delivered = DEA.emit_and_apply(
+        "COURIER_DELIVERED",
+        order_id="c3-order",
+        courier_id="100",
+        payload={"timestamp": "2026-07-19T08:05:00+00:00"},
+        state_payload=None,
+        event_key="c3-order_COURIER_DELIVERED_after-pickup",
+        emit_fn=EB.emit,
+        state_update_fn=SM.update_from_event,
+        effect_status_fn=SM.event_effect_status,
+        get_order_fn=SM.get_order_strict,
+        downstream_fn=hold,
+    )
+    resurrected = DEA.emit_and_apply(
+        "ORDER_RESURRECTED",
+        order_id="c3-order",
+        courier_id="100",
+        payload={
+            "new_status": "assigned",
+            "reason": "panel_status_restored",
+            "source": "panel_status_restored",
+        },
+        state_payload=None,
+        event_key="c3-order_ORDER_RESURRECTED_after-pickup",
+        emit_fn=EB.emit_audit,
+        state_update_fn=SM.update_from_event,
+        effect_status_fn=SM.event_effect_status,
+        get_order_fn=SM.get_order_strict,
+        downstream_fn=hold,
+    )
+    assert all(
+        outcome.failure_stage == "downstream"
+        for outcome in (pickup, delivered, resurrected)
+    )
+    assert SM.get_order_strict("c3-order")["status"] == "assigned"
+
+    effects = []
+    monkeypatch.setattr(
+        PW,
+        "_update_plan_on_picked_up",
+        lambda *_args, **_kwargs: effects.append("stale-pickup"),
+    )
+    monkeypatch.setattr(
+        PW,
+        "_advance_plan_on_deliver",
+        lambda *_args, **_kwargs: effects.append("stale-delivery"),
+    )
+    monkeypatch.setattr(
+        PW,
+        "_invalidate_plan_on_bag_change",
+        lambda *_args, **_kwargs: effects.append("resurrection-repaired"),
+    )
+    counts = DEA.drain_pending(
+        state_update_fn=SM.update_from_event,
+        effect_status_fn=SM.event_effect_status,
+        get_order_fn=SM.get_order_strict,
+        downstream_fn=_REAL_LIFECYCLE_DOWNSTREAM_APPLY,
+    )
+
+    assert counts["completed"] == 3
+    assert effects == ["resurrection-repaired"]
 
 
 def test_panel_resurrection_writer_uses_durable_chokepoint():

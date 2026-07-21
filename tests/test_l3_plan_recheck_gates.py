@@ -312,7 +312,14 @@ def test_gc_dry_run_reports_only(PR, tmp_path):
 def test_gc_apply_removes_zombie_keeps_live(PR, tmp_path):
     from dispatch_v2 import plan_manager
     orders = _seed_plans(tmp_path, plan_manager)
-    PR._gc_courier_plans(orders, datetime.now(_UTC), {}, dry_run=False, max_age_h=48.0)
+    PR._gc_courier_plans(
+        orders,
+        datetime.now(_UTC),
+        {},
+        dry_run=False,
+        max_age_h=48.0,
+        _current_state_fn=lambda: orders,
+    )
     after = json.loads(plan_manager.PLANS_FILE.read_text())
     assert "ZOMB" not in after                       # age-zombie usunięty
     assert "LIVE" in after and after["LIVE"].get("invalidated_at") is None  # żywy NIETKNIĘTY
@@ -334,11 +341,161 @@ def test_gc_apply_prunes_terminal_stop(PR, tmp_path):
                      "optimization_method": "x"}}
     plan_manager.PLANS_FILE.write_text(json.dumps(plans))
     orders = {"A": {"status": "assigned"}, "B": {"status": "delivered"}}  # B terminalny
-    rep = PR._gc_courier_plans(orders, now, {}, dry_run=False, max_age_h=48.0)
+    rep = PR._gc_courier_plans(
+        orders,
+        now,
+        {},
+        dry_run=False,
+        max_age_h=48.0,
+        _current_state_fn=lambda: orders,
+    )
     assert rep["gc_terminal_stop_prune"] == 1
     after = json.loads(plan_manager.PLANS_FILE.read_text())
     remaining = {s["order_id"] for s in after["MIX"]["stops"]}
     assert remaining == {"A"}  # B (terminalny) sprzątnięty, A (aktywny) zostaje
+
+
+def test_gc_state_fence_does_not_prune_new_assignment(PR, tmp_path):
+    """Terminalny snapshot nie usuwa stopa nowej generacji tego samego worka."""
+    from dispatch_v2 import plan_manager
+    plan_manager.PLANS_FILE = tmp_path / "courier_plans.json"
+    plan_manager.LOCK_FILE = tmp_path / "courier_plans.lock"
+    now = datetime.now(_UTC)
+    plan_manager.PLANS_FILE.write_text(json.dumps({
+        "MIX": {
+            "plan_version": 1,
+            "created_at": _iso(now),
+            "start_pos": {"lat": 53.1, "lng": 23.1},
+            "start_ts": _iso(now),
+            "stops": [
+                {"order_id": "A", "type": "dropoff", "coords": {},
+                 "predicted_at": None},
+                {"order_id": "B", "type": "dropoff", "coords": {},
+                 "predicted_at": None},
+            ],
+            "optimization_method": "x",
+        }
+    }))
+    stale = {
+        "A": {"status": "assigned", "courier_id": "MIX",
+              "updated_at": "2026-07-20T11:59:00+00:00"},
+        "B": {"status": "delivered", "courier_id": "MIX",
+              "updated_at": "2026-07-20T11:59:00+00:00"},
+    }
+    current = {
+        **stale,
+        "B": {"status": "assigned", "courier_id": "MIX",
+              "updated_at": "2026-07-20T12:00:01+00:00",
+              "last_lifecycle_event_id": "assign-new"},
+    }
+
+    PR._gc_courier_plans(
+        stale,
+        now,
+        {},
+        dry_run=False,
+        max_age_h=48.0,
+        _current_state_fn=lambda: current,
+    )
+
+    remaining = {
+        s["order_id"]
+        for s in json.loads(plan_manager.PLANS_FILE.read_text())["MIX"]["stops"]
+    }
+    assert remaining == {"A", "B"}
+
+
+def test_gc_no_active_cas_keeps_newer_plan_for_same_state(PR, tmp_path, monkeypatch):
+    """Plan sklasyfikowany jako pusty nie daje prawa unieważnić nowszego planu."""
+    from dispatch_v2 import plan_manager
+
+    plan_manager.PLANS_FILE = tmp_path / "courier_plans.json"
+    plan_manager.LOCK_FILE = tmp_path / "courier_plans.lock"
+    now = datetime.now(_UTC)
+    old = {
+        "plan_version": 1,
+        "created_at": _iso(now),
+        "start_pos": {"lat": 53.1, "lng": 23.1},
+        "start_ts": _iso(now),
+        "stops": [{"order_id": "OLD", "type": "dropoff", "coords": {}}],
+        "optimization_method": "x",
+        "invalidated_at": None,
+    }
+    newer = {
+        **old,
+        "plan_version": 2,
+        "stops": [{"order_id": "A", "type": "dropoff", "coords": {}}],
+    }
+    plan_manager.PLANS_FILE.write_text(json.dumps({"MIX": old}))
+    orders = {
+        "OLD": {"status": "delivered", "courier_id": "MIX"},
+        "A": {"status": "assigned", "courier_id": "MIX"},
+    }
+    real_fence = PR._run_if_bag_current
+
+    def install_newer_before_mutation(*args, **kwargs):
+        plan_manager.PLANS_FILE.write_text(json.dumps({"MIX": newer}))
+        return real_fence(*args, **kwargs)
+
+    monkeypatch.setattr(PR, "_run_if_bag_current", install_newer_before_mutation)
+
+    PR._gc_courier_plans(
+        orders,
+        now,
+        {},
+        dry_run=False,
+        max_age_h=48.0,
+        _current_state_fn=lambda: orders,
+    )
+
+    current = json.loads(plan_manager.PLANS_FILE.read_text())["MIX"]
+    assert current["plan_version"] == 2
+    assert current.get("invalidated_at") is None
+    assert [stop["order_id"] for stop in current["stops"]] == ["A"]
+
+
+def test_age_gc_state_fence_preserves_token_for_new_assignment(PR, tmp_path):
+    """Stary snapshot nie kasuje wersji planu między state a callbackiem ASSIGN."""
+    from dispatch_v2 import plan_manager
+    plan_manager.PLANS_FILE = tmp_path / "courier_plans.json"
+    plan_manager.LOCK_FILE = tmp_path / "courier_plans.lock"
+    now = datetime.now(_UTC)
+    old = now - timedelta(hours=72)
+    plan_manager.PLANS_FILE.write_text(json.dumps({
+        "ZOMB": {
+            "plan_version": 7,
+            "created_at": _iso(old),
+            "start_pos": {"lat": 53.1, "lng": 23.1},
+            "start_ts": _iso(old),
+            "stops": [],
+            "optimization_method": "x",
+            "invalidated_at": _iso(old),
+            "invalidation_reason": "OLD",
+        }
+    }))
+    current = {
+        "NEW": {
+            "status": "assigned",
+            "courier_id": "ZOMB",
+            "updated_at": _iso(now),
+            "last_lifecycle_event_id": "assign-new",
+        }
+    }
+
+    rep = PR._gc_courier_plans(
+        {},
+        now,
+        {},
+        dry_run=False,
+        max_age_h=48.0,
+        _current_state_fn=lambda: current,
+    )
+
+    assert rep["gc_age_removed"] == 1
+    assert rep["gc_age_removed_applied"] == 0
+    assert json.loads(plan_manager.PLANS_FILE.read_text())["ZOMB"][
+        "plan_version"
+    ] == 7
 
 
 def test_mutation2_gc_without_active_guard_would_kill_live(PR, tmp_path, monkeypatch):
@@ -359,7 +516,14 @@ def test_mutation2_gc_without_active_guard_would_kill_live(PR, tmp_path, monkeyp
     assert "LIVE" in killed  # mutacja zabija żywy
     # prawdziwy GC: LIVE NIE jest invalidowany
     killed.clear()
-    PR._gc_courier_plans(orders, datetime.now(_UTC), {}, dry_run=False, max_age_h=48.0)
+    PR._gc_courier_plans(
+        orders,
+        datetime.now(_UTC),
+        {},
+        dry_run=False,
+        max_age_h=48.0,
+        _current_state_fn=lambda: orders,
+    )
     assert "LIVE" not in killed  # prawdziwa logika chroni żywy
 
 

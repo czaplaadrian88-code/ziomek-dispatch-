@@ -538,6 +538,10 @@ ETAP4_DECISION_FLAGS = (
     # panel_watcher: _release_plan_on_reassign + disappeared RETURN release
     # (decision_flag). Default OFF; flip za ACK.
     "ENABLE_REASSIGN_OLD_PLAN_RELEASE",
+    # E1 OUTBOX-SWEEPER (2026-07-20): operacyjny tick panel-watchera wznawia
+    # stare, niedomkniete receipty state_apply_outbox niezaleznie od nadejscia
+    # kolejnego lifecycle eventu. Default OFF; kanon=flags.json, hot-reload.
+    "ENABLE_STATE_OUTBOX_SWEEPER",
     # CK-MANUAL-EDIT (2026-07-20, incydent #489052): pasywny re-check
     # czas_kuriera czasowki moze przejsc TYLKO z dodatnim sygnalem recznej
     # korekty gastro (krawedz zmiana_czasu_odbioru False->True, stabilny
@@ -564,6 +568,10 @@ USE_V2_PARSER = False
 # RETURN starego kuriera). Default OFF (deploy ciemny); kanon=flags.json (flip za ACK ownera),
 # rollback hot = klucz false / brak klucza.
 ENABLE_REASSIGN_OLD_PLAN_RELEASE = False
+# E1 OUTBOX-SWEEPER: dark launch. Wiek liczony od updated_at, wiec 30 s jest
+# jednoczesnie grace period dla foreground callbacku i cooldownem po bledzie.
+ENABLE_STATE_OUTBOX_SWEEPER = False
+STATE_OUTBOX_SWEEPER_MIN_AGE_S = 30.0
 # CK-MANUAL-EDIT: bezpieczny fallback OFF; kanon po ewentualnym flipie =
 # flags.json/decision_flag. Rollback hot: klucz false albo brak klucza.
 ENABLE_CZASOWKA_CK_MANUAL_EDIT_PASSTHROUGH = False

@@ -12603,6 +12603,43 @@
         "engine"
       ]
     },
+    "ENABLE_STATE_OUTBOX_SWEEPER": {
+      "carriers": [
+        "common.py:ETAP4_DECISION_FLAGS"
+      ],
+      "consumers": [
+        "dispatch_v2/common.py",
+        "dispatch_v2/durable_event_apply.py",
+        "dispatch_v2/panel_watcher.py"
+      ],
+      "curated_at": "2026-07-20",
+      "current_snapshot": {
+        "default": false
+      },
+      "default": false,
+      "intentional_per_process": {
+        "reason": "",
+        "value": false
+      },
+      "known_drift": false,
+      "known_drift_note": "",
+      "lifecycle": "planned",
+      "lifecycle_seeded": false,
+      "name": "ENABLE_STATE_OUTBOX_SWEEPER",
+      "notes": "E1 crash-consistency: panel-watcher tick wznawia state_apply_outbox starszy niz 30 s od updated_at; OFF nie dodaje sweepa przed fetchem i zachowuje istniejacy legacy drain po udanym fetchu. Klucz flags.json nieobecny w klonie, wiec dark default pochodzi z const=False; jawny carrier false dodaje FLIPMASTER przy wdrozeniu.",
+      "owner": {
+        "business": "Adrian",
+        "service": "dispatch-panel-watcher.service"
+      },
+      "removal_condition": "flip flags.json=true za ACK po merge i weryfikacji health albo retire po zastapieniu stalym recovery loopem",
+      "review_date": "2026-08-10",
+      "rollback": "flip ENABLE_STATE_OUTBOX_SWEEPER=false w flags.json (hot-reload, bez restartu); pelny = git revert + restart dispatch-panel-watcher.service ZA ACK",
+      "source_of_truth": "flags.json",
+      "twin_of": [],
+      "worlds": [
+        "engine"
+      ]
+    },
     "ENABLE_STATE_PANEL_DIVERGENCE_ALERT": {
       "carriers": [
         "flags.json",

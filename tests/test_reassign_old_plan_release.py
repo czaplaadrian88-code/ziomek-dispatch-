@@ -23,11 +23,14 @@ from types import SimpleNamespace
 
 from unittest import mock
 
+import pytest
+
 import dispatch_v2.panel_watcher as PW
 import dispatch_v2.common as C
 import dispatch_v2.lifecycle_downstream as LD
 import dispatch_v2.plan_manager as PM
 import dispatch_v2.plan_recheck as PR
+import dispatch_v2.state_machine as SM
 
 
 # ---------------------------------------------------------------- fixtures ---
@@ -61,6 +64,37 @@ def _seed_store(tmp_path, monkeypatch):
 def _flags_on(monkeypatch):
     monkeypatch.setattr(C, "ENABLE_SAVED_PLANS", True)
     monkeypatch.setattr(C, "ENABLE_REASSIGN_OLD_PLAN_RELEASE", True)
+
+
+def _seed_assign_proposal(tmp_path, monkeypatch):
+    pending_path = tmp_path / "pending_proposals.json"
+    pending_path.write_text(
+        json.dumps(
+            {
+                "999001": {
+                    "ts": "2026-07-20T10:00:00+00:00",
+                    "decision_record": {
+                        "ts": "2026-07-20T10:00:00+00:00",
+                        "best": {
+                            "courier_id": "310",
+                            "plan_expected_version": 0,
+                            "plan": {
+                                "sequence": ["999001"],
+                                "predicted_delivered_at": {
+                                    "999001": "2026-07-20T10:20:00+00:00"
+                                },
+                            },
+                        },
+                    },
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(PW, "_PENDING_PROPOSALS_PATH", str(pending_path))
+    monkeypatch.setattr(C, "ENABLE_SAVED_PLANS", True)
+    monkeypatch.setattr(C, "decision_flag", lambda _name: False)
+    return pending_path
 
 
 # ------------------------------------------------------- helper unit-level ---
@@ -181,6 +215,381 @@ def test_release_double_call_second_noop_version_stable(tmp_path, monkeypatch):
         "recanon best-effort przy obu (idempotencję gwarantuje plan_manager)"
 
 
+def test_durable_release_retries_recanon_after_remove_crash(
+    tmp_path, monkeypatch
+):
+    """Retry nie może zgubić recanonu po crashu między dwoma efektami."""
+    pf, _ = _seed_store(tmp_path, monkeypatch)
+    _flags_on(monkeypatch)
+    recanons = []
+
+    def fail_first_recanon(cid, **_kwargs):
+        recanons.append(cid)
+        if len(recanons) == 1:
+            raise RuntimeError("synthetic crash after remove_stops")
+        return True
+
+    monkeypatch.setattr(PR, "recanon_courier", fail_first_recanon)
+    with pytest.raises(RuntimeError, match="synthetic crash"):
+        PW._release_plan_on_reassign(
+            "207", "999001", _raise_on_error=True
+        )
+    after_first = json.loads(pf.read_text(encoding="utf-8"))
+    assert [s["order_id"] for s in after_first["207"]["stops"]] == ["999002"]
+
+    assert PW._release_plan_on_reassign(
+        "207", "999001", _raise_on_error=True
+    ) is True
+    assert json.loads(pf.read_text(encoding="utf-8")) == after_first
+    assert recanons == ["207", "207"]
+
+
+def test_durable_release_retries_directory_fsync_before_receipt(
+    tmp_path, monkeypatch
+):
+    """Rename bez fsync dir nie może zostać uznany za trwały cleanup."""
+    pf, _ = _seed_store(tmp_path, monkeypatch)
+    _flags_on(monkeypatch)
+    real_ensure = PM.ensure_storage_durable
+    fsync_attempts = {"count": 0}
+    recanons = []
+
+    def fail_first_directory_fsync(path=None):
+        fsync_attempts["count"] += 1
+        if fsync_attempts["count"] == 1:
+            raise OSError("synthetic directory fsync failure")
+        return real_ensure(path)
+
+    monkeypatch.setattr(PM, "ensure_storage_durable", fail_first_directory_fsync)
+    monkeypatch.setattr(
+        PR,
+        "recanon_courier",
+        lambda cid, **_kwargs: recanons.append(cid) or True,
+    )
+
+    with pytest.raises(OSError, match="directory fsync"):
+        PW._release_plan_on_reassign(
+            "207", "999001", _raise_on_error=True
+        )
+    assert [
+        s["order_id"]
+        for s in json.loads(pf.read_text(encoding="utf-8"))["207"]["stops"]
+    ] == ["999002"]
+    assert recanons == []
+
+    assert PW._release_plan_on_reassign(
+        "207", "999001", _raise_on_error=True
+    ) is True
+    assert fsync_attempts["count"] == 2
+    assert recanons == ["207"]
+
+
+def test_durable_release_rejects_corrupt_plan_store(
+    tmp_path, monkeypatch
+):
+    """Uszkodzony JSON nie może udawać pustego planu w strict callbacku."""
+    pf, _ = _seed_store(tmp_path, monkeypatch)
+    _flags_on(monkeypatch)
+    pf.write_text("{broken", encoding="utf-8")
+    recanons = []
+    monkeypatch.setattr(
+        PR,
+        "recanon_courier",
+        lambda cid, **kwargs: recanons.append((cid, kwargs)),
+    )
+
+    with pytest.raises(json.JSONDecodeError):
+        PW._release_plan_on_reassign(
+            "207",
+            "999001",
+            _raise_on_error=True,
+            _authorized_by_receipt=True,
+            _recanon_authorized_by_receipt=True,
+        )
+
+    assert pf.read_text(encoding="utf-8") == "{broken"
+    assert recanons == []
+
+
+def test_durable_assign_rejects_corrupt_plan_store_without_overwrite(
+    tmp_path, monkeypatch
+):
+    """ASSIGNED strict nie może potraktować corrupt całego store jak {}."""
+    _seed_assign_proposal(tmp_path, monkeypatch)
+    pf = tmp_path / "courier_plans.json"
+    pf.write_text("{broken", encoding="utf-8")
+    monkeypatch.setattr(PM, "PLANS_FILE", pf)
+    monkeypatch.setattr(PM, "LOCK_FILE", tmp_path / "courier_plans.lock")
+
+    with pytest.raises(json.JSONDecodeError):
+        PW._save_plan_on_assign(
+            "999001",
+            "310",
+            _raise_on_error=True,
+            _saved_plans_authorized_by_receipt=True,
+        )
+
+    assert pf.read_text(encoding="utf-8") == "{broken"
+
+
+def test_durable_assign_retry_fsyncs_visible_save_after_cas_mismatch(
+    tmp_path, monkeypatch
+):
+    """Rename+fsync-dir fail -> retry CAS keep-current nadal ponawia fsync."""
+    _seed_assign_proposal(tmp_path, monkeypatch)
+    pf = tmp_path / "courier_plans.json"
+    pf.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(PM, "PLANS_FILE", pf)
+    monkeypatch.setattr(PM, "LOCK_FILE", tmp_path / "courier_plans.lock")
+    real_ensure = PM.ensure_storage_durable
+    attempts = {"count": 0}
+
+    def fail_first(path=None):
+        attempts["count"] += 1
+        if attempts["count"] == 1:
+            raise OSError("synthetic assign directory fsync failure")
+        return real_ensure(path)
+
+    monkeypatch.setattr(PM, "ensure_storage_durable", fail_first)
+
+    with pytest.raises(OSError, match="assign directory fsync"):
+        PW._save_plan_on_assign(
+            "999001",
+            "310",
+            _raise_on_error=True,
+            _saved_plans_authorized_by_receipt=True,
+        )
+    assert json.loads(pf.read_text(encoding="utf-8"))["310"][
+        "plan_version"
+    ] == 1
+
+    PW._save_plan_on_assign(
+        "999001",
+        "310",
+        _raise_on_error=True,
+        _saved_plans_authorized_by_receipt=True,
+    )
+    assert attempts["count"] == 2
+
+
+def test_durable_release_rejects_corruption_after_remove_before_recanon(
+    tmp_path, monkeypatch
+):
+    """Korupcja po rename remove_stops zostawia receipt do ponownej próby."""
+    pf, _ = _seed_store(tmp_path, monkeypatch)
+    _flags_on(monkeypatch)
+    orders_state = tmp_path / "orders_state.json"
+    orders_state.write_text(
+        json.dumps(
+            {
+                "999002": {
+                    "order_id": "999002",
+                    "status": "assigned",
+                    "courier_id": "207",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(PR, "ORDERS_STATE_PATH", orders_state)
+    monkeypatch.setattr(PR, "_refresh_d3_fala_a_flags", lambda: None)
+    monkeypatch.setattr(PR, "ENABLE_RECANON_ON_WRITE", True)
+
+    real_ensure = PM.ensure_storage_durable
+
+    def corrupt_after_fsync(path=None):
+        real_ensure(path)
+        pf.write_text("{broken", encoding="utf-8")
+
+    monkeypatch.setattr(PM, "ensure_storage_durable", corrupt_after_fsync)
+
+    with pytest.raises(json.JSONDecodeError):
+        PW._release_plan_on_reassign(
+            "207",
+            "999001",
+            _raise_on_error=True,
+            _authorized_by_receipt=True,
+            _recanon_authorized_by_receipt=True,
+        )
+
+    assert pf.read_text(encoding="utf-8") == "{broken"
+
+
+def test_durable_generation_guard_rejects_corrupt_plan_store(
+    tmp_path, monkeypatch
+):
+    """Aktywna nowsza generacja nie może zamknąć receiptu na corrupt store."""
+    pf, _ = _seed_store(tmp_path, monkeypatch)
+    _flags_on(monkeypatch)
+    pf.write_text("{broken", encoding="utf-8")
+    monkeypatch.setattr(
+        LD.state_machine,
+        "get_order_strict",
+        lambda _oid: {
+            "order_id": "999001",
+            "status": "assigned",
+            "courier_id": "207",
+        },
+    )
+
+    with pytest.raises(json.JSONDecodeError):
+        LD.apply(
+            {
+                "event_type": "ORDER_RETURNED_TO_POOL",
+                "event_id": "return-before-active-generation",
+                "order_id": "999001",
+                "courier_id": "207",
+                "payload": {},
+            }
+        )
+
+    assert pf.read_text(encoding="utf-8") == "{broken"
+
+
+def test_durable_delivery_retries_fsync_and_saved_plans_flip(
+    tmp_path, monkeypatch
+):
+    """DELIVERED retry ponawia fsync i respektuje snapshot SAVED_PLANS=ON."""
+    pf, _ = _seed_store(tmp_path, monkeypatch)
+    _flags_on(monkeypatch)
+    real_ensure = PM.ensure_storage_durable
+    fsync_attempts = {"count": 0}
+    recanons = []
+
+    def fail_first_directory_fsync(path=None):
+        fsync_attempts["count"] += 1
+        if fsync_attempts["count"] == 1:
+            raise OSError("synthetic delivery directory fsync failure")
+        return real_ensure(path)
+
+    monkeypatch.setattr(PM, "ensure_storage_durable", fail_first_directory_fsync)
+    monkeypatch.setattr(
+        PR,
+        "recanon_courier",
+        lambda cid, **kwargs: recanons.append((cid, kwargs)) or True,
+    )
+
+    with pytest.raises(OSError, match="delivery directory fsync"):
+        PW._advance_plan_on_deliver(
+            "207",
+            "999001",
+            "2026-07-20T10:00:00+00:00",
+            [53.1, 23.1],
+            _raise_on_error=True,
+            _saved_plans_authorized_by_receipt=True,
+            _recanon_authorized_by_receipt=True,
+        )
+    assert [
+        s["order_id"]
+        for s in json.loads(pf.read_text(encoding="utf-8"))["207"]["stops"]
+    ] == ["999002"]
+    assert recanons == []
+
+    monkeypatch.setattr(C, "ENABLE_SAVED_PLANS", False)
+    PW._advance_plan_on_deliver(
+        "207",
+        "999001",
+        "2026-07-20T10:00:00+00:00",
+        [53.1, 23.1],
+        _raise_on_error=True,
+        _saved_plans_authorized_by_receipt=True,
+        _recanon_authorized_by_receipt=True,
+    )
+    assert fsync_attempts["count"] == 2
+    assert recanons[0][1]["_enabled_by_receipt"] is True
+
+
+def test_durable_pickup_retries_fsync_and_saved_plans_flip(
+    tmp_path, monkeypatch
+):
+    """PICKED_UP jest bliźniakiem rename/no-op retry DELIVERED."""
+    pf, _ = _seed_store(tmp_path, monkeypatch)
+    _flags_on(monkeypatch)
+    real_ensure = PM.ensure_storage_durable
+    fsync_attempts = {"count": 0}
+    recanons = []
+    redecides = []
+
+    def fail_first_directory_fsync(path=None):
+        fsync_attempts["count"] += 1
+        if fsync_attempts["count"] == 1:
+            raise OSError("synthetic pickup directory fsync failure")
+        return real_ensure(path)
+
+    monkeypatch.setattr(PM, "ensure_storage_durable", fail_first_directory_fsync)
+    monkeypatch.setattr(
+        PR,
+        "recanon_courier",
+        lambda cid, **kwargs: recanons.append((cid, kwargs)) or True,
+    )
+    monkeypatch.setattr(
+        PR,
+        "redecide_courier",
+        lambda cid, **kwargs: redecides.append((cid, kwargs)) or True,
+    )
+
+    with pytest.raises(OSError, match="pickup directory fsync"):
+        PW._update_plan_on_picked_up(
+            "207",
+            "999001",
+            "2026-07-20T10:00:00+00:00",
+            _raise_on_error=True,
+            _saved_plans_authorized_by_receipt=True,
+            _recanon_authorized_by_receipt=True,
+            _redecide_authorized_by_receipt=True,
+        )
+    stop = next(
+        s
+        for s in json.loads(pf.read_text(encoding="utf-8"))["207"]["stops"]
+        if s["order_id"] == "999001"
+    )
+    assert stop["status_at_plan_time"] == "picked_up"
+    assert recanons == [] and redecides == []
+
+    monkeypatch.setattr(C, "ENABLE_SAVED_PLANS", False)
+    PW._update_plan_on_picked_up(
+        "207",
+        "999001",
+        "2026-07-20T10:00:00+00:00",
+        _raise_on_error=True,
+        _saved_plans_authorized_by_receipt=True,
+        _recanon_authorized_by_receipt=True,
+        _redecide_authorized_by_receipt=True,
+    )
+    assert fsync_attempts["count"] == 2
+    assert recanons[0][1]["_enabled_by_receipt"] is True
+    assert redecides[0][1]["_enabled_by_receipt"] is True
+
+
+def test_durable_delivery_and_pickup_reject_corrupt_plan_store(
+    tmp_path, monkeypatch
+):
+    """Oba cleanupy fail-loud na corrupt JSON zamiast zamykać receipt."""
+    pf, _ = _seed_store(tmp_path, monkeypatch)
+    _flags_on(monkeypatch)
+    pf.write_text("{broken", encoding="utf-8")
+
+    with pytest.raises(json.JSONDecodeError):
+        PW._advance_plan_on_deliver(
+            "207",
+            "999001",
+            "2026-07-20T10:00:00+00:00",
+            None,
+            _raise_on_error=True,
+            _saved_plans_authorized_by_receipt=True,
+            _recanon_authorized_by_receipt=True,
+        )
+    with pytest.raises(json.JSONDecodeError):
+        PW._update_plan_on_picked_up(
+            "207",
+            "999001",
+            _raise_on_error=True,
+            _saved_plans_authorized_by_receipt=True,
+            _recanon_authorized_by_receipt=True,
+            _redecide_authorized_by_receipt=True,
+        )
+
+
 def test_plan_manager_remove_stops_absent_oid_pure_noop(tmp_path, monkeypatch):
     """v3 (Sol flip-gate, poziom plan_manager): oid nieobecny w planie →
     czysty no-op WEWNĄTRZ exclusive locka — zero zapisu, wersja bez zmiany.
@@ -190,6 +599,59 @@ def test_plan_manager_remove_stops_absent_oid_pure_noop(tmp_path, monkeypatch):
     PM.remove_stops("207", "404404")            # oid spoza planu
     assert json.loads(pf.read_text(encoding="utf-8")) == seeded, \
         "brak stopa → remove_stops NIE pisze i NIE bumpuje (czysty no-op)"
+
+
+def test_plan_recheck_state_fence_blocks_stale_stop_reinsertion(
+    tmp_path, monkeypatch
+):
+    """RETURN cleanup wygrywa ze snapshotem plan_recheck sprzed tranzycji."""
+    pf, _seeded = _seed_store(tmp_path, monkeypatch)
+    state_path = tmp_path / "orders_state.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "999001": {
+                    "order_id": "999001",
+                    "status": "returned",
+                    "courier_id": None,
+                    "updated_at": "2026-07-20T10:01:00+00:00",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(SM, "_state_path", lambda: str(state_path))
+    stale_state = {
+        "999001": {
+            "order_id": "999001",
+            "status": "assigned",
+            "courier_id": "207",
+        }
+    }
+    before = pf.read_text(encoding="utf-8")
+    save_attempts = []
+
+    def stale_save():
+        save_attempts.append(True)
+        PM.save_plan(
+            "207",
+            {
+                "start_pos": {"lat": 53.1, "lng": 23.1},
+                "start_ts": "2026-07-20T10:00:00+00:00",
+                "stops": [{"order_id": "999001", "type": "dropoff"}],
+                "optimization_method": "stale-recheck-test",
+            },
+            expected_version=3,
+        )
+
+    assert PR._save_plan_if_bag_current(
+        "207", ["999001"], stale_state, stale_save
+    ) is False
+    assert save_attempts == []
+    assert pf.read_text(encoding="utf-8") == before
+    assert "_state_fenced_save=_save_plan_if_bag_current" in inspect.getsource(
+        PR.run_recheck
+    )
 
 
 def test_release_race_newer_plan_without_stop_no_bump(tmp_path, monkeypatch):
@@ -209,6 +671,118 @@ def test_release_race_newer_plan_without_stop_no_bump(tmp_path, monkeypatch):
     after = json.loads(pf.read_text(encoding="utf-8"))
     assert after == plans, "nowszy plan bez stopa → zero zapisu/bumpu"
     assert after["207"]["plan_version"] == 3
+
+
+def test_assignment_release_cas_preserves_b_to_a_new_generation(
+    tmp_path, monkeypatch
+):
+    """Stary A→B callback nie usuwa stopa planu zapisanego przez późniejsze B→A."""
+    pf, _ = _seed_store(tmp_path, monkeypatch)
+    _flags_on(monkeypatch)
+    current = {
+        "order_id": "999001",
+        "status": "assigned",
+        "courier_id": "310",
+    }
+    monkeypatch.setattr(
+        LD.state_machine, "get_order_strict", lambda _oid: dict(current)
+    )
+    real_release = PW._release_plan_on_reassign
+    raced = {"value": False}
+
+    def write_new_a_plan_before_old_release(cid, oid, **kwargs):
+        if not raced["value"]:
+            raced["value"] = True
+            current["courier_id"] = "207"
+            plans = json.loads(pf.read_text(encoding="utf-8"))
+            plans["207"]["plan_version"] += 1
+            pf.write_text(json.dumps(plans), encoding="utf-8")
+        return real_release(cid, oid, **kwargs)
+
+    monkeypatch.setattr(
+        PW, "_release_plan_on_reassign", write_new_a_plan_before_old_release
+    )
+    monkeypatch.setattr(PW, "_save_plan_on_assign_signal", lambda *_a, **_k: None)
+    event = {
+        "event_type": "COURIER_ASSIGNED",
+        "event_id": "assign-A-to-B-before-B-to-A",
+        "order_id": "999001",
+        "courier_id": "310",
+        "previous_courier_id": "207",
+        "saved_plans_authorized": True,
+        "recanon_on_write_authorized": False,
+        "invalidate_plan_on_bag_change_authorized": False,
+        "reassign_old_plan_release_authorized": True,
+        "payload": {"source": "test"},
+    }
+
+    with pytest.raises(PM.ConcurrencyError):
+        LD.apply(event)
+    after_race = json.loads(pf.read_text(encoding="utf-8"))
+    assert after_race["207"]["plan_version"] == 4
+    assert any(
+        str(stop.get("order_id")) == "999001"
+        for stop in after_race["207"]["stops"]
+    )
+
+    LD.apply(event)
+    assert json.loads(pf.read_text(encoding="utf-8")) == after_race
+
+
+def test_old_release_with_flag_off_cannot_block_newer_assignment_gap(
+    tmp_path, monkeypatch
+):
+    """Stary receipt zamyka się, gdy nowsza generacja A ma jeszcze partial plan."""
+    pf, _ = _seed_store(tmp_path, monkeypatch)
+    _flags_on(monkeypatch)
+    plans = json.loads(pf.read_text(encoding="utf-8"))
+    plans["207"]["stops"] = [
+        stop
+        for stop in plans["207"]["stops"]
+        if str(stop.get("order_id")) != "999001"
+    ]
+    pf.write_text(json.dumps(plans), encoding="utf-8")
+    monkeypatch.setattr(
+        LD.state_machine,
+        "get_order_strict",
+        lambda _oid: {
+            "order_id": "999001",
+            "status": "assigned",
+            "courier_id": "207",
+        },
+    )
+    monkeypatch.setattr(
+        PW,
+        "_invalidate_plan_on_bag_change",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("stary receipt nie naprawia nowszej generacji")
+        ),
+    )
+    monkeypatch.setattr(
+        PW,
+        "_release_plan_on_reassign",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            AssertionError("stary release nie dotyka nowszej generacji")
+        ),
+    )
+    monkeypatch.setattr(PW, "_save_plan_on_assign_signal", lambda *_a, **_k: None)
+
+    LD.apply(
+        {
+            "event_type": "COURIER_ASSIGNED",
+            "event_id": "old-A-to-B-after-new-B-to-A",
+            "order_id": "999001",
+            "courier_id": "310",
+            "previous_courier_id": "207",
+            "saved_plans_authorized": True,
+            "recanon_on_write_authorized": False,
+            "invalidate_plan_on_bag_change_authorized": False,
+            "reassign_old_plan_release_authorized": True,
+            "payload": {"source": "test"},
+        }
+    )
+
+    assert json.loads(pf.read_text(encoding="utf-8")) == plans
 
 
 # ------------------------------------------------- branch-level (diff loop) ---
@@ -246,11 +820,17 @@ def _raw_response(oid, cid, status_id=3):
 
 
 def _run_diff_with_recorders(parsed, state, raw_fetches, kurier_ids=None,
-                             audit_emitted=True):
+                             audit_emitted=True, release_enabled=True):
     """_diff_and_emit z pełnym mockowaniem; zwraca (calls, stats) gdzie calls
     = chronologia ('release', cid, oid) / ('return_release', cid, oid) /
     ('signal', oid, cid)."""
     calls = []
+
+    def fake_release(cid, oid, **_kwargs):
+        if not C.decision_flag("ENABLE_REASSIGN_OLD_PLAN_RELEASE"):
+            return False
+        calls.append(("release", cid, oid))
+        return True
 
     def fake_fetch(zid, csrf, timeout=10.0):
         return raw_fetches.get(str(zid))
@@ -263,10 +843,30 @@ def _run_diff_with_recorders(parsed, state, raw_fetches, kurier_ids=None,
         """
         oid = str(kwargs.get("order_id") or "")
         new_cid = str(kwargs.get("courier_id") or "")
-        # RETURN (8/9): ten klaster izoluje routing, nie stan — nie wolno karmic
-        # LD.apply stanem 'assigned' (krzaczy sie i produkcyjny try polyka branch).
-        # Honorujemy pokretlo audit_emitted (dedupe => zero downstream => zero release).
+        # RETURN (8/9): stan izolowany, ale realny durable router musi zobaczyc
+        # snapshot CID zapisany w state_payload. Honorujemy dedupe: bez nowego
+        # callbacku nie ma zadnego release.
         if event_type == "ORDER_RETURNED_TO_POOL":
+            if audit_emitted:
+                event = {
+                    "event_type": event_type,
+                    "event_id": str(kwargs.get("event_id") or "test-return"),
+                    "order_id": oid,
+                    "courier_id": new_cid,
+                    "payload": kwargs.get("state_payload") or kwargs.get("payload") or {},
+                }
+                post_return_state = {
+                    **(state.get(oid) or {}),
+                    "order_id": oid,
+                    "status": "returned_to_pool",
+                    "courier_id": None,
+                }
+                with mock.patch.object(
+                    LD.state_machine,
+                    "get_order_strict",
+                    return_value=post_return_state,
+                ):
+                    LD.apply(event)
             return SimpleNamespace(
                 state_ready=True,
                 event_created=bool(audit_emitted),
@@ -283,6 +883,8 @@ def _run_diff_with_recorders(parsed, state, raw_fetches, kurier_ids=None,
         }
         if event_type == "COURIER_ASSIGNED" and previous_cid != new_cid:
             event["previous_courier_id"] = previous_cid
+            if release_enabled:
+                event["reassign_old_plan_release_authorized"] = True
         current = {
             **(state.get(oid) or {}),
             "order_id": oid,
@@ -296,9 +898,12 @@ def _run_diff_with_recorders(parsed, state, raw_fetches, kurier_ids=None,
             state_ready=True,
             event_created=True,
             downstream_executed=True,
+            state_event=event,
         )
 
-    with mock.patch("dispatch_v2.panel_watcher.state_get_all", return_value=state), \
+    with mock.patch.object(
+            C, "ENABLE_REASSIGN_OLD_PLAN_RELEASE", release_enabled), \
+         mock.patch("dispatch_v2.panel_watcher.state_get_all", return_value=state), \
          mock.patch("dispatch_v2.panel_watcher.fetch_order_details", side_effect=fake_fetch), \
          mock.patch("dispatch_v2.panel_watcher._emit_and_apply_state",
                     side_effect=fake_emit_and_apply), \
@@ -308,11 +913,14 @@ def _run_diff_with_recorders(parsed, state, raw_fetches, kurier_ids=None,
          mock.patch("dispatch_v2.panel_watcher._check_panel_agree"), \
          mock.patch("dispatch_v2.panel_watcher._check_panel_override"), \
          mock.patch("dispatch_v2.panel_watcher._release_plan_on_reassign",
-                    side_effect=lambda cid, oid, **_kwargs: (
-                        calls.append(("release", cid, oid)), True)[1]), \
+                    side_effect=fake_release), \
          mock.patch("dispatch_v2.panel_watcher._remove_stops_on_return",
-                    side_effect=lambda cid, oid: calls.append(
+                    side_effect=lambda cid, oid, **_kwargs: calls.append(
                         ("return_release", cid, oid))), \
+         mock.patch("dispatch_v2.lifecycle_downstream._cleanup_plan_version",
+                    return_value=0), \
+         mock.patch("dispatch_v2.panel_watcher._recanon_after_plan_cleanup",
+                    return_value=True), \
          mock.patch("dispatch_v2.panel_watcher._save_plan_on_assign_signal",
                     side_effect=lambda oid, cid, **_kwargs: calls.append(("signal", oid, cid))), \
          mock.patch("dispatch_v2.panel_watcher.geocode", return_value=None), \
@@ -339,7 +947,11 @@ def test_disappeared_return_flag_on_releases_plan_of_state_courier(monkeypatch):
             state=state,
             raw_fetches={oid: _raw_response(oid, raw_cid, status_id)},
         )
-        assert calls == [("return_release", "207", oid)]
+        expected = []
+        if raw_cid:
+            expected.append(("return_release", str(raw_cid), oid))
+        expected.append(("return_release", "207", oid))
+        assert calls == expected
 
 
 def test_disappeared_return_flag_off_keeps_old_plan(monkeypatch):
@@ -352,6 +964,7 @@ def test_disappeared_return_flag_off_keeps_old_plan(monkeypatch):
         parsed=_mock_parsed(),
         state=state,
         raw_fetches={oid: _raw_response(oid, None, 8)},
+        release_enabled=False,
     )
     assert calls == []
 
@@ -443,6 +1056,25 @@ def test_one_tick_both_paths_single_release_single_signal():
     assert stats["assigned"] == 1
 
 
+def test_one_tick_flag_off_does_not_activate_release_dedupe():
+    """OFF zachowuje oba baseline tory; released_this_tick pozostaje pusty."""
+    state = {"467801": {"order_id": "467801", "courier_id": "207",
+                        "status": "assigned", "delivery_address": "X"}}
+    calls, stats = _run_diff_with_recorders(
+        parsed=_mock_parsed(order_ids=["467801"], assigned_ids={"467801"},
+                            courier_packs={"Nowy K": ["467801"]}),
+        state=state,
+        raw_fetches={"467801": _raw_response("467801", 310)},
+        kurier_ids={"Nowy K": 310},
+        release_enabled=False,
+    )
+    assert calls == [
+        ("signal", "467801", "310"),
+        ("signal", "467801", "310"),
+    ]
+    assert stats["assigned"] == 2
+
+
 def test_packs_fallback_release_previous_courier():
     """Bliźniak: PANEL_PACKS FALLBACK przy zmianie kuriera (previous_cid) też
     zwalnia plan starego przed sygnałem nowemu."""
@@ -476,12 +1108,17 @@ def test_packs_fallback_trust_raw_guard_no_release():
 # ------------------------------------------------------- strażnicy dryfu ---
 
 def test_release_helper_shape_mirrors_return_handler():
-    """Strażnik: helper woła remove_stops ORAZ recanon_courier (symetria P-5,
-    klasa „tranzycja kurcząca worek": cancel/deliver/reassign-loser)."""
-    src = inspect.getsource(PW._release_plan_on_reassign)
-    assert "remove_stops" in src
-    assert "recanon_courier" in src
-    assert "reassign_out" in src
+    """Strażnik: cleanup i wolny recanon są rozdzielone, ale oba zachowane.
+
+    Durable router trzyma lifecycle state lock tylko wokół generation-check +
+    CAS remove_stops; recanon biegnie po zwolnieniu locka i nadal używa P-5.
+    """
+    release_src = inspect.getsource(PW._release_plan_on_reassign)
+    recanon_src = inspect.getsource(PW._recanon_after_plan_cleanup)
+    downstream_src = inspect.getsource(LD.apply)
+    assert "remove_stops" in release_src
+    assert "recanon_courier" in recanon_src
+    assert "reassign_out" in downstream_src
 
 
 def test_both_twin_paths_call_release():

@@ -44,9 +44,17 @@ def test_return_noop_when_saved_plans_off(monkeypatch):
 
 
 def test_all_four_write_handlers_call_recanon():
-    """Strażnik symetrii: każdy handler modyfikujący plan woła recanon_courier."""
+    """Strażnik symetrii: każdy handler dochodzi do jednego recanonu P-5."""
     import inspect
     for fn in (PW._save_plan_on_assign_signal, PW._advance_plan_on_deliver,
-               PW._update_plan_on_picked_up, PW._remove_stops_on_return):
+               PW._update_plan_on_picked_up):
         assert "recanon_courier" in inspect.getsource(fn), \
             f"{fn.__name__} musi wołać recanon_courier (symetria P-5)"
+    # RETURN/REASSIGN oddzielają szybki CAS cleanup pod state lockiem od
+    # wolnego recanonu. Delegacja nadal jest obowiązkowa i wspólna dla obu.
+    assert "_recanon_after_plan_cleanup" in inspect.getsource(
+        PW._remove_stops_on_return
+    )
+    assert "recanon_courier" in inspect.getsource(
+        PW._recanon_after_plan_cleanup
+    )

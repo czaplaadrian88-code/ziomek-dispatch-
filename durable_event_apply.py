@@ -11,7 +11,9 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 from dataclasses import dataclass, replace
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
 from dispatch_v2 import event_bus, state_machine
@@ -34,6 +36,10 @@ class DurableApplyOutcome:
     failure_stage: Optional[str] = None
     state_event: Optional[dict] = None
     duplicate_of_event_id: Optional[str] = None
+    # Oddziela wykonanie callbacku od terminalizacji receipt. Jawny
+    # ``downstream_fn=None`` nie wykonuje callbacku, ale nadal moze poprawnie
+    # przeprowadzic pending -> applied i musi wejsc do metryki sweepa.
+    downstream_transitioned: bool = False
 
 
 def _actual_event_id(
@@ -65,6 +71,17 @@ def _same_requested_intent(existing: object, requested: dict) -> bool:
     return all(
         existing.get(field) == requested.get(field)
         for field in ("event_type", "order_id", "courier_id", "payload")
+    )
+
+
+def _state_retry_in_cooldown(
+    row: dict, retry_updated_before: Optional[str]
+) -> bool:
+    """Czy ten konkretny, już próbowany state receipt jest jeszcze świeży."""
+    return bool(
+        retry_updated_before is not None
+        and int(row.get("state_attempts") or 0) > 0
+        and str(row.get("updated_at") or "") > retry_updated_before
     )
 
 
@@ -105,7 +122,10 @@ def _previous_courier_for_event(
         assigned_cid = str(state_event.get("courier_id") or "")
         return current_cid if current_cid and current_cid != assigned_cid else ""
     if event_type == "ORDER_RETURNED_TO_POOL":
-        return str(state_event.get("courier_id") or "") or current_cid
+        # Raw panel CID może już wskazywać trzecią wartość. Provenance planu,
+        # który stan faktycznie opuszcza w tej atomowej tranzycji, pochodzi z
+        # current; raw CID pozostaje osobno w samym evencie.
+        return current_cid or str(state_event.get("courier_id") or "")
     return ""
 
 
@@ -177,6 +197,7 @@ def _outcome_from_row(
     state_ready: bool,
     state_transitioned: bool,
     downstream_executed: bool,
+    downstream_transitioned: bool = False,
     superseded: bool = False,
     failure_stage: Optional[str] = None,
     duplicate_of_event_id: Optional[str] = None,
@@ -188,6 +209,7 @@ def _outcome_from_row(
         state_ready=state_ready,
         state_transitioned=state_transitioned,
         downstream_executed=downstream_executed,
+        downstream_transitioned=downstream_transitioned,
         superseded=superseded,
         failure_stage=failure_stage,
         state_event=row.get("state_event") if isinstance(row.get("state_event"), dict) else None,
@@ -369,12 +391,13 @@ def _process_state_row(
                     failure_stage="state_token",
                 )
             if not expected_token:
-                # The event is durable, but both independent baseline reads
-                # failed before its commit. No later snapshot can prove that
-                # applying it would not overwrite an intervening lifecycle
-                # writer. Terminalize loudly as indeterminate/superseded so a
-                # single double fault cannot poison downstream work lanes.
-                event_bus.mark_state_apply_superseded(
+                # Event jest trwaly, ale oba niezalezne odczyty baseline zawiodly
+                # przed jego commitem. Pozniejszy snapshot nie dowodzi, ze nie
+                # bylo writera posredniego, wiec nie wolno ani aplikowac, ani
+                # bezpowrotnie oznaczac intencji jako superseded. Osobne lane'y
+                # state/downstream pozwalaja zachowac go pending bez blokowania
+                # callbackow innych zlecen.
+                event_bus.record_state_apply_error(
                     event_id,
                     "missing expected state storage token; "
                     "baseline cannot be proven",
@@ -386,7 +409,6 @@ def _process_state_row(
                     state_ready=False,
                     state_transitioned=False,
                     downstream_executed=False,
-                    superseded=True,
                     failure_stage="state_token_indeterminate",
                 )
             token_unchanged = str(actual_token) == str(expected_token)
@@ -747,6 +769,12 @@ def _finish_downstream(
     downstream_fn: Optional[Callable[[dict], object]],
     *,
     max_rows: int = 100,
+    updated_before: Optional[str] = None,
+    include_event_versions: Optional[dict[str, tuple[str, int]]] = None,
+    exclude_event_ids: Optional[set[str]] = None,
+    expected_first_event_id: Optional[str] = None,
+    expected_first_version: Optional[tuple[str, int]] = None,
+    defer_when_no_eligible_row: bool = False,
 ) -> DurableApplyOutcome:
     """Domknij target po fair kolejce gotowych callbacków.
 
@@ -823,11 +851,47 @@ def _finish_downstream(
                     downstream_executed=False,
                     failure_stage="downstream",
                 )
+            if (
+                expected_first_event_id is not None
+                and expected_first_version is not None
+                and (
+                    str(target.get("updated_at") or ""),
+                    int(target.get("downstream_attempts") or 0),
+                )
+                != expected_first_version
+            ):
+                # Outer selector działa przed cross-process lockiem. Sam zegar
+                # nie jest tokenem CAS (może stać/cofnąć się); licznik prób
+                # wykrywa konkurencyjny begin/error nawet przy identycznym ISO.
+                return _outcome_from_row(
+                    target,
+                    event_created=state_outcome.event_created,
+                    state_ready=True,
+                    state_transitioned=state_outcome.state_transitioned,
+                    downstream_executed=False,
+                )
 
-            oldest = event_bus.get_oldest_pending_downstream()
+            oldest = event_bus.get_oldest_pending_downstream(
+                updated_before=updated_before,
+                include_event_versions=include_event_versions,
+                exclude_event_ids=exclude_event_ids,
+            )
             if oldest is None:
+                if expected_first_event_id is not None or defer_when_no_eligible_row:
+                    # Sweeper wybral target przed lockiem. Foreground mogl go
+                    # w miedzyczasie domknac albo odswiezyc po bledzie; brak
+                    # aktualnie uprawnionego row nie jest awaria receiptu.
+                    target = event_bus.get_state_apply_outbox(target_id) or target
+                    return _outcome_from_row(
+                        target,
+                        event_created=state_outcome.event_created,
+                        state_ready=target.get("state_status") == "applied",
+                        state_transitioned=state_outcome.state_transitioned,
+                        downstream_executed=False,
+                        superseded=target.get("state_status") == "superseded",
+                    )
                 error = "downstream:pending target missing from FIFO"
-                event_bus.record_state_apply_error(target_id, error)
+                event_bus.record_state_apply_downstream_error(target_id, error)
                 _log.error(
                     f"DURABLE_APPLY {error} event_id={target_id}"
                 )
@@ -842,6 +906,22 @@ def _finish_downstream(
                 )
 
             oldest_id = str(oldest.get("event_id") or "")
+            if (
+                expected_first_event_id is not None
+                and oldest_id != expected_first_event_id
+            ):
+                # Selekcja sprzed locka stracila aktualnosc. Nie wykonuj B i
+                # nie przypisuj jego wyniku/metryk do A; kolejna iteracja
+                # sweepa wybierze aktualny head juz jako wlasny target.
+                target = event_bus.get_state_apply_outbox(target_id) or target
+                return _outcome_from_row(
+                    target,
+                    event_created=state_outcome.event_created,
+                    state_ready=target.get("state_status") == "applied",
+                    state_transitioned=state_outcome.state_transitioned,
+                    downstream_executed=False,
+                    superseded=target.get("state_status") == "superseded",
+                )
             oldest_event = oldest.get("state_event")
             invalid_reason = _invalid_state_event_reason(oldest)
             if invalid_reason is not None:
@@ -851,12 +931,22 @@ def _finish_downstream(
                     f"event_id={oldest_id or '<missing>'}; target={target_id}; "
                     f"reason={invalid_reason}"
                 )
+                if expected_first_event_id is not None:
+                    invalid = event_bus.get_state_apply_outbox(oldest_id) or oldest
+                    return _outcome_from_row(
+                        invalid,
+                        event_created=state_outcome.event_created,
+                        state_ready=False,
+                        state_transitioned=state_outcome.state_transitioned,
+                        downstream_executed=False,
+                        superseded=True,
+                    )
                 continue
 
             if oldest.get("state_status") != "applied":
                 # Query kontraktowo zwraca tylko ready rows. Fail loud zamiast
                 # przywracać head-of-line blocking przez niegotowy state lane.
-                event_bus.record_state_apply_error(
+                event_bus.record_state_apply_downstream_error(
                     oldest_id, "downstream selector returned non-applied state"
                 )
                 return replace(
@@ -892,7 +982,7 @@ def _finish_downstream(
             except Exception as exc:
                 error = f"downstream:{type(exc).__name__}: {exc}"
                 try:
-                    event_bus.record_state_apply_error(oldest_id, error)
+                    event_bus.record_state_apply_downstream_error(oldest_id, error)
                 except Exception:
                     _log.exception(
                         "DURABLE_APPLY could not persist downstream error "
@@ -916,7 +1006,7 @@ def _finish_downstream(
                 completed = event_bus.get_state_apply_outbox(oldest_id)
                 if not completed or completed.get("downstream_status") != "applied":
                     error = "downstream:receipt compare-and-set failed"
-                    event_bus.record_state_apply_error(oldest_id, error)
+                    event_bus.record_state_apply_downstream_error(oldest_id, error)
                     _log.error(
                         f"DURABLE_APPLY {error} event_id={oldest_id}; "
                         f"target={target_id} blocked"
@@ -939,6 +1029,7 @@ def _finish_downstream(
                     state_ready=True,
                     state_transitioned=state_outcome.state_transitioned,
                     downstream_executed=downstream_fn is not None,
+                    downstream_transitioned=bool(marked),
                 )
 
         _log.error(
@@ -968,6 +1059,8 @@ def _emit_and_apply_state_phase(
     state_update_fn: Callable[[dict], object],
     effect_status_fn: Callable[[dict, Optional[dict]], str],
     get_order_fn: Callable[[str], Optional[dict]],
+    state_event_metadata: Optional[dict] = None,
+    retry_updated_before: Optional[str] = None,
 ) -> DurableApplyOutcome:
     """Faza pod lifecycle lockiem: utrwal event i domknij exact state."""
     oid = str(order_id)
@@ -977,6 +1070,130 @@ def _emit_and_apply_state_phase(
         "courier_id": courier_id,
         "payload": (payload or {}) if state_payload is None else (state_payload or {}),
     }
+    if state_event_metadata:
+        reserved = set(requested_event) | {"event_id", "previous_courier_id"}
+        collisions = reserved.intersection(state_event_metadata)
+        if collisions:
+            raise ValueError(
+                "state_event_metadata overrides reserved fields: "
+                + ", ".join(sorted(collisions))
+            )
+        requested_event.update(state_event_metadata)
+    plan_callback_events = {
+        "COURIER_ASSIGNED",
+        "COURIER_DELIVERED",
+        "COURIER_PICKED_UP",
+        "ORDER_RETURNED_TO_POOL",
+        "ORDER_RESURRECTED",
+        "CZAS_KURIERA_UPDATED",
+        "PICKUP_TIME_UPDATED",
+    }
+    recanon_events = {
+        "COURIER_ASSIGNED",
+        "COURIER_DELIVERED",
+        "COURIER_PICKED_UP",
+        "ORDER_RETURNED_TO_POOL",
+    }
+    if event_type in plan_callback_events:
+        # Flagi autoryzuja NOWA intencje, nie jej pojedyncza probe. Markery sa
+        # czescia exact state_event w tej samej transakcji SQLite co receipt:
+        # pozniejszy flip nie moze przerwac callbacku po trwalym remove_stops,
+        # a przed recanon/receiptem.
+        # Jawne false odroznia nowy, fail-closed receipt od legacy row bez
+        # markera (legacy zachowuje odczyt biezacej flagi przez None).
+        requested_event["saved_plans_authorized"] = False
+        try:
+            from dispatch_v2.common import ENABLE_SAVED_PLANS
+            requested_event["saved_plans_authorized"] = bool(
+                ENABLE_SAVED_PLANS
+            )
+        except Exception:
+            pass
+
+        if event_type in recanon_events:
+            requested_event["recanon_on_write_authorized"] = False
+            try:
+                from dispatch_v2.common import decision_flag
+
+                requested_event["recanon_on_write_authorized"] = decision_flag(
+                    "ENABLE_RECANON_ON_WRITE"
+                )
+            except Exception:
+                pass
+
+        if event_type in {"COURIER_ASSIGNED", "COURIER_PICKED_UP"}:
+            requested_event["immediate_redecide_authorized"] = False
+            try:
+                from dispatch_v2.common import decision_flag
+
+                redecide_flag = (
+                    "ENABLE_IMMEDIATE_REDECIDE_ON_OVERRIDE"
+                    if event_type == "COURIER_ASSIGNED"
+                    else "ENABLE_IMMEDIATE_REDECIDE_ON_PICKUP"
+                )
+                requested_event["immediate_redecide_authorized"] = decision_flag(
+                    redecide_flag
+                )
+            except Exception:
+                pass
+
+        if event_type == "COURIER_ASSIGNED":
+            requested_event["panel_agree_authorized"] = False
+            try:
+                from dispatch_v2.common import flag
+
+                requested_event["panel_agree_authorized"] = flag(
+                    "ENABLE_PANEL_AGREE",
+                    os.environ.get("ENABLE_PANEL_AGREE", "1") != "0",
+                )
+            except Exception:
+                pass
+
+        if event_type in {
+            "COURIER_ASSIGNED",
+            "ORDER_RETURNED_TO_POOL",
+            "ORDER_RESURRECTED",
+        }:
+            requested_event["invalidate_plan_on_bag_change_authorized"] = False
+            try:
+                from dispatch_v2.common import flag
+
+                requested_event[
+                    "invalidate_plan_on_bag_change_authorized"
+                ] = flag("ENABLE_INVALIDATE_PLAN_ON_BAG_CHANGE", True)
+            except Exception:
+                pass
+
+        if event_type in {"CZAS_KURIERA_UPDATED", "PICKUP_TIME_UPDATED"}:
+            requested_event["committed_invalidates_view_authorized"] = False
+            try:
+                from dispatch_v2.common import flag
+
+                requested_event[
+                    "committed_invalidates_view_authorized"
+                ] = flag("ENABLE_COMMITTED_INVALIDATES_VIEW", True)
+            except Exception:
+                pass
+
+        if event_type in {"COURIER_ASSIGNED", "ORDER_RETURNED_TO_POOL"}:
+            marker = (
+                "reassign_old_plan_release_authorized"
+                if event_type == "COURIER_ASSIGNED"
+                else "return_previous_cleanup_authorized"
+            )
+            # Caller może związać snapshot CID i autoryzację jednym odczytem
+            # ticka. Nie mieszaj go z drugim hot-readem w fazie receipt, bo
+            # flip OFF->ON pomiędzy nimi tworzył marker ON bez snapshot CID.
+            if marker not in requested_event:
+                try:
+                    from dispatch_v2.common import decision_flag
+
+                    if decision_flag("ENABLE_REASSIGN_OLD_PLAN_RELEASE"):
+                        requested_event[marker] = True
+                except Exception:
+                    # Brak wiarygodnego odczytu = brak rozszerzenia zachowania.
+                    # Sam lifecycle event nadal musi zostac utrwalony i zastosowany.
+                    pass
 
     with state_machine.lifecycle_apply_lock():
         predecessor_event_id: Optional[str] = None
@@ -984,22 +1201,44 @@ def _emit_and_apply_state_phase(
         # share one semantic key. Exact B retry must resume T2, not select T1
         # by rowid and fork T3. Fall back to the historical oldest unresolved
         # row only when no pending generation matches the requested intent.
+        pending_for_key = event_bus.list_pending_state_applies_for_key(
+            event_key, oid
+        )
         matching_pending = next(
             (
                 candidate
-                for candidate in event_bus.list_pending_state_applies_for_key(
-                    event_key, oid
-                )
+                for candidate in reversed(pending_for_key)
                 if _same_requested_intent(
                     candidate.get("state_event"), requested_event
                 )
             ),
             None,
         )
+        pending_tail = event_bus.get_latest_pending_state_apply_for_order(oid)
         requested_unresolved = (
             matching_pending
             or event_bus.get_unresolved_state_apply(event_key, oid)
         )
+        matching_is_tail = bool(
+            requested_unresolved
+            and pending_tail
+            and str(requested_unresolved.get("event_id") or "")
+            == str(pending_tail.get("event_id") or "")
+        )
+        if (
+            requested_unresolved is not None
+            and pending_tail is not None
+            and not matching_is_tail
+        ):
+            # A1 -> B(pending) -> A jest nowa intencja A2, nie retry A1.
+            # Dotyczy zarowno A1 state=pending, jak i A1 state=applied z
+            # oczekujacym callbackiem. Arrival order pod lifecycle lockiem jest
+            # generational tokenem; wznowienie A1 zgubiloby ostatnia obserwacje,
+            # a drain zakonczylby stanem B.
+            requested_unresolved = None
+            predecessor_event_id = (
+                str((pending_tail or {}).get("event_id") or "") or None
+            )
         if requested_unresolved is not None:
             if requested_unresolved.get("state_status") == "pending":
                 # Retry exact payloadu wznawia T1. Inny payload pod tym samym
@@ -1008,19 +1247,32 @@ def _emit_and_apply_state_phase(
                 same_intent = _same_requested_intent(
                     requested_unresolved.get("state_event"), requested_event
                 )
-                unresolved_outcome = _process_state_row(
-                    requested_unresolved,
-                    event_created=False,
-                    state_update_fn=state_update_fn,
-                    effect_status_fn=effect_status_fn,
-                    get_order_fn=get_order_fn,
+                state_retry_deferred = _state_retry_in_cooldown(
+                    requested_unresolved, retry_updated_before
                 )
+                if state_retry_deferred:
+                    unresolved_outcome = _outcome_from_row(
+                        requested_unresolved,
+                        event_created=False,
+                        state_ready=False,
+                        state_transitioned=False,
+                        downstream_executed=False,
+                        failure_stage="state_cooldown",
+                    )
+                else:
+                    unresolved_outcome = _process_state_row(
+                        requested_unresolved,
+                        event_created=False,
+                        state_update_fn=state_update_fn,
+                        effect_status_fn=effect_status_fn,
+                        get_order_fn=get_order_fn,
+                    )
                 if same_intent:
                     return unresolved_outcome
                 predecessor_event_id = (
                     str(requested_unresolved.get("event_id") or "") or None
                 )
-                if unresolved_outcome.state_ready:
+                if not state_retry_deferred and unresolved_outcome.state_ready:
                     try:
                         after_unresolved = get_order_fn(oid)
                         same_epoch = bool(
@@ -1072,11 +1324,13 @@ def _emit_and_apply_state_phase(
 
         older = event_bus.get_pending_state_apply_for_order(oid)
         if older is not None:
-            # Najpierw sprobuj domknac T1. Jesli nadal jest pending, T2 MUSI mimo
-            # to powstac trwale (one-shot call-site nie moze go zgubic), ale jego
-            # state apply dostaje jawna zaleznosc od T1.
+            # Najpierw sprobuj domknac T1, o ile nie trwa cooldown workera.
+            # T2 MUSI mimo to powstac trwale (one-shot call-site nie moze go
+            # zgubic), ale jego state apply dostaje jawna zaleznosc od T1.
             if str(older.get("event_id") or "") != str(
                 predecessor_event_id or ""
+            ) and not _state_retry_in_cooldown(
+                older, retry_updated_before
             ):
                 _process_state_row(
                     older,
@@ -1175,6 +1429,15 @@ def _emit_and_apply_state_phase(
             )
         state_event = dict(requested_event)
         state_event["event_id"] = actual_id
+        if not state_read_failed:
+            previous_courier_id = _previous_courier_for_event(
+                state_event, current
+            )
+            if previous_courier_id:
+                # Provenance cleanupu należy do TEJ SAMEJ transakcji SQLite co
+                # source event i receipt. Post-emit bind pozostaje wyłącznie
+                # ścieżką recovery dla legacy/unknown-read rows.
+                state_event["previous_courier_id"] = previous_courier_id
         try:
             created_id = emit_fn(
                 event_type,
@@ -1262,8 +1525,30 @@ def emit_and_apply(
     effect_status_fn: Callable[[dict, Optional[dict]], str],
     get_order_fn: Callable[[str], Optional[dict]],
     downstream_fn: Optional[Callable[[dict], object]],
+    state_event_metadata: Optional[dict] = None,
+    sweeper_enabled: Optional[bool] = None,
 ) -> DurableApplyOutcome:
     """Utrwal i zastosuj state, potem domknij downstream poza state lockiem."""
+    try:
+        from dispatch_v2.common import STATE_OUTBOX_SWEEPER_MIN_AGE_S
+
+        if sweeper_enabled is None:
+            from dispatch_v2.common import decision_flag
+
+            sweeper_enabled = decision_flag("ENABLE_STATE_OUTBOX_SWEEPER")
+    except Exception:
+        sweeper_enabled = False
+    sweeper_enabled = bool(sweeper_enabled)
+    retry_updated_before = (
+        (
+            datetime.now(timezone.utc)
+            - timedelta(
+                seconds=max(0.0, float(STATE_OUTBOX_SWEEPER_MIN_AGE_S))
+            )
+        ).isoformat()
+        if sweeper_enabled
+        else None
+    )
     state_outcome = _emit_and_apply_state_phase(
         event_type,
         order_id=order_id,
@@ -1275,7 +1560,38 @@ def emit_and_apply(
         state_update_fn=state_update_fn,
         effect_status_fn=effect_status_fn,
         get_order_fn=get_order_fn,
+        state_event_metadata=state_event_metadata,
+        retry_updated_before=retry_updated_before,
     )
+    # Gdy niezalezny sweeper jest ON, jego X-sekundowy cooldown musi
+    # obowiązywać także foreground FIFO. Inaczej każdy nowy lifecycle event
+    # natychmiast ponawiałby callback, który worker właśnie oznaczył błędem.
+    # Dokładny target bez wcześniejszej próby pozostaje uprawniony od razu;
+    # retry targetu z attempts>0 także respektuje cooldown.
+    if sweeper_enabled and state_outcome.state_ready:
+        target = event_bus.get_state_apply_outbox(state_outcome.event_id)
+        if target is not None:
+            target_updated_at = str(target.get("updated_at") or "")
+            include_versions = (
+                {
+                    state_outcome.event_id: (
+                        target_updated_at,
+                        int(target.get("downstream_attempts") or 0),
+                    )
+                }
+                if (
+                    target_updated_at
+                    and int(target.get("downstream_attempts") or 0) == 0
+                )
+                else None
+            )
+            return _finish_downstream(
+                state_outcome,
+                downstream_fn,
+                updated_before=retry_updated_before,
+                include_event_versions=include_versions,
+                defer_when_no_eligible_row=True,
+            )
     return _finish_downstream(state_outcome, downstream_fn)
 
 
@@ -1286,11 +1602,45 @@ def drain_pending(
     get_order_fn: Callable[[str], Optional[dict]],
     downstream_fn: Optional[Callable[[dict], object]],
     limit: int = 100,
+    min_age_seconds: float = 0.0,
 ) -> dict:
-    """Resume state, potem FIFO downstream bez trzymania locka orders_state."""
-    counts = {"seen": 0, "state_ready": 0, "downstream": 0, "superseded": 0, "failed": 0}
-    for initial in event_bus.list_unresolved_state_applies(limit=limit):
+    """Resume state, potem FIFO downstream bez trzymania locka orders_state.
+
+    ``min_age_seconds`` liczy zastoj od ``updated_at``. Zero zachowuje
+    natychmiastowy kontrakt dla pracy istniejacej na początku wywolania;
+    dodatni prog sluzy workerowi i daje foregroundowi grace period oraz staly
+    cooldown po nieudanej probie.
+    """
+    # Nawet przy progu 0 pracuj na migawce z początku wywołania. Dzięki temu
+    # drain nie przejmuje świeżego callbacku utworzonego przez foreground już
+    # podczas bieżącej rundy; rows zastosowane przez jego własny state lane są
+    # wpuszczane niżej dokładnym tokenem (event_id, updated_at).
+    updated_before = (
+        datetime.now(timezone.utc)
+        - timedelta(seconds=max(0.0, float(min_age_seconds)))
+    ).isoformat()
+
+    counts = {
+        "seen": 0,
+        "state_ready": 0,
+        "downstream": 0,
+        "superseded": 0,
+        "failed": 0,
+        "completed": 0,
+    }
+    completed_ids: set[str] = set()
+    same_sweep_ready_versions: dict[str, tuple[str, int]] = {}
+    deferred_downstream_ids: set[str] = set()
+
+    for initial in event_bus.list_unresolved_state_applies(
+        limit=limit, updated_before=updated_before
+    ):
         event_id = str(initial.get("event_id") or "")
+        selected_updated_at = str(initial.get("updated_at") or "")
+        selected_state_attempts = int(initial.get("state_attempts") or 0)
+        selected_downstream_attempts = int(
+            initial.get("downstream_attempts") or 0
+        )
         with state_machine.lifecycle_apply_lock():
             row = event_bus.get_state_apply_outbox(event_id)
             if row is None:
@@ -1299,6 +1649,18 @@ def drain_pending(
             if row.get("state_status") not in ("pending", "applied"):
                 continue
             if row.get("state_status") == "applied" and row.get("downstream_status") != "pending":
+                continue
+            if updated_before is not None and (
+                str(row.get("updated_at") or "") != selected_updated_at
+                or int(row.get("state_attempts") or 0)
+                != selected_state_attempts
+                or int(row.get("downstream_attempts") or 0)
+                != selected_downstream_attempts
+                or str(row.get("updated_at") or "") > updated_before
+            ):
+                # Lista powstaje przed cross-process lockiem. Inny consumer
+                # mogl juz wykonac probe i odswiezyc cooldown; optimistic
+                # version check zapobiega natychmiastowemu podwojnemu retry.
                 continue
             counts["seen"] += 1
             outcome = _process_state_row(
@@ -1311,13 +1673,42 @@ def drain_pending(
             counts["state_ready"] += int(outcome.state_ready)
             counts["superseded"] += int(outcome.superseded)
             counts["failed"] += int(outcome.failure_stage is not None)
+            refreshed = event_bus.get_state_apply_outbox(event_id)
+            if (
+                outcome.state_ready
+                and refreshed
+                and refreshed.get("state_status") == "applied"
+                and refreshed.get("downstream_status") == "pending"
+            ):
+                # Receipt byl stale na wejsciu do sweepa. Mark state odswieza
+                # updated_at, ale nie moze przez to sztucznie odroczyc drugiej
+                # fazy o kolejne X sekund w tej samej kontrolowanej probie.
+                refreshed_updated_at = str(refreshed.get("updated_at") or "")
+                if refreshed_updated_at:
+                    # Wyjatek od age gate jest wazny tylko dla dokladnej wersji
+                    # receiptu utworzonej przez ten sweep. Kazda konkurencyjna
+                    # proba zmienia updated_at i uniewaznia ten token.
+                    same_sweep_ready_versions[event_id] = (
+                        refreshed_updated_at,
+                        int(refreshed.get("downstream_attempts") or 0),
+                    )
+            if outcome.superseded:
+                completed_ids.add(event_id)
 
     # Jedna awaria najstarszego callbacku celowo zatrzymuje tylko causal FIFO,
     # nie lane zapisu state. Nie hammeruj tego samego row wielokrotnie w ticku.
     for _ in range(max(1, int(limit))):
-        oldest = event_bus.get_oldest_pending_downstream()
+        oldest = event_bus.get_oldest_pending_downstream(
+            updated_before=updated_before,
+            include_event_versions=same_sweep_ready_versions,
+            exclude_event_ids=deferred_downstream_ids,
+        )
         if oldest is None:
             break
+        selected_version = (
+            str(oldest.get("updated_at") or ""),
+            int(oldest.get("downstream_attempts") or 0),
+        )
         outcome = _finish_downstream(
             _outcome_from_row(
                 oldest,
@@ -1328,12 +1719,36 @@ def drain_pending(
             ),
             downstream_fn,
             max_rows=1,
+            updated_before=updated_before,
+            include_event_versions=same_sweep_ready_versions,
+            exclude_event_ids=deferred_downstream_ids,
+            expected_first_event_id=str(oldest.get("event_id") or ""),
+            expected_first_version=selected_version,
         )
         counts["downstream"] += int(outcome.downstream_executed)
+        if outcome.downstream_transitioned or outcome.superseded:
+            # Licz tylko terminalizacje wykonane przez ten consumer. Samo
+            # zaobserwowanie receiptu domknietego przez konkurenta nie moze
+            # zawyzac operacyjnej metryki sweepa.
+            completed_ids.add(outcome.event_id)
         if outcome.failure_stage is not None:
             counts["failed"] += 1
             break
         refreshed = event_bus.get_state_apply_outbox(outcome.event_id)
-        if not refreshed or refreshed.get("downstream_status") != "applied":
+        if not refreshed:
             break
+        if refreshed.get("downstream_status") == "applied":
+            same_sweep_ready_versions.pop(outcome.event_id, None)
+            continue
+        current_version = (
+            str(refreshed.get("updated_at") or ""),
+            int(refreshed.get("downstream_attempts") or 0),
+        )
+        # Brak postępu oznacza, że selekcja straciła aktualność pod lockiem.
+        # Wyklucz tylko ten receipt do końca bieżącego sweepa: nie hammeruj go
+        # przy stojącym zegarze, ale nadal obsłuż inne ordery.
+        deferred_downstream_ids.add(outcome.event_id)
+        if current_version != selected_version:
+            same_sweep_ready_versions.pop(outcome.event_id, None)
+    counts["completed"] = len(completed_ids)
     return counts

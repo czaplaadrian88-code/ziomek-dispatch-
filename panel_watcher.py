@@ -26,6 +26,7 @@ import os
 import signal
 import sys
 import time
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from typing import Optional, Tuple
 
@@ -96,6 +97,9 @@ _COORDS_CHECK_INTERVAL_S = 15.0
 
 
 _EventApplyOutcome = durable_event_apply.DurableApplyOutcome
+_STATE_OUTBOX_SWEEPER_TICK_SNAPSHOT: ContextVar[Optional[bool]] = ContextVar(
+    "state_outbox_sweeper_tick_snapshot", default=None
+)
 
 
 def _emit_and_apply_state(
@@ -107,9 +111,31 @@ def _emit_and_apply_state(
     state_payload: Optional[dict] = None,
     event_id: str,
     audit: bool = False,
+    old_plan_release_authorized: Optional[bool] = None,
 ) -> _EventApplyOutcome:
     """Atomowy event+outbox, exact-payload state apply i trwały downstream."""
     emitter = emit_audit if audit else emit
+    state_body = (payload or {}) if state_payload is None else (state_payload or {})
+    source = str(state_body.get("source") or "")
+    state_event_metadata = {}
+    if event_type == "COURIER_ASSIGNED" and source in _PANEL_LEARNING_SOURCES:
+        # pending_proposals/learning_log sa zmienne i nie naleza do orders_state.
+        # Ich causalny snapshot musi jednak wejsc do TEJ SAMEJ trwalej intencji
+        # co assignment; inaczej crash przed pierwsza projekcja learningu
+        # pozwala retry sklasyfikowac zdarzenie wedlug pozniejszej propozycji.
+        state_event_metadata["panel_learning_context"] = (
+            _capture_panel_learning_context(order_id)
+        )
+    if (
+        old_plan_release_authorized is not None
+        and event_type in {"COURIER_ASSIGNED", "ORDER_RETURNED_TO_POOL"}
+    ):
+        marker = (
+            "reassign_old_plan_release_authorized"
+            if event_type == "COURIER_ASSIGNED"
+            else "return_previous_cleanup_authorized"
+        )
+        state_event_metadata[marker] = bool(old_plan_release_authorized)
     return durable_event_apply.emit_and_apply(
         event_type,
         order_id=str(order_id),
@@ -122,6 +148,8 @@ def _emit_and_apply_state(
         effect_status_fn=event_effect_status,
         get_order_fn=state_get_order_strict,
         downstream_fn=lifecycle_downstream.apply,
+        state_event_metadata=state_event_metadata or None,
+        sweeper_enabled=_STATE_OUTBOX_SWEEPER_TICK_SNAPSHOT.get(),
     )
 
 
@@ -242,6 +270,11 @@ def _signal_handler(signum, frame):
 # rejestrujemy jako PANEL_OVERRIDE (sygnał "koordynator ma inne zdanie").
 _PENDING_PROPOSALS_PATH = "/root/.openclaw/workspace/dispatch_state/pending_proposals.json"
 _LEARNING_LOG_PATH = "/root/.openclaw/workspace/dispatch_state/learning_log.jsonl"
+_PANEL_LEARNING_SOURCES = frozenset({
+    "panel_initial",
+    "panel_diff",
+    "panel_reassign",
+})
 
 
 def _durable_downstream_attempt(
@@ -281,7 +314,10 @@ def _append_learning_record(
 
     The per-effect receipt is separate from the composite lifecycle callback:
     a later plan/recanon failure therefore retries only unfinished effects and
-    never depends on a finite number of logrotate archives for deduplication.
+    cannot reclassify the assignment.  Physical JSONL delivery remains
+    at-least-once in the extreme append-before-receipt crash window; retries
+    dedupe across the active file and every retained numeric rotation, while
+    ``lifecycle_event_id`` gives consumers a stable logical identity.
     """
     from dispatch_v2 import event_bus
     from dispatch_v2.core.jsonl_appender import (
@@ -308,6 +344,17 @@ def _append_learning_record(
         raise RuntimeError(
             f"invalid canonical learning projection {projection.get('effect_id')}"
         )
+    if canonical_record.get("action") == "PANEL_LEARNING_NONE":
+        # Trwaly negatywny wynik klasyfikacji jest receiptem, nie rekordem
+        # treningowym. Crash miedzy prepare i mark wznawia samo markowanie.
+        if not event_bus.mark_durable_learning_projected(
+            str(projection.get("effect_id") or "")
+        ):
+            raise RuntimeError(
+                "cannot persist negative learning projection receipt "
+                f"{projection.get('effect_id')}"
+            )
+        return
     attempt = _durable_downstream_attempt(
         lifecycle_event_id, _raise_on_error=_raise_on_error
     )
@@ -342,6 +389,73 @@ def _append_learning_record(
         )
 
 
+def _resume_durable_learning_projection(
+    lifecycle_event_id: Optional[str],
+    *,
+    _raise_on_error: bool = False,
+) -> bool:
+    """Domknij raz wybrana klasyfikacje przed odczytem zmiennych plikow/flag.
+
+    ``True`` oznacza, ze SQLite zawieral juz kanoniczny efekt (takze juz
+    projected). Caller nie moze wtedy ponownie klasyfikowac ASSIGN na podstawie
+    pozniejszego pending_proposals, wieku ani live flagi.
+    """
+    if not lifecycle_event_id:
+        return False
+    from dispatch_v2 import event_bus
+
+    effect_id = f"{lifecycle_event_id}:panel_assignment_learning"
+    try:
+        projection = event_bus.get_durable_learning_projection(effect_id)
+    except Exception:
+        if _raise_on_error:
+            raise
+        return False
+    if projection is None:
+        return False
+    try:
+        canonical_record = projection.get("record")
+        if not isinstance(canonical_record, dict):
+            raise RuntimeError(f"invalid canonical learning projection {effect_id}")
+        _append_learning_record(
+            canonical_record,
+            lifecycle_event_id,
+            _raise_on_error=_raise_on_error,
+        )
+        return True
+    except Exception:
+        if _raise_on_error:
+            raise
+        # Istniejacy durable wybor nadal blokuje ponowna klasyfikacje, nawet
+        # gdy legacy caller nie chce propagowac chwilowego bledu projekcji.
+        return True
+
+
+def _seal_no_panel_learning(
+    lifecycle_event_id: Optional[str],
+    order_id: str,
+    *,
+    _raise_on_error: bool = False,
+) -> None:
+    """Utrwal negatywna klasyfikacje, aby retry nie czytal nowszych proposal."""
+    if not lifecycle_event_id:
+        return
+    try:
+        _append_learning_record(
+            {
+                "ts": now_iso(),
+                "order_id": str(order_id),
+                "action": "PANEL_LEARNING_NONE",
+                "lifecycle_event_id": str(lifecycle_event_id),
+            },
+            lifecycle_event_id,
+            _raise_on_error=_raise_on_error,
+        )
+    except Exception:
+        if _raise_on_error:
+            raise
+
+
 def _check_panel_override(
     order_id: str,
     panel_courier_id: str,
@@ -349,6 +463,7 @@ def _check_panel_override(
     *,
     lifecycle_event_id: Optional[str] = None,
     _raise_on_error: bool = False,
+    _context_by_receipt: Optional[dict] = None,
 ) -> None:
     """Jeśli order_id był w pending_proposals i kurier panelu różny od propozycji
     Ziomka — zapisz PANEL_OVERRIDE do learning_log.jsonl.
@@ -360,19 +475,33 @@ def _check_panel_override(
     ``_raise_on_error``, aby błąd pozostawił receipt do retry.
     """
     import json
-    try:
-        with open(_PENDING_PROPOSALS_PATH, "r", encoding="utf-8") as f:
-            pending = json.load(f)
-    except FileNotFoundError:
+    if _resume_durable_learning_projection(
+        lifecycle_event_id, _raise_on_error=_raise_on_error
+    ):
         return
-    except Exception as e:
-        _log.warning(f"PANEL_OVERRIDE read pending fail: {e}")
-        if _raise_on_error:
-            raise
-        return
-
-    rec = pending.get(str(order_id)) if isinstance(pending, dict) else None
+    if _context_by_receipt is not None:
+        if not isinstance(_context_by_receipt, dict):
+            raise ValueError("panel learning receipt context is not an object")
+        rec = _context_by_receipt.get("pending_record")
+    else:
+        try:
+            with open(_PENDING_PROPOSALS_PATH, "r", encoding="utf-8") as f:
+                pending = json.load(f)
+        except FileNotFoundError:
+            _seal_no_panel_learning(
+                lifecycle_event_id, order_id, _raise_on_error=_raise_on_error
+            )
+            return
+        except Exception as e:
+            _log.warning(f"PANEL_OVERRIDE read pending fail: {e}")
+            if _raise_on_error:
+                raise
+            return
+        rec = pending.get(str(order_id)) if isinstance(pending, dict) else None
     if not rec:
+        _seal_no_panel_learning(
+            lifecycle_event_id, order_id, _raise_on_error=_raise_on_error
+        )
         return
 
     dr = rec.get("decision_record") or {}
@@ -381,6 +510,9 @@ def _check_panel_override(
     proposed_score = best.get("score")
 
     if not proposed_courier_id or proposed_courier_id == str(panel_courier_id):
+        _seal_no_panel_learning(
+            lifecycle_event_id, order_id, _raise_on_error=_raise_on_error
+        )
         return
 
     override_rec = {
@@ -484,6 +616,54 @@ def _find_recent_assign_direct(
     return None
 
 
+def _capture_panel_learning_context(order_id: str) -> dict:
+    """Snapshot mutable learning inputs before the durable ASSIGNED receipt.
+
+    ``capture_status`` is explicit, including read failures.  Retry therefore
+    never upgrades a temporary absence/corruption into a later proposal and
+    never changes AGREE into OVERRIDE (or the reverse).
+    """
+    import json
+
+    context = {
+        "schema_version": 2,
+        "captured_at": now_iso(),
+        # Threshold jest czescia klasyfikacji tego exact ASSIGNED. Retry po
+        # restarcie nie moze zmienic AGREE/NONE tylko dlatego, ze config procesu
+        # zostal zmieniony po utrwaleniu receiptu.
+        "panel_agree_max_age_min": float(_PANEL_AGREE_MAX_AGE_MIN),
+        "capture_status": "none",
+        "pending_record": None,
+        "assign_direct": None,
+    }
+    try:
+        with open(_PENDING_PROPOSALS_PATH, "r", encoding="utf-8") as f:
+            pending = json.load(f)
+    except FileNotFoundError:
+        pending = {}
+    except Exception as exc:
+        context["capture_status"] = "unavailable"
+        _log.warning(
+            "PANEL_LEARNING snapshot pending fail oid=%s: %s: %s",
+            order_id,
+            type(exc).__name__,
+            exc,
+        )
+        return context
+
+    rec = pending.get(str(order_id)) if isinstance(pending, dict) else None
+    if isinstance(rec, dict):
+        context["capture_status"] = "pending"
+        context["pending_record"] = rec
+        return context
+
+    assign_direct = _find_recent_assign_direct(order_id)
+    if isinstance(assign_direct, dict):
+        context["capture_status"] = "assign_direct"
+        context["assign_direct"] = assign_direct
+    return context
+
+
 def _write_panel_agree(
     order_id: str,
     proposed_cid: str,
@@ -550,6 +730,8 @@ def _check_panel_agree(
     *,
     lifecycle_event_id: Optional[str] = None,
     _raise_on_error: bool = False,
+    _enabled_by_receipt: Optional[bool] = None,
+    _context_by_receipt: Optional[dict] = None,
 ) -> None:
     """Jeśli order_id ma świeżą (≤15 min) propozycję i kurier panelu ZGODNY z
     best — zapisz PANEL_AGREE do learning_log. Rozjazd obsługuje istniejący
@@ -560,23 +742,36 @@ def _check_panel_agree(
     downstream może zażądać propagacji błędu do outboxa."""
     import json
     try:
-        if not _panel_agree_enabled():
+        if _resume_durable_learning_projection(
+            lifecycle_event_id, _raise_on_error=_raise_on_error
+        ):
+            return
+        agree_enabled = (
+            _panel_agree_enabled()
+            if _enabled_by_receipt is None
+            else bool(_enabled_by_receipt)
+        )
+        if not agree_enabled:
             return
         if not panel_courier_id or str(panel_courier_id) == str(KOORDYNATOR_ID):
             return  # hold na Koordynatora = nie-decyzja (edge a, belt-and-suspenders)
 
-        try:
-            with open(_PENDING_PROPOSALS_PATH, "r", encoding="utf-8") as f:
-                pending = json.load(f)
-        except FileNotFoundError:
-            pending = {}
-        except Exception as e:
-            _log.warning(f"PANEL_AGREE read pending fail: {e}")
-            if _raise_on_error:
-                raise
-            return
-
-        rec = pending.get(str(order_id)) if isinstance(pending, dict) else None
+        if _context_by_receipt is not None:
+            if not isinstance(_context_by_receipt, dict):
+                raise ValueError("panel learning receipt context is not an object")
+            rec = _context_by_receipt.get("pending_record")
+        else:
+            try:
+                with open(_PENDING_PROPOSALS_PATH, "r", encoding="utf-8") as f:
+                    pending = json.load(f)
+            except FileNotFoundError:
+                pending = {}
+            except Exception as e:
+                _log.warning(f"PANEL_AGREE read pending fail: {e}")
+                if _raise_on_error:
+                    raise
+                return
+            rec = pending.get(str(order_id)) if isinstance(pending, dict) else None
         if rec:
             # pending_proposals[oid] = zawsze OSTATNIA propozycja (proposal_sender
             # nadpisuje; starsze kończą jako TIMEOUT_SUPERSEDED) — edge (b).
@@ -588,8 +783,35 @@ def _check_panel_agree(
             sent_at = _parse_iso_utc(rec.get("sent_at") or dr.get("ts"))
             latency_s = None
             if sent_at is not None:
-                age_s = (datetime.now(timezone.utc) - sent_at).total_seconds()
-                if age_s > _PANEL_AGREE_MAX_AGE_MIN * 60.0:
+                if _context_by_receipt is not None:
+                    observed_at = _parse_iso_utc(
+                        _context_by_receipt.get("captured_at")
+                    )
+                    if observed_at is None:
+                        raise ValueError(
+                            "panel learning receipt has invalid captured_at"
+                        )
+                    raw_max_age = _context_by_receipt.get(
+                        "panel_agree_max_age_min",
+                        # Kompatybilnosc z receiptami schema v1 utrwalonymi
+                        # przed dodaniem progu. Nowe v2 zawsze maja snapshot.
+                        _PANEL_AGREE_MAX_AGE_MIN,
+                    )
+                    try:
+                        max_age_min = float(raw_max_age)
+                    except (TypeError, ValueError) as exc:
+                        raise ValueError(
+                            "panel learning receipt has invalid age threshold"
+                        ) from exc
+                    if max_age_min < 0:
+                        raise ValueError(
+                            "panel learning receipt has negative age threshold"
+                        )
+                else:
+                    observed_at = datetime.now(timezone.utc)
+                    max_age_min = _PANEL_AGREE_MAX_AGE_MIN
+                age_s = (observed_at - sent_at).total_seconds()
+                if age_s > max_age_min * 60.0:
                     return  # propozycja za stara — brak związku przyczynowego
                 latency_s = round(age_s, 1)
             _write_panel_agree(order_id, proposed, panel_courier_id,
@@ -599,8 +821,12 @@ def _check_panel_agree(
             return
 
         # Brak pending → możliwy ASSIGN z Telegrama (edge c).
-        ad = _find_recent_assign_direct(
-            order_id, _raise_on_error=_raise_on_error
+        ad = (
+            _context_by_receipt.get("assign_direct")
+            if _context_by_receipt is not None
+            else _find_recent_assign_direct(
+                order_id, _raise_on_error=_raise_on_error
+            )
         )
         if not ad:
             return
@@ -631,6 +857,7 @@ def _save_plan_on_assign(
     courier_id: str,
     *,
     _raise_on_error: bool = False,
+    _saved_plans_authorized_by_receipt: Optional[bool] = None,
 ) -> None:
     """V3.19b: zapisz plan z pending_proposals po emit COURIER_ASSIGNED.
 
@@ -641,7 +868,12 @@ def _save_plan_on_assign(
     """
     try:
         from dispatch_v2.common import ENABLE_SAVED_PLANS
-        if not ENABLE_SAVED_PLANS:
+        saved_plans_enabled = (
+            bool(ENABLE_SAVED_PLANS)
+            if _saved_plans_authorized_by_receipt is None
+            else bool(_saved_plans_authorized_by_receipt)
+        )
+        if not saved_plans_enabled:
             return
     except Exception:
         if _raise_on_error:
@@ -757,8 +989,17 @@ def _save_plan_on_assign(
         "optimization_method": plan.get("strategy") or "bruteforce",
     }
     try:
-        plan_manager.save_plan(
-            str(courier_id), body, expected_version=expected_version)
+        if _raise_on_error:
+            plan_manager.save_plan(
+                str(courier_id),
+                body,
+                expected_version=expected_version,
+                _raise_on_corrupt=True,
+            )
+        else:
+            plan_manager.save_plan(
+                str(courier_id), body, expected_version=expected_version
+            )
         _log.info(f"V3.19b plan saved cid={courier_id} oid={order_id} stops={len(stops)}")
     except plan_manager.ConcurrencyError as e:
         _log.warning(
@@ -766,6 +1007,10 @@ def _save_plan_on_assign(
             f"expected={e.expected_version} current={e.current_version} "
             f"policy=keep_current"
         )
+        if _raise_on_error:
+            # Pierwsza proba mogla wykonac rename, po czym polec na fsync dir.
+            # Retry widzi wtedy CAS mismatch; ponowny fsync domyka ten zapis.
+            plan_manager.ensure_storage_durable()
     except Exception as e:
         _log.warning(f"V3.19b save_plan fail cid={courier_id} oid={order_id}: {e}")
         if _raise_on_error:
@@ -777,7 +1022,9 @@ def _invalidate_plan_on_bag_change(
     courier_id: str,
     *,
     _raise_on_error: bool = False,
-) -> None:
+    _saved_plans_authorized_by_receipt: Optional[bool] = None,
+    _enabled_by_receipt: Optional[bool] = None,
+) -> bool:
     """BUG-1 (2026-06-05): gdy zlecenie zostaje przypisane/przepisane kurierowi, a NIE
     jest pokryte jego zapisanym planem (typowo PANEL_OVERRIDE / reassign — koordynator
     przypisał ręcznie, nie z propozycji Ziomka, więc _save_plan_on_assign cicho pomija
@@ -787,54 +1034,89 @@ def _invalidate_plan_on_bag_change(
     SSE PLAN_UPDATED → apka natychmiast robi pełny GET /api/courier/orders (build_view
     zwraca cały aktualny worek), zamiast czekać do 5-min plan_recheck gap-fill.
 
-    Cicho no-op gdy: flaga off, saved-plans off, kurier bez aktywnego planu (apka i tak
-    na fallbacku pełnego worka), albo order już pokryty planem (świeży save_plan ruszył
-    plan_version, sygnał jest). Domyślnie błędy nie propagują; outbox włącza strict.
+    Zwraca True, gdy plan jest bezpieczny (pokrywa order albo już używa
+    fallbacku po braku/inwalidacji). False oznacza, że flaga blokuje potrzebną
+    inwalidację. Domyślnie błędy nie propagują; outbox włącza strict.
     """
     try:
         from dispatch_v2.common import ENABLE_SAVED_PLANS, flag
-        if not ENABLE_SAVED_PLANS:
-            return
-        if not flag("ENABLE_INVALIDATE_PLAN_ON_BAG_CHANGE", True):
-            return
+        saved_plans_enabled = (
+            bool(ENABLE_SAVED_PLANS)
+            if _saved_plans_authorized_by_receipt is None
+            else bool(_saved_plans_authorized_by_receipt)
+        )
+        if not saved_plans_enabled:
+            return True
+        invalidate_enabled = (
+            flag("ENABLE_INVALIDATE_PLAN_ON_BAG_CHANGE", True)
+            if _enabled_by_receipt is None
+            else bool(_enabled_by_receipt)
+        )
     except Exception:
         if _raise_on_error:
             raise
-        return
+        return False
     if not courier_id or not order_id:
-        return
+        return True
     try:
         from dispatch_v2 import plan_manager
         # load_plan zwraca None gdy brak planu LUB plan już invalidated → no-op w obu
-        plan = plan_manager.load_plan(str(courier_id))
+        if _raise_on_error:
+            plan = plan_manager.load_plan(
+                str(courier_id), _raise_on_corrupt=True
+            )
+        else:
+            plan = plan_manager.load_plan(str(courier_id))
         if plan is None:
-            return
+            if _raise_on_error:
+                plan_manager.ensure_storage_durable()
+            return True
         covered = {str(s.get("order_id")) for s in plan.get("stops", [])}
         if str(order_id) in covered:
-            return
+            if _raise_on_error:
+                plan_manager.ensure_storage_durable()
+            return True
+        if not invalidate_enabled:
+            # Brak naprawy NIE jest stanem bezpiecznym. Caller zwykle może
+            # potraktować receipt-False jako zamierzony no-op feature flagi,
+            # lecz generation guard po remove_stops musi fail-closed i zostawić
+            # receipt pending zamiast zamknąć go z aktywnym OID poza planem.
+            return False
         try:
-            plan_manager.invalidate_plan(
-                str(courier_id),
-                "BAG_CHANGED",
-                expected_version=plan.get("plan_version", 0),
-            )
+            if _raise_on_error:
+                plan_manager.invalidate_plan(
+                    str(courier_id),
+                    "BAG_CHANGED",
+                    expected_version=plan.get("plan_version", 0),
+                    _raise_on_corrupt=True,
+                )
+            else:
+                plan_manager.invalidate_plan(
+                    str(courier_id),
+                    "BAG_CHANGED",
+                    expected_version=plan.get("plan_version", 0),
+                )
         except plan_manager.ConcurrencyError as e:
             _log.warning(
                 f"PLAN_CAS_SKIP writer=bag_change cid={courier_id} oid={order_id} "
                 f"expected={e.expected_version} current={e.current_version} "
                 f"policy=keep_current"
             )
-            return
+            if _raise_on_error:
+                raise
+            return False
         _log.info(
             f"BUG-1 invalidate_plan_on_bag_change cid={courier_id} oid={order_id} "
             f"— order poza planem (reassign/override) → apka odświeży worek"
         )
+        return True
     except Exception as e:
         _log.warning(
             f"BUG-1 invalidate_plan_on_bag_change fail cid={courier_id} oid={order_id}: {e}"
         )
         if _raise_on_error:
             raise
+        return False
 
 
 def _invalidate_plan_on_committed_change(
@@ -842,6 +1124,8 @@ def _invalidate_plan_on_committed_change(
     courier_id: str,
     *,
     _raise_on_error: bool = False,
+    _saved_plans_authorized_by_receipt: Optional[bool] = None,
+    _enabled_by_receipt: Optional[bool] = None,
 ) -> None:
     """FIX-E (2026-06-13, B1): gdy zmienia się czas_kuriera/pickup (committed/ready)
     zlecenia PRZYPISANEGO kurierowi, zasygnalizuj zmianę JEGO planu (touch_plan: bump
@@ -862,9 +1146,19 @@ def _invalidate_plan_on_committed_change(
     """
     try:
         from dispatch_v2.common import ENABLE_SAVED_PLANS, flag
-        if not ENABLE_SAVED_PLANS:
+        saved_plans_enabled = (
+            bool(ENABLE_SAVED_PLANS)
+            if _saved_plans_authorized_by_receipt is None
+            else bool(_saved_plans_authorized_by_receipt)
+        )
+        if not saved_plans_enabled:
             return
-        if not flag("ENABLE_COMMITTED_INVALIDATES_VIEW", True):
+        committed_signal_enabled = (
+            flag("ENABLE_COMMITTED_INVALIDATES_VIEW", True)
+            if _enabled_by_receipt is None
+            else bool(_enabled_by_receipt)
+        )
+        if not committed_signal_enabled:
             return
     except Exception:
         if _raise_on_error:
@@ -879,7 +1173,18 @@ def _invalidate_plan_on_committed_change(
         # na planie JUŻ invalidated (scenariusz B1: PANEL_OVERRIDE unieważnił plan, a
         # czas_kuriera wchodzi sekundy później — load_plan zwracałby None i no-opował).
         # No-op (False) gdy brak planu — apka i tak na pełnym worku z fresh czas_kuriera.
-        if plan_manager.touch_plan(str(courier_id), "COMMITTED_TIME_CHANGED"):
+        touched = (
+            plan_manager.touch_plan(
+                str(courier_id),
+                "COMMITTED_TIME_CHANGED",
+                _raise_on_corrupt=True,
+            )
+            if _raise_on_error
+            else plan_manager.touch_plan(
+                str(courier_id), "COMMITTED_TIME_CHANGED"
+            )
+        )
+        if touched:
             _log.info(
                 f"FIX-E committed_change cid={courier_id} oid={order_id} "
                 f"— apka odświeży widok (eta_committed)"
@@ -897,6 +1202,10 @@ def _save_plan_on_assign_signal(
     courier_id: str,
     *,
     _raise_on_error: bool = False,
+    _saved_plans_authorized_by_receipt: Optional[bool] = None,
+    _recanon_authorized_by_receipt: Optional[bool] = None,
+    _redecide_authorized_by_receipt: Optional[bool] = None,
+    _invalidate_authorized_by_receipt: Optional[bool] = None,
 ) -> None:
     """BUG-1 (2026-06-05): zapisz plan z propozycji (gdy to nasz kurier) ORAZ zasygnalizuj
     apce zmianę worka. _save_plan_on_assign cicho pomija zapis przy PANEL_OVERRIDE/reassign,
@@ -904,11 +1213,30 @@ def _save_plan_on_assign_signal(
     _invalidate_plan_on_bag_change łapie ten przypadek (order poza planem) i unieważnia
     plan → SSE PLAN_UPDATED → natychmiastowy pełny GET. No-op gdy save pokrył order."""
     _save_plan_on_assign(
-        order_id, courier_id, _raise_on_error=_raise_on_error
+        order_id,
+        courier_id,
+        _raise_on_error=_raise_on_error,
+        _saved_plans_authorized_by_receipt=(
+            _saved_plans_authorized_by_receipt
+        ),
     )
-    _invalidate_plan_on_bag_change(
-        order_id, courier_id, _raise_on_error=_raise_on_error
+    bag_safe = _invalidate_plan_on_bag_change(
+        order_id,
+        courier_id,
+        _raise_on_error=_raise_on_error,
+        _saved_plans_authorized_by_receipt=(
+            _saved_plans_authorized_by_receipt
+        ),
+        _enabled_by_receipt=_invalidate_authorized_by_receipt,
     )
+    if (
+        _raise_on_error
+        and bag_safe is False
+        and _invalidate_authorized_by_receipt is True
+    ):
+        raise RuntimeError(
+            f"assigned plan does not cover oid={order_id} and invalidation is disabled"
+        )
     # RECANON: po zapisie planu z PROPOZYCJI (surowa sekwencja OR-Tools) egzekwuj
     # od razu niezmienniki kanonu (carried-first + committed + relax). No-op gdy
     # plan invalidated (override) — tym zajmuje się redecide niżej.
@@ -916,7 +1244,10 @@ def _save_plan_on_assign_signal(
         from dispatch_v2 import plan_recheck
         if _raise_on_error:
             plan_recheck.recanon_courier(
-                str(courier_id), reason="assign", _raise_on_error=True
+                str(courier_id),
+                reason="assign",
+                _raise_on_error=True,
+                _enabled_by_receipt=_recanon_authorized_by_receipt,
             )
         else:
             plan_recheck.recanon_courier(str(courier_id), reason="assign")
@@ -932,7 +1263,9 @@ def _save_plan_on_assign_signal(
         from dispatch_v2 import plan_recheck
         if _raise_on_error:
             plan_recheck.redecide_courier(
-                courier_id, _raise_on_error=True
+                courier_id,
+                _raise_on_error=True,
+                _enabled_by_receipt=_redecide_authorized_by_receipt,
             )
         else:
             plan_recheck.redecide_courier(courier_id)
@@ -949,11 +1282,18 @@ def _advance_plan_on_deliver(
     delivery_coords: Optional[list],
     *,
     _raise_on_error: bool = False,
+    _saved_plans_authorized_by_receipt: Optional[bool] = None,
+    _recanon_authorized_by_receipt: Optional[bool] = None,
 ) -> None:
     """V3.19b: advance plan po emit COURIER_DELIVERED sukces."""
     try:
         from dispatch_v2.common import ENABLE_SAVED_PLANS
-        if not ENABLE_SAVED_PLANS:
+        saved_plans_enabled = (
+            bool(ENABLE_SAVED_PLANS)
+            if _saved_plans_authorized_by_receipt is None
+            else bool(_saved_plans_authorized_by_receipt)
+        )
+        if not saved_plans_enabled:
             return
     except Exception:
         if _raise_on_error:
@@ -967,12 +1307,24 @@ def _advance_plan_on_deliver(
         if delivery_coords and isinstance(delivery_coords, (list, tuple)) \
                 and len(delivery_coords) == 2:
             coords_tuple = (float(delivery_coords[0]), float(delivery_coords[1]))
-        plan_manager.advance_plan(
-            str(courier_id),
-            str(order_id),
-            delivered_at_raw or now_iso(),
-            coords_tuple,
-        )
+        if _raise_on_error:
+            plan_manager.advance_plan(
+                str(courier_id),
+                str(order_id),
+                delivered_at_raw or now_iso(),
+                coords_tuple,
+                _raise_on_corrupt=True,
+            )
+            # Retry po rename+fsync-dir failure moze byc store no-op. Jawny
+            # ponowny fsync jest warunkiem zamkniecia durable receiptu.
+            plan_manager.ensure_storage_durable()
+        else:
+            plan_manager.advance_plan(
+                str(courier_id),
+                str(order_id),
+                delivered_at_raw or now_iso(),
+                coords_tuple,
+            )
     except Exception as e:
         _log.warning(f"V3.19b advance_plan fail cid={courier_id} oid={order_id}: {e}")
         if _raise_on_error:
@@ -983,7 +1335,10 @@ def _advance_plan_on_deliver(
         from dispatch_v2 import plan_recheck
         if _raise_on_error:
             plan_recheck.recanon_courier(
-                str(courier_id), reason="deliver", _raise_on_error=True
+                str(courier_id),
+                reason="deliver",
+                _raise_on_error=True,
+                _enabled_by_receipt=_recanon_authorized_by_receipt,
             )
         else:
             plan_recheck.recanon_courier(str(courier_id), reason="deliver")
@@ -993,48 +1348,117 @@ def _advance_plan_on_deliver(
             raise
 
 
+def _recanon_after_plan_cleanup(
+    courier_id: str,
+    order_id: str,
+    *,
+    reason: str,
+    _raise_on_error: bool = False,
+    _recanon_authorized_by_receipt: Optional[bool] = None,
+    _expected_order_generation: Optional[tuple[str, Optional[dict]]] = None,
+) -> bool:
+    """Druga, retryable faza cleanupu wykonywana poza lifecycle state lockiem."""
+    try:
+        from dispatch_v2 import plan_recheck
+
+        if _raise_on_error:
+            plan_recheck.recanon_courier(
+                str(courier_id),
+                reason=reason,
+                _raise_on_error=True,
+                _enabled_by_receipt=_recanon_authorized_by_receipt,
+                _expected_order_generation=_expected_order_generation,
+            )
+        else:
+            plan_recheck.recanon_courier(str(courier_id), reason=reason)
+        return True
+    except Exception as exc:
+        _log.warning(
+            f"recanon-on-{reason} fail cid={courier_id} oid={order_id}: {exc}"
+        )
+        if _raise_on_error:
+            raise
+        return False
+
+
 def _remove_stops_on_return(
     courier_id: str,
     order_id: str,
     *,
     _raise_on_error: bool = False,
-) -> None:
-    """V3.19b: remove_stops po emit ORDER_RETURNED_TO_POOL sukces."""
+    _saved_plans_authorized_by_receipt: Optional[bool] = None,
+    _recanon_authorized_by_receipt: Optional[bool] = None,
+    _expected_plan_version: Optional[int] = None,
+    _skip_recanon: bool = False,
+) -> bool:
+    """V3.19b cleanup; bool pozwala receiptowi wykryc best-effort failure."""
     try:
         from dispatch_v2.common import ENABLE_SAVED_PLANS
-        if not ENABLE_SAVED_PLANS:
-            return
+        saved_plans_enabled = (
+            bool(ENABLE_SAVED_PLANS)
+            if _saved_plans_authorized_by_receipt is None
+            else bool(_saved_plans_authorized_by_receipt)
+        )
+        if not saved_plans_enabled:
+            return True
     except Exception:
         if _raise_on_error:
             raise
-        return
+        return False
     if not courier_id:
-        return
+        return True
+    succeeded = True
     try:
         from dispatch_v2 import plan_manager
-        plan_manager.remove_stops(str(courier_id), str(order_id))
+        if _raise_on_error:
+            try:
+                remove_kwargs = {"_raise_on_corrupt": True}
+                if _expected_plan_version is not None:
+                    remove_kwargs["expected_version"] = _expected_plan_version
+                plan_manager.remove_stops(
+                    str(courier_id), str(order_id), **remove_kwargs
+                )
+            except plan_manager.ConcurrencyError:
+                # Rename+fsync-dir crash może zostawić już wykonany efekt przy
+                # starej wersji. Uznaj CAS conflict wyłącznie gdy targetu już
+                # nie ma; nowszy plan nadal zawierający OID jest inną generacją.
+                current_plan = plan_manager.load_plans(
+                    _raise_on_corrupt=True
+                ).get(str(courier_id))
+                still_has_target = bool(
+                    current_plan
+                    and current_plan.get("invalidated_at") is None
+                    and any(
+                        str(stop.get("order_id")) == str(order_id)
+                        for stop in current_plan.get("stops", [])
+                    )
+                )
+                if still_has_target:
+                    raise
+        else:
+            plan_manager.remove_stops(str(courier_id), str(order_id))
+        # Retry po bledzie fsync katalogu moze zobaczyc juz podmieniony plik i
+        # wykonac store no-op. Ponowny fsync dir jest wtedy warunkiem zamkniecia
+        # durable receiptu, nie opcjonalna optymalizacja.
+        plan_manager.ensure_storage_durable()
     except Exception as e:
+        succeeded = False
         _log.warning(f"V3.19b remove_stops fail cid={courier_id} oid={order_id}: {e}")
         if _raise_on_error:
             raise
-    # RECANON: po anulowaniu/zwrocie (remove_stops usunął stopy) re-egzekwuj kanon na
-    # RESZCIE worka natychmiast — SYMETRIA z assign/deliver/pickup (P-5 audyt 2026-06-24).
-    # Bez tego anulowanie zlecenia (np. między dwiema dostawami) zostawiało plan
-    # niezkanonizowany (niesione nie na froncie / okno committed nieuwzględnione) do
-    # następnego 5-min ticku. Best-effort, self-gating na ENABLE_RECANON_ON_WRITE,
-    # no-op gdy worek pusty / brak kotwicy → nigdy nie psuje (≤ stan sprzed fixu).
-    try:
-        from dispatch_v2 import plan_recheck
-        if _raise_on_error:
-            plan_recheck.recanon_courier(
-                str(courier_id), reason="return", _raise_on_error=True
-            )
-        else:
-            plan_recheck.recanon_courier(str(courier_id), reason="return")
-    except Exception as e:
-        _log.warning(f"recanon-on-return fail cid={courier_id} oid={order_id}: {e}")
-        if _raise_on_error:
-            raise
+    if _skip_recanon:
+        return succeeded
+    # RECANON pozostaje osobna faza: durable lifecycle wywołuje ją po
+    # zwolnieniu krótkiego state-generation locka.
+    if not _recanon_after_plan_cleanup(
+        str(courier_id),
+        str(order_id),
+        reason="return",
+        _raise_on_error=_raise_on_error,
+        _recanon_authorized_by_receipt=_recanon_authorized_by_receipt,
+    ):
+        succeeded = False
+    return succeeded
 
 
 def _release_plan_on_reassign(
@@ -1042,6 +1466,11 @@ def _release_plan_on_reassign(
     order_id: str,
     *,
     _raise_on_error: bool = False,
+    _authorized_by_receipt: bool = False,
+    _saved_plans_authorized_by_receipt: Optional[bool] = None,
+    _recanon_authorized_by_receipt: Optional[bool] = None,
+    _expected_plan_version: Optional[int] = None,
+    _skip_recanon: bool = False,
 ) -> bool:
     """REASSIGN-RELEASE (2026-07-20): po przerzuceniu zlecenia na INNEGO kuriera
     zwolnij plan STAREGO — lustrzane do _remove_stops_on_return (ta sama klasa:
@@ -1064,13 +1493,23 @@ def _release_plan_on_reassign(
     locki = TOCTOU (nowszy plan mógł wejść między odczyt a zapis).
 
     Za flagą ENABLE_REASSIGN_OLD_PLAN_RELEASE (default OFF, flip za ACK).
-    Zwykły caller pozostaje best-effort; durable callback używa trybu strict.
+    Zwykły caller pozostaje best-effort; durable callback używa trybu strict
+    i trwalej autoryzacji zapisanej w exact state_event. Dzieki temu OFF blokuje
+    nowe intencje, ale nie ucina retry po czesciowo wykonanym efekcie.
     """
     try:
         from dispatch_v2.common import ENABLE_SAVED_PLANS, decision_flag
-        if not ENABLE_SAVED_PLANS:
+        saved_plans_enabled = (
+            bool(ENABLE_SAVED_PLANS)
+            if _saved_plans_authorized_by_receipt is None
+            else bool(_saved_plans_authorized_by_receipt)
+        )
+        if not saved_plans_enabled:
             return False
-        if not decision_flag("ENABLE_REASSIGN_OLD_PLAN_RELEASE"):
+        if (
+            not _authorized_by_receipt
+            and not decision_flag("ENABLE_REASSIGN_OLD_PLAN_RELEASE")
+        ):
             return False
     except Exception:
         if _raise_on_error:
@@ -1082,7 +1521,29 @@ def _release_plan_on_reassign(
     oid = str(order_id)
     try:
         from dispatch_v2 import plan_manager
-        plan_manager.remove_stops(cid, oid)
+        if _raise_on_error:
+            try:
+                remove_kwargs = {"_raise_on_corrupt": True}
+                if _expected_plan_version is not None:
+                    remove_kwargs["expected_version"] = _expected_plan_version
+                plan_manager.remove_stops(cid, oid, **remove_kwargs)
+            except plan_manager.ConcurrencyError:
+                current_plan = plan_manager.load_plans(
+                    _raise_on_corrupt=True
+                ).get(cid)
+                still_has_target = bool(
+                    current_plan
+                    and current_plan.get("invalidated_at") is None
+                    and any(
+                        str(stop.get("order_id")) == oid
+                        for stop in current_plan.get("stops", [])
+                    )
+                )
+                if still_has_target:
+                    raise
+        else:
+            plan_manager.remove_stops(cid, oid)
+        plan_manager.ensure_storage_durable()
         _log.info(
             f"REASSIGN-RELEASE cid_old={cid} oid={oid} "
             f"— plan starego zwolniony (remove_stops → bump plan_version)"
@@ -1093,24 +1554,15 @@ def _release_plan_on_reassign(
         )
         if _raise_on_error:
             raise
-    # RECANON: po zwolnieniu re-egzekwuj kanon na RESZCIE worka STAREGO natychmiast
-    # — SYMETRIA z assign/deliver/pickup/return (P-5). Self-gating na
-    # ENABLE_RECANON_ON_WRITE, no-op gdy worek pusty / brak planu → nigdy nie
-    # psuje (≤ stan sprzed fixu).
-    try:
-        from dispatch_v2 import plan_recheck
-        if _raise_on_error:
-            plan_recheck.recanon_courier(
-                cid, reason="reassign_out", _raise_on_error=True
-            )
-        else:
-            plan_recheck.recanon_courier(cid, reason="reassign_out")
-    except Exception as e:
-        _log.warning(
-            f"recanon-on-reassign-out fail cid_old={cid} oid={oid}: {e}"
-        )
-        if _raise_on_error:
-            raise
+    if _skip_recanon:
+        return True
+    _recanon_after_plan_cleanup(
+        cid,
+        oid,
+        reason="reassign_out",
+        _raise_on_error=_raise_on_error,
+        _recanon_authorized_by_receipt=_recanon_authorized_by_receipt,
+    )
     return True
 
 
@@ -1120,13 +1572,21 @@ def _update_plan_on_picked_up(
     picked_up_at: Optional[str] = None,
     *,
     _raise_on_error: bool = False,
+    _saved_plans_authorized_by_receipt: Optional[bool] = None,
+    _recanon_authorized_by_receipt: Optional[bool] = None,
+    _redecide_authorized_by_receipt: Optional[bool] = None,
 ) -> None:
     """V3.19c sub A: po emit COURIER_PICKED_UP sukces. Update
     stop.status_at_plan_time + prune pickup stop (jeśli był).
     """
     try:
         from dispatch_v2.common import ENABLE_SAVED_PLANS
-        if not ENABLE_SAVED_PLANS:
+        saved_plans_enabled = (
+            bool(ENABLE_SAVED_PLANS)
+            if _saved_plans_authorized_by_receipt is None
+            else bool(_saved_plans_authorized_by_receipt)
+        )
+        if not saved_plans_enabled:
             return
     except Exception:
         if _raise_on_error:
@@ -1136,7 +1596,18 @@ def _update_plan_on_picked_up(
         return
     try:
         from dispatch_v2 import plan_manager
-        plan_manager.mark_picked_up(str(courier_id), str(order_id), picked_up_at)
+        if _raise_on_error:
+            plan_manager.mark_picked_up(
+                str(courier_id),
+                str(order_id),
+                picked_up_at,
+                _raise_on_corrupt=True,
+            )
+            plan_manager.ensure_storage_durable()
+        else:
+            plan_manager.mark_picked_up(
+                str(courier_id), str(order_id), picked_up_at
+            )
     except Exception as e:
         _log.warning(f"V3.19c mark_picked_up fail cid={courier_id} oid={order_id}: {e}")
         if _raise_on_error:
@@ -1153,10 +1624,16 @@ def _update_plan_on_picked_up(
         # natychmiast — egzekwuje carried-first zanim apka/konsola pobiorą plan.
         if _raise_on_error:
             plan_recheck.recanon_courier(
-                str(courier_id), reason="pickup", _raise_on_error=True
+                str(courier_id),
+                reason="pickup",
+                _raise_on_error=True,
+                _enabled_by_receipt=_recanon_authorized_by_receipt,
             )
             plan_recheck.redecide_courier(
-                str(courier_id), reason="pickup", _raise_on_error=True
+                str(courier_id),
+                reason="pickup",
+                _raise_on_error=True,
+                _enabled_by_receipt=_redecide_authorized_by_receipt,
             )
         else:
             plan_recheck.recanon_courier(str(courier_id), reason="pickup")
@@ -1594,7 +2071,70 @@ def _build_prefetch_candidates(parsed: dict, current_state: dict, ignored_ids,
     return list(dict.fromkeys(out))
 
 
-def _diff_and_emit(parsed: dict, csrf: str) -> dict:
+def _sweep_state_apply_outbox(*, enabled: Optional[bool] = None) -> dict:
+    """Lekki recovery step; OFF nie dodaje I/O ponad legacy drain po fetchu."""
+    try:
+        if enabled is None:
+            enabled = decision_flag("ENABLE_STATE_OUTBOX_SWEEPER")
+        if not enabled:
+            return {}
+        min_age_s = max(0.0, float(C.STATE_OUTBOX_SWEEPER_MIN_AGE_S))
+        recovered = durable_event_apply.drain_pending(
+            state_update_fn=update_from_event,
+            effect_status_fn=event_effect_status,
+            get_order_fn=state_get_order_strict,
+            downstream_fn=lifecycle_downstream.apply,
+            limit=100,
+            min_age_seconds=min_age_s,
+        )
+        stats = {
+            "durable_apply_seen": recovered.get("seen", 0),
+            "durable_apply_recovered": recovered.get("state_ready", 0),
+            "durable_downstream_recovered": recovered.get("downstream", 0),
+            "durable_apply_superseded": recovered.get("superseded", 0),
+            "durable_apply_failed": recovered.get("failed", 0),
+            "state_outbox_sweeper_completed": recovered.get("completed", 0),
+        }
+        stats["errors"] = stats["durable_apply_failed"]
+        if any(
+            stats[key]
+            for key in (
+                "durable_apply_seen",
+                "durable_downstream_recovered",
+                "durable_apply_superseded",
+                "durable_apply_failed",
+                "state_outbox_sweeper_completed",
+            )
+        ):
+            _log.info(
+                "STATE_OUTBOX_SWEEPER completed=%d seen=%d state_ready=%d "
+                "downstream=%d superseded=%d failed=%d min_age_s=%.1f",
+                stats["state_outbox_sweeper_completed"],
+                stats["durable_apply_seen"],
+                stats["durable_apply_recovered"],
+                stats["durable_downstream_recovered"],
+                stats["durable_apply_superseded"],
+                stats["durable_apply_failed"],
+                min_age_s,
+            )
+        return stats
+    except Exception as exc:
+        _log.error(
+            f"STATE_OUTBOX_SWEEPER failed: {type(exc).__name__}: {exc}"
+        )
+        return {
+            "durable_apply_failed": 1,
+            "state_outbox_sweeper_completed": 0,
+            "errors": 1,
+        }
+
+
+def _diff_and_emit(
+    parsed: dict,
+    csrf: str,
+    *,
+    _state_outbox_sweeper_on: Optional[bool] = None,
+) -> dict:
     """Porownuje stan panel vs orders_state, emituje eventy.
     Zwraca statystyki tego cyklu."""
     stats = {
@@ -1607,28 +2147,38 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
         "errors": 0,
     }
 
-    # C3-01: drain nie zalezy od ponownego wejscia w source call-site. To domyka
-    # crash po state commit, ale przed plan/recanon, oraz apply-failure po evencie.
-    try:
-        recovered = durable_event_apply.drain_pending(
-            state_update_fn=update_from_event,
-            effect_status_fn=event_effect_status,
-            get_order_fn=state_get_order_strict,
-            downstream_fn=lifecycle_downstream.apply,
-            limit=100,
-        )
-        stats["durable_apply_seen"] = recovered["seen"]
-        stats["durable_apply_recovered"] = recovered["state_ready"]
-        stats["durable_downstream_recovered"] = recovered["downstream"]
-        stats["durable_apply_superseded"] = recovered["superseded"]
-        stats["durable_apply_failed"] = recovered["failed"]
-        stats["errors"] += recovered["failed"]
-    except Exception as exc:
-        stats["durable_apply_failed"] = 1
-        stats["errors"] += 1
-        _log.error(
-            f"DURABLE_APPLY drain failed: {type(exc).__name__}: {exc}"
-        )
+    # Zachowaj baseline OFF: dotychczasowy opportunistyczny drain biegl po
+    # udanym fetchu/parse. Flaga ON przenosi recovery na poczatek ticku, dodaje
+    # age gate i dziala takze przy awarii panelu; nie wolno wtedy wykonywac
+    # drugiego, nieograniczonego wiekiem drainu w tym samym cyklu.
+    if _state_outbox_sweeper_on is None:
+        try:
+            _state_outbox_sweeper_on = decision_flag(
+                "ENABLE_STATE_OUTBOX_SWEEPER"
+            )
+        except Exception:
+            _state_outbox_sweeper_on = False
+    if not _state_outbox_sweeper_on:
+        try:
+            recovered = durable_event_apply.drain_pending(
+                state_update_fn=update_from_event,
+                effect_status_fn=event_effect_status,
+                get_order_fn=state_get_order_strict,
+                downstream_fn=lifecycle_downstream.apply,
+                limit=100,
+            )
+            stats["durable_apply_seen"] = recovered["seen"]
+            stats["durable_apply_recovered"] = recovered["state_ready"]
+            stats["durable_downstream_recovered"] = recovered["downstream"]
+            stats["durable_apply_superseded"] = recovered["superseded"]
+            stats["durable_apply_failed"] = recovered["failed"]
+            stats["errors"] += recovered["failed"]
+        except Exception as exc:
+            stats["durable_apply_failed"] = 1
+            stats["errors"] += 1
+            _log.error(
+                f"DURABLE_APPLY drain failed: {type(exc).__name__}: {exc}"
+            )
 
     current_state = state_get_all()
     html_order_ids = set(parsed["order_ids"])
@@ -1948,6 +2498,12 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
     # zasilany TYLKO gdy helper realnie aktywny (flaga ON) → przy OFF pusty =
     # packs zachowuje się bajt-w-bajt jak dziś.
     released_this_tick = set()
+    try:
+        _old_plan_release_on = decision_flag(
+            "ENABLE_REASSIGN_OLD_PLAN_RELEASE"
+        )
+    except Exception:
+        _old_plan_release_on = False
     for zid, state_order in list(current_state.items()):
         # Pomijamy terminalne (delivered, cancelled) - nie obserwujemy ich dalej
         if state_order.get("status") in ("delivered", "returned_to_pool", "cancelled"):
@@ -2000,32 +2556,30 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                             "reason": reason,
                             "source": "panel_diff",
                         }
+                        _returned_state_payload = None
+                        if _old_plan_release_on:
+                            _returned_state_payload = dict(_returned_payload)
+                            _snapshot_cid = str(
+                                state_order.get("courier_id") or ""
+                            )
+                            if _snapshot_cid:
+                                _returned_state_payload[
+                                    "return_snapshot_cleanup_courier_id"
+                                ] = _snapshot_cid
                         ev = _emit_and_apply_state(
                             "ORDER_RETURNED_TO_POOL",
                             order_id=zid,
                             courier_id=_adv_cid,
                             payload=_returned_payload,
+                            state_payload=_returned_state_payload,
                             event_id=f"{zid}_ORDER_RETURNED_{reason}_canonical",
                             audit=True,
+                            old_plan_release_authorized=_old_plan_release_on,
                         )
                         if not ev.state_ready:
                             stats["errors"] += 1
                         if ev.downstream_executed:
                             _log.info(f"{reason.upper()} {zid} status={status_id} (panel_diff)")
-                            # RETURN-RELEASE: update wyżej terminalizuje state, więc
-                            # późniejszy reconcile już nie usunie stopa. Zwalniamy
-                            # plan STAREGO kuriera ze snapshotu (raw cid bywa pusty
-                            # albo już inny), tą samą flagą co REASSIGN-RELEASE.
-                            try:
-                                _return_release_on = decision_flag(
-                                    "ENABLE_REASSIGN_OLD_PLAN_RELEASE"
-                                )
-                            except Exception:
-                                _return_release_on = False
-                            if _return_release_on:
-                                _remove_stops_on_return(
-                                    str(state_order.get("courier_id") or ""), zid
-                                )
             except Exception as e:
                 _log.warning(f"details for disappeared {zid}: {e}")
                 stats["errors"] += 1
@@ -2080,6 +2634,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                         payload={"source": "panel_reassign"},
                         event_id=f"{zid}_COURIER_ASSIGNED_{panel_courier}_canonical",
                         audit=True,
+                        old_plan_release_authorized=_old_plan_release_on,
                     )
                     if not ev.state_ready:
                         stats["errors"] += 1
@@ -2087,7 +2642,15 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                         stats["assigned"] += 1
                     if ev.downstream_executed:
                         _log.info(f"REASSIGNED {zid} {state_courier} -> {panel_courier}")
-                        if state_courier and state_courier != panel_courier:
+                        if (
+                            bool(
+                                (getattr(ev, "state_event", None) or {}).get(
+                                    "reassign_old_plan_release_authorized"
+                                )
+                            )
+                            and state_courier
+                            and state_courier != panel_courier
+                        ):
                             # Durable callback wykonał już event-local cleanup
                             # starego planu (za istniejącą flagą) i sygnał nowego.
                             # Snapshot current_state jest stale do końca ticku;
@@ -2199,6 +2762,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                         state_payload={"source": "packs_fallback"},
                         event_id=f"{_oid_str}_COURIER_ASSIGNED_{_target_cid}_canonical",
                         audit=True,
+                        old_plan_release_authorized=_old_plan_release_on,
                     )
                     if not _ev.state_ready:
                         stats["errors"] += 1
@@ -2505,6 +3069,7 @@ def _diff_and_emit(parsed: dict, csrf: str) -> dict:
                 payload=_reconcile_returned_payload,
                 event_id=f"{zid}_ORDER_RETURNED_{reason}_canonical",
                 audit=True,
+                old_plan_release_authorized=_old_plan_release_on,
             )
             if not ev.state_ready:
                 stats["errors"] += 1
@@ -2993,6 +3558,24 @@ def tick(cycle_num: int) -> Tuple[dict, Optional[dict]]:
     cycle_stats = {"cycle": cycle_num, "at": now_iso()}
     cycle_parsed: Optional[dict] = None
 
+    # E1: niezalezny od fetchu panelu i nowych eventow recovery tick. Helper
+    # jest fail-soft; jeden snapshot flagi steruje OBU miejscami, więc hot-flip
+    # w połowie ticku nie uruchomi dwóch drainów ani nie ominie obu.
+    try:
+        _state_outbox_sweeper_on = decision_flag(
+            "ENABLE_STATE_OUTBOX_SWEEPER"
+        )
+    except Exception as exc:
+        _state_outbox_sweeper_on = False
+        _log.error(
+            "STATE_OUTBOX_SWEEPER flag read failed: "
+            f"{type(exc).__name__}: {exc}; using legacy drain"
+        )
+    cycle_stats.update(
+        _sweep_state_apply_outbox(enabled=_state_outbox_sweeper_on)
+    )
+    _sweeper_errors = int(cycle_stats.get("errors", 0) or 0)
+
     try:
         html = fetch_panel_html()
         parsed = parse_panel_html(html)
@@ -3082,21 +3665,37 @@ def tick(cycle_num: int) -> Tuple[dict, Optional[dict]]:
         # widział COURIER_ASSIGNED emitowane przez scan (uniknij race
         # gdy diff emit COURIER_PICKED_UP bez prior ASSIGNED → reconcile
         # phantom MISSING_FROM_STATE 4h+ później).
-        if not _cold_start_done:
-            try:
-                cs_stats = _post_restart_cold_start_scan(parsed, csrf)
-                cycle_stats.update(cs_stats)
-                _log.info(
-                    f"COLD_START_SCAN done cycle={cycle_num}: "
-                    f"scanned={cs_stats.get('cold_start_scanned', 0)} "
-                    f"emitted={cs_stats.get('cold_start_emitted', 0)} "
-                    f"errors={cs_stats.get('cold_start_errors', 0)}"
-                )
-            except Exception as _cs_e:
-                _log.warning(f"cold_start_scan fail (non-blocking): {_cs_e}")
-            _cold_start_done = True
+        _sweeper_snapshot_token = _STATE_OUTBOX_SWEEPER_TICK_SNAPSHOT.set(
+            _state_outbox_sweeper_on
+        )
+        try:
+            if not _cold_start_done:
+                try:
+                    cs_stats = _post_restart_cold_start_scan(parsed, csrf)
+                    cycle_stats.update(cs_stats)
+                    _log.info(
+                        f"COLD_START_SCAN done cycle={cycle_num}: "
+                        f"scanned={cs_stats.get('cold_start_scanned', 0)} "
+                        f"emitted={cs_stats.get('cold_start_emitted', 0)} "
+                        f"errors={cs_stats.get('cold_start_errors', 0)}"
+                    )
+                except Exception as _cs_e:
+                    _log.warning(f"cold_start_scan fail (non-blocking): {_cs_e}")
+                _cold_start_done = True
 
-        diff_stats = _diff_and_emit(parsed, csrf)
+            diff_stats = _diff_and_emit(
+                parsed,
+                csrf,
+                _state_outbox_sweeper_on=_state_outbox_sweeper_on,
+            )
+        finally:
+            _STATE_OUTBOX_SWEEPER_TICK_SNAPSHOT.reset(
+                _sweeper_snapshot_token
+            )
+        if _sweeper_errors:
+            diff_stats["errors"] = int(diff_stats.get("errors", 0) or 0) + (
+                _sweeper_errors
+            )
         cycle_stats.update(diff_stats)
 
     except Exception as e:

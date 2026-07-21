@@ -245,6 +245,8 @@ def _init_state_apply_outbox_table() -> None:
                         downstream_applied_at TEXT,
                         downstream_attempts INTEGER NOT NULL DEFAULT 0,
                         state_attempts INTEGER NOT NULL DEFAULT 0,
+                        state_retry_seq INTEGER NOT NULL DEFAULT 0,
+                        downstream_retry_seq INTEGER NOT NULL DEFAULT 0,
                         last_error TEXT,
                         created_at TEXT NOT NULL,
                         updated_at TEXT NOT NULL
@@ -278,6 +280,48 @@ def _init_state_apply_outbox_table() -> None:
                         "ALTER TABLE state_apply_outbox "
                         "ADD COLUMN downstream_attempts INTEGER NOT NULL DEFAULT 1"
                     )
+                if "state_retry_seq" not in columns:
+                    conn.execute(
+                        "ALTER TABLE state_apply_outbox "
+                        "ADD COLUMN state_retry_seq INTEGER NOT NULL DEFAULT 0"
+                    )
+                if "downstream_retry_seq" not in columns:
+                    conn.execute(
+                        "ALTER TABLE state_apply_outbox "
+                        "ADD COLUMN downstream_retry_seq INTEGER NOT NULL DEFAULT 0"
+                    )
+                conn.execute(
+                    """CREATE TABLE IF NOT EXISTS state_apply_retry_clock (
+                        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+                        value INTEGER NOT NULL
+                    )"""
+                )
+                conn.execute(
+                    "INSERT OR IGNORE INTO state_apply_retry_clock "
+                    "(singleton, value) VALUES (1, 0)"
+                )
+                # Migracja zachowuje stabilne FIFO bez zaufania do zegara.
+                # Surowe legacy inserty z default=0 trafiaja na poczatek kolejki.
+                conn.execute(
+                    "UPDATE state_apply_outbox SET state_retry_seq=rowid "
+                    "WHERE state_retry_seq=0"
+                )
+                conn.execute(
+                    "UPDATE state_apply_outbox SET downstream_retry_seq=rowid "
+                    "WHERE downstream_retry_seq=0"
+                )
+                conn.execute(
+                    """UPDATE state_apply_retry_clock
+                       SET value = MAX(
+                           value,
+                           COALESCE((SELECT MAX(rowid) FROM state_apply_outbox), 0),
+                           COALESCE((SELECT MAX(state_retry_seq)
+                                     FROM state_apply_outbox), 0),
+                           COALESCE((SELECT MAX(downstream_retry_seq)
+                                     FROM state_apply_outbox), 0)
+                       )
+                       WHERE singleton=1"""
+                )
                 conn.execute(
                     """CREATE TABLE IF NOT EXISTS durable_learning_projection (
                         effect_id TEXT PRIMARY KEY,
@@ -301,6 +345,20 @@ def _init_state_apply_outbox_table() -> None:
                     """CREATE INDEX IF NOT EXISTS idx_state_apply_outbox_pending
                        ON state_apply_outbox(state_status, downstream_status, created_at)"""
                 )
+                conn.execute(
+                    """CREATE INDEX IF NOT EXISTS idx_state_apply_outbox_retry
+                       ON state_apply_outbox(state_status, downstream_status, updated_at)"""
+                )
+                conn.execute(
+                    """CREATE INDEX IF NOT EXISTS idx_state_apply_outbox_state_retry
+                       ON state_apply_outbox(state_status, state_retry_seq)"""
+                )
+                conn.execute(
+                    """CREATE INDEX IF NOT EXISTS idx_state_apply_outbox_downstream_retry
+                       ON state_apply_outbox(
+                           state_status, downstream_status, downstream_retry_seq
+                       )"""
+                )
                 conn.execute("COMMIT;")
             except Exception:
                 if conn.in_transaction:
@@ -318,6 +376,19 @@ def _ensure_state_apply_outbox_initialized() -> None:
         _init_state_apply_outbox_table()
 
 
+def _next_state_apply_retry_seq(conn: sqlite3.Connection) -> int:
+    """Monotoniczny bilet round-robin; caller trzyma transakcje write."""
+    conn.execute(
+        "UPDATE state_apply_retry_clock SET value=value+1 WHERE singleton=1"
+    )
+    row = conn.execute(
+        "SELECT value FROM state_apply_retry_clock WHERE singleton=1"
+    ).fetchone()
+    if row is None:
+        raise RuntimeError("state_apply_retry_clock is not initialized")
+    return int(row[0])
+
+
 def _insert_state_apply_outbox(
     conn: sqlite3.Connection,
     *,
@@ -332,14 +403,17 @@ def _insert_state_apply_outbox(
     created_at: str,
 ) -> None:
     """Wstaw pending receipt. Caller trzyma transakcje eventu."""
+    retry_seq = _next_state_apply_retry_seq(conn)
     conn.execute(
         """INSERT INTO state_apply_outbox
            (event_id, event_key, order_id, expected_state_version,
             expected_state_marker, expected_state_token, predecessor_event_id,
             state_event,
             state_status, downstream_status, downstream_attempts, state_attempts,
+            state_retry_seq, downstream_retry_seq,
             created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'pending', 0, 0, ?, ?)""",
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', 'pending', 0, 0,
+                   ?, ?, ?, ?)""",
         (
             event_id,
             event_key,
@@ -349,6 +423,8 @@ def _insert_state_apply_outbox(
             expected_state_token,
             predecessor_event_id,
             state_event_json,
+            retry_seq,
+            retry_seq,
             created_at,
             created_at,
         ),
@@ -766,48 +842,109 @@ def get_latest_state_apply(
     return _decode_outbox_row(row)
 
 
-def list_unresolved_state_applies(limit: int = 100) -> List[Dict[str, Any]]:
-    """Pending fazy state, fair po liczbie prób i kolejności insertów.
+def list_unresolved_state_applies(
+    limit: int = 100,
+    *,
+    updated_before: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Pending fazy state, fair po trwałym bilecie round-robin.
 
     Rows z juz zastosowanym state i oczekujacym downstream maja osobny lane.
     Mieszanie obu klas pod jednym LIMIT pozwalalo duzemu backlogowi downstream
-    trwale zaglodzic nowszy zapis orders_state.
+    trwale zaglodzic nowszy zapis orders_state. ``updated_before`` jest brama
+    wieku dla lekkiego sweepa; None zachowuje natychmiastowy drain call-site'u.
     """
     _ensure_state_apply_outbox_initialized()
+    age_clause = " AND updated_at <= ?" if updated_before is not None else ""
+    params: tuple[Any, ...] = (
+        (str(updated_before), max(1, int(limit)))
+        if updated_before is not None
+        else (max(1, int(limit)),)
+    )
     with _conn() as conn:
         rows = conn.execute(
-            """SELECT * FROM state_apply_outbox
-               WHERE state_status = 'pending'
-               ORDER BY state_attempts ASC, rowid ASC
+            f"""SELECT * FROM state_apply_outbox
+               WHERE state_status = 'pending'{age_clause}
+               ORDER BY state_retry_seq ASC, rowid ASC
                LIMIT ?""",
-            (max(1, int(limit)),),
+            params,
         ).fetchall()
     return [_decode_outbox_row(row) for row in rows if row is not None]  # type: ignore[misc]
 
 
-def get_oldest_pending_downstream() -> Optional[Dict[str, Any]]:
-    """Następny gotowy callback, fair po próbach i kolejności insertów.
+def get_oldest_pending_downstream(
+    *,
+    updated_before: Optional[str] = None,
+    include_event_versions: Optional[Dict[str, tuple[str, int]]] = None,
+    exclude_event_ids: Optional[set[str]] = None,
+) -> Optional[Dict[str, Any]]:
+    """Następny gotowy callback, fair po trwałym bilecie round-robin.
 
     ``state_status=pending`` należy do osobnego lane i nie może blokować
-    niezależnych, już zastosowanych eventów.  Rosnący ``downstream_attempts``
-    sprawia też, że trwale wadliwy callback nie jest wybierany przed B przy
-    każdym restarcie/drainie.
+    niezależnych, już zastosowanych eventów. Trwały bilet jest przesuwany przed
+    próbą callbacku, więc awaria schodzi za starsze wpisy, ale nie może być
+    głodzona stałym napływem nowszych. ``updated_before`` ogranicza sweep do
+    receiptow bez postepu przez skonfigurowany grace period.
     """
     _ensure_state_apply_outbox_initialized()
+    included = tuple(
+        sorted(
+            (str(event_id), str(version[0]), int(version[1]))
+            for event_id, version in (include_event_versions or {}).items()
+            if event_id and version and version[0]
+        )
+    )
+    excluded = tuple(
+        sorted(str(event_id) for event_id in (exclude_event_ids or set()) if event_id)
+    )
+    if updated_before is not None and included:
+        exact_clauses = " OR ".join(
+            "(candidate.event_id = ? AND candidate.updated_at = ? "
+            "AND candidate.downstream_attempts = ?)"
+            for _ in included
+        )
+        age_clause = (
+            " AND (candidate.updated_at <= ? "
+            f"OR ({exact_clauses}))"
+        )
+        exact_params = tuple(value for pair in included for value in pair)
+        age_params: tuple[Any, ...] = (str(updated_before), *exact_params)
+    elif updated_before is not None:
+        age_clause = " AND candidate.updated_at <= ?"
+        age_params = (str(updated_before),)
+    else:
+        age_clause = ""
+        age_params = ()
+    if excluded:
+        exclude_clause = (
+            " AND candidate.event_id NOT IN ("
+            + ",".join("?" for _ in excluded)
+            + ")"
+        )
+    else:
+        exclude_clause = ""
+    params: tuple[Any, ...] = (
+        *age_params,
+        *excluded,
+    )
     with _conn() as conn:
         row = conn.execute(
-            """SELECT candidate.* FROM state_apply_outbox AS candidate
+            f"""SELECT candidate.* FROM state_apply_outbox AS candidate
                WHERE candidate.state_status = 'applied'
                  AND candidate.downstream_status = 'pending'
+                 {age_clause}
+                 {exclude_clause}
                  AND NOT EXISTS (
                      SELECT 1 FROM state_apply_outbox AS older
                      WHERE older.order_id = candidate.order_id
                        AND older.rowid < candidate.rowid
                        AND older.state_status = 'applied'
                        AND older.downstream_status = 'pending'
-                 )
-               ORDER BY candidate.downstream_attempts ASC, candidate.rowid ASC
-               LIMIT 1"""
+               )
+               ORDER BY candidate.downstream_retry_seq ASC,
+                        candidate.rowid ASC
+               LIMIT 1""",
+            params,
         ).fetchone()
     return _decode_outbox_row(row)
 
@@ -837,19 +974,31 @@ def begin_state_apply_downstream(event_id: str) -> Optional[int]:
     _ensure_state_apply_outbox_initialized()
     ts = now_iso()
     with _conn() as conn:
-        cur = conn.execute(
-            """UPDATE state_apply_outbox
-               SET downstream_attempts = downstream_attempts + 1, updated_at = ?
-               WHERE event_id = ? AND state_status = 'applied'
-                 AND downstream_status = 'pending'""",
-            (ts, event_id),
-        )
-        if cur.rowcount != 1:
-            return None
-        row = conn.execute(
-            "SELECT downstream_attempts FROM state_apply_outbox WHERE event_id = ?",
-            (event_id,),
-        ).fetchone()
+        conn.execute("BEGIN IMMEDIATE;")
+        try:
+            retry_seq = _next_state_apply_retry_seq(conn)
+            cur = conn.execute(
+                """UPDATE state_apply_outbox
+                   SET downstream_attempts = downstream_attempts + 1,
+                       downstream_retry_seq = ?, updated_at = ?
+                   WHERE event_id = ? AND state_status = 'applied'
+                     AND downstream_status = 'pending'""",
+                (retry_seq, ts, event_id),
+            )
+            row = (
+                conn.execute(
+                    "SELECT downstream_attempts FROM state_apply_outbox "
+                    "WHERE event_id = ?",
+                    (event_id,),
+                ).fetchone()
+                if cur.rowcount == 1
+                else None
+            )
+            conn.execute("COMMIT;")
+        except Exception:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK;")
+            raise
     return int(row[0]) if row is not None else None
 
 
@@ -857,13 +1006,24 @@ def mark_state_apply_applied(event_id: str) -> bool:
     _ensure_state_apply_outbox_initialized()
     ts = now_iso()
     with _conn() as conn:
-        cur = conn.execute(
-            """UPDATE state_apply_outbox
-               SET state_status = 'applied', state_applied_at = COALESCE(state_applied_at, ?),
-                   state_attempts = state_attempts + 1, last_error = NULL, updated_at = ?
-               WHERE event_id = ? AND state_status = 'pending'""",
-            (ts, ts, event_id),
-        )
+        conn.execute("BEGIN IMMEDIATE;")
+        try:
+            retry_seq = _next_state_apply_retry_seq(conn)
+            cur = conn.execute(
+                """UPDATE state_apply_outbox
+                   SET state_status = 'applied',
+                       state_applied_at = COALESCE(state_applied_at, ?),
+                       state_attempts = state_attempts + 1,
+                       downstream_retry_seq = ?,
+                       last_error = NULL, updated_at = ?
+                   WHERE event_id = ? AND state_status = 'pending'""",
+                (ts, retry_seq, ts, event_id),
+            )
+            conn.execute("COMMIT;")
+        except Exception:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK;")
+            raise
     return cur.rowcount == 1
 
 
@@ -961,11 +1121,44 @@ def record_state_apply_error(event_id: str, error: str) -> bool:
     _ensure_state_apply_outbox_initialized()
     ts = now_iso()
     with _conn() as conn:
+        conn.execute("BEGIN IMMEDIATE;")
+        try:
+            retry_seq = _next_state_apply_retry_seq(conn)
+            cur = conn.execute(
+                """UPDATE state_apply_outbox
+                   SET state_attempts = state_attempts + 1,
+                       state_retry_seq = CASE
+                           WHEN state_status = 'pending' THEN ?
+                           ELSE state_retry_seq
+                       END,
+                       last_error = ?, updated_at = ?
+                   WHERE event_id = ?
+                     AND (state_status = 'pending' OR downstream_status = 'pending')""",
+                (retry_seq, error[:1000], ts, event_id),
+            )
+            conn.execute("COMMIT;")
+        except Exception:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK;")
+            raise
+    return cur.rowcount == 1
+
+
+def record_state_apply_downstream_error(event_id: str, error: str) -> bool:
+    """Zapisz błąd callbacku bez fałszywego zwiększania state_attempts.
+
+    Numer próby downstream jest zwiększany atomowo przez
+    ``begin_state_apply_downstream`` jeszcze przed callbackiem. Ten zapis
+    jedynie utrwala błąd i odświeża cooldown retry.
+    """
+    _ensure_state_apply_outbox_initialized()
+    ts = now_iso()
+    with _conn() as conn:
         cur = conn.execute(
             """UPDATE state_apply_outbox
-               SET state_attempts = state_attempts + 1, last_error = ?, updated_at = ?
-               WHERE event_id = ?
-                 AND (state_status = 'pending' OR downstream_status = 'pending')""",
+               SET last_error = ?, updated_at = ?
+               WHERE event_id = ? AND state_status = 'applied'
+                 AND downstream_status = 'pending'""",
             (error[:1000], ts, event_id),
         )
     return cur.rowcount == 1
