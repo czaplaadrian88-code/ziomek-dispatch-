@@ -144,6 +144,19 @@ def _donor_km_reconstructable(c):
     return c["pos_source"] not in RECONSTRUCTABLE_KM_POS_SOURCES_EXCLUDE
 
 
+def _is_hidden_donor(c):
+    """KOREKTA 2026-07-21 (case 489065, cid484): wariant pre_shift klasy
+    brzegowej 1. F1.7 nadpisuje km pre_shift na None PO passie, wiec ukryty
+    donor NIE przechodzi _is_engine_donor (wymaga liczbowego km) i wyłączenie
+    'niemierzalne' nigdy nie odpalalo -> falszywy MISMATCH. Wariant no_gps
+    (nadpisanie na fleet_avg, liczbowe) byl lapany; pre_shift->None nie.
+    Kandydat synth=False + MAYBE + pos_source z klasy nadpisywanej + km
+    nie-liczbowy = byl donorem w silniku, nieodtwarzalny z logu."""
+    return (c["synth"] is False and c["feasibility"] == "MAYBE"
+            and c["pos_source"] in RECONSTRUCTABLE_KM_POS_SOURCES_EXCLUDE
+            and not isinstance(c["km"], (int, float)))
+
+
 def parse_ts(s):
     if not s:
         return None
@@ -531,7 +544,8 @@ def compute_window_metrics(summaries, target_cids):
             donor_synth_none_seen += sum(1 for c in pool if c["synth"] is None)
             # klasa brzegowa 1: pula zawiera prawdziwego donora, ktorego km
             # zostal nadpisany w logu PO passie -> nieodtwarzalna wprost.
-            if any(_is_engine_donor(c) and not _donor_km_reconstructable(c) for c in pool):
+            if any((_is_engine_donor(c) and not _donor_km_reconstructable(c))
+                   or _is_hidden_donor(c) for c in pool):
                 donor_unmeasurable += 1
                 continue
             logged_km = sorted(logged_vals)[0] if len(logged_vals) == 1 else None
