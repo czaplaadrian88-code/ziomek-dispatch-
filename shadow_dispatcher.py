@@ -1705,6 +1705,32 @@ def _tick(shadow_log_path: str, meta: Optional[dict], *,
                     _log.warning(f"pending_pool upsert fail order={oid}: {_pp_e}")
 
             latency_ms = (time.time() - t0) * 1000.0
+            # Decision-time ETA audit: final PipelineResult after selection and
+            # claim-ledger disposition, before any later lifecycle outcome can
+            # leak into the prediction snapshot. Default OFF; helper is fail-safe.
+            try:
+                from dispatch_v2 import decision_eta_log as _dtlog
+                _dtlog.record_pipeline_decision(
+                    result,
+                    decision_id=f"shadow_dispatcher:{eid}",
+                    decision_ts=datetime.now(timezone.utc),
+                    decision_kind="dispatch_selection",
+                    source="shadow_dispatcher",
+                    outcome=(
+                        "DROP_FERAL_CLAIM"
+                        if _claim_dropped else getattr(result, "verdict", None)
+                    ),
+                    context={
+                        "event_id": str(eid),
+                        "claim_dropped": bool(_claim_dropped),
+                    },
+                )
+            except Exception as _dtlog_e:  # defense-in-depth: log-only path
+                _log.warning(
+                    "decision ETA hook fail-safe order=%s: %s",
+                    oid,
+                    _dtlog_e,
+                )
             if _stage_timing_on:
                 _legacy_ended_ns = time.perf_counter_ns()
                 _legacy_perf_ms = (

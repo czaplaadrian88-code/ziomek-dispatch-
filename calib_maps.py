@@ -77,6 +77,36 @@ _bias_cache: Dict[str, Any] = {"mtime": None, "data": None}
 _cell_resid_cache: Dict[str, Any] = {"mtime": None, "data": None}
 
 
+def calibration_provenance() -> Dict[str, Any]:
+    """Return version-only provenance for decision-time audit records.
+
+    The snapshot is fail-soft and deliberately omits paths and map contents.
+    It is only evaluated when the decision ETA logger is enabled, so the
+    default-OFF path has no additional filesystem work.
+    """
+    sources = (
+        ("eta_quantile", ETA_QUANTILE_MAP_PATH, _eta_cache),
+        ("restaurant_prep_bias", PREP_BIAS_MAP_PATH, _bias_cache),
+        ("eta_cell_residual", ETA_CELL_RESIDUAL_MAP_PATH, _cell_resid_cache),
+    )
+    out: Dict[str, Any] = {}
+    for name, path, cache in sources:
+        data = _load_cached(path, cache)
+        if not isinstance(data, dict):
+            out[name] = {
+                "status": "missing_or_invalid",
+                "version": None,
+                "generated_at": None,
+            }
+            continue
+        out[name] = {
+            "status": "loaded",
+            "version": data.get("version"),
+            "generated_at": data.get("generated_at"),
+        }
+    return out
+
+
 def time_slot_warsaw(now: Optional[datetime] = None) -> str:
     """Slot czasowy Warsaw dla map kalibracyjnych i bucketów klasyfikatora.
 

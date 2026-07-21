@@ -630,6 +630,18 @@ The shadow dispatcher is the **decision engine running read-only**: it consumes 
 events, runs `assess_order()`, but **sends no Telegram and mutates no state**. It serializes every
 decision to **`shadow_decisions.jsonl`** (append-only).
 
+**Decision-time ETA audit (SOURCE-ONLY 2026-07-21):**
+`ENABLE_DECISION_ETA_LOG` jest w ETAP4 i ma fallback **False**; klucza nie
+dodano do produkcyjnego `flags.json`. Po osobnym flipie wspólny fail-safe writer
+`decision_eta_log.py` zapisze do `dispatch_state/decision_eta_log.jsonl` finalny
+snapshot as-of dla `shadow_dispatcher`, czasówek, reassignment, global resweep i
+każdego udanego commitu planu. Rekord obejmuje wybranego CID i ocenioną pulę,
+per-leg pickup/delivery ETA oraz provenance modelu, kalibratora i źródła pozycji,
+bez nazw, adresów i koordynatów. Logger nie jest consumerem decyzyjnym; błąd I/O
+zwiększa procesowy licznik i nie zmienia werdyktu. Dzienna bramka:
+`tools/decision_eta_coverage.py` (100% unikalnych eventów shadow; brak denominatora
+= HOLD). Rotacja: daily/30/maxsize 100M. Flip nadal wymaga ACK ownera.
+
 - `_tick()` (`~:1040`) batches ≤50 events/cycle; `process_event()` (`~:1012`) is the pure wrapper.
 - **Record schema** (`_serialize_result`/`_serialize_candidate`, `~:254,476`): `ts, event_id,
   order_id, restaurant, verdict, reason, auto_route{AUTO|ACK|ALERT}, would_auto_assign,

@@ -224,6 +224,25 @@ def eval_czasowka(order_id: str, order_state: dict, now_utc: datetime) -> dict:
             )
     except Exception:
         pass  # Defensive — observability NIGDY nie crashes dispatch flow
+    try:
+        from dispatch_v2 import decision_eta_log as _dtlog
+        _dtlog.record_candidate_decision(
+            decision_id=f"czasowka_scheduler:{order_id}:{now_utc.isoformat()}",
+            decision_ts=now_utc,
+            decision_kind="czasowka_evaluation",
+            source="czasowka_scheduler",
+            order_id=str(order_id),
+            outcome=result.get("decision"),
+            candidates=result.get("all_candidates_for_proactive") or [],
+            selected=result.get("best"),
+            candidate_pool_scope="czasowka_evaluated_pool",
+            context={
+                "minutes_to_pickup": result.get("minutes_to_pickup"),
+                "match_quality": result.get("match_quality"),
+            },
+        )
+    except Exception as exc:  # defense-in-depth: log-only path
+        _log.warning("decision ETA czasowka hook fail-safe oid=%s: %s", order_id, exc)
     return result
 
 

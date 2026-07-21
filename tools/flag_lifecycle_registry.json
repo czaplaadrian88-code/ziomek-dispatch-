@@ -2,16 +2,16 @@
  "_meta": {
   "counts": {
    "apka": 27,
-   "engine": 395,
+   "engine": 396,
    "engine_1b_units": 12,
-   "etap4": 130,
+   "etap4": 131,
    "flags_json_keys": 246,
    "fp_extra": 35,
    "known_drift": 0,
    "numeric": 26,
    "panel": 86,
    "test_isolated": 6,
-   "total": 508,
+   "total": 509,
    "twins_concepts": 5
   },
   "generator": "tools/flag_lifecycle_seed.py",
@@ -5016,6 +5016,48 @@
    "review_date": "2026-10-10",
    "rollback": "flags.json OFF hot-reload (bez restartu)",
    "source_of_truth": "flags.json",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
+  "ENABLE_DECISION_ETA_LOG": {
+   "carriers": [
+    "common.py:ETAP4_DECISION_FLAGS",
+    "dispatch_v2/common.py-const"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/decision_eta_log.py",
+    "dispatch_v2/shadow_dispatcher.py",
+    "dispatch_v2/czasowka_scheduler.py",
+    "dispatch_v2/plan_manager.py",
+    "dispatch_v2/tools/reassignment_forward_shadow.py",
+    "dispatch_v2/tools/pending_global_resweep.py"
+   ],
+   "curated_at": "2026-07-21",
+   "current_snapshot": {
+    "default": false
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "Wspólny append-lock; każdy writer czyta ten sam engine flags.json.",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "shadow",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_DECISION_ETA_LOG",
+   "notes": "Kod default OFF. Dodanie/flip klucza w flags.json wymaga osobnego ACK ownera; log-only, bez wpływu na wybór.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-shadow.service + writery planów/czasówek"
+   },
+   "removal_condition": "Po zastąpieniu wersjonowanym event storem decision-time ETA.",
+   "review_date": "2026-08-21",
+   "rollback": "flags.json ENABLE_DECISION_ETA_LOG=false hot-reload (bez restartu)",
+   "source_of_truth": "common.py-const do osobnego rolloutu flags.json",
    "twin_of": [],
    "worlds": [
     "engine"
