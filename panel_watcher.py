@@ -319,8 +319,11 @@ def _append_learning_record(
     a later plan/recanon failure therefore retries only unfinished effects and
     cannot reclassify the assignment.  Physical JSONL delivery remains
     at-least-once in the extreme append-before-receipt crash window; retries
-    dedupe across the active file and every retained numeric rotation, while
-    ``lifecycle_event_id`` gives consumers a stable logical identity.
+    dedupe across the active file and every retained numeric rotation. The
+    callback ``lifecycle_event_id`` remains the idempotency identity of the
+    assignment.  With JOIN-HARDENING ON the public record uses
+    ``lifecycle_event_id`` for the source shadow decision and keeps the callback
+    identity separately as ``assignment_lifecycle_event_id``.
     """
     from dispatch_v2 import event_bus
     from dispatch_v2.core.jsonl_appender import (
@@ -361,12 +364,23 @@ def _append_learning_record(
     attempt = _durable_downstream_attempt(
         lifecycle_event_id, _raise_on_error=_raise_on_error
     )
+    # Backward compatibility with E1 projections: older canonical records use
+    # lifecycle_event_id for the COURIER_ASSIGNED callback. New join records
+    # reserve that key for shadow.event_id and dedupe on the explicit assignment
+    # key. The SQLite projection is still the first-wins source of truth.
+    assignment_id = str(lifecycle_event_id)
+    dedupe_key = (
+        "assignment_lifecycle_event_id"
+        if str(canonical_record.get("assignment_lifecycle_event_id") or "")
+        == assignment_id
+        else "lifecycle_event_id"
+    )
     if not created or attempt > 1:
         append_jsonl_once(
             _LEARNING_LOG_PATH,
             canonical_record,
-            dedupe_key="lifecycle_event_id",
-            dedupe_value=str(lifecycle_event_id),
+            dedupe_key=dedupe_key,
+            dedupe_value=assignment_id,
             scan_rotated=True,
         )
     elif attempt == 1:
@@ -380,8 +394,8 @@ def _append_learning_record(
         append_jsonl_once(
             _LEARNING_LOG_PATH,
             canonical_record,
-            dedupe_key="lifecycle_event_id",
-            dedupe_value=str(lifecycle_event_id),
+            dedupe_key=dedupe_key,
+            dedupe_value=assignment_id,
             scan_rotated=True,
         )
     if not event_bus.mark_durable_learning_projected(
@@ -459,6 +473,33 @@ def _seal_no_panel_learning(
             raise
 
 
+def _learning_record_identity_fields(
+    decision_record: dict,
+    assignment_lifecycle_event_id: Optional[str],
+    *,
+    decision_join_enabled: bool,
+) -> dict:
+    """Rozdziel ID decyzji shadow od ID późniejszego assignmentu.
+
+    OFF zachowuje dokładnie schemat E1. ON daje żądany twardy join
+    ``learning.lifecycle_event_id == shadow.event_id``; brak event_id jest
+    jawny jako ``null`` zamiast sfabrykowania innego zdarzenia.
+    """
+    assignment_id = (
+        str(assignment_lifecycle_event_id)
+        if assignment_lifecycle_event_id
+        else None
+    )
+    if not decision_join_enabled:
+        return {"lifecycle_event_id": assignment_id} if assignment_id else {}
+
+    shadow_event_id = str((decision_record or {}).get("event_id") or "") or None
+    fields = {"lifecycle_event_id": shadow_event_id}
+    if assignment_id:
+        fields["assignment_lifecycle_event_id"] = assignment_id
+    return fields
+
+
 def _check_panel_override(
     order_id: str,
     panel_courier_id: str,
@@ -527,9 +568,16 @@ def _check_panel_override(
         "actual_courier_id": str(panel_courier_id),
         "panel_source": source,
         "decision": dr,
+        **_learning_record_identity_fields(
+            dr,
+            lifecycle_event_id,
+            decision_join_enabled=(
+                bool(_context_by_receipt.get("decision_join_enabled", False))
+                if _context_by_receipt is not None
+                else decision_flag("ENABLE_LEARNING_LOG_DECISION_JOIN")
+            ),
+        ),
     }
-    if lifecycle_event_id:
-        override_rec["lifecycle_event_id"] = str(lifecycle_event_id)
     # MP-#11 (2026-05-08): atomic JSONL append via core helper. Eliminuje race
     # między panel_watcher i telegram_approver pisanie do TEGO SAMEGO learning_log.
     try:
@@ -629,12 +677,17 @@ def _capture_panel_learning_context(order_id: str) -> dict:
     import json
 
     context = {
-        "schema_version": 2,
+        "schema_version": 3,
         "captured_at": now_iso(),
         # Threshold jest czescia klasyfikacji tego exact ASSIGNED. Retry po
         # restarcie nie moze zmienic AGREE/NONE tylko dlatego, ze config procesu
         # zostal zmieniony po utrwaleniu receiptu.
         "panel_agree_max_age_min": float(_PANEL_AGREE_MAX_AGE_MIN),
+        # Semantyka klucza joinu musi być związana z exact assignment receipt;
+        # retry po flipie nie może zmienić znaczenia już utrwalanej lekcji.
+        "decision_join_enabled": decision_flag(
+            "ENABLE_LEARNING_LOG_DECISION_JOIN"
+        ),
         "capture_status": "none",
         "pending_record": None,
         "assign_direct": None,
@@ -677,6 +730,7 @@ def _write_panel_agree(
     panel_source: str,
     *,
     lifecycle_event_id: Optional[str] = None,
+    decision_join_enabled: Optional[bool] = None,
     _raise_on_error: bool = False,
 ) -> None:
     """Schemat zgodny z PANEL_OVERRIDE (proposed_courier_id/actual_courier_id —
@@ -703,9 +757,16 @@ def _write_panel_agree(
         "order_created_at": dr.get("order_created_at"),
         "source": source_kind,        # "panel" | "telegram" (edge c — bez dublu w raporcie)
         "panel_source": panel_source,  # panel_initial | panel_diff | panel_reassign
+        **_learning_record_identity_fields(
+            dr,
+            lifecycle_event_id,
+            decision_join_enabled=(
+                decision_flag("ENABLE_LEARNING_LOG_DECISION_JOIN")
+                if decision_join_enabled is None
+                else bool(decision_join_enabled)
+            ),
+        ),
     }
-    if lifecycle_event_id:
-        agree_rec["lifecycle_event_id"] = str(lifecycle_event_id)
     # MP-#11: atomic JSONL append (flock) — ta sama dyscyplina co PANEL_OVERRIDE;
     # panel_watcher i telegram_approver piszą do TEGO SAMEGO learning_log.
     try:
@@ -820,6 +881,13 @@ def _check_panel_agree(
             _write_panel_agree(order_id, proposed, panel_courier_id,
                                latency_s, dr, "panel", source,
                                lifecycle_event_id=lifecycle_event_id,
+                               decision_join_enabled=(
+                                   bool(_context_by_receipt.get(
+                                       "decision_join_enabled", False
+                                   ))
+                                   if _context_by_receipt is not None
+                                   else None
+                               ),
                                _raise_on_error=_raise_on_error)
             return
 
@@ -848,6 +916,13 @@ def _check_panel_agree(
         _write_panel_agree(order_id, proposed, panel_courier_id,
                            latency_s, dr, "telegram", source,
                            lifecycle_event_id=lifecycle_event_id,
+                           decision_join_enabled=(
+                               bool(_context_by_receipt.get(
+                                   "decision_join_enabled", False
+                               ))
+                               if _context_by_receipt is not None
+                               else None
+                           ),
                            _raise_on_error=_raise_on_error)
     except Exception as e:
         _log.warning(f"PANEL_AGREE check fail oid={order_id}: {type(e).__name__}: {e}")

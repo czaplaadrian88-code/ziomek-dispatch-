@@ -3366,6 +3366,12 @@ class PipelineResult:
     pickup_ready_at: Optional[datetime]
     restaurant: Optional[str]
     delivery_address: Optional[str] = None
+    # CHOICE-SET (2026-07-21): pełna oceniona pula sprzed top-N, przeniesiona
+    # jawnie przez granicę selection→shadow serializer. `candidates` pozostaje
+    # kompatybilnym top-N używanym przez istniejące renderery/konsumentów.
+    # Serializer emituje z tego wyłącznie sześć bezpiecznych pól przy fladze ON;
+    # flaga jest domyślnie OFF.
+    full_pool_candidates: Optional[List[Candidate]] = None
     # Sprint-1 2026-04-30 (logging extension): pool size scalars dla counterfactual
     # analysis. pool_total_count = liczba kandydatów PRZED feasibility cut (cała
     # rozważana pula), pool_feasible_count = liczba MAYBE post-feasibility.

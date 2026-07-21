@@ -227,6 +227,13 @@ ETAP4_DECISION_FLAGS = (
     "ENABLE_ETA_CELL_RESIDUAL_CORRECTION",
     # W1/T2.4 advisory (2026-07-07): stempel would-be-mode (S1/S2/S3) na rekordzie decyzji (shadow).
     "ENABLE_MODE_LAYER_SHADOW",
+    # CHOICE-SET (2026-07-21): pełna oceniona pula w shadow_decisions jako
+    # sześciopolowy full_pool_compact. Wyłącznie obserwacja; default OFF.
+    "ENABLE_FULL_CHOICE_SET_LOG",
+    # JOIN-HARDENING (2026-07-21): PANEL_AGREE/OVERRIDE wiąże learning_log
+    # z event_id źródłowej decyzji shadow. Osobna flaga, bo świeży E1 używał
+    # tej samej nazwy pola dla ID późniejszego COURIER_ASSIGNED.
+    "ENABLE_LEARNING_LOG_DECISION_JOIN",
     "ENABLE_R6_BREACH_SHADOW_LOG",
     # E2 (2026-06-14): 20% live A/B PLN-sort selekcji kandydatow (dispatch_pipeline).
     "ENABLE_E2_PLN_AB",
@@ -596,6 +603,10 @@ ENABLE_ETA_CELL_RESIDUAL_CORRECTION = False
 # obserwatora mode_observer — NIE krokuje FSM). Default OFF, czysta obserwowalność
 # (mode+mode_reason w serializerze); zero wpływu na verdict/score/feasibility.
 ENABLE_MODE_LAYER_SHADOW = False
+# CHOICE-SET/JOIN-HARDENING: bezpieczne fallbacki OFF. Kanon po ewentualnym
+# flipie = flags.json przez decision_flag(); brak module-level odczytu env.
+ENABLE_FULL_CHOICE_SET_LOG = False
+ENABLE_LEARNING_LOG_DECISION_JOIN = False
 ETA_FABRICATION_FLOOR_MIN = 60.0     # T=60: E-1 łapie 100% fabrykacji (>90 gubi połowę)
 ETA_FABRICATION_RATIO = 2.5          # pred>2,5×robust_ref (komponent ratio Opusa vs FP kryzysu)
 ETA_ROBUST_SERVICE_MIN = 12.0        # service_time (odbiór+wydanie) w robust_ref

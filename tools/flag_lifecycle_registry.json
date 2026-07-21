@@ -6614,6 +6614,43 @@
     "apka"
    ]
   },
+  "ENABLE_FULL_CHOICE_SET_LOG": {
+   "carriers": [
+    "common.py:ETAP4_DECISION_FLAGS",
+    "dispatch_v2/common.py-const"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/shadow_dispatcher.py"
+   ],
+   "curated_at": "2026-07-21",
+   "current_snapshot": {
+    "default": false
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "wyłącznie writer shadow_decisions",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "shadow",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_FULL_CHOICE_SET_LOG",
+   "notes": "Pełna pula sprzed top-N jako sześciopolowy full_pool_compact; brak klucza = OFF. Klucz flags.json=false dodaje CTO w kroku wydania.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-shadow.service"
+   },
+   "removal_condition": "po 2 dniach walidacji join coverage i decyzji o stałym schemacie ledgera",
+   "review_date": "2026-08-21",
+   "rollback": "flags.json OFF hot-reload (bez restartu)",
+   "source_of_truth": "common.py-const",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
   "ENABLE_GEOCODE_BBOX_GUARD": {
    "carriers": [
     "dispatch_v2/common.py-const"
@@ -7792,6 +7829,43 @@
    "removal_condition": "n/d dopóki live",
    "review_date": "2026-10-10",
    "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "source_of_truth": "common.py-const",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
+  "ENABLE_LEARNING_LOG_DECISION_JOIN": {
+   "carriers": [
+    "common.py:ETAP4_DECISION_FLAGS",
+    "dispatch_v2/common.py-const"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/panel_watcher.py"
+   ],
+   "curated_at": "2026-07-21",
+   "current_snapshot": {
+    "default": false
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "writer learning_log działa w dispatch-panel-watcher",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "shadow",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_LEARNING_LOG_DECISION_JOIN",
+   "notes": "ON: PANEL_AGREE/OVERRIDE lifecycle_event_id = shadow.event_id; ID assignmentu zostaje osobno do dedupe. OFF zachowuje schemat E1. Klucz flags.json=false dodaje CTO w kroku wydania.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-panel-watcher.service"
+   },
+   "removal_condition": "po 2 dniach pokrycia joinu i migracji wszystkich czytników na twardy klucz",
+   "review_date": "2026-08-21",
+   "rollback": "flags.json OFF hot-reload (bez restartu)",
    "source_of_truth": "common.py-const",
    "twin_of": [],
    "worlds": [

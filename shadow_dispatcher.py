@@ -332,24 +332,60 @@ def _propagate_prefixed_metrics(base: dict, metrics) -> None:
         base[k] = _json_safe(v)
 
 
+def _serialize_candidate_compact(c) -> dict:
+    """Minimalny, stabilny projection kandydata do pełnego choice-setu.
+
+    To jest wspólne źródło sześciu pól dla LOCATION A (alternatives),
+    LOCATION B (inline best) i ``full_pool_compact``. Nie wolno rozszerzać
+    payloadu o pełne metrics/plan — ledger ma pozostać mały i bez PII.
+    """
+    m = (getattr(c, "metrics", None) or {}) if c is not None else {}
+    return {
+        "cid": getattr(c, "courier_id", None),
+        "score": getattr(c, "score", None),
+        "feasibility_verdict": getattr(c, "feasibility_verdict", None),
+        "pos_source": m.get("pos_source"),
+        "km_to_pickup": m.get("km_to_pickup"),
+        "r6_bag_size": m.get("r6_bag_size"),
+    }
+
+
+def _serialize_full_pool_compact(result: PipelineResult, best) -> list:
+    """Best + cała pula sprzed top-N, dokładnie raz per kanoniczny CID.
+
+    ``best`` idzie pierwszy, bo ścieżka solo tworzy nowy obiekt dla tego samego
+    kuriera co odrzucony wariant w pełnej puli. Dzięki identity helperowi zapis
+    zachowuje finalny wariant zwycięzcy, a nie jego nieaktualnego bliźniaka.
+    Fallback do ``result.candidates`` utrzymuje kompatybilność starych replayów.
+    """
+    full_pool = getattr(result, "full_pool_candidates", None)
+    if full_pool is None:
+        full_pool = getattr(result, "candidates", None) or []
+    ordered = ([best] if best is not None else []) + _alternative_candidates(
+        full_pool, best
+    )
+    return [_serialize_candidate_compact(candidate) for candidate in ordered]
+
+
 def _serialize_candidate(c) -> dict:
     plan = c.plan
     m = c.metrics or {}
+    compact = _serialize_candidate_compact(c)
     out = {
-        "courier_id": c.courier_id,
+        "courier_id": compact["cid"],
         "name": c.name,
-        "score": c.score,
-        "feasibility": c.feasibility_verdict,
+        "score": compact["score"],
+        "feasibility": compact["feasibility_verdict"],
         "reason": c.feasibility_reason,
         "best_effort": c.best_effort,
-        "km_to_pickup": m.get("km_to_pickup"),
+        "km_to_pickup": compact["km_to_pickup"],
         "travel_min": m.get("travel_min"),
         # SP-B2-ETAQ shadow (2026-06-11, LOCATION A): kalibracja kwantylowa ETA.
         "travel_min_cal": m.get("travel_min_cal"),
         "drive_min": m.get("drive_min"),
         "eta_pickup_hhmm": _eta_hhmm_warsaw(m.get("eta_pickup_utc")),
         "eta_drive_hhmm": _eta_hhmm_warsaw(m.get("eta_drive_utc")),
-        "pos_source": m.get("pos_source"),
+        "pos_source": compact["pos_source"],
         # Z-09 (audyt 2026-06-10): rescue ze store replay'uje pierwotny label
         # pos_source (np. "gps") — bez tych pól nieodróżnialny od żywego fixa.
         "pos_from_store": m.get("pos_from_store"),
@@ -379,7 +415,7 @@ def _serialize_candidate(c) -> dict:
         "r6_max_bag_time_min": m.get("r6_max_bag_time_min"),
         "r6_worst_oid": m.get("r6_worst_oid"),
         "r6_is_solo": m.get("r6_is_solo"),
-        "r6_bag_size": m.get("r6_bag_size"),
+        "r6_bag_size": compact["r6_bag_size"],
         # Fix 2026-05-17 (#474227): r6_bag_size jest null gdy feasibility_v2
         # robi early-return PRZED blokiem R6 (np. bramka sla_violation:538).
         # bag_size_before (feasibility_v2:276) ustawiane bezwarunkowo = len(bag).
@@ -695,6 +731,9 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
     from datetime import datetime, timezone, timedelta
     best = result.best
     best_m = (best.metrics if best is not None else {}) or {}
+    best_compact = (
+        _serialize_candidate_compact(best) if best is not None else None
+    )
 
     # SP-B2-PREPBIAS shadow (2026-06-11): effective_ready_shadow = pickup_ready
     # + bias_med(restauracja, slot) z dispatch_state/restaurant_prep_bias.json
@@ -845,13 +884,13 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
         "mode": getattr(result, "mode", None),
         "mode_reason": getattr(result, "mode_reason", None),
         "best": None if best is None else {
-            "courier_id": best.courier_id,
+            "courier_id": best_compact["cid"],
             "name": best.name,
-            "score": best.score,
-            "feasibility": best.feasibility_verdict,
+            "score": best_compact["score"],
+            "feasibility": best_compact["feasibility_verdict"],
             "reason": best.feasibility_reason,
             "best_effort": best.best_effort,
-            "km_to_pickup": best_m.get("km_to_pickup"),
+            "km_to_pickup": best_compact["km_to_pickup"],
             "travel_min": best_m.get("travel_min"),
             # SP-B2-ETAQ shadow (2026-06-11, LOCATION B): kalibracja kwantylowa ETA.
             "travel_min_cal": best_m.get("travel_min_cal"),
@@ -867,7 +906,7 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             # picked_up_at → residual spóźnienia. None gdy flaga OFF.
             "target_pickup_debiased": target_pickup_debiased_iso,
             "pickup_debias_min": pickup_debias_min_used,
-            "pos_source": best_m.get("pos_source"),
+            "pos_source": best_compact["pos_source"],
             # Z-09 (audyt 2026-06-10): patrz _serialize_candidate (LOCATION A).
             "pos_from_store": best_m.get("pos_from_store"),
             "pos_age_min": best_m.get("pos_age_min"),
@@ -896,7 +935,7 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             "r6_max_bag_time_min": best_m.get("r6_max_bag_time_min"),
             "r6_worst_oid": best_m.get("r6_worst_oid"),
             "r6_is_solo": best_m.get("r6_is_solo"),
-            "r6_bag_size": best_m.get("r6_bag_size"),
+            "r6_bag_size": best_compact["r6_bag_size"],
             # Fix 2026-05-17 (#474227): bag_size_before propagation (LOCATION B
             # — best). Patrz _serialize_candidate dla detali. r6_bag_size null
             # przy feasibility early-return przed R6 → fallback do bag_size_before.
@@ -1126,6 +1165,10 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
     _stage_timing = getattr(result, "stage_timing", None)
     if isinstance(_stage_timing, dict):
         out["timing"] = _stage_timing
+    # CHOICE-SET: OFF zachowuje legacy shape bajt-w-bajt (klucza nie ma).
+    # ON zapisuje pełną pulę sprzed top-N, bez ciężkich planów/metrics.
+    if C.decision_flag("ENABLE_FULL_CHOICE_SET_LOG"):
+        out["full_pool_compact"] = _serialize_full_pool_compact(result, best)
     if out["best"] is not None:
         _propagate_prefixed_metrics(out["best"], best_m)
     return out
