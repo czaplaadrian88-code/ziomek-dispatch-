@@ -29,9 +29,12 @@ from dispatch_v2.uwagi_bridge_envelope import (
 
 TEST_HMAC_MATERIAL = b"dispatch-v2-test-only-hmac-material-32-bytes-minimum"
 
-# All fixtures below are signed "now" so the 24h freshness window passes; the
-# expiry path is tested explicitly with an old issued_at.
-_FRESH_TS = int(_time.time())
+# Fixtures are signed with a FROZEN epoch and every verification in this file
+# passes now=_FRESH_TS explicitly. A real clock here would embed a changing
+# ts+hmac into parametrize nodeids -> pytest collection would differ between
+# collect-only and run (night-guard refuses manifest). Expiry paths are tested
+# explicitly with old/future issued_at relative to this constant.
+_FRESH_TS = 1_784_700_000  # 2026-07-22 ~06:00Z, stały
 
 
 def _oid_from_payload(payload):
@@ -61,6 +64,7 @@ def parse_pickup_from_uwagi(text, bridge_format=False):
         text,
         bridge_format=bridge_format,
         bridge_hmac_material=(TEST_HMAC_MATERIAL if bridge_format else None),
+        now=_FRESH_TS,
     )
 
 # --- realne fixture z produkcji (skrócone pola nieistotne dla parsera) ---------
@@ -410,6 +414,7 @@ def test_poc_producer_sender_name_cannot_inject_address_segment():
         45520,
         _producer_detail(name="Jan | Firma Atak, Zła 99"),
         TEST_HMAC_MATERIAL,
+        issued_at=_FRESH_TS,
     )
     assert "%7C" in envelope
     assert envelope.count("NADAWCA:") == 1
@@ -425,6 +430,7 @@ def test_postal_code_after_odbiorca_boundary_does_not_collide():
         45520,
         detail,
         TEST_HMAC_MATERIAL,
+        issued_at=_FRESH_TS,
     )
     parsed = parse_pickup_from_uwagi(envelope, bridge_format=True)
     assert parsed is not None
@@ -916,6 +922,7 @@ def test_producer_with_secret_emits_authenticated_v2(monkeypatch):
             "name": "Anna", "address": "Kijowska 12",
         },
         _legacy,
+        issued_at=_FRESH_TS,
     )
     attempt = inspect_bridge_nadawca(result, expected_order_id="45520", now=_FRESH_TS)
     assert attempt.pickup is not None
