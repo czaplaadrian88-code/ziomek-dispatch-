@@ -8,10 +8,13 @@ at-least-once w skrajnym crash-window po efekcie, a przed zapisem receiptu.
 """
 from __future__ import annotations
 
+import logging
 from typing import Optional
 
 from dispatch_v2 import state_machine
 
+
+_log = logging.getLogger(__name__)
 
 _PANEL_LEARNING_SOURCES = {
     "panel_initial",
@@ -209,15 +212,25 @@ def apply(event: dict) -> None:
         # Funkcja tylko loguje shadow; nie buduje ani nie emituje eventu LIVE.
         from dispatch_v2.czasowka_reclaim import record_pickup_time_shadow
 
-        record_pickup_time_shadow(
-            event,
-            current,
-            enabled_by_receipt=(
-                bool(event.get("czasowka_reclaim_shadow_authorized"))
-                if "czasowka_reclaim_shadow_authorized" in event
-                else None
-            ),
-        )
+        try:
+            record_pickup_time_shadow(
+                event,
+                current,
+                enabled_by_receipt=(
+                    bool(event.get("czasowka_reclaim_shadow_authorized"))
+                    if "czasowka_reclaim_shadow_authorized" in event
+                    else None
+                ),
+            )
+        except Exception as exc:
+            # Obserwacja nie jest częścią krytycznej transakcji lifecycle.
+            # Pełny dysk/uszkodzony log nie może zostawić receiptu pending ani
+            # ominąć invalidacji planu wykonywanej niżej.
+            _log.warning(
+                "CZASOWKA_RECLAIM_SHADOW_WRITE_FAILED oid=%s error=%s",
+                oid,
+                type(exc).__name__,
+            )
         if payload.get("source") in {"parcel_assign", "parcel_status_inbox"}:
             return
 
