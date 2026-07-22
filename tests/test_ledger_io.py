@@ -76,6 +76,25 @@ def test_iter_shadow_cutoff_filters_per_record(ledger):
     assert got == ["new"]
 
 
+def test_iter_shadow_observations_are_opt_in_for_decision_consumers(ledger):
+    now = datetime.now(UTC)
+    observation = _shadow(
+        "obs",
+        now,
+        decision_kind="lifecycle_observation",
+        record_type="CZASOWKA_RECLAIM_EVALUATION",
+    )
+    _write_jsonl(ledger["shadow"], [_shadow("decision", now), observation])
+
+    default = [r["order_id"] for r in lio.iter_shadow_decisions(None)]
+    all_records = [
+        r["order_id"]
+        for r in lio.iter_shadow_decisions(None, include_observations=True)
+    ]
+    assert default == ["decision"]
+    assert all_records == ["decision", "obs"]
+
+
 def test_iter_shadow_canonicalizes_oid_to_str(ledger):
     now = datetime.now(UTC)
     _write_jsonl(ledger["shadow"], [{"order_id": 483655, "ts": _iso(now - timedelta(minutes=1))}])
