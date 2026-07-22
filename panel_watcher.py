@@ -2461,6 +2461,12 @@ def _diff_and_emit(
                         _aid,
                         type(exc).__name__,
                     )
+                # Anti-replay: no independent expected_order_id here — the
+                # panel `zid` lives in a different namespace than the bridge's
+                # source `#order_id`, so binding is enforced by the envelope
+                # itself (signed-oid must match the content `#oid` = internal
+                # consistency, plus the freshness window). A captured envelope
+                # is thus non-eternal and any tamper breaks the signature.
                 _bridge_attempt = inspect_bridge_nadawca(
                     _uwagi_text,
                     hmac_material=_bridge_hmac_material,

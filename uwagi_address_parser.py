@@ -119,14 +119,24 @@ def _try_bridge_nadawca(
     text: str,
     stoplist: frozenset,
     hmac_material: Optional[bytes],
+    expected_order_id: object = None,
+    now: Optional[float] = None,
+    max_age_seconds: Optional[float] = None,
 ) -> BridgeNadawcaAttempt:
     """P0 bridge-NADAWCA: waliduj kopertę, potem adres nadawcy.
 
     Każda niejednoznaczność odrzuca całą próbę P0. ``reason`` jest stabilnym,
     czystym diagnostykiem; wywołujący może odróżnić przyszłą wersję formatu od
-    braku proweniencji bez logowania ani I/O w parserze.
+    braku proweniencji bez logowania ani I/O w parserze. Anti-replay
+    (``order_id_mismatch``/``envelope_expired``) egzekwuje koperta.
     """
-    verification = verify_bridge_envelope(text, hmac_material)
+    verification = verify_bridge_envelope(
+        text,
+        hmac_material,
+        expected_order_id=expected_order_id,
+        now=now,
+        max_age_seconds=max_age_seconds,
+    )
     if not verification.authenticated or verification.payload is None:
         return BridgeNadawcaAttempt(
             None,
@@ -241,12 +251,24 @@ def _try_bridge_nadawca(
 
 
 def inspect_bridge_nadawca(
-    text: Optional[str], hmac_material: Optional[bytes] = None
+    text: Optional[str],
+    hmac_material: Optional[bytes] = None,
+    *,
+    expected_order_id: object = None,
+    now: Optional[float] = None,
+    max_age_seconds: Optional[float] = None,
 ) -> BridgeNadawcaAttempt:
     """Publiczna, czysta diagnostyka koperty bridge-NADAWCA."""
     if not text or not text.strip():
         return BridgeNadawcaAttempt(None, "empty_text")
-    return _try_bridge_nadawca(text, _load_company_stoplist(), hmac_material)
+    return _try_bridge_nadawca(
+        text,
+        _load_company_stoplist(),
+        hmac_material,
+        expected_order_id=expected_order_id,
+        now=now,
+        max_age_seconds=max_age_seconds,
+    )
 
 
 def _normalize(text: str) -> str:
@@ -401,6 +423,10 @@ def _try_p2(pickup_line: str, stoplist: frozenset) -> Optional[ParsedPickup]:
 def parse_pickup_from_uwagi(text: Optional[str],
                             bridge_format: bool = False,
                             bridge_hmac_material: Optional[bytes] = None,
+                            *,
+                            expected_order_id: object = None,
+                            now: Optional[float] = None,
+                            max_age_seconds: Optional[float] = None,
                             ) -> Optional[ParsedPickup]:
     """
     Pure function. No I/O. Deterministic.
@@ -431,7 +457,14 @@ def parse_pickup_from_uwagi(text: Optional[str],
     stoplist = _load_company_stoplist()
 
     if bridge_format:
-        attempt = _try_bridge_nadawca(text, stoplist, bridge_hmac_material)
+        attempt = _try_bridge_nadawca(
+            text,
+            stoplist,
+            bridge_hmac_material,
+            expected_order_id=expected_order_id,
+            now=now,
+            max_age_seconds=max_age_seconds,
+        )
         if attempt.pickup is not None:
             return attempt.pickup
         if attempt.envelope_seen:

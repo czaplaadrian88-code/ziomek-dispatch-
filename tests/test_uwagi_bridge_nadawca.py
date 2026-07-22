@@ -9,6 +9,8 @@ jest fixturem negatywnym. OFF = bajt-parytet z legacy.
 import logging
 import json
 import os
+import re as _re
+import time as _time
 from types import SimpleNamespace
 
 import pytest
@@ -19,6 +21,7 @@ from dispatch_v2.uwagi_address_parser import (
 )
 from dispatch_v2.uwagi_bridge_envelope import (
     BridgeCredentialError,
+    build_bridge_uwagi,
     build_verbose_uwagi_envelope,
     load_bridge_hmac,
     sign_bridge_envelope,
@@ -26,9 +29,31 @@ from dispatch_v2.uwagi_bridge_envelope import (
 
 TEST_HMAC_MATERIAL = b"dispatch-v2-test-only-hmac-material-32-bytes-minimum"
 
+# All fixtures below are signed "now" so the 24h freshness window passes; the
+# expiry path is tested explicitly with an old issued_at.
+_FRESH_TS = int(_time.time())
 
-def inspect_bridge_nadawca(text):
-    return _inspect_bridge_nadawca(text, hmac_material=TEST_HMAC_MATERIAL)
+
+def _oid_from_payload(payload):
+    """Extract the source order id printed as ``#<oid>`` in the payload head."""
+    head = payload.split("|", 1)[0]
+    m = _re.search(r"#([0-9A-Za-z_-]+)", head)
+    return m.group(1) if m else "0"
+
+
+def sign_bridge_envelope_fixture(payload, material=TEST_HMAC_MATERIAL,
+                                 *, order_id=None, issued_at=None):
+    """Sign a fixture, binding the order id parsed from the head + a fresh ts."""
+    return sign_bridge_envelope(
+        payload,
+        material,
+        order_id=order_id if order_id is not None else _oid_from_payload(payload),
+        issued_at=_FRESH_TS if issued_at is None else issued_at,
+    )
+
+
+def inspect_bridge_nadawca(text, **kwargs):
+    return _inspect_bridge_nadawca(text, hmac_material=TEST_HMAC_MATERIAL, **kwargs)
 
 
 def parse_pickup_from_uwagi(text, bridge_format=False):
@@ -95,12 +120,12 @@ NADZWYCZAJNIE = (
 def _upgrade_fixture(unsigned_v1):
     payload, marker = unsigned_v1.rsplit(" | ", 1)
     assert marker == "SRC:EPAKA_BRIDGE:v1"
-    return sign_bridge_envelope(payload, TEST_HMAC_MATERIAL)
+    return sign_bridge_envelope_fixture(payload)
 
 
 def _resign_payload(envelope, transform):
     payload = envelope.rsplit(" | SRC:", 1)[0]
-    return sign_bridge_envelope(transform(payload), TEST_HMAC_MATERIAL)
+    return sign_bridge_envelope_fixture(transform(payload))
 
 
 UNSIGNED_V1_STREET_SPORT = STREET_SPORT
@@ -178,10 +203,10 @@ def test_company_extracted_for_display():
 def test_stoplist_blocks_street_named_like_company():
     """Mutation-probe kierunku: podstawiony 'adres' będący nazwą firmy ze stoplisty
     NIE przechodzi (plauzybilność ulicy dalej obowiązuje w gałęzi bridge)."""
-    poisoned = sign_bridge_envelope((
+    poisoned = sign_bridge_envelope_fixture((
         "X #1 | NADAWCA: A tel 1 | Firma, NIP 123, Mali Wojownicy 7, "
         "15-000 Białystok, a@b.c | Odbiorca: B | oryg. adres: C 1 | Paczek: 1 | "
-    ).removesuffix(" | "), TEST_HMAC_MATERIAL)
+    ).removesuffix(" | "))
     assert parse_pickup_from_uwagi(poisoned, bridge_format=True) is None
 
 
@@ -191,7 +216,7 @@ def _bridge_text(address, *, city="Białystok"):
         f"Firma Testowa, {address}, 15-001 {city}, test@example.invalid | "
         "Odbiorca: Anna Nowak | oryg. adres: Inna 99 | Paczek: 1"
     )
-    return sign_bridge_envelope(payload, TEST_HMAC_MATERIAL)
+    return sign_bridge_envelope_fixture(payload)
 
 
 def test_manual_fake_marker_without_complete_envelope_stays_none():
@@ -201,9 +226,11 @@ def test_manual_fake_marker_without_complete_envelope_stays_none():
 
 def test_poc_complete_manual_envelope_with_pasted_marker_is_rejected():
     """PoC #1: pełna ręczna koperta nie zna HMAC i nie może wejść w P0."""
+    # Well-formed v2 marker shape (oid/ts present) but a digest the forger
+    # cannot compute without the secret -> hmac_mismatch, not a shape reject.
     forged = UNSIGNED_V1_STREET_SPORT.replace(
         "SRC:EPAKA_BRIDGE:v1",
-        "SRC:EPAKA_BRIDGE:v2;hmac-sha256=" + ("0" * 64),
+        f"SRC:EPAKA_BRIDGE:v2;oid=45520;ts={_FRESH_TS};hmac-sha256=" + ("0" * 64),
     )
     attempt = inspect_bridge_nadawca(forged)
     assert attempt.pickup is None
@@ -233,7 +260,7 @@ def test_poc_two_raw_nadawca_prefixes_in_one_segment_are_rejected():
     payload = STREET_SPORT.rsplit(" | SRC:", 1)[0].replace(
         "NADAWCA: FLM", "NADAWCA: NADAWCA: FLM", 1
     )
-    signed = sign_bridge_envelope(payload, TEST_HMAC_MATERIAL)
+    signed = sign_bridge_envelope_fixture(payload)
     attempt = inspect_bridge_nadawca(signed)
     assert attempt.pickup is None
     assert attempt.reason == "raw_nadawca_prefix_count:2"
@@ -553,9 +580,11 @@ def test_callsite_bridge_geocode_fail_never_uses_central_fallback(monkeypatch):
 
 
 def test_callsite_poc_manual_complete_envelope_goes_to_koord(monkeypatch):
+    # Well-formed v2 marker shape (oid/ts present) but a digest the forger
+    # cannot compute without the secret -> hmac_mismatch, not a shape reject.
     forged = UNSIGNED_V1_STREET_SPORT.replace(
         "SRC:EPAKA_BRIDGE:v1",
-        "SRC:EPAKA_BRIDGE:v2;hmac-sha256=" + ("0" * 64),
+        f"SRC:EPAKA_BRIDGE:v2;oid=45520;ts={_FRESH_TS};hmac-sha256=" + ("0" * 64),
     )
     payload, geocode_calls = _run_panel_callsite(
         monkeypatch,
@@ -724,3 +753,170 @@ def test_flag_lifecycle_registry_binds_bridge_to_reject():
     assert flags[bridge]["default"] is False
     assert flags[bridge]["twin_of"] == [reject]
     assert bridge in flags[reject]["twin_of"]
+
+
+# --------------------------------------------------------------------------
+# Anti-replay: order-id binding + freshness (2026-07-22 P1-1)
+# --------------------------------------------------------------------------
+from dispatch_v2.uwagi_bridge_envelope import (  # noqa: E402
+    DEFAULT_ENVELOPE_MAX_AGE_SECONDS,
+    verify_bridge_envelope,
+)
+
+
+def _fresh_envelope(order_id=45520):
+    """A valid v2 envelope for a given source order id, signed 'now'."""
+    payload = (
+        f"Street-Sport #{order_id} | NADAWCA: FLM SP.K tel 604 593 684 | "
+        "FLM SP.K, NIP 5423039093, Boruty 17, 15-157 Białystok, a@b.pl | "
+        "Odbiorca: FLM SP.K. | oryg. adres: Kijowska 12 | Paczek: 1"
+    )
+    return sign_bridge_envelope(
+        payload, TEST_HMAC_MATERIAL, order_id=order_id, issued_at=_FRESH_TS
+    )
+
+
+def test_replay_envelope_of_order_111_into_999_is_order_id_mismatch():
+    """Reviewer PoC: a valid envelope signed for order 111 must not be accepted
+    for a different order 999 (caller supplies the independent expected id)."""
+    envelope = _fresh_envelope(order_id=111)
+    # Sanity: with the matching expected id it authenticates.
+    ok = inspect_bridge_nadawca(envelope, expected_order_id="111", now=_FRESH_TS)
+    assert ok.pickup is not None
+    assert ok.reason == "parsed_v2"
+    # Same bearer envelope, different processed order -> replay rejected.
+    replayed = inspect_bridge_nadawca(envelope, expected_order_id="999", now=_FRESH_TS)
+    assert replayed.pickup is None
+    assert replayed.reason == "order_id_mismatch"
+    assert parse_pickup_from_uwagi_full(
+        envelope, expected_order_id="999"
+    ) is None
+
+
+def test_signed_oid_not_matching_content_hash_is_order_id_mismatch():
+    """Internal consistency: an envelope whose authenticated oid is not the
+    ``#<oid>`` printed in the content is rejected even without an expected id."""
+    payload = (
+        "Street-Sport #999 | NADAWCA: FLM tel 1 | FLM, Boruty 17, "
+        "15-157 Białystok, a@b.pl | Odbiorca: X | oryg. adres: Y 1 | Paczek: 1"
+    )
+    # Sign a DIFFERENT oid (111) than the content advertises (#999).
+    envelope = sign_bridge_envelope(
+        payload, TEST_HMAC_MATERIAL, order_id=111, issued_at=_FRESH_TS
+    )
+    attempt = inspect_bridge_nadawca(envelope, now=_FRESH_TS)
+    assert attempt.pickup is None
+    assert attempt.reason == "order_id_mismatch"
+
+
+def test_expired_envelope_is_rejected_envelope_expired():
+    """An authentic envelope older than the freshness window -> envelope_expired."""
+    envelope = _fresh_envelope(order_id=45520)
+    stale_now = _FRESH_TS + DEFAULT_ENVELOPE_MAX_AGE_SECONDS + 3600
+    attempt = inspect_bridge_nadawca(envelope, now=stale_now)
+    assert attempt.pickup is None
+    assert attempt.reason == "envelope_expired"
+    # And below the window it still parses.
+    fresh = inspect_bridge_nadawca(envelope, now=_FRESH_TS + 60)
+    assert fresh.reason == "parsed_v2"
+
+
+def test_future_dated_envelope_beyond_skew_is_expired():
+    """A ts implausibly in the future (forged/clock-abuse) -> envelope_expired."""
+    envelope = _fresh_envelope()
+    attempt = inspect_bridge_nadawca(envelope, now=_FRESH_TS - 4000)
+    assert attempt.pickup is None
+    assert attempt.reason == "envelope_expired"
+
+
+def test_happy_path_v2_still_authenticates_and_parses():
+    """Scenario (c): a fresh, consistent v2 envelope parses the sender pickup."""
+    envelope = _fresh_envelope(order_id=45520)
+    v = verify_bridge_envelope(envelope, TEST_HMAC_MATERIAL, now=_FRESH_TS)
+    assert v.authenticated is True
+    assert v.reason == "authenticated_v2"
+    assert v.order_id == "45520"
+    assert v.issued_at == _FRESH_TS
+    parsed = parse_pickup_from_uwagi(envelope, bridge_format=True)
+    assert parsed is not None
+    assert (parsed.street, parsed.number) == ("Boruty", "17")
+
+
+def test_max_age_is_configurable_via_env(monkeypatch):
+    from dispatch_v2 import uwagi_bridge_envelope as env
+
+    envelope = _fresh_envelope()
+    old_now = _FRESH_TS + 2 * 3600  # 2h later
+    # Default 24h -> still fresh.
+    assert verify_bridge_envelope(
+        envelope, TEST_HMAC_MATERIAL, now=old_now
+    ).reason == "authenticated_v2"
+    # Tighten window to 1h via env -> now expired.
+    monkeypatch.setenv(env.ENVELOPE_MAX_AGE_ENV, "3600")
+    assert verify_bridge_envelope(
+        envelope, TEST_HMAC_MATERIAL, now=old_now
+    ).reason == "envelope_expired"
+
+
+def parse_pickup_from_uwagi_full(text, **kwargs):
+    return _parse_pickup_from_uwagi(
+        text, bridge_format=True, bridge_hmac_material=TEST_HMAC_MATERIAL, **kwargs
+    )
+
+
+# --- Producer fail-safe: missing secret -> legacy, never raises (scenario d) ---
+def test_producer_without_secret_falls_back_to_legacy_without_exception(monkeypatch):
+    from dispatch_v2 import uwagi_bridge_envelope as env
+
+    def _raise_no_secret():
+        raise BridgeCredentialError("bridge HMAC unavailable: FileNotFoundError")
+
+    monkeypatch.setattr(env, "load_bridge_hmac", _raise_no_secret)
+    calls = {"legacy": 0}
+
+    def _legacy():
+        calls["legacy"] += 1
+        return "Street-Sport #45520 | Odbiorca: X | SRC:EPAKA_BRIDGE:v1"
+
+    warnings = []
+
+    class _Logger:
+        def warning(self, *a, **k):
+            warnings.append((a, k))
+
+    result = build_bridge_uwagi(
+        {"name": "Street-Sport", "verbose_uwagi": True},
+        45520,
+        {"sender": {"street": "Boruty 17"}},
+        _legacy,
+        logger=_Logger(),
+    )
+    assert calls["legacy"] == 1
+    assert result.endswith("SRC:EPAKA_BRIDGE:v1")
+    assert warnings, "missing secret must warn"
+
+
+def test_producer_with_secret_emits_authenticated_v2(monkeypatch):
+    from dispatch_v2 import uwagi_bridge_envelope as env
+
+    monkeypatch.setattr(env, "load_bridge_hmac", lambda: TEST_HMAC_MATERIAL)
+
+    def _legacy():
+        raise AssertionError("legacy builder must not run when secret is present")
+
+    result = build_bridge_uwagi(
+        {"name": "Street-Sport", "verbose_uwagi": True},
+        45520,
+        {
+            "sender": {
+                "name": "Jan", "lastname": "Kowalski", "phone": "1",
+                "company": "FLM", "street": "Boruty 17",
+                "post_code": "15-157", "city": "Białystok",
+            },
+            "name": "Anna", "address": "Kijowska 12",
+        },
+        _legacy,
+    )
+    attempt = inspect_bridge_nadawca(result, expected_order_id="45520", now=_FRESH_TS)
+    assert attempt.pickup is not None
+    assert (attempt.pickup.street, attempt.pickup.number) == ("Boruty", "17")
