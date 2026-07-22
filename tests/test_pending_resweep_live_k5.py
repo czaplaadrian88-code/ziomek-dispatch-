@@ -10,6 +10,7 @@ TOCTOU-guardy pod lockami (gone/changed/status planned) · cap per tick · fail-
 """
 import json
 import sys
+from datetime import timedelta
 
 sys.path.insert(0, "/root/.openclaw/workspace/scripts")
 
@@ -62,6 +63,20 @@ def test_live_off_no_mutation_byte_parity(tmp_path, monkeypatch):
     assert _pending(str(tmp_path / "pending.json")) == before
     rows = [json.loads(l) for l in out.read_text().splitlines()]
     assert all("live_action" not in r for r in rows)
+    _assert_live_off_pingpong_telemetry(tmp_path, monkeypatch)
+
+
+def _assert_live_off_pingpong_telemetry(tmp_path, monkeypatch):
+    """G6 ma stan shadow, ale przy LIVE=OFF nie wykonuje nawet oznaczonej blokady."""
+    out = _setup(tmp_path, monkeypatch, {"o2": "A"})
+    out.write_text("")
+    before = (tmp_path / "pending.json").read_bytes()
+    PGR.run_once(now=_N)
+    PGR.run_once(now=_N)
+    assert (tmp_path / "pending.json").read_bytes() == before
+    rows = [json.loads(line) for line in out.read_text().splitlines()]
+    assert all("live_action" not in row for row in rows)
+    assert all("would_pingpong_block" in row for row in rows)
 
 
 def test_live_on_gate_closed_zero_actions(tmp_path, monkeypatch):
@@ -99,6 +114,33 @@ def test_live_on_swaps_decision_record_with_provenance(tmp_path, monkeypatch):
     rows = {r["order_id"]: r for r in
             (json.loads(l) for l in out.read_text().splitlines())}
     assert rows["o2"]["live_action"] == "acted" and rows["o3"]["live_action"] == "acted"
+    _assert_live_guard_skips_return(tmp_path, monkeypatch)
+
+
+def _assert_live_guard_skips_return(tmp_path, monkeypatch):
+    """Przyszłe LIVE respektuje G6; historia pochodzi z resweep_live, nie shadow-state."""
+    _patch_serializer(monkeypatch)
+    out, pp = _arm_live(tmp_path, monkeypatch, {"o2": "A"})
+    out.write_text("")
+    monkeypatch.setattr(
+        PGR.CR, "dispatchable_fleet",
+        lambda: [_cs("A", bag=[{"order_id": "x"}]), _cs("B"), _cs("C")])
+    pending = _pending(pp)
+    pending["o2"]["resweep_live"] = {
+        "old_cid": "B", "new_cid": "A",
+        "ts": (_N - timedelta(minutes=5)).isoformat(), "flip_count": 1,
+    }
+    with open(pp, "w", encoding="utf-8") as target:
+        json.dump(pending, target)
+    before = _pending(pp)
+
+    summary = PGR.run_once(now=_N)
+    row = json.loads(out.read_text().splitlines()[0])
+    assert summary["would_repropose"] == 1
+    assert summary["live_acted"] == 0
+    assert row["would_pingpong_block"] is True
+    assert row["live_action"] == "skip_pingpong_guard"
+    assert _pending(pp) == before
 
 
 def test_toctou_gone_entry_skipped_inside_lock(tmp_path, monkeypatch):

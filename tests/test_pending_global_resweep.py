@@ -6,7 +6,7 @@ Candidate udawane przez types.SimpleNamespace; CourierState-like też (ma .bag, 
 import sys
 import json
 import types
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, "/root/.openclaw/workspace/scripts")
 from dispatch_v2 import common as C
@@ -106,6 +106,7 @@ def _setup(tmp_path, monkeypatch, proposed_best):
     monkeypatch.setattr(PGR, "PENDING_PATH", str(pp))
     monkeypatch.setattr(PGR, "ORDERS_STATE", str(op))
     monkeypatch.setattr(PGR, "OUT_JSONL", str(out))
+    monkeypatch.setattr(PGR, "PINGPONG_STATE_PATH", str(tmp_path / "pingpong-state.json"))
     monkeypatch.setattr(PGR, "_assess", _fake_assess)
     monkeypatch.setattr(PGR.CR, "dispatchable_fleet", lambda: [_cs(c) for c in ("A", "B", "C")])
     monkeypatch.setattr(C, "flag", lambda n, d=False: True if n == PGR.FLAG else d)
@@ -144,6 +145,106 @@ def test_run_once_spread_fix(tmp_path, monkeypatch):
     # są różne, więc test nie przejdzie po omyłkowym skopiowaniu new_km.
     assert by["o2"]["proposed_km"] == km_by_cid["A"]
     assert by["o2"]["new_km_to_pickup"] == km_by_cid["B"]
+    assert by["o2"]["delta_km"] == km_by_cid["B"] - km_by_cid["A"]
+    assert {"restaurant", "delivery_address", "proposed_name", "new_name"}.isdisjoint(
+        by["o2"])
+    state_payload = json.loads((tmp_path / "pingpong-state.json").read_text())
+    assert state_payload["schema"] == 1
+    assert set(state_payload["orders"]["o2"]) == {
+        "current_cid", "previous_cid", "last_swap_ts", "flip_count"}
+    _assert_pingpong_guard_scenarios()
+    _assert_review_g5g6_summary()
+
+
+def _guard_row(oid, proposed, target):
+    return {"order_id": oid, "proposed_cid": proposed, "new_cid": target,
+            "new_score": 20.0, "no_courier": False}
+
+
+def _assert_pingpong_guard_scenarios():
+    """A→B przechodzi; powrót B→A z normalnym, lecz nie 2× marginem jest blokowany."""
+    state = {}
+    first = _guard_row("o1", "A", "B")
+    PGR._annotate_pingpong_rows(
+        [first], {"o1": {"A": 0.0, "B": 20.0}}, state, _N,
+        margin=15.0, margin_multiplier=2.0, cooldown_min=10.0)
+    assert first["would_pingpong_block"] is False
+
+    third = _guard_row("o1", "A", "A")
+    PGR._annotate_pingpong_rows(
+        [third], {"o1": {"B": 0.0, "A": 20.0}}, state,
+        _N + timedelta(minutes=11), margin=15.0,
+        margin_multiplier=2.0, cooldown_min=10.0)
+    assert third["pingpong_is_return"] is True
+    assert third["would_pingpong_block"] is True
+    assert state["o1"]["current_cid"] == "B"
+
+    # A→B→C nie jest kontr-podmianą i nie podlega guardowi.
+    state = {}
+    first = _guard_row("o1", "A", "B")
+    PGR._annotate_pingpong_rows(
+        [first], {"o1": {"A": 0.0, "B": 20.0}}, state, _N,
+        margin=15.0, margin_multiplier=2.0, cooldown_min=10.0)
+    next_row = _guard_row("o1", "A", "C")
+    PGR._annotate_pingpong_rows(
+        [next_row], {"o1": {"B": 0.0, "C": 20.0}}, state,
+        _N + timedelta(minutes=1), margin=15.0,
+        margin_multiplier=2.0, cooldown_min=10.0)
+    assert next_row["pingpong_is_return"] is False
+    assert next_row["would_pingpong_block"] is False
+    assert state["o1"]["current_cid"] == "C"
+
+    # Nawet silny powrót czeka na cooldown; po nim przechodzi.
+    state = {}
+    first = _guard_row("o1", "A", "B")
+    PGR._annotate_pingpong_rows(
+        [first], {"o1": {"A": 0.0, "B": 35.0}}, state, _N,
+        margin=15.0, margin_multiplier=2.0, cooldown_min=10.0)
+
+    too_soon = _guard_row("o1", "A", "A")
+    PGR._annotate_pingpong_rows(
+        [too_soon], {"o1": {"B": 0.0, "A": 35.0}}, state,
+        _N + timedelta(minutes=5), margin=15.0,
+        margin_multiplier=2.0, cooldown_min=10.0)
+    assert too_soon["would_pingpong_block"] is True
+    assert too_soon["pingpong_elapsed_min"] == 5.0
+
+    after_cooldown = _guard_row("o1", "A", "A")
+    PGR._annotate_pingpong_rows(
+        [after_cooldown], {"o1": {"B": 0.0, "A": 35.0}}, state,
+        _N + timedelta(minutes=11), margin=15.0,
+        margin_multiplier=2.0, cooldown_min=10.0)
+    assert after_cooldown["would_pingpong_block"] is False
+    assert state["o1"]["current_cid"] == "A"
+
+    # HARD feasibility ma pierwszeństwo przed SOFT hysterezą.
+    state = {"o1": {"current_cid": "B", "previous_cid": "A",
+                    "last_swap_ts": _N.isoformat(), "flip_count": 1}}
+    row = _guard_row("o1", "A", "A")
+    PGR._annotate_pingpong_rows(
+        [row], {"o1": {"A": 20.0}}, state, _N + timedelta(minutes=1),
+        margin=15.0, margin_multiplier=2.0, cooldown_min=10.0)
+    assert row["pingpong_is_return"] is True
+    assert row["pingpong_hard_escape_current_infeasible"] is True
+    assert row["would_pingpong_block"] is False
+
+
+def _assert_review_g5g6_summary():
+    from dispatch_v2.tools import pending_global_resweep_review as review
+    got = review.summarize_g5_g6([
+        {"would_repropose": True, "delta_km": -1.5,
+         "pingpong_is_return": False, "would_pingpong_block": False},
+        {"would_repropose": True, "delta_km": 2.0,
+         "pingpong_is_return": True, "would_pingpong_block": True},
+        {"would_repropose": True, "delta_km": None,
+         "pingpong_is_return": False, "would_pingpong_block": None,
+         "pingpong_state_error": "OSError"},
+    ])
+    assert got["g5"]["measured_rows"] == 2
+    assert got["g5"]["missing_rows"] == 1
+    assert got["g5"]["delta_km_median"] == 0.25
+    assert got["g6"]["return_attempt_rows"] == 1
+    assert got["g6"]["would_block_rows"] == 1
 
 
 def test_run_once_single_rerank_better_courier(tmp_path, monkeypatch):

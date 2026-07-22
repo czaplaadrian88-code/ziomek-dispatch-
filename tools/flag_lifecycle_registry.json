@@ -17245,6 +17245,44 @@
     "engine"
    ]
   },
+  "PENDING_RESWEEP_PINGPONG_COOLDOWN_MIN": {
+   "carriers": [
+    "flags.json",
+    "dispatch_v2/tools/pending_global_resweep.py"
+   ],
+   "consumers": [
+    "dispatch_v2/tools/pending_global_resweep.py"
+   ],
+   "curated_at": "2026-07-22",
+   "current_snapshot": {
+    "default": 10.0
+   },
+   "default": 10.0,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "live",
+   "lifecycle_seeded": false,
+   "name": "PENDING_RESWEEP_PINGPONG_COOLDOWN_MIN",
+   "notes": "G6: minimalny odstęp przed kontr-podmianą na poprzedniego kuriera; shadow telemetry przy LIVE=OFF",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-pending-resweep-shadow.service"
+   },
+   "removal_condition": "razem z guardem G6 po decyzji ownera",
+   "review_date": "2026-07-24",
+   "rollback": "git revert; brak klucza w flags.json zachowuje default 10 min",
+   "source_of_truth": "dispatch_v2/tools/pending_global_resweep.py",
+   "twin_of": [
+    "PENDING_RESWEEP_PINGPONG_MARGIN_MULTIPLIER"
+   ],
+   "worlds": [
+    "engine"
+   ]
+  },
   "PENDING_RESWEEP_LIVE": {
    "carriers": [
     "flags.json"
@@ -17309,6 +17347,44 @@
    "rollback": "env OFF w flags.json + restart dispatch-shadow.service ZA ACK",
    "source_of_truth": "flags.json",
    "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
+  "PENDING_RESWEEP_PINGPONG_MARGIN_MULTIPLIER": {
+   "carriers": [
+    "flags.json",
+    "dispatch_v2/tools/pending_global_resweep.py"
+   ],
+   "consumers": [
+    "dispatch_v2/tools/pending_global_resweep.py"
+   ],
+   "curated_at": "2026-07-22",
+   "current_snapshot": {
+    "default": 2.0
+   },
+   "default": 2.0,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "live",
+   "lifecycle_seeded": false,
+   "name": "PENDING_RESWEEP_PINGPONG_MARGIN_MULTIPLIER",
+   "notes": "G6: kontr-podmiana wymaga 2x zwykłego marginu oraz cooldownu",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-pending-resweep-shadow.service"
+   },
+   "removal_condition": "razem z guardem G6 po decyzji ownera",
+   "review_date": "2026-07-24",
+   "rollback": "git revert; brak klucza w flags.json zachowuje default 2.0",
+   "source_of_truth": "dispatch_v2/tools/pending_global_resweep.py",
+   "twin_of": [
+    "PENDING_RESWEEP_PINGPONG_COOLDOWN_MIN"
+   ],
    "worlds": [
     "engine"
    ]

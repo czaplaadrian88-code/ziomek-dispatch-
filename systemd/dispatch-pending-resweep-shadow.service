@@ -1,5 +1,5 @@
 [Unit]
-Description=Ziomek pending-resweep SHADOW — globalny re-ranking WISZĄCYCH propozycji co 1 min (measure-first; assess_order nad dispatchable_fleet z wirtualną alokacją; loguje would_repropose + rozjazd kierunków). READ-ONLY, OSOBNY PROCES, zero mutacji panel/Telegram/state. Flag ENABLE_PENDING_RESWEEP default OFF=no-op; PENDING_RESWEEP_LIVE (edit msg) default OFF.
+Description=Ziomek pending-resweep SHADOW — globalny re-ranking WISZĄCYCH propozycji co 1 min; zapisuje PII-free JSONL i atomowy stan kontrfaktyczny G6. Zero mutacji panel/Telegram/pending/orders. ENABLE_PENDING_RESWEEP default OFF=no-op; PENDING_RESWEEP_LIVE default OFF.
 Documentation=file:/root/.openclaw/workspace/scripts/dispatch_v2/tools/pending_global_resweep.py
 Documentation=file:/root/.openclaw/workspace/scripts/dispatch_v2/eod_drafts/2026-06-24/pending_global_resweep.md
 After=network.target
@@ -17,7 +17,7 @@ IOSchedulingClass=best-effort
 IOSchedulingPriority=7
 # Bezpiecznik MAX_HANGING=8 → O(K^2) assess; oneshot, nie powinno przekroczyć minuty
 TimeoutStartSec=90
-# Sandbox / pamięć — styl pozostałych shadow-serwisów (read-only, mały footprint)
+# Sandbox / pamięć — proces mały; zapis ograniczony logicznie do JSONL i stanu G6.
 MemoryHigh=300M
 MemoryMax=400M
 TasksMax=256

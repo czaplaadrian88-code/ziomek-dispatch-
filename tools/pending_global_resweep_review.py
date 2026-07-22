@@ -16,6 +16,7 @@ import sys
 import json
 import argparse
 from collections import Counter, defaultdict
+from statistics import median
 
 sys.path.insert(0, "/root/.openclaw/workspace/scripts")
 
@@ -65,6 +66,33 @@ def summarize(rows):
     return days
 
 
+def summarize_g5_g6(rows):
+    """Agregat bramek pomiarowych; zero przykładów z danymi opisowymi/PII."""
+    swaps = [r for r in rows if r.get("would_repropose")]
+    g5 = [r for r in swaps if r.get("delta_km") is not None]
+    deltas = [float(r["delta_km"]) for r in g5]
+    returns = [r for r in rows if r.get("pingpong_is_return") is True]
+    evaluated = [r for r in rows if r.get("would_pingpong_block") is not None]
+    return {
+        "g5": {
+            "would_repropose_rows": len(swaps),
+            "measured_rows": len(g5),
+            "missing_rows": len(swaps) - len(g5),
+            "nonworse_rows": sum(delta <= 0 for delta in deltas),
+            "positive_delta_rows": sum(delta > 0 for delta in deltas),
+            "delta_km_median": round(median(deltas), 2) if deltas else None,
+            "delta_km_max": round(max(deltas), 2) if deltas else None,
+        },
+        "g6": {
+            "evaluated_rows": len(evaluated),
+            "return_attempt_rows": len(returns),
+            "would_block_rows": sum(
+                r.get("would_pingpong_block") is True for r in rows),
+            "state_error_rows": sum(bool(r.get("pingpong_state_error")) for r in rows),
+        },
+    }
+
+
 def examples(rows, limit=6):
     out = []
     seen = set()
@@ -76,8 +104,10 @@ def examples(rows, limit=6):
             continue
         seen.add(oid)
         out.append({
-            "ts": r.get("ts"), "order_id": oid, "restaurant": r.get("restaurant"),
-            "proposed": r.get("proposed_name"), "new": r.get("new_name"),
+            "ts": r.get("ts"), "order_id": oid,
+            # Back-compat dla starego korpusu; nowe rekordy są PII-free i używają CID.
+            "proposed": r.get("proposed_cid") or r.get("proposed_name"),
+            "new": r.get("new_cid") or r.get("new_name"),
             "reason": r.get("reason"), "delta_vs_now": r.get("delta_vs_now"),
             "maxpile": f"{r.get('g_maxpile_before')}→{r.get('g_maxpile_after')}",
         })
@@ -105,7 +135,9 @@ def main() -> int:
     days = summarize(rows)
     ex = examples(rows)
     verdict = _verdict(days)
-    report = {"total_rows": len(rows), "days": days, "examples": ex, "verdict": verdict}
+    report = {"total_rows": len(rows), "days": days,
+              "g5_g6": summarize_g5_g6(rows),
+              "examples": ex, "verdict": verdict}
     print(json.dumps(report, ensure_ascii=False, indent=2))
 
     # Telegram skrót do Adriana
@@ -124,8 +156,8 @@ def main() -> int:
                 lines.append("")
                 lines.append("Przykłady (by-repropose):")
                 for e in ex[:5]:
-                    lines.append(f"• #{e['order_id']} {e['restaurant']}: "
-                                 f"{e['proposed']} → {e['new']} ({e['reason']}, pile {e['maxpile']})")
+                    lines.append(f"• #{e['order_id']}: {e['proposed']} → {e['new']} "
+                                 f"({e['reason']}, pile {e['maxpile']})")
         lines.append("")
         lines.append(verdict)
         try:
