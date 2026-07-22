@@ -15,6 +15,22 @@
 > - **Panel API / infra / porty / kurierzy** → `ZIOMEK_MASTER_KB.md` Część III (evergreen).
 > - **Live wartości flag** → `flags.json` + efektywne środowisko procesu (FLAG_FINGERPRINT) — NIGDY stare tabele.
 
+## 🧱 NAPRAWA U ŹRÓDŁA — ZAKAZ ŁAT I KOSMETYKI (Adrian 2026-07-22)
+- Objaw, UI, etykieta albo raport są WYŁĄCZNIE punktem startowym trace; nie są domyślnym miejscem fixu.
+  Przed zmianą prześledź przyczynę do warstwy, która tworzy błędny stan lub decyzję.
+- Przed implementacją MUSI powstać pełna mapa wszystkich writerów i konsumentów dotkniętego kontraktu,
+  także ścieżek bliźniaczych, recovery, cache, serializerów, monitorów i narzędzi operatorskich.
+- Naprawa MUSI ustanawiać jednego kanonicznego ownera/source kontraktu. Zakazane jest dokładanie kolejnego
+  fallbacku, warunkowego `if`, etykiety, render-only override albo duplikatu polityki zamiast usunięcia źródła.
+- Konkurencyjni writerzy tej samej prawdy MUSZĄ zostać usunięci albo jawnie wygaszeni; pozostawienie starej
+  ścieżki jako cichego fallbacku oznacza zmianę częściową i `HOLD`.
+- Bramka testowa MUSI zawierać: negatywny oracle reprodukujący defekt, mutation test który po usunięciu lub
+  odwróceniu fixu ponownie czerwienieje, oraz ratchet blokujący powrót duplikatu/writera/obejścia.
+- Tymczasowa łata jest dopuszczalna WYŁĄCZNIE jako jawny kill-switch: z osobnym owner ACK, terminem usunięcia,
+  rollbackiem i otwartym ledger gate. Bez tych czterech elementów łata jest zabroniona.
+- `CLEAN` reviewera nie obala reprodukowalnego defektu. Sprzeczne werdykty oznaczają `HOLD`, zachowanie repro
+  jako prawdy roboczej i obowiązkową niezależną weryfikację przed zmianą gate'a lub promocją.
+
 ## 🚦 OTWARTE BRAMKI / DŁUG — LEDGER MECHANICZNY (od 21.07, OBOWIĄZKOWY RYTUAŁ)
 Kanoniczna PRAWDA o otwartym długu = baza `/var/lib/ziomek-process-gates/gates.sqlite3` (0600).
 JEDYNY interfejs: `dispatch_v2/tools/process_debt_gate.py` (add/transition/list/show/export; FSM
