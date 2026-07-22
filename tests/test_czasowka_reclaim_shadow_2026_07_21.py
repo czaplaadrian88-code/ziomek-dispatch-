@@ -17,8 +17,11 @@ from dispatch_v2 import durable_event_apply as DEA
 from dispatch_v2 import event_bus as EB
 from dispatch_v2 import lifecycle_downstream as LD
 from dispatch_v2 import panel_watcher as PW
+from dispatch_v2 import reclaim_exemptions as RE
 from dispatch_v2 import state_machine as SM
+from dispatch_v2 import shadow_dispatcher as SD
 from dispatch_v2 import czasowka_reclaim as CR
+from dispatch_v2.dispatch_pipeline import Candidate
 from dispatch_v2.order_fsm import FsmOutcome, validate_order_event
 
 
@@ -159,6 +162,55 @@ def test_state_and_causality_guards_are_fail_closed(current, event, failed_guard
     assert record["guards"][failed_guard] is False
 
 
+@pytest.mark.parametrize(
+    "current,courier_orders,failed_guard",
+    [
+        (
+            _order(status="picked_up", picked_up_at=_at(55)),
+            None,
+            "target_not_carried",
+        ),
+        (
+            _order(czas_kuriera_warsaw=_at(55)),
+            None,
+            "target_not_committed",
+        ),
+        (
+            _order(),
+            [
+                _order(),
+                _order(
+                    order_id="oid-2",
+                    status="picked_up",
+                    picked_up_at=_at(30),
+                ),
+            ],
+            "courier_bag_has_no_carried_sibling",
+        ),
+        (
+            _order(),
+            [
+                _order(),
+                _order(order_id="oid-2", czas_kuriera_warsaw=_at(55)),
+            ],
+            "courier_bag_has_no_committed_sibling",
+        ),
+    ],
+)
+def test_reclaim_never_takes_carried_or_committed_work(
+    current, courier_orders, failed_guard
+):
+    record = CR.evaluate_pickup_time_updated(
+        _event(50, 80),
+        current,
+        courier_orders=courier_orders or [current],
+    )
+
+    assert record["would_reclaim"] is False
+    assert record["guards"][failed_guard] is False
+    assert failed_guard in record["rejection_reasons"]
+
+
 def test_shadow_record_contains_every_future_action_and_guard_field():
     record = CR.evaluate_pickup_time_updated(_event(50, 80), _order(80))
 
@@ -209,25 +261,38 @@ def test_firmowe_and_parcel_are_counted_separately_but_not_live_candidates():
     assert metrics["would_reclaim"] == 0
 
 
-def test_off_has_zero_io_on_differs_and_metric_is_idempotent_per_generation(tmp_path):
+def test_off_has_zero_io_on_differs_and_metric_is_idempotent_per_generation(
+    tmp_path, monkeypatch
+):
     log_path = tmp_path / "reclaim.jsonl"
+    canonical_path = tmp_path / "shadow_decisions.jsonl"
+    exemption_path = tmp_path / "exemptions.json"
     event_1 = _event(50, 80, event_id="time-1")
     event_2 = _event(50, 80, event_id="time-2")
     current = _order(80)
+    monkeypatch.setattr(SM, "get_all_strict", lambda: {"oid-1": current})
 
     assert CR.record_pickup_time_shadow(
-        event_1, current, log_path=log_path, enabled_by_receipt=False
+        event_1,
+        current,
+        log_path=log_path,
+        decision_log_path=canonical_path,
+        exemption_path=exemption_path,
+        enabled_by_receipt=False,
     ) is None
     assert not log_path.exists()
 
     CR.record_pickup_time_shadow(
-        event_1, current, log_path=log_path, enabled_by_receipt=True
+        event_1, current, log_path=log_path, decision_log_path=canonical_path,
+        exemption_path=exemption_path, enabled_by_receipt=True
     )
     CR.record_pickup_time_shadow(
-        event_1, current, log_path=log_path, enabled_by_receipt=True
+        event_1, current, log_path=log_path, decision_log_path=canonical_path,
+        exemption_path=exemption_path, enabled_by_receipt=True
     )
     CR.record_pickup_time_shadow(
-        event_2, current, log_path=log_path, enabled_by_receipt=True
+        event_2, current, log_path=log_path, decision_log_path=canonical_path,
+        exemption_path=exemption_path, enabled_by_receipt=True
     )
 
     rows = [json.loads(line) for line in log_path.read_text().splitlines()]
@@ -412,16 +477,165 @@ def test_lifecycle_downstream_wires_shadow_only(monkeypatch):
     assert "ORDER_RECLAIMED_TO_CZASOWKA" not in source
 
 
+def test_shadow_disk_error_does_not_block_plan_invalidation_or_fifo(
+    tmp_path, monkeypatch, caplog
+):
+    events_db = tmp_path / "events.db"
+    state_path = tmp_path / "orders_state.json"
+    with sqlite3.connect(events_db) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE events (
+                event_id TEXT PRIMARY KEY, event_type TEXT NOT NULL,
+                order_id TEXT, courier_id TEXT, payload TEXT,
+                created_at TEXT NOT NULL, processed_at TEXT,
+                status TEXT DEFAULT 'pending'
+            );
+            CREATE TABLE processed_events (
+                event_id TEXT PRIMARY KEY, processed_at TEXT NOT NULL
+            );
+            """
+        )
+    base = datetime.now(timezone.utc)
+    current = _order(50)
+    current["pickup_at_warsaw"] = _at(50, base=base)
+    current["pickup_at_at_assignment"] = _at(40, base=base)
+    _write_state(state_path, current)
+    monkeypatch.setattr(EB, "_db_path", lambda: str(events_db))
+    monkeypatch.setattr(EB, "_audit_log_initialized", False)
+    monkeypatch.setattr(EB, "_state_apply_outbox_initialized", False)
+    monkeypatch.setattr(EB, "_state_apply_outbox_db_path", None)
+    monkeypatch.setattr(SM, "_state_path", lambda: str(state_path))
+    monkeypatch.setattr(SM, "flag", lambda _name, default=False: default)
+    monkeypatch.setattr(
+        C,
+        "decision_flag",
+        lambda name: name == "ENABLE_CZASOWKA_RECLAIM_SHADOW",
+    )
+    monkeypatch.setattr(
+        CR,
+        "record_pickup_time_shadow",
+        lambda *a, **kw: (_ for _ in ()).throw(OSError("disk full")),
+    )
+    invalidations = []
+    monkeypatch.setattr(
+        PW,
+        "_invalidate_plan_on_committed_change",
+        lambda *a, **kw: invalidations.append((a, kw)),
+    )
+    payload = {
+        "oid": "oid-1",
+        "courier_id": "101",
+        "old_pickup_at_warsaw": _at(50, base=base),
+        "new_pickup_at_warsaw": _at(80, base=base),
+        "source": "panel_re_check",
+        "assignment_event_id_at_observation": "assign-1",
+        "courier_id_at_observation": "101",
+    }
+
+    with caplog.at_level("WARNING"):
+        outcome = DEA.emit_and_apply(
+            "PICKUP_TIME_UPDATED",
+            order_id="oid-1",
+            courier_id="101",
+            payload=payload,
+            state_payload=None,
+            event_key="oid-1_PICKUP_TIME_UPDATED_disk-full",
+            emit_fn=EB.emit_audit,
+            state_update_fn=SM.update_from_event,
+            effect_status_fn=SM.event_effect_status,
+            get_order_fn=SM.get_order_strict,
+            downstream_fn=LD.apply,
+            sweeper_enabled=False,
+        )
+
+    receipt = EB.get_state_apply_outbox(outcome.event_id)
+    assert outcome.failure_stage is None
+    assert receipt["downstream_status"] == "applied"
+    assert len(invalidations) == 1
+    assert "CZASOWKA_RECLAIM_SHADOW_WRITE_FAILED" in caplog.text
+
+
+def test_canonical_shadow_log_on_has_a_b_metrics_and_off_has_no_io(
+    tmp_path, monkeypatch
+):
+    current = _order(80)
+    monkeypatch.setattr(SM, "get_all_strict", lambda: {"oid-1": current})
+    detail = tmp_path / "detail.jsonl"
+    canonical = tmp_path / "shadow_decisions.jsonl"
+    exemptions = tmp_path / "exemptions.json"
+
+    assert CR.record_pickup_time_shadow(
+        _event(50, 80),
+        current,
+        log_path=detail,
+        decision_log_path=canonical,
+        exemption_path=exemptions,
+        enabled_by_receipt=False,
+    ) is None
+    assert not detail.exists()
+    assert not canonical.exists()
+
+    evaluation = CR.record_pickup_time_shadow(
+        _event(50, 80),
+        current,
+        log_path=detail,
+        decision_log_path=canonical,
+        exemption_path=exemptions,
+        enabled_by_receipt=True,
+        evaluated_at=OBSERVED,
+    )
+    row = json.loads(canonical.read_text(encoding="utf-8"))
+    assert row["record_type"] == "CZASOWKA_RECLAIM_EVALUATION"
+    assert row["decision_kind"] == "lifecycle_observation"
+    assert row["best"]["would_reclaim"] is True
+    assert row["best"]["rejection_reasons"] == []
+
+    metrics = SD._czasowka_reclaim_metrics(evaluation)
+    candidate = Candidate("101", None, 0.0, "MAYBE", "test", None, metrics)
+    location_a = SD._serialize_candidate(candidate)
+    location_b = SD.serialize_czasowka_reclaim_observation(evaluation)["best"]
+    for field in ("would_reclaim", "rejection_reason", "rejection_reasons"):
+        assert location_a[field] == location_b[field]
+
+
+def test_operator_exemption_store_is_consumed_by_shadow_writer(tmp_path, monkeypatch):
+    current = _order(80, order_id="485123")
+    event = _event(50, 80)
+    event["order_id"] = "485123"
+    event["payload"] = {**event["payload"], "oid": "485123"}
+    exemption_path = tmp_path / "exemptions.json"
+    RE.set_exemption(
+        "485123", "manual_time_hold", path=exemption_path, now=OBSERVED
+    )
+    monkeypatch.setattr(SM, "get_all_strict", lambda: {"485123": current})
+
+    record = CR.record_pickup_time_shadow(
+        event,
+        current,
+        log_path=tmp_path / "detail.jsonl",
+        decision_log_path=tmp_path / "shadow_decisions.jsonl",
+        exemption_path=exemption_path,
+        enabled_by_receipt=True,
+        evaluated_at=OBSERVED,
+    )
+
+    assert record["would_reclaim"] is False
+    assert record["guards"]["not_reclaim_exempt"] is False
+    assert record["reclaim_exempt_source"] == "operator_store"
+
+
 def test_live_stub_is_off_and_state_event_semantics_are_atomic(tmp_path, monkeypatch):
     pickup_event = _event(50, 80)
     current = _order(80)
     assert CR.build_live_reclaim_event(
-        pickup_event, current, live_enabled=False
+        pickup_event, current, courier_orders=[current], live_enabled=False
     ) is None
 
     live_event = CR.build_live_reclaim_event(
         pickup_event,
         current,
+        courier_orders=[current],
         live_enabled=True,
         evaluated_at=OBSERVED,
     )
@@ -429,6 +643,7 @@ def test_live_stub_is_off_and_state_event_semantics_are_atomic(tmp_path, monkeyp
     same_generation = CR.build_live_reclaim_event(
         _event(50, 90, event_id="another-time-event"),
         _order(90),
+        courier_orders=[_order(90)],
         live_enabled=True,
         evaluated_at=OBSERVED,
     )
@@ -443,6 +658,14 @@ def test_live_stub_is_off_and_state_event_semantics_are_atomic(tmp_path, monkeyp
     assert SM.event_effect_status(blocked, current) == "superseded"
     assert SM.update_from_event(blocked) is None
     assert SM.get_order_strict("oid-1")["courier_id"] == "101"
+
+    committed = _order(80, czas_kuriera_warsaw=_at(80))
+    _write_state(state_path, committed)
+    assert SM.event_effect_status(live_event, committed) == "superseded"
+    assert SM.update_from_event(live_event) is None
+    assert SM.get_order_strict("oid-1")["courier_id"] == "101"
+
+    _write_state(state_path, current)
 
     verdict = validate_order_event(live_event, current)
     assert verdict.outcome is FsmOutcome.LEGAL

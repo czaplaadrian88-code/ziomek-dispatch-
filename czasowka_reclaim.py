@@ -81,6 +81,8 @@ def evaluate_pickup_time_updated(
     event: dict,
     current_order: Optional[dict],
     *,
+    courier_orders: Optional[Iterable[dict]] = None,
+    external_exemption: Optional[dict] = None,
     evaluated_at: Optional[datetime] = None,
 ) -> dict:
     """Zbuduj kompletny rekord przyszlej akcji; funkcja jest bez efektow I/O."""
@@ -131,8 +133,32 @@ def evaluate_pickup_time_updated(
 
     is_firmowe = _is_firmowe(current)
     is_parcel = bool(current.get("source") == "parcel" or C.is_paczka_order(current))
-    exempt = current.get("reclaim_exempt") is True
+    external_exempt = isinstance(external_exemption, dict)
+    exempt = current.get("reclaim_exempt") is True or external_exempt
     status = current.get("status")
+    context_orders = list(courier_orders) if courier_orders is not None else [current]
+    sibling_orders = [
+        order
+        for order in context_orders
+        if isinstance(order, dict)
+        and _text(order.get("order_id")) != oid
+        and _text(order.get("courier_id")) == current_cid
+        and order.get("status") in {"assigned", "picked_up"}
+    ]
+    carried_siblings = [
+        order
+        for order in sibling_orders
+        if order.get("status") == "picked_up" or order.get("picked_up_at") is not None
+    ]
+    committed_siblings = [
+        order
+        for order in sibling_orders
+        if bool(_text(order.get("czas_kuriera_warsaw")))
+    ]
+    target_carried = status == "picked_up" or current.get("picked_up_at") is not None
+    # ODR-001/R27: obecność zamrożonego czasu jest sygnałem commitmentu.
+    # Wartości nieparsowalnej również nie wolno interpretować jako brak bramki.
+    target_committed = bool(_text(current.get("czas_kuriera_warsaw")))
     event_id = _text(event.get("event_id"))
     guards = {
         "event_is_pickup_time_updated": event.get("event_type") == "PICKUP_TIME_UPDATED",
@@ -142,6 +168,10 @@ def evaluate_pickup_time_updated(
         "courier_is_real": _is_real_courier(current.get("courier_id")),
         "courier_is_not_koordynator": bool(current_cid and current_cid != KOORDYNATOR_CID),
         "picked_up_at_is_none": current.get("picked_up_at") is None,
+        "target_not_carried": not target_carried,
+        "target_not_committed": not target_committed,
+        "courier_bag_has_no_carried_sibling": not carried_siblings,
+        "courier_bag_has_no_committed_sibling": not committed_siblings,
         "assignment_event_id_present": bool(assignment_id),
         "pickup_at_at_assignment_present": pickup_at_assignment is not None,
         "same_assignment_generation": bool(
@@ -192,6 +222,10 @@ def evaluate_pickup_time_updated(
         "courier_is_real",
         "courier_is_not_koordynator",
         "picked_up_at_is_none",
+        "target_not_carried",
+        "target_not_committed",
+        "courier_bag_has_no_carried_sibling",
+        "courier_bag_has_no_committed_sibling",
         "assignment_event_id_present",
         "pickup_at_at_assignment_present",
         "same_assignment_generation",
@@ -216,6 +250,7 @@ def evaluate_pickup_time_updated(
         (name for name in all_order if not guards[name]),
         None,
     )
+    rejection_reasons = [name for name in all_order if not guards[name]]
     reclaim_generation = assignment_id or observed_assignment_id or None
     reclaim_intent_id = (
         f"{oid}:{reclaim_generation}" if oid and reclaim_generation else None
@@ -245,13 +280,22 @@ def evaluate_pickup_time_updated(
         "reclaim_boundary_at": _iso(far_boundary),
         "source": payload.get("source"),
         "reclaim_exempt": exempt,
-        "reclaim_exempt_reason": current.get("reclaim_exempt_reason"),
+        "reclaim_exempt_reason": (
+            external_exemption.get("reason_code")
+            if external_exempt
+            else current.get("reclaim_exempt_reason")
+        ),
+        "reclaim_exempt_source": "operator_store" if external_exempt else "order_state",
+        "courier_bag_active_sibling_count": len(sibling_orders),
+        "courier_bag_carried_sibling_count": len(carried_siblings),
+        "courier_bag_committed_sibling_count": len(committed_siblings),
         "is_firmowe": is_firmowe,
         "is_parcel": is_parcel,
         "guards": guards,
         "would_reclaim_candidate": technical_candidate,
         "would_reclaim": would_reclaim,
         "rejection_reason": rejection_reason,
+        "rejection_reasons": rejection_reasons,
         "future_action": {
             "event_type": "ORDER_RECLAIMED_TO_CZASOWKA",
             "status": "planned",
@@ -279,6 +323,8 @@ def record_pickup_time_shadow(
     current_order: Optional[dict],
     *,
     log_path: Optional[Path] = None,
+    decision_log_path: Optional[Path] = None,
+    exemption_path: Optional[Path] = None,
     enabled_by_receipt: Optional[bool] = None,
     evaluated_at: Optional[datetime] = None,
 ) -> Optional[dict]:
@@ -294,9 +340,17 @@ def record_pickup_time_shadow(
             )
     if not enabled_by_receipt or event.get("event_type") != "PICKUP_TIME_UPDATED":
         return None
+    from dispatch_v2 import reclaim_exemptions, shadow_dispatcher, state_machine
+
+    snapshot = state_machine.get_all_strict()
+    external_exemption = reclaim_exemptions.get_exemption(
+        event.get("order_id"), exemption_path
+    )
     record = evaluate_pickup_time_updated(
         event,
         current_order,
+        courier_orders=snapshot.values(),
+        external_exemption=external_exemption,
         evaluated_at=evaluated_at,
     )
     append_jsonl_once(
@@ -305,6 +359,12 @@ def record_pickup_time_shadow(
         dedupe_key="shadow_evaluation_id",
         dedupe_value=record["shadow_evaluation_id"],
         scan_rotated=True,
+    )
+    canonical_path = decision_log_path
+    if canonical_path is None:
+        canonical_path = Path(C.load_config()["paths"]["shadow_log"])
+    shadow_dispatcher.append_czasowka_reclaim_observation(
+        str(canonical_path), record
     )
     return record
 
@@ -315,6 +375,19 @@ def aggregate_shadow_metrics(records: Iterable[dict]) -> dict:
     for record in records:
         if not isinstance(record, dict):
             continue
+        if record.get("record_type") == "CZASOWKA_RECLAIM_EVALUATION" and isinstance(
+            record.get("best"), dict
+        ):
+            best = record["best"]
+            record = {
+                "shadow_evaluation_id": record.get("event_id"),
+                "reclaim_intent_id": best.get("reclaim_intent_id"),
+                "would_reclaim_candidate": best.get("would_reclaim_candidate"),
+                "would_reclaim": best.get("would_reclaim"),
+                "is_firmowe": best.get("reclaim_is_firmowe"),
+                "is_parcel": best.get("reclaim_is_parcel"),
+                "rejection_reason": best.get("rejection_reason"),
+            }
         evaluation_id = _text(record.get("shadow_evaluation_id"))
         if evaluation_id and evaluation_id not in evaluations:
             evaluations[evaluation_id] = record
@@ -379,13 +452,21 @@ def iter_shadow_records(path: Optional[Path] = None) -> Iterator[dict]:
 
 
 def read_shadow_metrics(path: Optional[Path] = None) -> dict:
-    return aggregate_shadow_metrics(iter_shadow_records(path))
+    if path is not None:
+        return aggregate_shadow_metrics(iter_shadow_records(path))
+    from dispatch_v2.tools import ledger_io
+
+    return aggregate_shadow_metrics(
+        ledger_io.iter_shadow_decisions(None, include_observations=True)
+    )
 
 
 def build_live_reclaim_event(
     pickup_event: dict,
     current_order: Optional[dict],
     *,
+    courier_orders: Optional[Iterable[dict]] = None,
+    external_exemption: Optional[dict] = None,
     live_enabled: Optional[bool] = None,
     evaluated_at: Optional[datetime] = None,
 ) -> Optional[dict]:
@@ -394,9 +475,18 @@ def build_live_reclaim_event(
         live_enabled = C.decision_flag("ENABLE_CZASOWKA_RECLAIM_LIVE")
     if not live_enabled:
         return None
+    if courier_orders is None:
+        from dispatch_v2 import reclaim_exemptions, state_machine
+
+        courier_orders = state_machine.get_all_strict().values()
+        external_exemption = reclaim_exemptions.get_exemption(
+            pickup_event.get("order_id")
+        )
     record = evaluate_pickup_time_updated(
         pickup_event,
         current_order,
+        courier_orders=courier_orders,
+        external_exemption=external_exemption,
         evaluated_at=evaluated_at,
     )
     if not record["would_reclaim"]:

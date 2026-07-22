@@ -943,7 +943,11 @@ def event_effect_status(
             return "applied"
         if status in ("picked_up", "delivered", "returned_to_pool", "cancelled"):
             return "superseded"
-        if status != "assigned" or current.get("picked_up_at") is not None:
+        if (
+            status != "assigned"
+            or current.get("picked_up_at") is not None
+            or bool(str(current.get("czas_kuriera_warsaw") or "").strip())
+        ):
             return "superseded"
         if not previous_cid or previous_cid == "26":
             return "superseded"
@@ -1519,6 +1523,7 @@ def update_from_event(event: dict) -> Optional[dict]:
         if (
             existing.get("status") != "assigned"
             or existing.get("picked_up_at") is not None
+            or bool(str(existing.get("czas_kuriera_warsaw") or "").strip())
             or not previous_cid
             or previous_cid == "26"
             or str(existing.get("courier_id") or "") != previous_cid
