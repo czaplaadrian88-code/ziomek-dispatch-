@@ -565,6 +565,11 @@ ETAP4_DECISION_FLAGS = (
     # PICKUP_TIME_UPDATED, ktory atomowo lustrzy czas do aplikacji kuriera.
     # Default OFF = dotychczasowy CK_PASSIVE_SUPPRESSED bajt-w-bajt.
     "ENABLE_CZASOWKA_CK_MANUAL_EDIT_PASSTHROUGH",
+    # CZASOWKA-RECLAIM (owner 2026-07-21): dwa rozdzielne etapy. SHADOW
+    # wyłącznie mierzy durable PICKUP_TIME_UPDATED po zapisie state; LIVE ma
+    # uśpiony state-handler, ale nie ma uzbrojonego producenta ani call-site'u.
+    "ENABLE_CZASOWKA_RECLAIM_SHADOW",
+    "ENABLE_CZASOWKA_RECLAIM_LIVE",
 )
 
 # Stałe-fallback (module-level OFF) dla flag dodanych do ETAP4_DECISION_FLAGS
@@ -591,6 +596,11 @@ STATE_OUTBOX_SWEEPER_MIN_AGE_S = 30.0
 # CK-MANUAL-EDIT: bezpieczny fallback OFF; kanon po ewentualnym flipie =
 # flags.json/decision_flag. Rollback hot: klucz false albo brak klucza.
 ENABLE_CZASOWKA_CK_MANUAL_EDIT_PASSTHROUGH = False
+# CZASOWKA-RECLAIM: oba fallbacki OFF. Shadow nie zmienia state/planu/gastro;
+# LIVE pozostaje nieuzbrojony (brak producenta/call-site'u); jego state-handler
+# nie jest kompletnym downstreamem i wymaga osobnej karty oraz ACK ownera.
+ENABLE_CZASOWKA_RECLAIM_SHADOW = False
+ENABLE_CZASOWKA_RECLAIM_LIVE = False
 # W0.2 advisory (roadmapa 08, werdykt E-1 „GO hybryda"): bezpiecznik fabrykacji ETA.
 # Wykrycie: pred_carry > ETA_FABRICATION_FLOOR_MIN ∧ pred_carry > RATIO×robust_ref,
 # gdzie robust_ref = osrm_freeflow(pickup→deliv)·traffic_mult + service + slack
@@ -1024,6 +1034,32 @@ MAX_BAG_SANITY_CAP = int(os.environ.get("MAX_BAG_SANITY_CAP", "8"))
 # czytają przez load_flags().get("KEY", C.KEY).
 MAX_PICKUP_REACH_KM = float(os.environ.get("MAX_PICKUP_REACH_KM", "15.0"))
 EARLY_BIRD_THRESHOLD_MIN = int(os.environ.get("EARLY_BIRD_THRESHOLD_MIN", "60"))
+
+# Kanoniczna granica czasowki. Wczesniej ten sam literal 60 byl skopiowany w
+# parserze, watcherze, state machine, auto-KOORD i obu schedulerach. Sama
+# granica biznesowa nie jest flaga. Histereza reclaim jest technicznym progiem
+# obserwacji i moze byc nadpisana env w harnessie/shadow bez zmiany 60-min kanonu.
+CZASOWKA_PREP_MIN = 60
+CZASOWKA_RECLAIM_HYSTERESIS_MIN = float(
+    os.environ.get("CZASOWKA_RECLAIM_HYSTERESIS_MIN", "5")
+)
+
+
+def is_czasowka_prep(value: object) -> bool:
+    """Klasyfikacja surowego czasu przygotowania bez zmiany legacy scope."""
+    try:
+        return value is not None and float(value) >= float(CZASOWKA_PREP_MIN)
+    except (TypeError, ValueError):
+        return False
+
+
+def is_czasowka_order(order: object) -> bool:
+    """Jeden klasyfikator stanu: jawny typ albo prep >= kanoniczne 60 min."""
+    if not isinstance(order, dict):
+        return False
+    if str(order.get("order_type") or "").strip().lower() == "czasowka":
+        return True
+    return is_czasowka_prep(order.get("prep_minutes"))
 
 
 # === TIMEZONE + TIMESTAMP PARSING (V3.1 P0.3) ===

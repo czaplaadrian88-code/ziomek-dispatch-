@@ -127,9 +127,10 @@ def _cleanup_stale(state: dict, now: datetime) -> int:
 # ---------- Order classification ----------
 
 def _is_czasowka(order_state: dict) -> bool:
-    """Czasówka = prep_minutes >= 60 AND held by Koordynator (id_kurier=26)."""
-    prep = order_state.get("prep_minutes")
-    if prep is None or prep < 60:
+    """Czasówka wg common + holding Koordynatora (id_kurier=26/pusto)."""
+    # Legacy scheduler historycznie klasyfikuje po prep, nie po samej etykiecie
+    # order_type; wspolna stala/helper bez rozszerzenia zachowania LIVE.
+    if not C.is_czasowka_prep(order_state.get("prep_minutes")):
         return False
     cid = str(order_state.get("courier_id") or "")
     # id_kurier=26 (Koordynator) OR not yet assigned

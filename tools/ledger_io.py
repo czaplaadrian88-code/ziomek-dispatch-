@@ -239,20 +239,25 @@ def _read_live_tail(path: str, cutoff_dt: Optional[datetime], max_bytes: int):
 
 # ── API publiczne ──────────────────────────────────────────────────────────
 def iter_shadow_decisions(cutoff_dt: Optional[datetime], *,
-                          max_bytes: Optional[int] = None) -> Iterator[dict]:
+                          max_bytes: Optional[int] = None,
+                          include_observations: bool = False) -> Iterator[dict]:
     """Rekordy shadow_decisions z okna [cutoff_dt, teraz], rotation-aware.
 
     Deleguje pruning całych plików do `_rotated_logs.iter_jsonl_records`, potem
     filtruje ts ≥ cutoff per-rekord i kanonizuje oid→str. `max_bytes` (opcja dla
     tick-strażników) czyta tylko ogon żywego pliku, gdy to bezpieczne —
     semantyka wynikowa identyczna z pełną ścieżką (patrz `_read_live_tail`).
+    Lifecycle observations żyją w tym samym kanonicznym pliku, ale domyślnie
+    nie wchodzą do mianowników historycznych konsumentów decyzji.
     """
     cutoff_dt = _ensure_utc(cutoff_dt)
     path = LEDGER["shadow"]
     if max_bytes is not None:
         tail = _read_live_tail(path, cutoff_dt, max_bytes)
         if tail is not None:
-            yield from tail
+            for rec in tail:
+                if include_observations or rec.get("decision_kind") != "lifecycle_observation":
+                    yield rec
             return
     for rec in _rotated_logs.iter_jsonl_records(path, cutoff_dt):
         if cutoff_dt is not None:
@@ -260,7 +265,8 @@ def iter_shadow_decisions(cutoff_dt: Optional[datetime], *,
             if ts is None or ts < cutoff_dt:
                 continue
         _canon_oid(rec)
-        yield rec
+        if include_observations or rec.get("decision_kind") != "lifecycle_observation":
+            yield rec
 
 
 def parse_sla_ts(value) -> Optional[datetime]:

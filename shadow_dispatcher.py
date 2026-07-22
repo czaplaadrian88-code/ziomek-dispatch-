@@ -29,7 +29,7 @@ from dispatch_v2.common import load_config, now_iso, setup_logger
 from dispatch_v2.core.broadcast_handlers import dispatch_config_reload
 from dispatch_v2.core.config_reload_subscriber import BroadcastSubscriber
 from dispatch_v2.courier_resolver import build_fleet_snapshot, dispatchable_fleet
-from dispatch_v2.dispatch_pipeline import PipelineResult
+from dispatch_v2.dispatch_pipeline import Candidate, PipelineResult
 from dispatch_v2.core.decide import decide as _decide  # K09: fasada decyzji (delegacja 1:1)
 from dispatch_v2.core.world_state import WorldState
 from dispatch_v2.identity.candidate_pool import (
@@ -1184,6 +1184,86 @@ def _append_decision(path: str, record: dict) -> None:
     """
     from dispatch_v2.core.jsonl_appender import append_jsonl
     append_jsonl(path, record)
+
+
+def _czasowka_reclaim_metrics(evaluation: dict) -> dict:
+    reasons = evaluation.get("rejection_reasons") or []
+    return {
+        "would_reclaim": bool(evaluation.get("would_reclaim")),
+        "would_reclaim_candidate": bool(
+            evaluation.get("would_reclaim_candidate")
+        ),
+        "rejection_reason": evaluation.get("rejection_reason"),
+        "rejection_reasons": list(reasons),
+        "reclaim_guards": dict(evaluation.get("guards") or {}),
+        "reclaim_delta_min": evaluation.get("delta_min"),
+        "reclaim_intent_id": evaluation.get("reclaim_intent_id"),
+        "reclaim_is_firmowe": bool(evaluation.get("is_firmowe")),
+        "reclaim_is_parcel": bool(evaluation.get("is_parcel")),
+    }
+
+
+def serialize_czasowka_reclaim_observation(evaluation: dict) -> dict:
+    """Serializuj lifecycle-observation tym samym kontraktem co decyzje.
+
+    Metryki przechodzą przez wspólny mechanizm LOCATION A/B
+    ``_propagate_prefixed_metrics``. Rekord nie jest propozycją i nie zawiera
+    nazwy, adresu ani innych danych osobowych.
+    """
+    metrics = _czasowka_reclaim_metrics(evaluation)
+    candidate = Candidate(
+        courier_id=str(evaluation.get("cid") or ""),
+        name=None,
+        score=0.0,
+        feasibility_verdict=(
+            "MAYBE" if evaluation.get("would_reclaim") else "NO"
+        ),
+        feasibility_reason=(
+            "czasowka_reclaim_candidate"
+            if evaluation.get("would_reclaim")
+            else str(evaluation.get("rejection_reason") or "guard_rejected")
+        ),
+        plan=None,
+        metrics=metrics,
+    )
+    result = PipelineResult(
+        order_id=str(evaluation.get("oid") or ""),
+        verdict="OBSERVE",
+        reason="czasowka_reclaim_shadow",
+        best=candidate,
+        candidates=[candidate],
+        pickup_ready_at=None,
+        restaurant=None,
+        delivery_address=None,
+    )
+    serialized = _serialize_result(
+        result,
+        str(evaluation.get("shadow_evaluation_id") or ""),
+        0.0,
+    )
+    serialized.update(
+        {
+            "record_type": "CZASOWKA_RECLAIM_EVALUATION",
+            "decision_kind": "lifecycle_observation",
+            "schema": "shadow_decision.czasowka_reclaim.v1",
+        }
+    )
+    return serialized
+
+
+def append_czasowka_reclaim_observation(path: str, evaluation: dict) -> dict:
+    """Zapisz PII-free observation do kanonicznego shadow_decisions.jsonl."""
+    record = serialize_czasowka_reclaim_observation(evaluation)
+    from dispatch_v2.core.jsonl_appender import append_jsonl_once
+
+    append_jsonl_once(
+        path,
+        record,
+        dedupe_key="event_id",
+        dedupe_value=record["event_id"],
+        scan_rotated=True,
+    )
+    return record
 
 
 def _probe_age_s(iso_val, now: datetime) -> Optional[float]:

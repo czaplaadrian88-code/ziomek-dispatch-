@@ -95,7 +95,7 @@ def _ff_raw(a, b) -> Optional[Tuple[float, float]]:
 def _was_czasowka(order_event) -> int:
     try:
         co = (order_event or {}).get("czas_odbioru")
-        return 1 if co is not None and float(co) >= 60 else 0
+        return 1 if co is not None and float(co) >= C.CZASOWKA_PREP_MIN else 0
     except Exception:
         return 0
 

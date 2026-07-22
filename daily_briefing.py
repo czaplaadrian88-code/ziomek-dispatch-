@@ -24,7 +24,12 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Dict, Optional, Tuple
 
-from dispatch_v2.common import WARSAW, parse_panel_timestamp, setup_logger
+from dispatch_v2.common import (
+    CZASOWKA_PREP_MIN,
+    WARSAW,
+    parse_panel_timestamp,
+    setup_logger,
+)
 from dispatch_v2.tools._rotated_logs import iter_jsonl_records  # SP-B2-LOGROT
 
 
@@ -119,7 +124,6 @@ _PEAK_HOURS_WARSAW = frozenset(range(11, 14)) | frozenset(range(17, 20))
 # Pola best NIE będące komponentami score (agregaty / warianty nieaktywne).
 _COMPONENT_SKIP = {"bonus_penalty_sum"}
 _COMPONENT_EXTRA = ("timing_gap_bonus", "bundle_bonus")
-_CZASOWKA_PREP_MIN = 60.0
 
 
 def _parse_any_iso(ts_str) -> Optional[datetime]:
@@ -177,7 +181,7 @@ def _accept_rec_dims(r: dict) -> Tuple[str, str, str]:
     t_pra, t_oca = _parse_any_iso(pra), _parse_any_iso(oca)
     if t_pra is not None and t_oca is not None:
         prep_min = (t_pra - t_oca).total_seconds() / 60.0
-        typ = "czasówka" if prep_min >= _CZASOWKA_PREP_MIN else "elastyk"
+        typ = "czasówka" if prep_min >= CZASOWKA_PREP_MIN else "elastyk"
     return (tier or "?", pora, typ)
 
 

@@ -44,6 +44,9 @@ EVENT_TYPES = {
     "COURIER_REJECTED_PROPOSAL",
     "ORDER_RETURNED_TO_POOL",
     "ORDER_RESURRECTED",
+    # Czasowka reclaim: w etapie 21.07 tylko ciemny kontrakt eventu. Brak
+    # producenta LIVE; bezposredni state handler wymaga osobnej flagi OFF.
+    "ORDER_RECLAIMED_TO_CZASOWKA",
     "KOORDYNATOR_DEADLINE",
     "GPS_STALE",
     "PANEL_UNREACHABLE",
@@ -87,6 +90,7 @@ AUDIT_EVENT_TYPES = {
     "PANEL_UNREACHABLE",
     "ORDER_RETURNED_TO_POOL",
     "ORDER_RESURRECTED",
+    "ORDER_RECLAIMED_TO_CZASOWKA",
 }
 
 # Tech debt #39 (2026-05-13): queue types that are ALSO mirrored to audit_log
