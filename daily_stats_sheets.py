@@ -242,6 +242,10 @@ def load_shadow_feasible_pool(target_day: date) -> dict:
                 d = json.loads(line)
             except Exception:
                 continue
+            if d.get("decision_kind") == "lifecycle_observation":
+                # obserwacje lifecycle (np. czasowka-reclaim shadow) to nie decyzje
+                # dispatchu — nie zasilaja puli feasible (recenzja reclaim-v3 22.07)
+                continue
             ts = _parse_iso_utc(d.get("ts"))
             if ts is None:
                 continue
