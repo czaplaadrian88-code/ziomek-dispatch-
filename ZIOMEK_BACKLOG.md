@@ -1,5 +1,13 @@
 # ZIOMEK AI DISPATCHER - BACKLOG ROZWOJU
 
+> **KANDYDAT 2026-07-22 — RESWEEP G5/G6 SHADOW (`a076f74e`):** G5 loguje
+> `proposed_km`, `new_km_to_pickup` i `delta_km`; G6 utrzymuje atomowy,
+> PII-free stan kontrfaktyczny i loguje `would_pingpong_block` dla A→B→A
+> (default 2× margin + 10 min cooldown, HARD infeasible ma pierwszeństwo).
+> `PENDING_RESWEEP_LIVE` i `flags.json` nietknięte. Kandydat wymaga review CTO,
+> pełnej suity w kanonicznym venv oraz 48 h świeżego shadow przed decyzją ownera.
+> Dowód: `eod_drafts/2026-07-22/resweep_g5g6/RESWEEP_G5G6_SHADOW_REPORT.md`.
+
 > **KANDYDAT 2026-07-21 — DECISION-TIME ETA LOG:** source-only, flaga
 > `ENABLE_DECISION_ETA_LOG` default OFF. Wspólny fail-safe writer pokrywa finalną
 > selekcję shadow (best_effort/objm), czasówki, reassignment, global resweep oraz
