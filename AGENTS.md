@@ -1,51 +1,146 @@
-# AGENTS.md — instrukcje repo dispatch_v2 dla sesji Codex
+# AGENTS.md — dispatch_v2 (dla sesji Codex)
 
-Lustro najwazniejszych dyrektyw z `CLAUDE.md` (sekcja 🧭 START TUTAJ) — Codex
-czyta TEN plik, Claude Code czyta CLAUDE.md. Kanon globalny Codex:
-`/root/.codex/AGENTS.md` (bootstrap, Przykazanie #0, sekrety, git/worktree).
+> **Parytet:** ten plik i `CLAUDE.md` (obok, dla Claude Code) mają IDENTYCZNY zestaw dyrektyw
+> — różnią się tylko adresatem. Zmiana jednej dyrektywy tu = ta sama zmiana w `CLAUDE.md`
+> (REGUŁA DWÓCH MIEJSC, niżej). Kanon globalny Codex (bootstrap, sekrety, git/worktree, pełne ETAP 0→7):
+> `/root/.codex/AGENTS.md`.
+>
+> **Stan bieżący i historia wersji NIE są w tym pliku** (były zamrożonym snapshotem 2026-05-10; usunięte).
+> Bieżący stan weryfikuj w kodzie, runtime i handoffie — NIGDY w dokumencie-snapshotcie. Wycięte:
+> historia V3.7–V3.28/incydenty/tagi → `/root/.claude/projects/-root/memory/dispatch_history.md` + `git log`/`git tag`;
+> co robić teraz → `/root/.claude/projects/-root/memory/todo_master.md` → `/root/.claude/projects/-root/memory/sprint_timeline.md` (CURRENT HANDOFF); backlog → `ZIOMEK_BACKLOG.md`;
+> reguły biznesowe → `/root/.claude/projects/-root/memory/project_overview.md` + `/root/.claude/projects/-root/memory/ZIOMEK_REGULY_KANON.md`; Panel API/infra → `ZIOMEK_MASTER_KB.md`
+> Część III; live flagi → `flags.json` + efektywne środowisko procesu (FLAG_FINGERPRINT), NIGDY stare tabele.
 
-## Start
+## 🚦 OTWARTE BRAMKI / DŁUG — LEDGER MECHANICZNY (od 21.07, OBOWIĄZKOWY RYTUAŁ)
+Kanoniczna PRAWDA o otwartym długu = baza `/var/lib/ziomek-process-gates/gates.sqlite3` (0600).
+JEDYNY interfejs: `dispatch_v2/tools/process_debt_gate.py` (add/transition/list/show/export; FSM
+BUILT_OFF→WAIT_DATA→READY_FOR_REVIEW→READY_FOR_OWNER→OWNER_ACKED→APPLIED→VERIFIED→CLOSED
++ REJECTED/SUPERSEDED; CAS + audyt). Widok: `dispatch_v2/OPEN_GATES.md` (GENERATED; odśwież
+`export --format open-gates`).
+- START SESJI: przeczytaj `dispatch_v2/OPEN_GATES.md` ZANIM weźmiesz nowe zadanie.
+- KONIEC ZADANIA/BRAMKI: `transition` w ledgerze z dowodem (SHA+hash) — notatka w memory NIE wystarcza.
+- AT-JOBY: planuj WYŁĄCZNIE przez `dispatch_v2/tools/at_gate.py` (rejestracja+reconcile; job zniknął bez werdyktu = ALARM w widoku).
+- Kolektor propozycji: `tools/process_debt_collect.py` (`--apply` tylko świadomie). `todo_master.md` = kontekst; ledger = prawda.
 
-1. Przykazanie #0 — KAZDA zmiana silnika idzie protokolem ETAP 0→7:
-   `/root/.claude/projects/-root/memory/ziomek-change-protocol.md`.
-2. Nawigacja: `docs/CODEMAP.md` → `docs/ARCHITECTURE.md` → `docs/decisions/`.
-   NIE skanuj repo — wszystko ma mapy.
-3. Srodowisko: testy WYLACZNIE `/root/.openclaw/venvs/dispatch/bin/python -m
-   pytest tests/ -q`; zywy stan = `/root/.openclaw/workspace/dispatch_state/`
-   (katalog `dispatch_v2/dispatch_state/` w repo to NIE stan live); flagi
-   silnika = `../flags.json` (3 swiaty flag: ADR-004).
+## Kolejność czytania — NIE skanuj repo, wszystko ma mapę
+1. **Przykazanie #0** (niżej) — JAK bezpiecznie zmieniać Ziomka; bez wyjątków.
+2. **`docs/CODEMAP.md`** — spis treści repo + „gdzie szukać czego" + pułapki nawigacyjne.
+3. **`docs/ARCHITECTURE.md`** — 10 warstw, przepływ danych, punkty wejścia. Kanon kontraktów:
+   `ZIOMEK_ARCHITECTURE.md` + `ZIOMEK_INVARIANTS.md` + `ZIOMEK_DEFINITION_OF_DONE.md`.
+4. **Bieżący stan** → `/root/.claude/projects/-root/memory/` (`todo_master.md` → `sprint_timeline.md` CURRENT HANDOFF).
+5. **Decyzje projektowe** → `docs/decisions/` (ADR-001..008 + ODR-001/ODR-002).
+6. Dalej TYLKO pliki potrzebne do zadania — CODEMAP wskaże które.
 
-## Skille = domyslne narzedzia sesji (od 17.07)
-
-Jezeli dla czynnosci istnieje skill — UZYWASZ skilla, nie recznych komend
-(drivery maja bramki ACK, oracle i selftesty pod nocnym straznikiem; reczne
-odtwarzanie = dryf i pominiete bezpieczniki). Katalog: `.claude/skills/README.md`.
+## 🧰 SKILLE = DOMYŚLNE NARZĘDZIA KAŻDEJ SESJI (od 17.07)
+Jeżeli dla czynności istnieje skill — **UŻYWASZ skilla, nie ręcznych komend** (drivery mają bramki ACK,
+oracle i selftesty pod nocnym strażnikiem; ręczne odtwarzanie = dryf i pominięte bezpieczniki).
+Katalog + zasady: `.claude/skills/README.md`. Driver wołaj ścieżką, z korzenia repo.
 
 | Robisz… | NAJPIERW odpal |
 |---|---|
-| start sesji / rozpoznanie stanu / wybor zadania | `python3 .claude/skills/ziomek-cto/driver.py brief` |
-| planowanie KAZDEJ zmiany silnika (ETAP 3 #0) | `python3 .claude/skills/ziomek-cto/driver.py scope "<temat>"` |
-| gotowy diff przed commitem (bramka DoD) | `python3 .claude/skills/ziomek-cto/driver.py dod <diff\|ref> --evidence <plik>` (exit 1 = STOP) |
+| start sesji / rozpoznanie stanu / wybór zadania | `python3 .claude/skills/ziomek-cto/driver.py brief` |
+| planowanie KAŻDEJ zmiany silnika (ETAP 3 #0, mapa kompletności/bliźniaki) | `python3 .claude/skills/ziomek-cto/driver.py scope "<temat>"` |
+| gotowy diff przed commitem (bramka DoD, exit 1 = STOP) | `python3 .claude/skills/ziomek-cto/driver.py dod <diff\|ref> --evidence <plik>` |
 | koniec sesji / wpis handoff do memory | `python3 .claude/skills/ziomek-cto/driver.py handoff` |
-| diagnoza uslug / straznik / przecieki / flagi / suita | `.claude/skills/run-dispatch-v2/driver.sh health` (= services+guard+litter; osobne subkomendy: `flags`/`collect`/`test`) |
-| kandydat przed promocja/merge | `python3 .claude/skills/ziomek-blind-review/driver.py blind <katalog>` → swiezy recenzent → `check` |
+| diagnoza usług / werdykt strażnika / przecieki / flagi / suita | `.claude/skills/run-dispatch-v2/driver.sh health` (subkomendy: `guard`/`litter`/`flags`/`collect`/`test`) |
+| kandydat (skill/patch/brama) przed promocją/merge | `python3 .claude/skills/ziomek-blind-review/driver.py blind <katalog>` → świeży recenzent → `check <verdict.json>` |
 
-## REGULA DWOCH MIEJSC (Adrian 17.07)
+## 📜 REGUŁA DWÓCH MIEJSC (Adrian 17.07)
+Każda dyrektywa sesyjna (routing skilli, zasady pracy, bramki, bootstrap) MUSI być zapisana równolegle
+w DWÓCH miejscach, bo Claude czyta CLAUDE.md a **Codex czyta AGENTS.md**: repo `CLAUDE.md` ↔ `AGENTS.md`
+(ten plik) oraz globalnie `/root/CLAUDE.md` ↔ `/root/.codex/AGENTS.md`. Zmiana jednego bez drugiego =
+zmiana częściowa (niezakończona).
 
-Kazda dyrektywa sesyjna (routing, zasady pracy, bramki) MUSI byc zapisana
-rownolegle w DWOCH miejscach: **CLAUDE.md (Claude Code) i AGENTS.md (Codex)**
-— repo `CLAUDE.md` ↔ `AGENTS.md` (ten plik) oraz globalnie `/root/CLAUDE.md`
-↔ `/root/.codex/AGENTS.md`. Zmiana jednego bez drugiego = zmiana czesciowa
-(niezakonczona).
+## ⚙️ Twarde minimum środowiskowe
+- **Testy WYŁĄCZNIE** `/root/.openclaw/venvs/dispatch/bin/python -m pytest tests/ -q` (systemowy python3
+  nie ma ortools → fałszywe faile).
+- **Żywy stan** = `/root/.openclaw/workspace/dispatch_state/`. Katalog `dispatch_state/` w TYM repo = NIE stan live.
+- **Log decyzji silnika** = `../logs/shadow_decisions.jsonl`.
+- **Flagi = 3 światy** (ADR-004): silnik `../flags.json` — część czytana hot-reload przez `C.flag()`/`decision_flag`,
+  ale **flagi module-level ładują się dopiero przy starcie procesu → po ich zmianie WYMAGANY restart** (KANON v1.3).
+  Panel `flags.systemd.env` + drop-iny (⚠ `systemctl show -p Environment` ich NIE pokazuje); apka drop-iny
+  systemd + `courier_api/config.py`. W wątpliwości sprawdź efektywne środowisko procesu i FLAG_FINGERPRINT, nie default kodu.
+- **NIGDY nie restartuj `dispatch-telegram` ani nie wdrażaj w peaku bez jawnego ACK.** Re-enable = pełen deploy.
 
-## Twarde granice (skrot; pelne w /root/.codex/AGENTS.md)
+## 🛡️ TWARDE BEZPIECZNIKI OPERACYJNE (nie do pominięcia, żaden skill ich nie znosi)
+- **Workflow per-step:** draft → ACK → `cp .bak` → edit → `py_compile` → import check → test → commit → tag → (restart) → verify → stop na ACK. Granularne tagi jako punkty rollbacku.
+- **NIGDY nie restartuj żadnego systemd bez `py_compile` + import check** (dispatch-telegram dodatkowo wymaga explicit ACK w czacie).
+- **Zero `jq`** na serwerze (JSON manipuluj Pythonem). **`sed` tylko do ODCZYTU**, nigdy do edycji.
+- **Zakaz heredoców z cudzysłowami.**
+- **Atomic writes:** temp → `fsync` → `rename` (nigdy zapis w miejscu na żywym stanie).
 
-- Deploy / flip flagi / restart uslugi / telegram / peak — TYLKO za ACK
-  wlasciciela, po protokole #0. ODR-002: zaden skill/dokument nie nadaje
-  execution authority.
-- Multi-sesja: wspolne repo — commit atomowo jawnym pathspec (C1-git), nigdy
-  `git add -A`, nigdy nie cofaj cudzego WIP; przed commitem `git log -3` +
-  `git status`.
-- Baseline testow musi byc ZIELONY przed zmiana; pelna regresja vs baseline
-  po zmianie; manifest straznika re-seed przy zmianie zbioru nodeidow
-  (`night_guard --update-manifest`, fail-closed).
+---
+
+# ⛔ PRZYKAZANIE #0 — ZANIM TKNIESZ ZIOMKA (czytaj PIERWSZE)
+**Każda zmiana / naprawa / upgrade dispatchu (silnik, feasibility, scoring, selekcja, kanon/plan, flagi,
+metryki, konsola/apka, config, integracja) idzie PROTOKOŁEM — bez wyjątków:**
+➡ **`/root/.claude/projects/-root/memory/ziomek-change-protocol.md`** — **wklej z niego PROMPT na początku
+zadania** i przejdź ETAP 0→7 (pełne ETAP rozpisane w `/root/.codex/AGENTS.md`). Skrót nieprzeskakiwalny:
+- **(0)** stan na żywo + testy bazowe ZIELONE; ustal efektywne flagi procesu (3 światy), nie default.
+- **(1)** fix U ŹRÓDŁA we właściwej z 10 warstw — nie łatka na renderze.
+- **(2)** SOFT nie osłabia HARD; nie cofaj świadomych inwersji P‑1..P‑7 bez ACK.
+- **(3) MAPA KOMPLETNOŚCI** — wszystkie miejsca danej klasy, **bliźniacze ścieżki RAZEM** (best_effort↔objm_lexr6,
+  feasibility↔greedy↔plan_recheck, serializer A+B, 4 handlery recanon, każdy importer/konsument).
+- **(4)** dowody nie deklaracje: flaga ON≠OFF (test), metryka w `shadow_decisions.jsonl`, parytet bliźniaków,
+  checkery flag + inwarianty, **PEŁNA regresja Ziomka vs baseline + e2e przez WSZYSTKIE dotknięte warstwy**.
+- **(5)** replay → dowód **POZYTYWNEGO wpływu** (metryka docelowa lepsza ON↔OFF, nie tylko brak regresji) + okno 2 dni.
+- **(6)** backup→py_compile→test(kanoniczna ścieżka)→git log -3→ACK→1 restart (NIGDY telegram/peak bez OK).
+- **(7)** rollback gotowy.
+
+**Zmiana częściowa = NIEZAKOŃCZONA. Wątpliwość co do priorytetów/inwersji → PYTAJ Adriana, nie zgaduj.**
+
+➡ **Kanon architektury** (zatwierdzony 01.07): `ZIOMEK_ARCHITECTURE.md` + `ZIOMEK_INVARIANTS.md` +
+`ZIOMEK_DEFINITION_OF_DONE.md` + `tools/entropy_dashboard.py` (8 metryk — **re-run po KAŻDEJ fali, mają MALEĆ**).
+
+---
+
+# ⚖️ NIEZALEŻNA WERYFIKACJA CTO (zasada globalna, Adrian 19.07)
+**Nigdy nie ufaj CTO na słowo.** Opinia / rekomendacja / werdykt `ACCEPT`/`REJECT` CTO = materiał do
+niezależnej analizy, a NIE dowód ani zgoda ownera. Sprawdź tezy CTO we własnym zakresie (kod, diff, runtime,
+testy, logi, dane), porównaj realną alternatywę (poprawność, skutki uboczne, bezpieczeństwo, utrzymanie,
+koszt, rollback), a przy rozbieżności lub sporze o zmianę nieodwracalną/produkcyjną — **zatrzymaj się do
+decyzji Adriana**. Werdykt CTO nie omija authority, Przykazania #0 ani bramek ownera.
+
+---
+
+# 🔒 TWARDE GRANICE / BRAMKI ACK
+Jeśli Adrian jawnie zlecił zakres — to GO dla analizy i implementacji; nie pytaj ponownie o techniczne kroki
+w tym zakresie. Osobny **biznesowy ACK** jest nadal wymagany przed:
+- flipem flagi zmieniającej decyzje; restartem/deployem procesu produkcyjnego; migracją/modyfikacją danych runtime;
+- pracą w peaku; re-enable lub restartem `dispatch-telegram`;
+- zmianą relacji HARD/SOFT lub precedencji P‑1..P‑7 / W‑1..W‑6; operacją nieodwracalną.
+
+ODR-002: żaden skill ani dokument NIE nadaje execution authority — tylko właściciel podnosi poziom autonomii.
+Jawne polecenie w AKTUALNEJ sesji = ten ACK; nie przenoś zgody ze starego sprintu/czatu.
+
+**Multi-sesja (wspólne repo):** jedna sesja = FLIPMASTER (tylko ona rusza `flags.json`/deploy/restart w oknie);
+commituj jawnym pathspec (nigdy `git add -A`); nigdy nie cofaj/nadpisuj cudzego WIP; przed commitem `git log -3`
++ `git status`; baseline ZIELONY przed zmianą, pełna regresja vs baseline po; manifest strażnika re-seed przy
+zmianie zbioru nodeidów (`night_guard --update-manifest`, fail-closed).
+
+---
+
+# 📌 Kontrakty Sprintu 4 (LIVE od 2026-07-10, master 70af4fa) — obowiązują każdą sesję
+- **HERMETIC-GUARD:** root `dispatch_v2/conftest.py` sandboxuje DISPATCH_STATE_DIR + blokuje zapis/kasowanie
+  żywych `dispatch_state`/`scripts/logs`/`flags.json` (też w subprocesach). `RuntimeError "HERMETIC-GUARD"`
+  w teście = TEST nieizolowany — napraw TEST (tmp_path/monkeypatch), NIGDY nie osłabiaj guarda. Dowód:
+  `HERMETIC_STRICT=1 pytest tests/` = 0 failed; kwarantanna live tylko w `tests/hermetic_quarantine.json`.
+- **FLAGI:** każda nowa/zmigrowana flaga MUSI trafić do `tools/flag_lifecycle_registry.json`. **Re-seed ZAWSZE
+  `tools/flag_lifecycle_seed.py --merge` — bez `--merge` zabijesz kurację** (seeder ostrzega). Checker
+  `tools/flag_lifecycle_check.py [--live]` = exit 0.
+- **TOŻSAMOŚĆ KURIERA:** kanon = pakiet `dispatch_v2/identity/`. Onboarding TYLKO przez `courier_admin.add_new_courier`
+  (transakcja 5 plików, w tym `courier_names`). Pełne nazwiska = grafik. NIE dodawaj inline kopii norm/resolverów.
+- Artefakty: `eod_drafts/2026-07-10/SPRINT4_*.md`.
+
+---
+
+# 🎯 3 ZASADY KARDYNALNE (NIENEGOCJOWALNE)
+- **Z1** — Autonomia = cel nadrzędny, niezależnie od dnia/pory.
+- **Z2** — Jakość ponad szybkość ZAWSZE, root cause przed fix.
+- **Z3** — Buduj na lata, fix u źródła, bez łat i skrótów tworzących nowy dług.
+
+Kod i stan runtime = dowód. Dokumentacja = wskazówka do weryfikacji. Zmiana częściowa = niezakończona.
+Wiedza domenowa Adriana ma pierwszeństwo przed intuicją modelu.
+
+**Owner:** Adrian Czapla <ac@nadajesz.pl>
