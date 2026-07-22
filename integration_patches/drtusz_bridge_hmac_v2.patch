@@ -1,71 +1,37 @@
 diff --git a/scripts/drtusz_bridge/bridge.py b/scripts/drtusz_bridge/bridge.py
+index 3189012..33ebb6f 100644
 --- a/scripts/drtusz_bridge/bridge.py
 +++ b/scripts/drtusz_bridge/bridge.py
-@@ -216,52 +216,25 @@ def build_uwagi(company, order_id, detail):
--    parts = [f"{company['name']} #{order_id}"]
-     verbose = company.get("verbose_uwagi", False)
--
-     if verbose:
--        s = detail.get("sender") or {}
--        sender_head = []
--        sender_name = " ".join(p for p in (s.get("name"), s.get("lastname")) if p).strip()
--        if sender_name:
--            sender_head.append(sender_name)
--        if s.get("phone"):
--            sender_head.append(f"tel {s['phone']}")
--        if sender_head:
--            parts.append("NADAWCA: " + " ".join(sender_head))
--        sender_meta = []
--        if s.get("company"):
--            sender_meta.append(s["company"])
--        if s.get("invoice_nip"):
--            sender_meta.append(f"NIP {s['invoice_nip']}")
--        addr_full = []
--        if s.get("street"):
--            addr_full.append(s["street"])
--        post_city = " ".join(p for p in (s.get("post_code"), s.get("city")) if p)
--        if post_city:
--            addr_full.append(post_city)
--        if addr_full:
--            sender_meta.append(", ".join(addr_full))
--        if s.get("email"):
--            sender_meta.append(s["email"])
--        if sender_meta:
--            parts.append(", ".join(sender_meta))
-+        # Shared producer/consumer contract: every external field is escaped,
-+        # then the exact payload is authenticated with the configured 0600 file.
-+        from dispatch_v2.uwagi_bridge_envelope import (
-+            build_verbose_uwagi_envelope,
-+            load_bridge_hmac,
-+        )
-+        return build_verbose_uwagi_envelope(
+@@ -214,6 +214,32 @@ def in_push_window(company, now_warsaw):
+ # budowa zlecenia gastro
+ # ----------------------------------------------------------------------------
+ def build_uwagi(company, order_id, detail):
++    """Producer entry. Verbose firms emit the authenticated v2 envelope when the
++    0600 HMAC secret is present; otherwise fall back to the byte-identical legacy
++    verbose uwagi so order creation never breaks (the v2 consumer fails closed to
++    KOORD on a legacy/unsigned envelope). Non-verbose firms are unchanged."""
++    if company.get("verbose_uwagi", False):
++        # dispatch_v2 lives one dir up (scripts-root). The systemd unit runs
++        # /usr/bin/python3 without PYTHONPATH, so bootstrap it from this file.
++        scripts_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
++        if scripts_root not in sys.path:
++            sys.path.insert(0, scripts_root)
++        try:
++            from dispatch_v2.uwagi_bridge_envelope import build_bridge_uwagi
++        except ImportError as exc:
++            log.error("dispatch_v2 import nieudany (%s) — legacy verbose uwagi", exc)
++            return _legacy_build_uwagi(company, order_id, detail)
++        return build_bridge_uwagi(
 +            company,
 +            order_id,
 +            detail,
-+            load_bridge_hmac(),
++            lambda: _legacy_build_uwagi(company, order_id, detail),
++            logger=log,
 +        )
--
++    return _legacy_build_uwagi(company, order_id, detail)
 +
-+    # Legacy companies do not emit the bridge envelope and remain byte-identical.
-+    parts = [f"{company['name']} #{order_id}"]
-     who = " ".join(p for p in (detail.get("name"), detail.get("lastname")) if p).strip()
-     if who:
-         parts.append(f"Odbiorca: {who}")
-     if detail.get("company"):
-         parts.append(detail["company"])
-     if detail.get("address"):
-         parts.append(f"oryg. adres: {detail['address']}")
--
--    if verbose:
--        if detail.get("czas_odbioru_okno"):
--            parts.append(f"Okno odbioru: {detail['czas_odbioru_okno']}")
--        if detail.get("czas_doreczenia_okno"):
--            parts.append(f"Okno doreczenia: {detail['czas_doreczenia_okno']}")
--        if detail.get("ilosc_paczek"):
--            parts.append(f"Paczek: {detail['ilosc_paczek']}")
--        # Marker pochodzenia (Sol NO-GO 21.07, bloker #1): niepodrabialny dowód,
--        # że uwagi wygenerował MOST (nie ręczna notatka) — parser bridge-NADAWCA
--        # w dispatch_v2 wymaga tej koperty; wersjonowany na przyszłe zmiany formatu.
--        parts.append("SRC:EPAKA_BRIDGE:v1")
--
-     return " | ".join(parts)
++
++def _legacy_build_uwagi(company, order_id, detail):
+     """Buduje pole `add_uwagi` zlecenia gastro.
+ 
+     Tryb domyslny (DrTusz/Dentomax/3Giga/Orthdruk): `<Nazwa> #<oid> | Odbiorca:
