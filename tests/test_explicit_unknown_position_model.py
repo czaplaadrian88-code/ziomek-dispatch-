@@ -204,6 +204,15 @@ def test_flag_is_read_once_and_conflict_fails_closed():
     assert "ENABLE_NO_GPS_EQUAL_TREATMENT" not in source  # nie zmieniamy authority/rank gate
 
 
+def test_enable_v326_r07_chain_eta_on_off_explicit_override():
+    """ON/OFF starej flagi: explicit UNKNOWN atomowo konsumuje chain ETA."""
+    import inspect
+    from dispatch_v2.core import candidates
+
+    source = inspect.getsource(candidates.eval_courier_inner)
+    assert "(C.ENABLE_V326_R07_CHAIN_ETA or explicit_unknown)" in source
+
+
 def test_shadow_serializes_candidate_in_both_locations_and_decision():
     from dispatch_v2.dispatch_pipeline import Candidate, PipelineResult
     from dispatch_v2.shadow_dispatcher import _serialize_result
@@ -222,7 +231,8 @@ def test_shadow_serializes_candidate_in_both_locations_and_decision():
     }
     best = Candidate(
         "U", None, 72.0, "MAYBE", "ok", None,
-        {"position_model_shadow": per_candidate, "pos_source": "no_gps"},
+        {"position_model_shadow": per_candidate, "pos_source": "no_gps",
+         "position_display_text": "pozycja nieznana · dojazd szac. 15 min"},
     )
     alt = Candidate(
         "G", None, 70.0, "MAYBE", "ok", None,
@@ -241,5 +251,7 @@ def test_shadow_serializes_candidate_in_both_locations_and_decision():
     }
     record = _serialize_result(result, "E", 1.0)
     assert record["best"]["position_model_shadow"] == per_candidate
+    assert record["best"]["position_display_text"] == \
+        "pozycja nieznana · dojazd szac. 15 min"
     assert record["alternatives"][0]["position_model_shadow"]["position_kind"] == "KNOWN_LIVE"
     assert record["position_model_shadow"]["would_change_winner"] is True
