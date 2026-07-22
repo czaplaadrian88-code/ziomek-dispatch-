@@ -1,6 +1,6 @@
 {
-  "base_sha": "5b3e027fefe6a2843dae7503f6d49309cf64cec6",
-  "manifest_version": 29,
+  "base_sha": "dced21776732c004363857e466662635a89f5152",
+  "manifest_version": 30,
   "nodeids": [
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix1_kurier_ids_load_fail_logs_error_and_dedups",
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix2_bag_not_stale_dedup_same_input",
@@ -5924,7 +5924,7 @@
     ]
   },
   "owner": "CTO-Fable",
-  "reason": "merge parser-envelope-v3 (koperty HMAC anti-replay, flagi OFF) + stabilizacja nodeidow testow kopert",
+  "reason": "merge resweep-g5g6 e500f99f: G5/G6 shadow, PENDING_RESWEEP_LIVE OFF",
   "schema_version": 1,
-  "updated_at_utc": "2026-07-22T09:05:16+00:00"
+  "updated_at_utc": "2026-07-22T11:05:23+00:00"
 }
