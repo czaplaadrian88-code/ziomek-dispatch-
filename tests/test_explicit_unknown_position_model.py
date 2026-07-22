@@ -19,6 +19,33 @@ from dispatch_v2.scoring import s_dystans, score_candidate
 NOW = datetime(2026, 7, 22, 12, 0, tzinfo=timezone.utc)
 
 
+def _eval_ctx(**overrides):
+    from dispatch_v2.core.candidates import EvalContext
+
+    values = {
+        "now": NOW,
+        "order_event": {"order_id": "E"},
+        "order_id": "E",
+        "restaurant": "R",
+        "delivery_address": "D",
+        "pickup_coords": (53.13, 23.16),
+        "delivery_coords": (53.14, 23.17),
+        "pickup_at": None,
+        "pickup_ready_at": None,
+        "new_order": SimpleNamespace(order_id="E"),
+        "new_rest_norm": "r",
+        "fleet_speed_kmh": 25.0,
+        "fleet_context": None,
+        "k07_prefetched_ck": None,
+        "loadgov_now": None,
+        "loadgov_ewma": None,
+        "loadgov_orders": None,
+        "loadgov_couriers": None,
+    }
+    values.update(overrides)
+    return EvalContext(**values)
+
+
 def test_resolver_uses_provenance_and_unknown_never_has_coords():
     unknown = resolve_position(
         coords=(53.1325, 23.1688), source="no_gps", age_min=None,
@@ -220,13 +247,166 @@ def test_e2e_counterfactual_replay_uses_real_selector_for_both_variants(monkeypa
     assert result.position_model_shadow["would_change_winner"] is True
 
 
+def test_off_legacy_reject_is_not_resurrected_but_shadow_keeps_explicit(monkeypatch):
+    """P1: primary OFF jest dokładnie legacy, także gdy explicit ma kandydata."""
+    from dispatch_v2 import dispatch_pipeline as dp
+    from dispatch_v2 import osrm_client
+    from dispatch_v2.core import candidates as candidate_core
+
+    explicit = dp.Candidate("U", None, 40.0, "MAYBE", "ok", None, {})
+    calls = []
+
+    def fake_inner(ctx, cid, cs):
+        calls.append(ctx.position_model_mode)
+        return explicit if ctx.position_model_mode == "explicit" else None
+
+    unknown = resolve_position(coords=(0.0, 0.0), source="none")
+    monkeypatch.setattr(candidate_core, "eval_courier_inner", fake_inner)
+    monkeypatch.setattr(candidate_core, "resolve_courier_position", lambda cs: unknown)
+    monkeypatch.setattr(osrm_client, "start_v2_request_tracking", lambda: None)
+    monkeypatch.setattr(osrm_client, "stop_v2_request_tracking", lambda: None)
+
+    variants = {}
+    off_ctx = _eval_ctx(
+        position_model_mode="legacy",
+        position_model_shadow=True,
+        position_model_variants=variants,
+    )
+    assert candidate_core.eval_courier(
+        off_ctx, "U", SimpleNamespace(pos=None, pos_source="none")) is None
+    assert calls == ["legacy", "explicit"]
+    assert variants["U"] == {"legacy": None, "explicit": explicit}
+
+    calls.clear()
+    on_ctx = _eval_ctx(
+        position_model_mode="explicit",
+        position_model_shadow=True,
+        position_model_variants={},
+    )
+    assert candidate_core.eval_courier(
+        on_ctx, "U", SimpleNamespace(pos=None, pos_source="none")) is explicit
+    assert calls == ["legacy", "explicit"]
+
+
+def test_both_flags_off_candidate_path_is_inert(monkeypatch):
+    """P2: bez shadow dokładnie jeden eval i zero wejścia w nowy resolver."""
+    from dispatch_v2 import osrm_client
+    from dispatch_v2.core import candidates as candidate_core
+
+    marker = SimpleNamespace(metrics={})
+    calls = []
+
+    def fake_inner(ctx, cid, cs):
+        calls.append(ctx.position_model_mode)
+        return marker
+
+    monkeypatch.setattr(candidate_core, "eval_courier_inner", fake_inner)
+    monkeypatch.setattr(
+        candidate_core,
+        "resolve_courier_position",
+        lambda cs: (_ for _ in ()).throw(AssertionError("shadow machinery ran")),
+    )
+    monkeypatch.setattr(osrm_client, "start_v2_request_tracking", lambda: None)
+    monkeypatch.setattr(osrm_client, "stop_v2_request_tracking", lambda: None)
+
+    result = candidate_core.eval_courier(
+        _eval_ctx(position_model_mode="legacy", position_model_shadow=False),
+        "U",
+        SimpleNamespace(pos=None, pos_source="none"),
+    )
+    assert result is marker
+    assert calls == ["legacy"]
+    assert not hasattr(result, "_position_model_variants")
+    assert "position_model_shadow" not in result.metrics
+
+
+def test_shadow_gate_off_uses_one_selector_and_no_shadow_payload(monkeypatch):
+    """P2: drugi prawdziwy selektor jest nieosiągalny przy shadow OFF."""
+    from dispatch_v2 import dispatch_pipeline as dp
+
+    selected = SimpleNamespace(best=None, verdict="SKIP")
+    calls = []
+
+    def fake_select(ctx, candidates):
+        calls.append(list(candidates))
+        return selected
+
+    monkeypatch.setattr(dp._selection, "select_and_emit", fake_select)
+    result = dp._select_position_model(
+        SimpleNamespace(fleet_snapshot={}),
+        [],
+        shadow_requested=False,
+        explicit_effective=False,
+        explicit_requested=False,
+        flag_conflict=False,
+    )
+    assert result is selected
+    assert calls == [[]]
+    assert not hasattr(result, "position_model_shadow")
+
+
+def test_shadow_counterfactual_sees_explicit_only_candidate_without_off_pool_leak(monkeypatch):
+    """P1/P2: shadow mierzy revival, ale actual legacy pool pozostaje bez U."""
+    from dispatch_v2 import dispatch_pipeline as dp
+    from dispatch_v2.core.selection import SelectionContext
+
+    plan = SimpleNamespace(
+        sequence=["O1"], sla_violations=0, predicted_delivered_at={}, pickup_at={},
+        total_duration_min=20.0, strategy="golden",
+    )
+
+    def candidate(cid, score):
+        return dp.Candidate(
+            cid, None, score, "MAYBE", "ok", plan,
+            {"bundle_level3_dev": None, "bag_size_before": 0, "r6_bag_size": 0,
+             "pos_source": "gps", "new_pickup_late_min": 0.0,
+             "late_pickup_committed_max": 0.0},
+        )
+
+    explicit_u = candidate("U", 90.0)
+    known_g = candidate("G", 70.0)
+    variants = {
+        "U": {"legacy": None, "explicit": explicit_u},
+        "G": {"legacy": known_g, "explicit": known_g},
+    }
+    monkeypatch.setattr(dp, "_classify_and_set_auto_route", lambda *a, **k: None)
+    ctx = SelectionContext(
+        now=NOW, order_event={"order_id": "REVIVE"}, order_id="REVIVE",
+        restaurant="R", delivery_address="D", pickup_coords=(53.13, 23.16),
+        delivery_coords=(53.14, 23.17), pickup_ready_at=None,
+        new_order=SimpleNamespace(order_id="O1"),
+        fleet_snapshot={"U": object(), "G": object()}, v328_fail_causes={},
+        position_model_mode="legacy", shadow_only=True,
+    )
+    actual_pool = [known_g]
+    result = dp._select_with_position_model_shadow(
+        ctx,
+        actual_pool,
+        explicit_effective=False,
+        explicit_requested=False,
+        flag_conflict=False,
+        position_model_variants=variants,
+    )
+    assert [candidate.courier_id for candidate in actual_pool] == ["G"]
+    assert result.best.courier_id == "G"
+    assert result.position_model_shadow["legacy_winner_cid"] == "G"
+    assert result.position_model_shadow["explicit_winner_cid"] == "U"
+
+
 def test_flag_default_off_and_old_flag_superseded():
     import json
     from pathlib import Path
 
     assert C.ENABLE_EXPLICIT_UNKNOWN_POSITION_MODEL is False
+    assert C.ENABLE_EXPLICIT_UNKNOWN_POSITION_SHADOW is False
     registry = json.loads(Path("tools/flag_lifecycle_registry.json").read_text())["flags"]
     assert registry["ENABLE_EXPLICIT_UNKNOWN_POSITION_MODEL"]["default"] is False
+    assert registry["ENABLE_EXPLICIT_UNKNOWN_POSITION_SHADOW"]["default"] is False
+    assert registry["ENABLE_EXPLICIT_UNKNOWN_POSITION_SHADOW"]["lifecycle"] == "shadow"
+    assert registry["ENABLE_EXPLICIT_UNKNOWN_POSITION_SHADOW"]["twin_of"] == \
+        ["ENABLE_EXPLICIT_UNKNOWN_POSITION_MODEL"]
+    assert registry["ENABLE_EXPLICIT_UNKNOWN_POSITION_MODEL"]["twin_of"] == \
+        ["ENABLE_EXPLICIT_UNKNOWN_POSITION_SHADOW"]
     assert registry["ENABLE_NO_GPS_NEUTRAL_SCORE_DIST"]["lifecycle"] == "deprecated"
     assert registry["ENABLE_NO_GPS_NEUTRAL_SCORE_DIST"]["superseded_by"] == \
         "ENABLE_EXPLICIT_UNKNOWN_POSITION_MODEL"
@@ -238,6 +418,7 @@ def test_flag_is_read_once_and_conflict_fails_closed():
 
     source = inspect.getsource(dispatch_pipeline._assess_order_impl)
     assert source.count('decision_flag(\n        "ENABLE_EXPLICIT_UNKNOWN_POSITION_MODEL")') == 1
+    assert source.count('decision_flag(\n        "ENABLE_EXPLICIT_UNKNOWN_POSITION_SHADOW")') == 1
     assert source.count('decision_flag(\n        "ENABLE_NO_GPS_NEUTRAL_SCORE_DIST")') == 1
     assert "_explicit_unknown_requested and not _position_flag_conflict" in source
     assert "ALERT EXPLICIT_UNKNOWN_FLAG_CONFLICT" in source

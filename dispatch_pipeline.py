@@ -1155,13 +1155,32 @@ def _select_with_position_model_shadow(
     explicit_effective: bool,
     explicit_requested: bool,
     flag_conflict: bool,
+    position_model_variants=None,
 ):
     """Uruchom actual i kontrfaktyk przez ten sam pełny selektor."""
     import copy as _copy
 
     counter_mode = "legacy" if explicit_effective else "explicit"
     counter_candidates = []
+    mapped_cids = set()
+    variants_by_cid = position_model_variants or {}
+    # Iteracja po fleet_snapshot zachowuje ten sam deterministyczny porządek co
+    # ThreadPoolExecutor.map. Wariant może istnieć także wtedy, gdy polityka
+    # główna odrzuciła kuriera i nie umieściła go w `candidates`.
+    for cid in selection_ctx.fleet_snapshot:
+        variants = variants_by_cid.get(str(cid))
+        if not variants:
+            continue
+        mapped_cids.add(str(cid))
+        variant = variants.get(counter_mode)
+        if variant is not None:
+            counter_candidates.append(_copy.deepcopy(variant))
+    # Kandydaci spoza per-courier eval (np. mass-fail fallback) są wspólni dla
+    # obu polityk, tak jak w kandydacie v1.
     for candidate in candidates:
+        cid = str(getattr(candidate, "courier_id", ""))
+        if cid in mapped_cids:
+            continue
         variants = getattr(candidate, "_position_model_variants", {}) or {}
         variant = variants.get(counter_mode, candidate)
         if variant is not None:
@@ -1193,6 +1212,29 @@ def _select_with_position_model_shadow(
         "explicit_verdict": explicit_result.verdict,
     }
     return selected
+
+
+def _select_position_model(
+    selection_ctx,
+    candidates,
+    *,
+    shadow_requested: bool,
+    explicit_effective: bool,
+    explicit_requested: bool,
+    flag_conflict: bool,
+    position_model_variants=None,
+):
+    """Jedna selekcja normalnie; dualny prawdziwy selektor tylko za shadow flagą."""
+    if not shadow_requested:
+        return _selection.select_and_emit(selection_ctx, candidates)
+    return _select_with_position_model_shadow(
+        selection_ctx,
+        candidates,
+        explicit_effective=explicit_effective,
+        explicit_requested=explicit_requested,
+        flag_conflict=flag_conflict,
+        position_model_variants=position_model_variants,
+    )
 
 
 def _objm_metric_min(c, k):
@@ -4711,6 +4753,8 @@ def _assess_order_impl(
     # wpływa na wynik, stary tor zachowuje dotychczasową semantykę i emitujemy ALERT.
     _explicit_unknown_requested = C.decision_flag(
         "ENABLE_EXPLICIT_UNKNOWN_POSITION_MODEL")
+    _explicit_unknown_shadow_requested = C.decision_flag(
+        "ENABLE_EXPLICIT_UNKNOWN_POSITION_SHADOW")
     _legacy_nogps_requested = C.decision_flag(
         "ENABLE_NO_GPS_NEUTRAL_SCORE_DIST")
     _position_flag_conflict = bool(
@@ -4960,6 +5004,7 @@ def _assess_order_impl(
 
     # K11 refaktoru: kontekst oceny = dokładnie wartości czytane dawniej z closure;
     # budowany tu (wartości finalne, wspólne dla całej puli). Delegacja 1:1.
+    _position_model_variants = {} if _explicit_unknown_shadow_requested else None
     _eval_ctx = _candidates.EvalContext(
         now=now, order_event=order_event, order_id=order_id, restaurant=restaurant,
         delivery_address=delivery_address, pickup_coords=pickup_coords,
@@ -4972,7 +5017,10 @@ def _assess_order_impl(
         plan_versions=_plan_versions_snapshot,
         timing_trace=_timing_trace,
         position_model_mode=("explicit" if _explicit_unknown_effective else "legacy"),
-        position_model_shadow=True,
+        position_model_shadow=_explicit_unknown_shadow_requested,
+        position_model_variants=_position_model_variants,
+        position_model_variants_lock=(
+            threading.Lock() if _explicit_unknown_shadow_requested else None),
     )
 
     def _v327_eval_courier(cid, cs):
@@ -5258,12 +5306,14 @@ def _assess_order_impl(
         )
     # Kontrfaktyk idzie przez PRAWDZIWY selektor (feasibility→score→tiering→
     # buckets→best_effort→OBJM/R29→final gates), nigdy przez max(score).
-    _selected = _select_with_position_model_shadow(
+    _selected = _select_position_model(
         _selection_ctx,
         candidates,
+        shadow_requested=_explicit_unknown_shadow_requested,
         explicit_effective=_explicit_unknown_effective,
         explicit_requested=_explicit_unknown_requested,
         flag_conflict=_position_flag_conflict,
+        position_model_variants=_position_model_variants,
     )
     if _timing_trace is not None:
         _timing_trace.record_since("selection_wall_ms", _selection_started)

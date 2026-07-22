@@ -73,6 +73,10 @@ class EvalContext:
     timing_trace: Any = None
     position_model_mode: str = "legacy"
     position_model_shadow: bool = False
+    # Side-channel wyłącznie dla kontrfaktu shadow. Pozwala zachować wariant
+    # explicit odrzucony przez legacy BEZ wkładania go do głównej puli.
+    position_model_variants: Optional[Dict[str, Dict[str, Any]]] = None
+    position_model_variants_lock: Any = None
 
 
 def _origin_shadow(candidate, position, *, explicit: bool) -> dict:
@@ -104,15 +108,25 @@ def eval_courier(ctx: EvalContext, cid, cs):
     with _ST.candidate_scope(ctx.timing_trace, str(cid)):
         _osrm_client.start_v2_request_tracking()
         try:
+            # OFF-parytet/perf: bez shadow wrapper jest dokładnie jednym wywołaniem
+            # aktywnej polityki. Nie klasyfikuje pozycji i nie buduje telemetrii.
+            if not ctx.position_model_shadow:
+                return eval_courier_inner(ctx, cid, cs)
+
             position = resolve_courier_position(cs)
             if ctx.position_model_shadow and position.position_kind is PositionKind.UNKNOWN:
                 legacy = eval_courier_inner(replace(ctx, position_model_mode="legacy"), cid, cs)
                 explicit = eval_courier_inner(replace(ctx, position_model_mode="explicit"), cid, cs)
+                variants = {"legacy": legacy, "explicit": explicit}
+                if ctx.position_model_variants is not None:
+                    if ctx.position_model_variants_lock is None:
+                        ctx.position_model_variants[str(cid)] = variants
+                    else:
+                        with ctx.position_model_variants_lock:
+                            ctx.position_model_variants[str(cid)] = variants
                 primary = explicit if ctx.position_model_mode == "explicit" else legacy
-                if primary is None:
-                    primary = legacy or explicit
                 if primary is not None:
-                    primary._position_model_variants = {"legacy": legacy, "explicit": explicit}
+                    primary._position_model_variants = variants
                     primary.metrics["position_model_shadow"] = {
                         **shadow_position(position),
                         "legacy_origin": _origin_shadow(legacy, position, explicit=False),
@@ -120,8 +134,15 @@ def eval_courier(ctx: EvalContext, cid, cs):
                     }
                 return primary
             candidate = eval_courier_inner(ctx, cid, cs)
+            variants = {"legacy": candidate, "explicit": candidate}
+            if ctx.position_model_variants is not None:
+                if ctx.position_model_variants_lock is None:
+                    ctx.position_model_variants[str(cid)] = variants
+                else:
+                    with ctx.position_model_variants_lock:
+                        ctx.position_model_variants[str(cid)] = variants
             if candidate is not None:
-                candidate._position_model_variants = {"legacy": candidate, "explicit": candidate}
+                candidate._position_model_variants = variants
                 candidate.metrics["position_model_shadow"] = {
                     **shadow_position(position),
                     "legacy_origin": _origin_shadow(candidate, position, explicit=False),
@@ -189,16 +210,17 @@ def eval_courier_inner(ctx: EvalContext, cid, cs):
     _soon_free_probe = _dp._soon_free_probe
     _sync_spread_penalty = _dp._sync_spread_penalty
     # ── koniec prologu; poniżej ciało bajt-w-bajt z dawnej closure ──
-    resolved_position = resolve_courier_position(cs)
-    explicit_unknown = (
-        ctx.position_model_mode == "explicit"
-        and resolved_position.position_kind is PositionKind.UNKNOWN
-    )
-    origin_travel = origin_estimate_for(resolved_position) if explicit_unknown else None
-    courier_pos = (
-        resolved_position.coords if ctx.position_model_mode == "explicit"
-        else _sanitize_courier_pos(getattr(cs, "pos", None))
-    )
+    resolved_position = None
+    explicit_unknown = False
+    origin_travel = None
+    if ctx.position_model_mode == "explicit":
+        resolved_position = resolve_courier_position(cs)
+        explicit_unknown = resolved_position.position_kind is PositionKind.UNKNOWN
+        origin_travel = origin_estimate_for(resolved_position) if explicit_unknown else None
+        courier_pos = resolved_position.coords
+    else:
+        # Legacy OFF-parity: nie uruchamiaj nawet resolvera nowego modelu.
+        courier_pos = _sanitize_courier_pos(getattr(cs, "pos", None))
     if courier_pos is None and origin_travel is None:
         return None
     bag_raw = getattr(cs, "bag", []) or []
@@ -1934,21 +1956,6 @@ def eval_courier_inner(ctx: EvalContext, cid, cs):
         "plan_expected_version": _plan_expected_version,
         "score": score_result,
         "km_to_pickup": (None if explicit_unknown else round(km_to_pickup_haversine, 2)),
-        "estimated_road_km": (
-            origin_travel.road_km if origin_travel is not None else None
-        ),
-        "estimated_drive_min": (
-            origin_travel.drive_min_soft if origin_travel is not None else None
-        ),
-        "position_kind": resolved_position.position_kind.value,
-        "position_provenance": resolved_position.provenance.value,
-        "position_display_text": (
-            "pozycja nieznana · dojazd szac. 15 min" if explicit_unknown else None
-        ),
-        "r29_solo_score": (
-            round(100.0 - origin_travel.road_km * 10.0, 2)
-            if origin_travel is not None else None
-        ),
         # NOGPS-NEUTRAL-SCORE (2026-07-19): road_km z pozycji-fikcji (centrum)?
         # Konsument: _nogps_neutral_score_pass (neutralizacja score) + display.
         "road_km_from_synthetic_pos": road_km_from_synthetic_pos,
@@ -2316,6 +2323,15 @@ def eval_courier_inner(ctx: EvalContext, cid, cs):
             round(_r07_latency_ms, 2) if _r07_latency_ms is not None else None
         ),
     }
+    if explicit_unknown:
+        enriched_metrics.update({
+            "estimated_road_km": origin_travel.road_km,
+            "estimated_drive_min": origin_travel.drive_min_soft,
+            "position_kind": resolved_position.position_kind.value,
+            "position_provenance": resolved_position.provenance.value,
+            "position_display_text": "pozycja nieznana · dojazd szac. 15 min",
+            "r29_solo_score": round(100.0 - origin_travel.road_km * 10.0, 2),
+        })
 
     # V3.24-A: hard reject gdy extension_penalty() returned None (>60 min).
     # Override verdict na NO tylko jeśli obecny MAYBE (nie przebijaj wcześniejszego NO).

@@ -351,6 +351,7 @@ ETAP4_DECISION_FLAGS = (
     # Konsument: dispatch_pipeline._nogps_neutral_score_pass. Stała-fallback niżej.
     "ENABLE_NO_GPS_NEUTRAL_SCORE_DIST",
     "ENABLE_EXPLICIT_UNKNOWN_POSITION_MODEL",
+    "ENABLE_EXPLICIT_UNKNOWN_POSITION_SHADOW",
     "ENABLE_OBJM_LEXR6_SELECT",
     # CZASÓWKA-W-UWAGACH SHADOW (2026-06-28, sesja 20, zlec. 484034 Sikorskiego):
     # parsuje deklarowany deadline DOSTAWY z free-text `uwagi` ("Czasówka na 17:10")
@@ -1787,6 +1788,10 @@ ENABLE_NO_GPS_NEUTRAL_SCORE_DIST = _os.environ.get("ENABLE_NO_GPS_NEUTRAL_SCORE_
 # neutralizacją jest rozstrzygany fail-closed w dispatch_pipeline per decyzja.
 ENABLE_EXPLICIT_UNKNOWN_POSITION_MODEL = _os.environ.get(
     "ENABLE_EXPLICIT_UNKNOWN_POSITION_MODEL", "0") == "1"
+# Osobna bramka kosztownego dual-eval + drugiego selektora. Default OFF:
+# merge z obiema flagami OFF nie uruchamia maszynerii kontrfaktycznej.
+ENABLE_EXPLICIT_UNKNOWN_POSITION_SHADOW = _os.environ.get(
+    "ENABLE_EXPLICIT_UNKNOWN_POSITION_SHADOW", "0") == "1"
 
 # R-DECLARED TRIPWIRE (L7.1, audyt 2026-06-30 root R7-I-E): reguła biznesowa
 # R-DECLARED-TIME (HARD) — `czas_kuriera >= czas_odbioru_timestamp` (deklarowany
