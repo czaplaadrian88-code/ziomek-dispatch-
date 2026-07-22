@@ -22,6 +22,7 @@ from itertools import permutations
 
 from dispatch_v2 import osrm_client
 from dispatch_v2.observability import stage_timing as _ST
+from dispatch_v2.position_model import OriginTravelEstimate
 from dispatch_v2.common import (
     ENABLE_DROP_TIME_CONSTRAINT,
     ENABLE_PICKED_UP_DROP_FLOOR,
@@ -250,7 +251,7 @@ class RoutePlanV2:
 
 
 def simulate_bag_route_v2(
-    courier_pos: Tuple[float, float],
+    courier_pos: Optional[Tuple[float, float]],
     bag: List[OrderSim],
     new_order: OrderSim,
     now: Optional[datetime] = None,
@@ -260,6 +261,7 @@ def simulate_bag_route_v2(
     dwell_pickup: float = DWELL_PICKUP_MIN,
     dwell_dropoff: float = DWELL_DROPOFF_MIN,
     drive_speed_mult: float = 1.0,
+    origin_travel: Optional[OriginTravelEstimate] = None,
 ) -> RoutePlanV2:
     """Hybrid simulator. Never returns None (osrm_client has fallback).
 
@@ -403,7 +405,31 @@ def simulate_bag_route_v2(
     new_delivery_idx = len(nodes) - 1
 
     points = [n["coords"] for n in nodes]
-    matrix = osrm_client.table(points, points)
+    if origin_travel is None:
+        matrix = osrm_client.table(points, points)
+    else:
+        # UNKNOWN jest wirtualnym pierwszym wierszem wspólnej macierzy kosztów.
+        # Żadne None/syntetyczne centrum nie trafia do OSRM ani haversine.
+        real = osrm_client.table(points[1:], points[1:])
+        n_points = len(points)
+        fixed = {
+            "duration_s": float(origin_travel.drive_min_hard) * 60.0,
+            "distance_m": float(origin_travel.road_km) * 1000.0,
+            "virtual_origin": True,
+        }
+        matrix = [[None for _ in range(n_points)] for _ in range(n_points)]
+        matrix[0][0] = {"duration_s": 0.0, "distance_m": 0.0, "virtual_origin": True}
+        for idx in range(1, n_points):
+            matrix[0][idx] = dict(fixed)
+            # Wirtualny origin istnieje wyłącznie jako pierwszy WIERSZ. Kolumna
+            # powrotna do depotu jest zerowa, żeby solver nie doliczył fikcyjnej
+            # drugiej nogi 22 min przy domknięciu trasy.
+            matrix[idx][0] = {
+                "duration_s": 0.0, "distance_m": 0.0, "virtual_origin_return": True,
+            }
+        for i, row in enumerate(real, start=1):
+            for j, cell in enumerate(row, start=1):
+                matrix[i][j] = cell
     fallback_used = any(
         bool((cell or {}).get("osrm_fallback")) for row in matrix for cell in row
     )

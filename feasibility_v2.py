@@ -20,6 +20,7 @@ from dispatch_v2 import osrm_client
 from dispatch_v2 import common as C
 from dispatch_v2 import prep_bias_anchor
 from dispatch_v2 import effects_buffer as _EB  # K08 refaktoru: zapis shadow PO decyzji
+from dispatch_v2.position_model import OriginTravelEstimate
 from dispatch_v2.common import (
     ENABLE_C2_SHADOW_LOG,
     HAVERSINE_ROAD_FACTOR_BIALYSTOK,
@@ -444,7 +445,7 @@ def _fail12_storepos_strict_on() -> bool:
 
 
 def check_feasibility_v2(
-    courier_pos: Tuple[float, float],
+    courier_pos: Optional[Tuple[float, float]],
     bag: List[OrderSim],
     new_order: OrderSim,
     shift_end: Optional[datetime] = None,
@@ -459,6 +460,7 @@ def check_feasibility_v2(
     courier_tier: Optional[str] = None,  # 2026-05-17 — tier-aware DWELL (tier_bag)
     schedule_source_stale: bool = False,  # D2 (audyt 2026-05-28) — grafik STALE → soft-degrade Gate 1
     pos_from_store: bool = False,  # Z-06 (audyt 2026-06-10) — pozycja odtworzona z last-known-pos store (≤25 min), NIE świeży fix tego ticku
+    origin_travel: Optional[OriginTravelEstimate] = None,
 ) -> Tuple[str, str, Dict, Optional[RoutePlanV2]]:
     if now is None:
         now = datetime.now(timezone.utc)
@@ -466,6 +468,15 @@ def check_feasibility_v2(
         now = now.replace(tzinfo=timezone.utc)
 
     metrics: Dict = {"bag_size_before": len(bag)}
+    if origin_travel is not None:
+        metrics.update({
+            "origin_travel_provenance": origin_travel.provenance,
+            "origin_road_km": origin_travel.road_km,
+            "origin_drive_min_soft": origin_travel.drive_min_soft,
+            "origin_drive_min_hard": origin_travel.drive_min_hard,
+            "r1_origin_geometry_evaluable": False,
+            "r5_origin_geometry_evaluable": False,
+        })
 
     # === FAST FILTERS ===
 
@@ -661,8 +672,13 @@ def check_feasibility_v2(
         else:
             metrics["r8_pickup_span_min"] = None  # graceful degradation
 
-    pickup_dist_km = osrm_client.haversine(courier_pos, new_order.pickup_coords)
+    pickup_dist_km = (
+        float(origin_travel.road_km) if origin_travel is not None
+        else osrm_client.haversine(courier_pos, new_order.pickup_coords)
+    )
     metrics["pickup_dist_km"] = round(pickup_dist_km, 2)
+    if origin_travel is not None:
+        metrics["pickup_drive_min_hard"] = origin_travel.drive_min_hard
     # SCALE-01: pickup-reach cap z flags.json (hot, multi-city), fallback =15 km.
     if pickup_dist_km > _pickup_reach_km():
         return ("NO", f"pickup_too_far ({pickup_dist_km:.1f} km)", metrics, None)
@@ -851,6 +867,7 @@ def check_feasibility_v2(
         base_sequence=base_sequence, earliest_departure=earliest_departure,
         dwell_pickup=_dwell_pickup, dwell_dropoff=_dwell_dropoff,
         drive_speed_mult=_drive_speed_mult,
+        origin_travel=origin_travel,
     )
 
     metrics["sequence"] = plan.sequence
@@ -969,7 +986,8 @@ def check_feasibility_v2(
         log.warning(f"OBJ_METRICS_FAIL {type(_objm_e).__name__}: {_objm_e}")
     try:
         from dispatch_v2 import obj_replay_capture as _orc
-        _orc.capture(courier_pos, bag, new_order, now, _dwell_pickup,
+        if origin_travel is None:
+            _orc.capture(courier_pos, bag, new_order, now, _dwell_pickup,
                      _dwell_dropoff, courier_tier,
                      getattr(new_order, "order_id", None))
     except Exception as _orc_e:
@@ -993,6 +1011,7 @@ def check_feasibility_v2(
                     base_sequence=base_sequence, earliest_departure=earliest_departure,
                     dwell_pickup=_dwell_pickup, dwell_dropoff=_dwell_dropoff,
                     drive_speed_mult=_drive_speed_mult,
+                    origin_travel=origin_travel,
                 )
             from dispatch_v2.route_metrics import compute_plan_metrics as _cpm_fa
             _on_m = _cpm_fa(_fa_plan, _dwell_pickup)

@@ -187,7 +187,7 @@ def compute_idle_wait_soft_penalty(wait_min: float) -> float:
 
 
 def score_candidate(
-    courier_pos: Tuple[float, float],
+    courier_pos: Optional[Tuple[float, float]],
     restaurant_pos: Tuple[float, float],
     bag_drop_coords: Optional[List[Tuple[float, float]]] = None,
     bag_size: int = 0,
@@ -207,7 +207,7 @@ def score_candidate(
 
     # Kat dla direction score
     angle = None
-    if bag_drop_coords:
+    if bag_drop_coords and courier_pos is not None:
         centroid = bag_centroid(bag_drop_coords)
         if centroid:
             brg_bag = bearing_deg(courier_pos, centroid)
