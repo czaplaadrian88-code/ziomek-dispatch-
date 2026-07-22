@@ -31,6 +31,7 @@ Uruchomienie ręczne:
 """
 from __future__ import annotations
 import sys
+import fcntl
 import json
 import os
 import tempfile
@@ -62,12 +63,16 @@ STATE_DIR = "/root/.openclaw/workspace/dispatch_state"
 PENDING_PATH = f"{STATE_DIR}/pending_proposals.json"
 ORDERS_STATE = f"{STATE_DIR}/orders_state.json"
 OUT_JSONL = f"{STATE_DIR}/pending_global_resweep.jsonl"
-KURIER_IDS_PATH = f"{STATE_DIR}/kurier_ids.json"
+PINGPONG_STATE_PATH = f"{STATE_DIR}/pending_resweep_pingpong_state.json"
 
 FLAG = "ENABLE_PENDING_RESWEEP"          # master on/off (shadow). default OFF = no-op.
 FLAG_LIVE = "PENDING_RESWEEP_LIVE"       # K5: podmiana propozycji dla KONSOLI (pending+1-klik; decyzja Adriana 05.07 — NIE Telegram). default OFF.
 MARGIN_KEY = "PENDING_RESWEEP_MARGIN"
+PINGPONG_MARGIN_MULTIPLIER_KEY = "PENDING_RESWEEP_PINGPONG_MARGIN_MULTIPLIER"
+PINGPONG_COOLDOWN_MIN_KEY = "PENDING_RESWEEP_PINGPONG_COOLDOWN_MIN"
 DEFAULT_MARGIN = 15.0                    # pkt — jak DEFAULT_MARGIN reassignment_fwd / auto-proximity
+DEFAULT_PINGPONG_MARGIN_MULTIPLIER = 2.0
+DEFAULT_PINGPONG_COOLDOWN_MIN = 10.0
 MAX_HANGING = 8                          # bezpiecznik: max wiszących zleceń/ tick
 
 _EVENT_FIELDS = (
@@ -85,15 +90,6 @@ def _state_to_order_event(rec: dict) -> dict:
     return {k: rec.get(k) for k in _EVENT_FIELDS if rec.get(k) is not None}
 
 
-def _alias_map() -> Dict[str, str]:
-    try:
-        with open(KURIER_IDS_PATH, encoding="utf-8") as f:
-            raw = json.load(f)
-        return {str(cid): str(name) for name, cid in raw.items()}
-    except (OSError, ValueError):
-        return {}
-
-
 def _append_jsonl(rows: List[dict]) -> None:
     if not rows:
         return
@@ -103,6 +99,170 @@ def _append_jsonl(rows: List[dict]) -> None:
                 f.write(json.dumps(r, ensure_ascii=False) + "\n")
     except OSError as e:
         _log.warning(f"jsonl append fail: {e}")
+
+
+def _positive_float(flags: dict, key: str, default: float) -> float:
+    """Fail-safe parser konfiguracji liczbowej resweepa (zero zmiany flags.json)."""
+    try:
+        value = float(flags.get(key, default))
+        if value <= 0:
+            raise ValueError("must be positive")
+        return value
+    except (TypeError, ValueError):
+        _log.warning("invalid %s; using default=%s", key, default)
+        return default
+
+
+def _iso_datetime(value: Any) -> Optional[datetime]:
+    try:
+        parsed = datetime.fromisoformat(str(value))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+
+def _pingpong_state_from_live(proposed: Dict[str, dict]) -> Dict[str, dict]:
+    """Stan LIVE pochodzi wyłącznie z audytowalnego provenance pending entry.
+
+    Shadow state nigdy nie jest wejściem do decyzji LIVE. Dzięki temu 48 h
+    kontrfaktycznej obserwacji nie może po flipie udawać wykonanych podmian.
+    """
+    state: Dict[str, dict] = {}
+    for oid, prop in proposed.items():
+        current = prop.get("cid")
+        item = {"current_cid": current, "previous_cid": None,
+                "last_swap_ts": None, "flip_count": 0}
+        provenance = prop.get("resweep_live") or {}
+        if (str(provenance.get("new_cid")) == str(current)
+                and provenance.get("old_cid") is not None):
+            item.update({
+                "previous_cid": str(provenance.get("old_cid")),
+                "last_swap_ts": provenance.get("ts"),
+                "flip_count": int(provenance.get("flip_count") or 1),
+            })
+        state[str(oid)] = item
+    return state
+
+
+def _annotate_pingpong_rows(rows: List[dict], score_maps: Dict[str, Dict[str, float]],
+                            state: Dict[str, dict], now: datetime, margin: float,
+                            margin_multiplier: float, cooldown_min: float) -> None:
+    """Oceń i zasymuluj guard A→B→A bez zmiany zwykłego would_repropose.
+
+    `state` jest mutowany tylko dla kontrfaktycznych podmian, które przeszłyby
+    zwykły margin i nie zostałyby zablokowane. Nie zawiera nazw/adresów/koordynatów.
+    """
+    required_margin = margin * margin_multiplier
+    for row in rows:
+        oid = str(row.get("order_id"))
+        entry = state.setdefault(oid, {
+            "current_cid": row.get("proposed_cid"), "previous_cid": None,
+            "last_swap_ts": None, "flip_count": 0,
+        })
+        current = entry.get("current_cid")
+        if current is None:
+            current = row.get("proposed_cid")
+            entry["current_cid"] = current
+        previous = entry.get("previous_cid")
+        target = row.get("new_cid")
+        scores = score_maps.get(oid) or {}
+        current_score = scores.get(str(current)) if current is not None else None
+        target_score = scores.get(str(target)) if target is not None else None
+        delta = None
+        if target_score is not None and current_score is not None:
+            delta = round(float(target_score) - float(current_score), 1)
+        normally_eligible = bool(
+            target is not None and str(target) != str(current)
+            and not row.get("no_courier")
+            and (current_score is None or (delta is not None and delta >= margin)
+                 or (str(current) == str(row.get("proposed_cid"))
+                     and row.get("would_repropose")))
+        )
+        is_return = bool(
+            normally_eligible and previous is not None
+            and str(target) == str(previous)
+        )
+        last_swap = _iso_datetime(entry.get("last_swap_ts"))
+        elapsed_min = None
+        if last_swap is not None:
+            elapsed_min = round(max(0.0, (now - last_swap).total_seconds() / 60.0), 2)
+        margin_ok = delta is not None and delta >= required_margin
+        cooldown_ok = elapsed_min is not None and elapsed_min >= cooldown_min
+        # HARD feasibility przed SOFT hysterezą: jeśli bieżący kurier wypadł z
+        # puli, guard nie może uwięzić zlecenia tylko dlatego, że delta jest None.
+        hard_escape = bool(is_return and current_score is None)
+        blocked = bool(is_return and not hard_escape
+                       and not (margin_ok and cooldown_ok))
+
+        row.update({
+            "would_pingpong_block": blocked,
+            "pingpong_is_return": is_return,
+            "pingpong_delta_vs_current": delta,
+            "pingpong_required_margin": round(required_margin, 1),
+            "pingpong_elapsed_min": elapsed_min,
+            "pingpong_cooldown_min": cooldown_min,
+            "pingpong_flip_count": int(entry.get("flip_count") or 0),
+            "pingpong_hard_escape_current_infeasible": hard_escape,
+        })
+        if normally_eligible and not blocked:
+            entry.update({
+                "previous_cid": current,
+                "current_cid": target,
+                "last_swap_ts": now.isoformat(),
+                "flip_count": int(entry.get("flip_count") or 0) + 1,
+            })
+
+
+def _annotate_pingpong_shadow(rows: List[dict], score_maps: Dict[str, Dict[str, float]],
+                              now: datetime, margin: float,
+                              margin_multiplier: float, cooldown_min: float) -> None:
+    """RMW shadow state pod fcntl; zapis temp→fsync→rename→fsync katalogu."""
+    state_path = os.path.abspath(PINGPONG_STATE_PATH)
+    parent = os.path.dirname(state_path)
+    os.makedirs(parent, exist_ok=True)
+    lock_path = state_path + ".lock"
+    with open(lock_path, "a+", encoding="utf-8") as lock_file:
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            try:
+                with open(state_path, encoding="utf-8") as source:
+                    raw = json.load(source)
+                state = raw.get("orders") if isinstance(raw, dict) else {}
+                if not isinstance(state, dict):
+                    state = {}
+            except FileNotFoundError:
+                state = {}
+            except (OSError, ValueError, TypeError) as exc:
+                _log.warning("pingpong shadow state load fail; rebuilding: %s", exc)
+                state = {}
+
+            active = {str(row.get("order_id")) for row in rows}
+            state = {str(oid): value for oid, value in state.items()
+                     if str(oid) in active and isinstance(value, dict)}
+            _annotate_pingpong_rows(rows, score_maps, state, now, margin,
+                                    margin_multiplier, cooldown_min)
+            payload = {"schema": 1, "updated_at": now.isoformat(), "orders": state}
+            fd, tmp_path = tempfile.mkstemp(prefix=".pending-resweep-pingpong-",
+                                            suffix=".tmp", dir=parent)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as target_file:
+                    json.dump(payload, target_file, ensure_ascii=False,
+                              separators=(",", ":"), sort_keys=True)
+                    target_file.flush()
+                    os.fsync(target_file.fileno())
+                os.replace(tmp_path, state_path)
+                dir_fd = os.open(parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+                try:
+                    os.fsync(dir_fd)
+                finally:
+                    os.close(dir_fd)
+            finally:
+                if os.path.exists(tmp_path):
+                    os.unlink(tmp_path)
+        finally:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
 
 
 def _cand_by_cid(res, cid: str):
@@ -361,6 +521,9 @@ def _live_apply(rows: List[dict], ga_results: Dict[str, Any], now: datetime) -> 
     for row in rows:
         if not row.get("would_repropose"):
             continue
+        if row.get("would_pingpong_block"):
+            row["live_action"] = "skip_pingpong_guard"
+            continue
         if acted >= LIVE_MAX_ACTIONS_PER_TICK:
             row["live_action"] = "skip_tick_cap"
             continue
@@ -380,6 +543,7 @@ def _live_apply(rows: List[dict], ga_results: Dict[str, Any], now: datetime) -> 
             "ts": now.isoformat(), "old_cid": row.get("proposed_cid"),
             "new_cid": row.get("new_cid"), "delta_vs_now": row.get("delta_vs_now"),
             "reason": row.get("reason"),
+            "flip_count": int(row.get("pingpong_flip_count") or 0) + 1,
         }
 
         def _mut(pending: Dict[str, Any]) -> None:
@@ -440,6 +604,10 @@ def run_once(now: Optional[datetime] = None, margin: Optional[float] = None) -> 
     flags = C.load_flags()
     if margin is None:
         margin = float(flags.get(MARGIN_KEY, DEFAULT_MARGIN))
+    pingpong_margin_multiplier = _positive_float(
+        flags, PINGPONG_MARGIN_MULTIPLIER_KEY, DEFAULT_PINGPONG_MARGIN_MULTIPLIER)
+    pingpong_cooldown_min = _positive_float(
+        flags, PINGPONG_COOLDOWN_MIN_KEY, DEFAULT_PINGPONG_COOLDOWN_MIN)
 
     try:
         with open(PENDING_PATH, encoding="utf-8") as f:
@@ -468,7 +636,8 @@ def run_once(now: Optional[datetime] = None, margin: Optional[float] = None) -> 
         proposed[oid] = {"cid": str(best.get("courier_id")) if best.get("courier_id") is not None else None,
                          "score": best.get("score"),
                          "sent_at": p.get("sent_at"), "expires_at": p.get("expires_at"),
-                         "auto_route": dr.get("auto_route")}
+                         "auto_route": dr.get("auto_route"),
+                         "resweep_live": p.get("resweep_live")}
         hanging.append((oid, rec))
 
     if not hanging:
@@ -518,8 +687,8 @@ def run_once(now: Optional[datetime] = None, margin: Optional[float] = None) -> 
     couriers_after, maxpile_after = _pile(after_cids)
     spread_improved = maxpile_after < maxpile_before
 
-    names = _alias_map()
     rows: List[dict] = []
+    pingpong_score_maps: Dict[str, Dict[str, float]] = {}
     n_would = 0
     for oid in allocation:
         a = allocation[oid]
@@ -532,6 +701,7 @@ def run_once(now: Optional[datetime] = None, margin: Optional[float] = None) -> 
         prop_orig_score = prop["score"]            # score z chwili propozycji (info)
         new_score = a["score"]
         cand_scores = a.get("cand_scores") or {}
+        pingpong_score_maps[str(oid)] = cand_scores
         # BIEŻĄCY score proponowanego kuriera dla tego zlecenia (po globalnej alokacji
         # innych) — None gdy wypadł z puli feasible. To jest właściwa baza porównania.
         prop_now_score = cand_scores.get(str(prop_cid)) if prop_cid else None
@@ -568,14 +738,10 @@ def run_once(now: Optional[datetime] = None, margin: Optional[float] = None) -> 
         row = {
             "ts": now.isoformat(),
             "order_id": oid,
-            "restaurant": orders.get(oid, {}).get("restaurant"),
-            "delivery_address": orders.get(oid, {}).get("delivery_address"),
             "proposed_cid": prop_cid,
-            "proposed_name": names.get(str(prop_cid)) if prop_cid else None,
             "proposed_orig_score": round(float(prop_orig_score), 1) if prop_orig_score is not None else None,
             "proposed_now_score": round(float(prop_now_score), 1) if prop_now_score is not None else None,
             "new_cid": new_cid,
-            "new_name": a.get("name") or (names.get(str(new_cid)) if new_cid else None),
             "new_score": new_score,
             "delta_vs_now": delta_now,
             "delta_vs_orig": delta_orig,
@@ -584,6 +750,8 @@ def run_once(now: Optional[datetime] = None, margin: Optional[float] = None) -> 
             "no_courier": a.get("no_courier", False),
             "proposed_km": round(float(prop_km), 2) if prop_km is not None else None,
             "new_km_to_pickup": round(a["km"], 2) if a.get("km") is not None else None,
+            "delta_km": (round(float(a["km"]) - float(prop_km), 2)
+                         if a.get("km") is not None and prop_km is not None else None),
             "new_r6_min": round(a["r6"], 1) if a.get("r6") is not None else None,
             "new_deliv_spread_km": round(a["spread"], 1) if a.get("spread") is not None else None,
             "pool_total": a.get("pool_total"),
@@ -611,6 +779,28 @@ def run_once(now: Optional[datetime] = None, margin: Optional[float] = None) -> 
             row["feral_claim_dropped"] = bool(a.get("feral_claim_dropped"))
             row["dropped_cid"] = a.get("dropped_cid")
         rows.append(row)
+
+    # G6: shadow zachowuje osobny kontrfaktyczny stan; LIVE ufa wyłącznie
+    # provenance faktycznie wykonanych podmian z pending_proposals.
+    try:
+        if _live_armed:
+            live_pingpong_state = _pingpong_state_from_live(proposed)
+            _annotate_pingpong_rows(
+                rows, pingpong_score_maps, live_pingpong_state, now, margin,
+                pingpong_margin_multiplier, pingpong_cooldown_min)
+        else:
+            _annotate_pingpong_shadow(
+                rows, pingpong_score_maps, now, margin,
+                pingpong_margin_multiplier, pingpong_cooldown_min)
+    except Exception as exc:  # noqa: BLE001 — pomiar nie może wywalić shadow-ticka
+        _log.warning("pingpong guard telemetry fail: %s: %s", type(exc).__name__, exc)
+        for row in rows:
+            # LIVE fail-closed: brak oceny historii nigdy nie przepuszcza podmiany.
+            # Shadow tylko ujawnia lukę pomiaru (None), bez zmiany would_repropose.
+            row["would_pingpong_block"] = True if _live_armed else None
+            row["pingpong_state_error"] = type(exc).__name__
+            if _live_armed:
+                row["pingpong_guard_fail_closed"] = True
 
     # K5 LIVE: akcje PRZED zapisem jsonl — wiersze dostają marker live_action
     # (audytowalność per zlecenie: co podmieniono / czemu pominięto).
@@ -684,6 +874,10 @@ def run_once(now: Optional[datetime] = None, margin: Optional[float] = None) -> 
         "claim_ledger_breaches": n_claim_breaches,
         "live_acted": live_acted,
         "margin": margin,
+        "pingpong_margin_multiplier": pingpong_margin_multiplier,
+        "pingpong_cooldown_min": pingpong_cooldown_min,
+        "would_pingpong_block": sum(
+            1 for row in rows if row.get("would_pingpong_block") is True),
         "duration_s": round(time.monotonic() - _t0, 2),
         "ts": now.isoformat(),
     }
