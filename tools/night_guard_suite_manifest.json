@@ -1,6 +1,6 @@
 {
-  "base_sha": "eeeb94c3964ddb660539783ed678d119f39ba05f",
-  "manifest_version": 27,
+  "base_sha": "5839066eaf9eb71bcc041081c7acfed404ad683b",
+  "manifest_version": 28,
   "nodeids": [
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix1_kurier_ids_load_fail_logs_error_and_dedups",
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix2_bag_not_stale_dedup_same_input",
@@ -1490,6 +1490,7 @@
     "tests/test_daily_briefing_acceptance.py::test_dims_from_override_record_czasowka_offpeak",
     "tests/test_daily_briefing_acceptance.py::test_dims_tier_fallback_bug4",
     "tests/test_daily_briefing_acceptance.py::test_top_override_components_skips_aggregates",
+    "tests/test_daily_stats_feasible_pool_filter.py::test_lifecycle_observation_excluded_from_feasible_pool",
     "tests/test_daily_stats_presnapshot.py::script_run",
     "tests/test_data_alerts.py::test_default_flag_is_off",
     "tests/test_data_alerts.py::test_edge_trigger_emits_once_then_dedupes",
@@ -5782,7 +5783,7 @@
     "tests/test_zombie01_pickup_guard.py::test_picked_up_recent_kept",
     "tests/test_zombie01_pickup_guard.py::test_zombie_assigned_with_stale_pickup_filtered"
   ],
-  "nodeids_sha256": "10e2bab9177fcd3c7c4c3bda88de561bcbf6727c702e6e1de999a5d2f8176100",
+  "nodeids_sha256": "eba1296c3014233324897718a7c146b15e86872b15c955afb89314889a365729",
   "outcome_contracts": {
     "tests/test_canon_static_check_a1.py::test_defer_completion_guard_armed_when_defer_exists": [
       "skipped"
@@ -5898,7 +5899,7 @@
     ]
   },
   "owner": "CTO-Fable",
-  "reason": "merge reclaim-v2 bb57f65b (+2 pliki testow, flagi OFF) + fix stale testu widoku OPEN_GATES (pre-deploy placeholder)",
+  "reason": "fix #1 recenzji reclaim: filtr observations w daily_stats_sheets (+1 test, stub gspread sprzatany po imporcie)",
   "schema_version": 1,
-  "updated_at_utc": "2026-07-22T08:00:49+00:00"
+  "updated_at_utc": "2026-07-22T08:15:42+00:00"
 }
