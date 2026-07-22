@@ -3,6 +3,8 @@ import unicodedata
 from dataclasses import dataclass
 from typing import Optional
 
+from dispatch_v2.uwagi_bridge_envelope import verify_bridge_envelope
+
 # Regex patterns compiled at module level for speed
 # Pattern to extract pickup line from uwagi text.
 # Pickup line starts after "Odbiór"/"Odbierasz", ends przy markerze DOSTAWY
@@ -75,6 +77,8 @@ class BridgeNadawcaAttempt:
 
     pickup: Optional[ParsedPickup]
     reason: str
+    envelope_seen: bool = False
+    version: Optional[int] = None
 
 
 # --- Format mostu epaki (verbose_uwagi, drtusz_bridge/bridge.py) -----------------
@@ -82,10 +86,7 @@ class BridgeNadawcaAttempt:
 #  <kod miasto>, [<email>] | Odbiorca: ... | oryg. adres: <ADRES DORĘCZENIA> | ...`
 # Punkt ODBIORU = adres NADAWCY (segment NADAWCA); pickup_rules mostu ustawiają
 # tylko CZAS (czasówka pushowana przy tworzeniu). "oryg. adres" = doręczenie,
-# NIE odbiór. Proweniencja = osobny, ostatni segment SRC:EPAKA_BRIDGE:v1.
-_BRIDGE_SOURCE_MARKER_PATTERN = re.compile(
-    r"SRC:EPAKA_BRIDGE:v(?P<version>\d+)"
-)
+# NIE odbiór. Proweniencja = poprawny terminalny HMAC koperty v2.
 _BRIDGE_NADAWCA_SEGMENT_PATTERN = re.compile(r"^NADAWCA:\s*")
 _BRIDGE_ODBIORCA_SEGMENT_PATTERN = re.compile(r"^Odbiorca:\s*")
 _BRIDGE_POSTAL_TOKEN_PATTERN = re.compile(r"(?<!\d)\d{2}-\d{3}(?!\d)")
@@ -114,34 +115,39 @@ def _load_company_stoplist() -> frozenset:
         return _DEFAULT_STOPLIST
 
 
-def _try_bridge_nadawca(text: str, stoplist: frozenset) -> BridgeNadawcaAttempt:
+def _try_bridge_nadawca(
+    text: str,
+    stoplist: frozenset,
+    hmac_material: Optional[bytes],
+) -> BridgeNadawcaAttempt:
     """P0 bridge-NADAWCA: waliduj kopertę, potem adres nadawcy.
 
     Każda niejednoznaczność odrzuca całą próbę P0. ``reason`` jest stabilnym,
     czystym diagnostykiem; wywołujący może odróżnić przyszłą wersję formatu od
     braku proweniencji bez logowania ani I/O w parserze.
     """
-    segments = text.split("|")
-    source_markers = []
-    for index, segment in enumerate(segments):
-        marker = _BRIDGE_SOURCE_MARKER_PATTERN.fullmatch(segment.strip())
-        if marker:
-            source_markers.append((index, marker.group("version")))
-    if len(source_markers) != 1:
+    verification = verify_bridge_envelope(text, hmac_material)
+    if not verification.authenticated or verification.payload is None:
         return BridgeNadawcaAttempt(
-            None, f"source_marker_count:{len(source_markers)}"
+            None,
+            verification.reason,
+            verification.envelope_seen,
+            verification.version,
         )
 
-    marker_index, version = source_markers[0]
-    if version != "1":
+    # Liczenie na surowym payloadzie, zanim split/normalizacja zmieni strukturę.
+    # Chroni także `NADAWCA: NADAWCA:` w jednym segmencie.
+    raw_nadawca_count = verification.payload.count("NADAWCA:")
+    if raw_nadawca_count != 1:
         return BridgeNadawcaAttempt(
-            None, f"unsupported_source_version:v{version}"
+            None,
+            f"raw_nadawca_prefix_count:{raw_nadawca_count}",
+            True,
+            verification.version,
         )
-    nonempty_indices = [
-        index for index, segment in enumerate(segments) if segment.strip()
-    ]
-    if marker_index == 0 or marker_index != nonempty_indices[-1]:
-        return BridgeNadawcaAttempt(None, "source_marker_not_terminal")
+
+    segments = verification.payload.split("|")
+    marker_index = len(segments)
 
     nadawca_indices = [
         index
@@ -150,7 +156,8 @@ def _try_bridge_nadawca(text: str, stoplist: frozenset) -> BridgeNadawcaAttempt:
     ]
     if len(nadawca_indices) != 1:
         return BridgeNadawcaAttempt(
-            None, f"nadawca_segment_count:{len(nadawca_indices)}"
+            None, f"nadawca_segment_count:{len(nadawca_indices)}", True,
+            verification.version,
         )
     odbiorca_indices = [
         index
@@ -159,15 +166,20 @@ def _try_bridge_nadawca(text: str, stoplist: frozenset) -> BridgeNadawcaAttempt:
     ]
     if len(odbiorca_indices) != 1:
         return BridgeNadawcaAttempt(
-            None, f"odbiorca_boundary_count:{len(odbiorca_indices)}"
+            None, f"odbiorca_boundary_count:{len(odbiorca_indices)}", True,
+            verification.version,
         )
 
     nadawca_index = nadawca_indices[0]
     odbiorca_index = odbiorca_indices[0]
     if nadawca_index == 0:
-        return BridgeNadawcaAttempt(None, "nadawca_segment_not_delimited")
+        return BridgeNadawcaAttempt(
+            None, "nadawca_segment_not_delimited", True, verification.version
+        )
     if not nadawca_index < odbiorca_index < marker_index:
-        return BridgeNadawcaAttempt(None, "odbiorca_boundary_order")
+        return BridgeNadawcaAttempt(
+            None, "odbiorca_boundary_order", True, verification.version
+        )
 
     sender_parts = segments[nadawca_index:odbiorca_index]
     sender_parts[0] = _BRIDGE_NADAWCA_SEGMENT_PATTERN.sub(
@@ -182,6 +194,8 @@ def _try_bridge_nadawca(text: str, stoplist: frozenset) -> BridgeNadawcaAttempt:
         return BridgeNadawcaAttempt(
             None,
             f"postal_anchor_count:{max(len(postal_tokens), len(anchors))}",
+            True,
+            verification.version,
         )
 
     am = anchors[0]
@@ -189,16 +203,20 @@ def _try_bridge_nadawca(text: str, stoplist: frozenset) -> BridgeNadawcaAttempt:
     city = _normalize(am.group("city"))
     sn = _BRIDGE_STREET_NUMBER_PATTERN.fullmatch(addr)
     if not sn:
-        return BridgeNadawcaAttempt(None, "address_shape")
+        return BridgeNadawcaAttempt(None, "address_shape", True, verification.version)
     street = _canonicalize_street(sn.group("street"))
     if not _is_plausible_street(street, stoplist):
-        return BridgeNadawcaAttempt(None, "street_not_plausible")
+        return BridgeNadawcaAttempt(
+            None, "street_not_plausible", True, verification.version
+        )
     number = sn.group("number")
     extra = sn.group("extra")
     if extra:
         extra = " ".join(_normalize(extra).split())
         if not _BRIDGE_ADDRESS_EXTRA_PATTERN.fullmatch(extra):
-            return BridgeNadawcaAttempt(None, "unsupported_address_extra")
+            return BridgeNadawcaAttempt(
+                None, "unsupported_address_extra", True, verification.version
+            )
         number = f"{number} {extra}"
     # firma nadawcy: pierwszy token przecinkowy segmentu meta (po `| `),
     # tylko display — bez walidacji plauzybilności firmy
@@ -216,15 +234,19 @@ def _try_bridge_nadawca(text: str, stoplist: frozenset) -> BridgeNadawcaAttempt:
             confidence=0.95,
             city=city or None,
         ),
-        "parsed_v1",
+        "parsed_v2",
+        True,
+        verification.version,
     )
 
 
-def inspect_bridge_nadawca(text: Optional[str]) -> BridgeNadawcaAttempt:
+def inspect_bridge_nadawca(
+    text: Optional[str], hmac_material: Optional[bytes] = None
+) -> BridgeNadawcaAttempt:
     """Publiczna, czysta diagnostyka koperty bridge-NADAWCA."""
     if not text or not text.strip():
         return BridgeNadawcaAttempt(None, "empty_text")
-    return _try_bridge_nadawca(text, _load_company_stoplist())
+    return _try_bridge_nadawca(text, _load_company_stoplist(), hmac_material)
 
 
 def _normalize(text: str) -> str:
@@ -377,7 +399,9 @@ def _try_p2(pickup_line: str, stoplist: frozenset) -> Optional[ParsedPickup]:
 
 
 def parse_pickup_from_uwagi(text: Optional[str],
-                            bridge_format: bool = False) -> Optional[ParsedPickup]:
+                            bridge_format: bool = False,
+                            bridge_hmac_material: Optional[bytes] = None,
+                            ) -> Optional[ParsedPickup]:
     """
     Pure function. No I/O. Deterministic.
 
@@ -396,9 +420,9 @@ def parse_pickup_from_uwagi(text: Optional[str],
     - 0.5: P2 narrative regex extraction
     - 0.0: fail (returns None)
 
-    bridge_format: gałąź P0 dla verbose_uwagi mostu epaki (flaga
-    ENABLE_UWAGI_BRIDGE_NADAWCA podawana z call-site'u — parser zostaje pure).
-    False = zachowanie bajt-identyczne z dotychczasowym.
+    bridge_format: gałąź P0 dla verbose_uwagi mostu epaki. Call-site podaje też
+    zweryfikowany odczytem pliku 0600 ``bridge_hmac_material``; parser nie robi
+    I/O i weryfikuje podpis przed składnią. False = zachowanie legacy.
     """
     if not text or not text.strip():
         return None
@@ -407,10 +431,10 @@ def parse_pickup_from_uwagi(text: Optional[str],
     stoplist = _load_company_stoplist()
 
     if bridge_format:
-        attempt = _try_bridge_nadawca(text, stoplist)
+        attempt = _try_bridge_nadawca(text, stoplist, bridge_hmac_material)
         if attempt.pickup is not None:
             return attempt.pickup
-        if attempt.reason.startswith("unsupported_source_version:"):
+        if attempt.envelope_seen:
             return None
 
     pickup_line = _extract_pickup_line(text)

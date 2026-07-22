@@ -792,6 +792,7 @@ def test_every_known_rotated_jsonl_writer_uses_shared_appender():
         "drive_min_calibration": ("auto_proximity_classifier.py",),
         "plan_recheck": ("plan_recheck.py",),
         "czasowka": ("czasowka_scheduler.py",),
+        "uwagi_bridge": ("panel_watcher.py",),
         "geocoding": ("geocoding_audit.py",),
     }
     for group, relative_paths in writers.items():

@@ -1,0 +1,70 @@
+diff --git a/scripts/drtusz_bridge/bridge.py b/scripts/drtusz_bridge/bridge.py
+--- a/scripts/drtusz_bridge/bridge.py
++++ b/scripts/drtusz_bridge/bridge.py
+@@ -216,63 +216,31 @@ def build_uwagi(company, order_id, detail):
+-    parts = [f"{company['name']} #{order_id}"]
+     verbose = company.get("verbose_uwagi", False)
+-
+     if verbose:
+-        s = detail.get("sender") or {}
+-        sender_head = []
+-        sender_name = " ".join(p for p in (s.get("name"), s.get("lastname")) if p).strip()
+-        if sender_name:
+-            sender_head.append(sender_name)
+-        if s.get("phone"):
+-            sender_head.append(f"tel {s['phone']}")
+-        if sender_head:
+-            parts.append("NADAWCA: " + " ".join(sender_head))
+-        sender_meta = []
+-        if s.get("company"):
+-            sender_meta.append(s["company"])
+-        if s.get("invoice_nip"):
+-            sender_meta.append(f"NIP {s['invoice_nip']}")
+-        addr_full = []
+-        if s.get("street"):
+-            addr_full.append(s["street"])
+-        post_city = " ".join(p for p in (s.get("post_code"), s.get("city")) if p)
+-        if post_city:
+-            addr_full.append(post_city)
+-        if addr_full:
+-            sender_meta.append(", ".join(addr_full))
+-        if s.get("email"):
+-            sender_meta.append(s["email"])
+-        if sender_meta:
+-            parts.append(", ".join(sender_meta))
++        # Shared producer/consumer contract: every external field is escaped,
++        # then the exact payload is authenticated with the configured 0600 file.
++        from dispatch_v2.uwagi_bridge_envelope import (
++            build_verbose_uwagi_envelope,
++            load_bridge_hmac,
++        )
++        return build_verbose_uwagi_envelope(
++            company,
++            order_id,
++            detail,
++            load_bridge_hmac(),
++        )
+ 
++    # Legacy companies do not emit the bridge envelope and remain byte-identical.
++    parts = [f"{company['name']} #{order_id}"]
+     who = " ".join(p for p in (detail.get("name"), detail.get("lastname")) if p).strip()
+     if who:
+         parts.append(f"Odbiorca: {who}")
+     if detail.get("company"):
+         parts.append(detail["company"])
+     if detail.get("address"):
+         parts.append(f"oryg. adres: {detail['address']}")
+-
+-    if verbose:
+-        if detail.get("czas_odbioru_okno"):
+-            parts.append(f"Okno odbioru: {detail['czas_odbioru_okno']}")
+-        if detail.get("czas_doreczenia_okno"):
+-            parts.append(f"Okno doreczenia: {detail['czas_doreczenia_okno']}")
+-        if detail.get("ilosc_paczek"):
+-            parts.append(f"Paczek: {detail['ilosc_paczek']}")
+-        # Marker pochodzenia (Sol NO-GO 21.07, bloker #1): niepodrabialny dowód,
+-        # że uwagi wygenerował MOST (nie ręczna notatka) — parser bridge-NADAWCA
+-        # w dispatch_v2 wymaga tej koperty; wersjonowany na przyszłe zmiany formatu.
+-        parts.append("SRC:EPAKA_BRIDGE:v1")
+-
+     return " | ".join(parts)

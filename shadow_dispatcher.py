@@ -45,6 +45,7 @@ from dispatch_v2.monitoring.consumer_stuck_alert import (
     evaluate_stuck_alert,
     render_telegram_message,
 )
+from dispatch_v2.uwagi_bridge_envelope import bridge_envelope_was_rejected
 # GPS-01 (audyt 2026-06-03): fleet-level GPS feed freshness detector.
 # Pelna sciezka import (Z3 doktryna). DOMYSLNIE INERT (GPS_FEED_ALERT_ENABLED=false
 # w flags.json) — brak GPS to CELOWY stan testowy 2026-06, hook short-circuituje
@@ -82,6 +83,11 @@ _telegram_approver_log = setup_logger(
     "/root/.openclaw/workspace/scripts/logs/telegram_approver.log",
 )
 _shutdown = False
+
+
+def _should_regeocode_pickup(payload: dict) -> bool:
+    """Fail closed after authenticated bridge rejection; legacy payloads pass."""
+    return not bridge_envelope_was_rejected(payload)
 
 
 def _sigterm_handler(signum, frame):
@@ -1575,6 +1581,16 @@ def _tick(shadow_log_path: str, meta: Optional[dict], *,
 
             # Geocode missing coords on-the-fly (city z payloadu — NEW_ORDER event)
             if not payload.get("pickup_coords"):
+                if not _should_regeocode_pickup(payload):
+                    _log.warning(
+                        "skip %s: authenticated bridge envelope was rejected "
+                        "upstream (order=%s); re-geocode forbidden",
+                        eid,
+                        oid,
+                    )
+                    event_bus.mark_processed(eid)
+                    stats["skipped"] += 1
+                    continue
                 addr = payload.get("pickup_address", "")
                 p_city = payload.get("pickup_city")
                 coords = geocode(addr, city=p_city) if addr else None

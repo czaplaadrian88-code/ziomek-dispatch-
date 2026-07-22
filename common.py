@@ -936,6 +936,27 @@ def check_v326_pair_coherence(or_tools=None, grouping=None) -> bool:
     return incoherent
 
 
+def uwagi_bridge_flags_coherent(
+    bridge_enabled=None,
+    reject_enabled=None,
+) -> bool:
+    """Fail-closed binding for authenticated bridge pickup parsing.
+
+    The bridge parser may run only when both the parser feature and the
+    no-central-fallback guard are effectively enabled in the same process.
+    Returning ``False`` is the runtime invariant; flag lifecycle twins and
+    tests provide the release-time checker.
+    """
+    if bridge_enabled is None:
+        bridge_enabled = flag("ENABLE_UWAGI_BRIDGE_NADAWCA", False)
+    if reject_enabled is None:
+        reject_enabled = flag(
+            "ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL",
+            ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL,
+        )
+    return bool(bridge_enabled) and bool(reject_enabled)
+
+
 def now_utc():
     return datetime.now(timezone.utc)
 

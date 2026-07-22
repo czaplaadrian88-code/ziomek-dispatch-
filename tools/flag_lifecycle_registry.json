@@ -6429,7 +6429,9 @@
    "review_date": "2026-10-10",
    "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
    "source_of_truth": "common.py-const",
-   "twin_of": [],
+   "twin_of": [
+    "ENABLE_UWAGI_BRIDGE_NADAWCA"
+   ],
    "worlds": [
     "engine"
    ]
@@ -13017,11 +13019,15 @@
   },
   "ENABLE_UWAGI_BRIDGE_NADAWCA": {
    "carriers": [
-    "flags.json"
+    "flags.json",
+    "common.py:ETAP4_DECISION_FLAGS",
+    "dispatch_v2/common.py-const"
    ],
    "consumers": [
+    "dispatch_v2/common.py:uwagi_bridge_flags_coherent",
     "dispatch_v2/panel_watcher.py",
-    "dispatch_v2/uwagi_address_parser.py:parse_pickup_from_uwagi(bridge_format=)"
+    "dispatch_v2/uwagi_address_parser.py:inspect_bridge_nadawca",
+    "dispatch_v2/uwagi_bridge_envelope.py:verify_bridge_envelope"
    ],
    "curated_at": "2026-07-21",
    "current_snapshot": {
@@ -13037,7 +13043,7 @@
    "lifecycle": "shadow",
    "lifecycle_seeded": false,
    "name": "ENABLE_UWAGI_BRIDGE_NADAWCA",
-   "notes": "P0 bridge-NADAWCA: adres ODBIORU paczek mostu epaki (catch-all rid=161, verbose_uwagi) z segmentu NADAWCA; oryg. adres=DORECZENIE. OFF=legacy P3->KOORD. Flip za ACK Adriana (bramka: dowod na realnych odrzutach 489242/489243).",
+   "notes": "P0 bridge-NADAWCA: tylko podpisana HMAC koperta v2; twarde sprzezenie z reject-on-geocode-fail. OFF=legacy P3->KOORD. Flip za ACK Adriana po review i >=2 dniach obserwacji.",
    "owner": {
     "business": "Adrian",
     "service": "dispatch-shadow.service"
@@ -13046,7 +13052,9 @@
    "review_date": "2026-10-10",
    "rollback": "env OFF w flags.json + restart dispatch-shadow.service ZA ACK",
    "source_of_truth": "flags.json",
-   "twin_of": [],
+   "twin_of": [
+    "ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL"
+   ],
    "worlds": [
     "engine"
    ]
