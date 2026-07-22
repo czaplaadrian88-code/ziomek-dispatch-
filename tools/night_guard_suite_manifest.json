@@ -1,6 +1,6 @@
 {
-  "base_sha": "dced21776732c004363857e466662635a89f5152",
-  "manifest_version": 30,
+  "base_sha": "d0746467dffe7949fbeec44dd4f4d03cceb9fe7a",
+  "manifest_version": 31,
   "nodeids": [
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix1_kurier_ids_load_fail_logs_error_and_dedups",
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix2_bag_not_stale_dedup_same_input",
@@ -1865,6 +1865,23 @@
     "tests/test_exclude_by_cid_2026_06_10.py::test_legacy_name_only_excluded_resolves_to_cid",
     "tests/test_exclude_by_cid_2026_06_10.py::test_load_backfills_excluded_cids_key",
     "tests/test_exclude_by_cid_2026_06_10.py::test_reset_clears_excluded_cids",
+    "tests/test_explicit_unknown_position_model.py::test_both_flags_off_candidate_path_is_inert",
+    "tests/test_explicit_unknown_position_model.py::test_chain_eta_unknown_empty_uses_15_not_max_prep_and_no_geo",
+    "tests/test_explicit_unknown_position_model.py::test_e2e_counterfactual_replay_uses_real_selector_for_both_variants",
+    "tests/test_explicit_unknown_position_model.py::test_enable_v326_r07_chain_eta_on_off_explicit_override",
+    "tests/test_explicit_unknown_position_model.py::test_feasibility_uses_65_for_reach_and_22_for_hard_plan",
+    "tests/test_explicit_unknown_position_model.py::test_flag_default_off_and_old_flag_superseded",
+    "tests/test_explicit_unknown_position_model.py::test_flag_is_read_once_and_conflict_fails_closed",
+    "tests/test_explicit_unknown_position_model.py::test_golden_true_selector_not_naive_max",
+    "tests/test_explicit_unknown_position_model.py::test_known_position_origin_estimator_is_noop",
+    "tests/test_explicit_unknown_position_model.py::test_off_legacy_reject_is_not_resurrected_but_shadow_keeps_explicit",
+    "tests/test_explicit_unknown_position_model.py::test_r29_profile_is_35_and_display_contract_has_no_factual_km",
+    "tests/test_explicit_unknown_position_model.py::test_resolver_uses_provenance_and_unknown_never_has_coords",
+    "tests/test_explicit_unknown_position_model.py::test_shadow_counterfactual_sees_explicit_only_candidate_without_off_pool_leak",
+    "tests/test_explicit_unknown_position_model.py::test_shadow_gate_off_uses_one_selector_and_no_shadow_payload",
+    "tests/test_explicit_unknown_position_model.py::test_shadow_serializes_candidate_in_both_locations_and_decision",
+    "tests/test_explicit_unknown_position_model.py::test_unknown_soft_constants_score_and_no_bearing",
+    "tests/test_explicit_unknown_position_model.py::test_virtual_origin_is_single_hard_22_min_matrix_row",
     "tests/test_f10_canonical_delivered_event_id.py::script_run",
     "tests/test_f14_dynamic_hard_cap.py::script_run",
     "tests/test_f2_hardmetric_serialization.py::test_both_serializer_locations_use_shared_helper",
@@ -5808,7 +5825,7 @@
     "tests/test_zombie01_pickup_guard.py::test_picked_up_recent_kept",
     "tests/test_zombie01_pickup_guard.py::test_zombie_assigned_with_stale_pickup_filtered"
   ],
-  "nodeids_sha256": "3c8f7649e9d032f1f2115f444111e4b46280e0aca072d4fa4eb83364c088cad3",
+  "nodeids_sha256": "7561a66438c58ec7c9649e80875f28c26f8462b686055c3381e2a832d3c562f1",
   "outcome_contracts": {
     "tests/test_canon_static_check_a1.py::test_defer_completion_guard_armed_when_defer_exists": [
       "skipped"
@@ -5924,7 +5941,7 @@
     ]
   },
   "owner": "CTO-Fable",
-  "reason": "merge resweep-g5g6 e500f99f: G5/G6 shadow, PENDING_RESWEEP_LIVE OFF",
+  "reason": "merge nogps-explicit-unknown v2 (pozycja nieznana=jawny stan, 6 warstw, obie flagi OFF=inert)",
   "schema_version": 1,
-  "updated_at_utc": "2026-07-22T11:05:23+00:00"
+  "updated_at_utc": "2026-07-22T13:56:23+00:00"
 }
