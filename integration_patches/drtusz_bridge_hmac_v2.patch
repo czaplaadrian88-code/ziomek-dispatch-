@@ -1,7 +1,7 @@
 diff --git a/scripts/drtusz_bridge/bridge.py b/scripts/drtusz_bridge/bridge.py
 --- a/scripts/drtusz_bridge/bridge.py
 +++ b/scripts/drtusz_bridge/bridge.py
-@@ -216,63 +216,31 @@ def build_uwagi(company, order_id, detail):
+@@ -216,52 +216,25 @@ def build_uwagi(company, order_id, detail):
 -    parts = [f"{company['name']} #{order_id}"]
      verbose = company.get("verbose_uwagi", False)
 -
