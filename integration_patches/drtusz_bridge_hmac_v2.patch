@@ -44,7 +44,8 @@ diff --git a/scripts/drtusz_bridge/bridge.py b/scripts/drtusz_bridge/bridge.py
 +            detail,
 +            load_bridge_hmac(),
 +        )
- 
+-
++
 +    # Legacy companies do not emit the bridge envelope and remain byte-identical.
 +    parts = [f"{company['name']} #{order_id}"]
      who = " ".join(p for p in (detail.get("name"), detail.get("lastname")) if p).strip()
