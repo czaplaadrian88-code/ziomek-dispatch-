@@ -55,6 +55,10 @@ from dispatch_v2.uwagi_address_parser import (
     inspect_bridge_nadawca,
     parse_pickup_from_uwagi,
 )
+from dispatch_v2.uwagi_bridge_envelope import (
+    BridgeCredentialError,
+    load_bridge_hmac,
+)
 from dispatch_v2.panel_client import (
     fetch_panel_html,
     parse_panel_html,
@@ -77,6 +81,43 @@ from dispatch_v2.state_machine import (
 from dispatch_v2.geocoding import geocode
 
 _log = setup_logger("panel_watcher", "/root/.openclaw/workspace/scripts/logs/dispatch.log")
+_UWAGI_BRIDGE_SHADOW_LOG_PATH = os.environ.get(
+    "UWAGI_BRIDGE_SHADOW_LOG",
+    "/root/.openclaw/workspace/dispatch_state/uwagi_bridge_envelope.jsonl",
+)
+
+
+def _write_uwagi_bridge_shadow_metric(
+    order_id,
+    *,
+    envelope_seen: bool,
+    version,
+    reason: str,
+    parsed: bool,
+    geocode_ok: bool,
+    central_fallback: bool,
+) -> None:
+    """Append one bounded PII-free envelope outcome; ingestion stays fail-soft."""
+    record = {
+        "order_id_hash": hashlib.sha256(
+            f"uwagi-bridge:{order_id}".encode("utf-8")
+        ).hexdigest()[:16],
+        "envelope_seen": bool(envelope_seen),
+        "version": version,
+        "reason": str(reason),
+        "parsed": bool(parsed),
+        "geocode_ok": bool(geocode_ok),
+        "central_fallback": bool(central_fallback),
+    }
+    try:
+        from dispatch_v2.core.jsonl_appender import append_jsonl
+        append_jsonl(_UWAGI_BRIDGE_SHADOW_LOG_PATH, record)
+    except Exception as exc:
+        _log.error(
+            "UWAGI_BRIDGE_METRIC_WRITE_FAIL order_hash=%s error=%s",
+            record["order_id_hash"],
+            type(exc).__name__,
+        )
 
 _running = True
 _fail_count = 0
@@ -2391,6 +2432,11 @@ def _diff_and_emit(
         _uwagi_pickup_parsed = None
         _pickup_address_override = None
         _restaurant_override = None
+        _bridge_metric_enabled = False
+        _bridge_attempt = None
+        _bridge_metric_reason = "not_evaluated"
+        _bridge_parsed = False
+        _bridge_geocode_ok = False
         if (_pcoords is None
                 and _is_firmowe_konto
                 and flag("ENABLE_UWAGI_ADDRESS_PARSER", True)):
@@ -2399,9 +2445,11 @@ def _diff_and_emit(
             _reject_on_geocode_fail = flag(
                 "ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL", True
             )
-            _bridge_format = bool(
-                _bridge_requested and _reject_on_geocode_fail
+            _bridge_format = C.uwagi_bridge_flags_coherent(
+                bridge_enabled=_bridge_requested,
+                reject_enabled=_reject_on_geocode_fail,
             )
+            _bridge_metric_enabled = bool(_bridge_requested)
             if _bridge_requested and not _reject_on_geocode_fail:
                 _log.warning(
                     f"NEW_ORDER {zid} firmowe-konto aid={_aid}: "
@@ -2409,20 +2457,83 @@ def _diff_and_emit(
                     "ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL=OFF; "
                     "bridge_format=False (sprzężenie fail-closed)"
                 )
-            _parsed = parse_pickup_from_uwagi(
-                _uwagi_text,
-                bridge_format=_bridge_format)
+            _bridge_hmac_material = None
+            if _bridge_format:
+                try:
+                    _bridge_hmac_material = load_bridge_hmac()
+                except BridgeCredentialError as exc:
+                    _log.error(
+                        "NEW_ORDER %s firmowe-konto aid=%s: bridge HMAC "
+                        "niedostępny (%s); fail-closed do legacy/KOORD",
+                        zid,
+                        _aid,
+                        type(exc).__name__,
+                    )
+                # Anti-replay: no independent expected_order_id here — the
+                # panel `zid` lives in a different namespace than the bridge's
+                # source `#order_id`, so binding is enforced by the envelope
+                # itself (signed-oid must match the content `#oid` = internal
+                # consistency, plus the freshness window). A captured envelope
+                # is thus non-eternal and any tamper breaks the signature.
+                _bridge_attempt = inspect_bridge_nadawca(
+                    _uwagi_text,
+                    hmac_material=_bridge_hmac_material,
+                )
+                _bridge_metric_reason = _bridge_attempt.reason
+                if _bridge_attempt.pickup is not None:
+                    _parsed = _bridge_attempt.pickup
+                elif _bridge_attempt.envelope_seen:
+                    _parsed = None
+                else:
+                    _parsed = parse_pickup_from_uwagi(
+                        _uwagi_text,
+                        bridge_format=False,
+                    )
+            else:
+                if _bridge_requested:
+                    _bridge_attempt = inspect_bridge_nadawca(_uwagi_text)
+                    _bridge_metric_reason = "binding_reject_flag_off"
+                if _bridge_attempt is not None and _bridge_attempt.envelope_seen:
+                    # Incoherent ON/OFF configuration must not silently parse a
+                    # signed bridge payload through the unauthenticated legacy path.
+                    _parsed = None
+                else:
+                    _parsed = parse_pickup_from_uwagi(
+                        _uwagi_text,
+                        bridge_format=False,
+                    )
             _bridge_rejection_reason = None
-            if _parsed is None and _bridge_format:
-                _bridge_rejection_reason = inspect_bridge_nadawca(
-                    _uwagi_text
-                ).reason
+            if (_parsed is None and _bridge_attempt is not None
+                    and _bridge_attempt.envelope_seen):
+                _bridge_rejection_reason = _bridge_attempt.reason
+            _bridge_envelope_rejected = bool(
+                _bridge_attempt is not None
+                and _bridge_attempt.envelope_seen
+                and _bridge_attempt.pickup is None
+            )
             if _parsed is not None:
+                _bridge_parsed = bool(
+                    _bridge_attempt is not None
+                    and _bridge_attempt.pickup is not None
+                )
                 _pickup_address_override = f"{_parsed.street} {_parsed.number}"
                 _pcoords = geocode(_pickup_address_override,
                                    city=(getattr(_parsed, "city", None) or "Białystok"),
                                    timeout=2.0)
+                if (_pcoords is not None
+                        and not C.coords_in_bialystok_bbox(_pcoords)):
+                    _log.error(
+                        "NEW_ORDER %s firmowe-konto aid=%s: geocode poza bbox; "
+                        "REJECT+FLAG (→ no_pickup_geocode/KOORD)",
+                        zid,
+                        _aid,
+                    )
+                    _pcoords = None
+                    if _bridge_parsed:
+                        _bridge_metric_reason = "geocode_out_of_bbox"
                 if _pcoords is None:
+                    if _bridge_parsed and _bridge_metric_reason == "parsed_v2":
+                        _bridge_metric_reason = "geocode_failed"
                     if _reject_on_geocode_fail:
                         # FAZA 2 #1: reject+flag — znamy adres, geocode padł →
                         # NIE udawaj że to centrala. None → no_pickup_geocode → KOORD.
@@ -2441,6 +2552,8 @@ def _diff_and_emit(
                         )
                         _pcoords = tuple(FIRMOWE_KONTO_FALLBACK_COORDS)
                 else:
+                    if _bridge_parsed:
+                        _bridge_geocode_ok = True
                     _log.info(
                         f"NEW_ORDER {zid} firmowe-konto aid={_aid}: uwagi-parser "
                         f"resolved pickup {_pickup_address_override!r} conf={_parsed.confidence} "
@@ -2455,24 +2568,34 @@ def _diff_and_emit(
                     "confidence": _parsed.confidence,
                     "raw_pickup_line": _parsed.raw_pickup_line,
                 }
+                if _bridge_parsed and _pcoords is None:
+                    # Persist the provenance-aware reject so downstream twins
+                    # cannot re-geocode or revive the central fallback.
+                    _uwagi_pickup_parsed["bridge_envelope_rejected"] = True
             else:
                 # P3 edge: parser nie wyciągnął adresu (np. uwagi=company-only
                 # "MALI WOJOWNICY"). FAZA 2 #1: reject+flag — bez adresu NIE
                 # zgadujemy centrali; koordynator ustala adres (None → KOORD).
-                if _reject_on_geocode_fail:
+                if _reject_on_geocode_fail or _bridge_envelope_rejected:
                     _log.error(
                         f"NEW_ORDER {zid} firmowe-konto aid={_aid}: parser zwrócił "
                         f"None (P3 edge) — REJECT+FLAG (→ no_pickup_geocode/KOORD), "
                         f"NIE podstawiam centrali; "
                         f"bridge_reason={_bridge_rejection_reason!r}. "
-                        f"Uwagi: {_uwagi_text!r}"
+                        f"Uwagi: {'<bridge-envelope-redacted>' if _bridge_envelope_rejected else repr(_uwagi_text)}"
                     )
                     _pcoords = None
                     _uwagi_pickup_parsed = {
                         "street": None, "number": None, "company": None,
-                        "confidence": 0.0, "raw_pickup_line": _uwagi_text or "",
+                        "confidence": 0.0,
+                        "raw_pickup_line": (
+                            "<bridge-envelope-redacted>"
+                            if _bridge_envelope_rejected else (_uwagi_text or "")
+                        ),
                         "geocode_rejected": True,
                     }
+                    if _bridge_envelope_rejected:
+                        _uwagi_pickup_parsed["bridge_envelope_rejected"] = True
                 else:
                     _log.info(
                         f"NEW_ORDER {zid} firmowe-konto aid={_aid}: parser zwrócił "
@@ -2488,6 +2611,24 @@ def _diff_and_emit(
                         "raw_pickup_line": _uwagi_text or "",
                         "fallback_coords_used": True,
                     }
+
+        if _bridge_metric_enabled:
+            _write_uwagi_bridge_shadow_metric(
+                zid,
+                envelope_seen=bool(
+                    _bridge_attempt and _bridge_attempt.envelope_seen
+                ),
+                version=(
+                    _bridge_attempt.version if _bridge_attempt is not None else None
+                ),
+                reason=_bridge_metric_reason,
+                parsed=_bridge_parsed,
+                geocode_ok=_bridge_geocode_ok,
+                central_fallback=(
+                    _pcoords is not None
+                    and tuple(_pcoords) == tuple(FIRMOWE_KONTO_FALLBACK_COORDS)
+                ),
+            )
 
         # Geocode delivery address (cache hit ~90% = 0ms, miss = Google API max 2s)
         _del_addr = norm.get("delivery_address")

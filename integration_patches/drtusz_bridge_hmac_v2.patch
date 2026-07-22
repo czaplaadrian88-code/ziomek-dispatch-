@@ -1,0 +1,37 @@
+diff --git a/scripts/drtusz_bridge/bridge.py b/scripts/drtusz_bridge/bridge.py
+index 3189012..33ebb6f 100644
+--- a/scripts/drtusz_bridge/bridge.py
++++ b/scripts/drtusz_bridge/bridge.py
+@@ -214,6 +214,32 @@ def in_push_window(company, now_warsaw):
+ # budowa zlecenia gastro
+ # ----------------------------------------------------------------------------
+ def build_uwagi(company, order_id, detail):
++    """Producer entry. Verbose firms emit the authenticated v2 envelope when the
++    0600 HMAC secret is present; otherwise fall back to the byte-identical legacy
++    verbose uwagi so order creation never breaks (the v2 consumer fails closed to
++    KOORD on a legacy/unsigned envelope). Non-verbose firms are unchanged."""
++    if company.get("verbose_uwagi", False):
++        # dispatch_v2 lives one dir up (scripts-root). The systemd unit runs
++        # /usr/bin/python3 without PYTHONPATH, so bootstrap it from this file.
++        scripts_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
++        if scripts_root not in sys.path:
++            sys.path.insert(0, scripts_root)
++        try:
++            from dispatch_v2.uwagi_bridge_envelope import build_bridge_uwagi
++        except ImportError as exc:
++            log.error("dispatch_v2 import nieudany (%s) — legacy verbose uwagi", exc)
++            return _legacy_build_uwagi(company, order_id, detail)
++        return build_bridge_uwagi(
++            company,
++            order_id,
++            detail,
++            lambda: _legacy_build_uwagi(company, order_id, detail),
++            logger=log,
++        )
++    return _legacy_build_uwagi(company, order_id, detail)
++
++
++def _legacy_build_uwagi(company, order_id, detail):
+     """Buduje pole `add_uwagi` zlecenia gastro.
+ 
+     Tryb domyslny (DrTusz/Dentomax/3Giga/Orthdruk): `<Nazwa> #<oid> | Odbiorca:

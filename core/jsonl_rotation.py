@@ -33,6 +33,7 @@ JSONL_PATHS: tuple[str, ...] = (
     "/root/.openclaw/workspace/dispatch_state/czasowka_eval_log.jsonl",
     "/root/.openclaw/workspace/dispatch_state/decision_eta_log.jsonl",
     "/root/.openclaw/workspace/dispatch_state/czasowka_reclaim_shadow.jsonl",
+    "/root/.openclaw/workspace/dispatch_state/uwagi_bridge_envelope.jsonl",
     "/root/.openclaw/workspace/scripts/logs/geocoding_log.jsonl",
 )
 

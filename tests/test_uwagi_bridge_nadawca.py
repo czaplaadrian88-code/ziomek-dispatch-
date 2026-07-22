@@ -3,18 +3,65 @@
 
 Fixture = REALNE uwagi z produkcji (watcher.log P3-edge rejects, 6 firm catch-all
 rid=161). Kontrakt: NADAWCA = punkt odbioru; `oryg. adres` = doręczenie (NIE odbiór);
-pickup_rules mostu ustawiają tylko CZAS. Flaga ENABLE_UWAGI_BRIDGE_NADAWCA podawana
-parametrem `bridge_format` (parser pure) — OFF = bajt-parytet z legacy.
+pickup_rules mostu ustawiają tylko CZAS. P0 wymaga HMAC v2; tekstowy marker v1
+jest fixturem negatywnym. OFF = bajt-parytet z legacy.
 """
 import logging
+import json
+import os
+import re as _re
+import time as _time
 from types import SimpleNamespace
 
 import pytest
 
 from dispatch_v2.uwagi_address_parser import (
-    inspect_bridge_nadawca,
-    parse_pickup_from_uwagi,
+    inspect_bridge_nadawca as _inspect_bridge_nadawca,
+    parse_pickup_from_uwagi as _parse_pickup_from_uwagi,
 )
+from dispatch_v2.uwagi_bridge_envelope import (
+    BridgeCredentialError,
+    build_bridge_uwagi,
+    build_verbose_uwagi_envelope,
+    load_bridge_hmac,
+    sign_bridge_envelope,
+)
+
+TEST_HMAC_MATERIAL = b"dispatch-v2-test-only-hmac-material-32-bytes-minimum"
+
+# All fixtures below are signed "now" so the 24h freshness window passes; the
+# expiry path is tested explicitly with an old issued_at.
+_FRESH_TS = int(_time.time())
+
+
+def _oid_from_payload(payload):
+    """Extract the source order id printed as ``#<oid>`` in the payload head."""
+    head = payload.split("|", 1)[0]
+    m = _re.search(r"#([0-9A-Za-z_-]+)", head)
+    return m.group(1) if m else "0"
+
+
+def sign_bridge_envelope_fixture(payload, material=TEST_HMAC_MATERIAL,
+                                 *, order_id=None, issued_at=None):
+    """Sign a fixture, binding the order id parsed from the head + a fresh ts."""
+    return sign_bridge_envelope(
+        payload,
+        material,
+        order_id=order_id if order_id is not None else _oid_from_payload(payload),
+        issued_at=_FRESH_TS if issued_at is None else issued_at,
+    )
+
+
+def inspect_bridge_nadawca(text, **kwargs):
+    return _inspect_bridge_nadawca(text, hmac_material=TEST_HMAC_MATERIAL, **kwargs)
+
+
+def parse_pickup_from_uwagi(text, bridge_format=False):
+    return _parse_pickup_from_uwagi(
+        text,
+        bridge_format=bridge_format,
+        bridge_hmac_material=(TEST_HMAC_MATERIAL if bridge_format else None),
+    )
 
 # --- realne fixture z produkcji (skrócone pola nieistotne dla parsera) ---------
 STREET_SPORT = (
@@ -68,6 +115,27 @@ NADZWYCZAJNIE = (
     "Jarzębinowa 12/45 | Okno odbioru: 11:00 - 14:00 | Paczek: 1 | "
     "SRC:EPAKA_BRIDGE:v1"
 )
+
+
+def _upgrade_fixture(unsigned_v1):
+    payload, marker = unsigned_v1.rsplit(" | ", 1)
+    assert marker == "SRC:EPAKA_BRIDGE:v1"
+    return sign_bridge_envelope_fixture(payload)
+
+
+def _resign_payload(envelope, transform):
+    payload = envelope.rsplit(" | SRC:", 1)[0]
+    return sign_bridge_envelope_fixture(transform(payload))
+
+
+UNSIGNED_V1_STREET_SPORT = STREET_SPORT
+STREET_SPORT = _upgrade_fixture(STREET_SPORT)
+CHWIESKO = _upgrade_fixture(CHWIESKO)
+BRAVILOR = _upgrade_fixture(BRAVILOR)
+WOJOWNICY_50_TO_43 = _upgrade_fixture(WOJOWNICY_50_TO_43)
+WOJOWNICY_43_TO_50 = _upgrade_fixture(WOJOWNICY_43_TO_50)
+MATKA_POLKA = _upgrade_fixture(MATKA_POLKA)
+NADZWYCZAJNIE = _upgrade_fixture(NADZWYCZAJNIE)
 
 BRIDGE_CASES = [
     (STREET_SPORT, "Boruty", "17"),
@@ -135,21 +203,20 @@ def test_company_extracted_for_display():
 def test_stoplist_blocks_street_named_like_company():
     """Mutation-probe kierunku: podstawiony 'adres' będący nazwą firmy ze stoplisty
     NIE przechodzi (plauzybilność ulicy dalej obowiązuje w gałęzi bridge)."""
-    poisoned = (
+    poisoned = sign_bridge_envelope_fixture((
         "X #1 | NADAWCA: A tel 1 | Firma, NIP 123, Mali Wojownicy 7, "
         "15-000 Białystok, a@b.c | Odbiorca: B | oryg. adres: C 1 | Paczek: 1 | "
-        "SRC:EPAKA_BRIDGE:v1"
-    )
+    ).removesuffix(" | "))
     assert parse_pickup_from_uwagi(poisoned, bridge_format=True) is None
 
 
 def _bridge_text(address, *, city="Białystok"):
-    return (
+    payload = (
         "Test #1 | NADAWCA: Jan Kowalski tel 500500500 | "
         f"Firma Testowa, {address}, 15-001 {city}, test@example.invalid | "
-        "Odbiorca: Anna Nowak | oryg. adres: Inna 99 | Paczek: 1 | "
-        "SRC:EPAKA_BRIDGE:v1"
+        "Odbiorca: Anna Nowak | oryg. adres: Inna 99 | Paczek: 1"
     )
+    return sign_bridge_envelope_fixture(payload)
 
 
 def test_manual_fake_marker_without_complete_envelope_stays_none():
@@ -157,16 +224,46 @@ def test_manual_fake_marker_without_complete_envelope_stays_none():
     assert parse_pickup_from_uwagi(text, bridge_format=True) is None
 
 
+def test_poc_complete_manual_envelope_with_pasted_marker_is_rejected():
+    """PoC #1: pełna ręczna koperta nie zna HMAC i nie może wejść w P0."""
+    # Well-formed v2 marker shape (oid/ts present) but a digest the forger
+    # cannot compute without the secret -> hmac_mismatch, not a shape reject.
+    forged = UNSIGNED_V1_STREET_SPORT.replace(
+        "SRC:EPAKA_BRIDGE:v1",
+        f"SRC:EPAKA_BRIDGE:v2;oid=45520;ts={_FRESH_TS};hmac-sha256=" + ("0" * 64),
+    )
+    attempt = inspect_bridge_nadawca(forged)
+    assert attempt.pickup is None
+    assert attempt.reason == "hmac_mismatch"
+
+
 def test_missing_odbiorca_boundary_fails_closed():
-    text = STREET_SPORT.replace("| Odbiorca:", "| Klient:", 1)
+    text = _resign_payload(
+        STREET_SPORT,
+        lambda payload: payload.replace("| Odbiorca:", "| Klient:", 1),
+    )
     assert parse_pickup_from_uwagi(text, bridge_format=True) is None
 
 
 def test_duplicate_nadawca_segment_fails_closed():
-    text = STREET_SPORT.replace(
-        "| Odbiorca:", "| NADAWCA: duplikat | Odbiorca:", 1
+    text = _resign_payload(
+        STREET_SPORT,
+        lambda payload: payload.replace(
+            "| Odbiorca:", "| NADAWCA: duplikat | Odbiorca:", 1
+        ),
     )
     assert parse_pickup_from_uwagi(text, bridge_format=True) is None
+
+
+def test_poc_two_raw_nadawca_prefixes_in_one_segment_are_rejected():
+    """PoC #2: surowe prefiksy liczymy przed split/normalizacją."""
+    payload = STREET_SPORT.rsplit(" | SRC:", 1)[0].replace(
+        "NADAWCA: FLM", "NADAWCA: NADAWCA: FLM", 1
+    )
+    signed = sign_bridge_envelope_fixture(payload)
+    attempt = inspect_bridge_nadawca(signed)
+    assert attempt.pickup is None
+    assert attempt.reason == "raw_nadawca_prefix_count:2"
 
 
 def test_nadawca_label_without_leading_pipe_is_not_an_envelope_segment():
@@ -176,15 +273,21 @@ def test_nadawca_label_without_leading_pipe_is_not_an_envelope_segment():
 
 
 def test_duplicate_odbiorca_boundary_fails_closed():
-    text = STREET_SPORT.replace(
-        "| Odbiorca:", "| Odbiorca: pierwszy | Odbiorca:", 1
+    text = _resign_payload(
+        STREET_SPORT,
+        lambda payload: payload.replace(
+            "| Odbiorca:", "| Odbiorca: pierwszy | Odbiorca:", 1
+        ),
     )
     assert parse_pickup_from_uwagi(text, bridge_format=True) is None
 
 
 def test_two_postal_anchors_fail_closed_instead_of_first_wins():
-    text = STREET_SPORT.replace(
-        "| Odbiorca:", ", Druga 2, 16-001 Kleosin | Odbiorca:", 1
+    text = _resign_payload(
+        STREET_SPORT,
+        lambda payload: payload.replace(
+            "| Odbiorca:", ", Druga 2, 16-001 Kleosin | Odbiorca:", 1
+        ),
     )
     assert parse_pickup_from_uwagi(text, bridge_format=True) is None
 
@@ -222,25 +325,25 @@ def test_two_word_city_is_preserved():
 
 
 def test_exact_epaka_marker_spelling_is_required():
-    typo = STREET_SPORT.replace("SRC:EPAKA_BRIDGE:v1", "SRC:EPAKI_BRIDGE:v1")
+    typo = STREET_SPORT.replace("SRC:EPAKA_BRIDGE:v2", "SRC:EPAKI_BRIDGE:v2")
     assert parse_pickup_from_uwagi(typo, bridge_format=True) is None
 
 
 def test_unknown_bridge_version_is_none_with_distinguishable_reason():
-    future = STREET_SPORT.replace("SRC:EPAKA_BRIDGE:v1", "SRC:EPAKA_BRIDGE:v2")
+    future = STREET_SPORT.replace("SRC:EPAKA_BRIDGE:v2", "SRC:EPAKA_BRIDGE:v3")
     attempt = inspect_bridge_nadawca(future)
     assert attempt.pickup is None
-    assert attempt.reason == "unsupported_source_version:v2"
+    assert attempt.reason == "unsupported_source_version:v3"
     assert parse_pickup_from_uwagi(future, bridge_format=True) is None
     legacy_collision = (
         "Odbiór: Lepsza 9 | NADAWCA: A | Firma, Boruty 17, "
-        "15-157 Białystok | Odbiorca: B | SRC:EPAKA_BRIDGE:v2"
+        "15-157 Białystok | Odbiorca: B | SRC:EPAKA_BRIDGE:v3"
     )
     assert parse_pickup_from_uwagi(legacy_collision, bridge_format=True) is None
 
 
 def test_duplicate_source_marker_fails_closed():
-    duplicate = STREET_SPORT + " | SRC:EPAKA_BRIDGE:v1"
+    duplicate = STREET_SPORT + " | " + STREET_SPORT.rsplit(" | ", 1)[1]
     assert parse_pickup_from_uwagi(duplicate, bridge_format=True) is None
 
 
@@ -264,15 +367,97 @@ def test_loose_nadawca_without_marker_uses_unchanged_legacy_path():
 
 
 def test_mutation_probe_swapped_nadawca_and_odbiorca_is_rejected():
-    swapped = (
-        STREET_SPORT.replace("NADAWCA:", "__SENDER__:", 1)
-        .replace("Odbiorca:", "NADAWCA:", 1)
-        .replace("__SENDER__:", "Odbiorca:", 1)
+    swapped = _resign_payload(
+        STREET_SPORT,
+        lambda payload: (
+            payload.replace("NADAWCA:", "__SENDER__:", 1)
+            .replace("Odbiorca:", "NADAWCA:", 1)
+            .replace("__SENDER__:", "Odbiorca:", 1)
+        ),
     )
     assert parse_pickup_from_uwagi(swapped, bridge_format=True) is None
 
 
-def _run_panel_callsite(monkeypatch, *, reject_on, uwagi=STREET_SPORT):
+def _producer_detail(**sender_overrides):
+    sender = {
+        "name": "Jan",
+        "lastname": "Kowalski",
+        "phone": "500500500",
+        "company": "Firma Nadawcy",
+        "invoice_nip": "1234567890",
+        "street": "Boruty 17",
+        "post_code": "15-157",
+        "city": "Białystok",
+        "email": "sender@example.invalid",
+    }
+    sender.update(sender_overrides)
+    return {
+        "sender": sender,
+        "name": "Anna",
+        "lastname": "Nowak",
+        "company": "Odbiorca Sp. z o.o.",
+        "address": "Kijowska 12",
+        "czas_odbioru_okno": "11:00 - 14:00",
+        "czas_doreczenia_okno": "12:00 - 15:00",
+        "ilosc_paczek": "1",
+    }
+
+
+def test_poc_producer_sender_name_cannot_inject_address_segment():
+    """PoC #3: `|` z pola producenta jest danymi, nie separatorem koperty."""
+    envelope = build_verbose_uwagi_envelope(
+        {"name": "Street-Sport", "verbose_uwagi": True},
+        45520,
+        _producer_detail(name="Jan | Firma Atak, Zła 99"),
+        TEST_HMAC_MATERIAL,
+    )
+    assert "%7C" in envelope
+    assert envelope.count("NADAWCA:") == 1
+    parsed = parse_pickup_from_uwagi(envelope, bridge_format=True)
+    assert parsed is not None
+    assert (parsed.street, parsed.number) == ("Boruty", "17")
+
+
+def test_postal_code_after_odbiorca_boundary_does_not_collide():
+    detail = _producer_detail(address="Kijowska 12, 00-001 Warszawa")
+    envelope = build_verbose_uwagi_envelope(
+        {"name": "Street-Sport", "verbose_uwagi": True},
+        45520,
+        detail,
+        TEST_HMAC_MATERIAL,
+    )
+    parsed = parse_pickup_from_uwagi(envelope, bridge_format=True)
+    assert parsed is not None
+    assert (parsed.street, parsed.number, parsed.city) == (
+        "Boruty", "17", "Białystok"
+    )
+
+
+def test_hmac_file_requires_exact_0600(tmp_path):
+    path = tmp_path / "bridge-hmac-fixture"
+    path.write_bytes(TEST_HMAC_MATERIAL)
+    os.chmod(path, 0o640)
+    with pytest.raises(BridgeCredentialError):
+        load_bridge_hmac(path)
+    os.chmod(path, 0o600)
+    assert load_bridge_hmac(path) == TEST_HMAC_MATERIAL
+
+
+def test_unsigned_v1_is_rejected_even_when_shape_is_complete():
+    attempt = inspect_bridge_nadawca(UNSIGNED_V1_STREET_SPORT)
+    assert attempt.envelope_seen is True
+    assert attempt.version == 1
+    assert attempt.reason == "unsigned_source_marker"
+    assert attempt.pickup is None
+
+
+def _run_panel_callsite(
+    monkeypatch,
+    *,
+    reject_on,
+    uwagi=STREET_SPORT,
+    geocode_result=None,
+):
     from dispatch_v2 import panel_detail_prefetch
     from dispatch_v2 import panel_watcher as watcher
     from dispatch_v2 import parse_continuity_guard
@@ -342,10 +527,16 @@ def _run_panel_callsite(monkeypatch, *, reject_on, uwagi=STREET_SPORT):
     monkeypatch.setattr(watcher, "flag", fake_flag)
     monkeypatch.setattr(watcher.C, "flag", fake_flag)
     monkeypatch.setattr(watcher, "decision_flag", lambda *_args, **_kwargs: False)
+    monkeypatch.setattr(watcher, "load_bridge_hmac", lambda: TEST_HMAC_MATERIAL)
+    monkeypatch.setattr(
+        watcher,
+        "_write_uwagi_bridge_shadow_metric",
+        lambda *_args, **_kwargs: None,
+    )
 
     def fake_geocode(address, *, city, timeout):
         geocode_calls.append((address, city, timeout))
-        return None
+        return geocode_result
 
     def fake_emit(event_type, **kwargs):
         emitted.append((event_type, kwargs))
@@ -375,6 +566,7 @@ def test_callsite_bridge_geocode_fail_never_uses_central_fallback(monkeypatch):
     assert payload["pickup_address"] == "Boruty 17"
     assert payload["uwagi_pickup_parsed"]["street"] == "Boruty"
     assert "fallback_coords_used" not in payload["uwagi_pickup_parsed"]
+    assert payload["uwagi_pickup_parsed"]["bridge_envelope_rejected"] is True
     decision = assess_order(
         {
             **payload,
@@ -387,11 +579,33 @@ def test_callsite_bridge_geocode_fail_never_uses_central_fallback(monkeypatch):
     assert decision.reason == "no_pickup_geocode"
 
 
+def test_callsite_poc_manual_complete_envelope_goes_to_koord(monkeypatch):
+    # Well-formed v2 marker shape (oid/ts present) but a digest the forger
+    # cannot compute without the secret -> hmac_mismatch, not a shape reject.
+    forged = UNSIGNED_V1_STREET_SPORT.replace(
+        "SRC:EPAKA_BRIDGE:v1",
+        f"SRC:EPAKA_BRIDGE:v2;oid=45520;ts={_FRESH_TS};hmac-sha256=" + ("0" * 64),
+    )
+    payload, geocode_calls = _run_panel_callsite(
+        monkeypatch,
+        reject_on=True,
+        uwagi=forged,
+    )
+    assert geocode_calls == []
+    assert payload["pickup_coords"] is None
+    assert payload["uwagi_pickup_parsed"]["geocode_rejected"] is True
+    assert payload["uwagi_pickup_parsed"]["bridge_envelope_rejected"] is True
+
+
 def test_callsite_disables_bridge_and_warns_when_reject_flag_is_off(
     monkeypatch, caplog
 ):
     with caplog.at_level(logging.WARNING, logger="panel_watcher"):
-        payload, geocode_calls = _run_panel_callsite(monkeypatch, reject_on=False)
+        payload, geocode_calls = _run_panel_callsite(
+            monkeypatch,
+            reject_on=False,
+            uwagi="MALI WOJOWNICY",
+        )
 
     assert geocode_calls == []
     assert payload["uwagi_pickup_parsed"]["fallback_coords_used"] is True
@@ -401,10 +615,53 @@ def test_callsite_disables_bridge_and_warns_when_reject_flag_is_off(
     )
 
 
+def test_incoherent_flags_cannot_revive_signed_envelope_via_legacy(monkeypatch):
+    payload, geocode_calls = _run_panel_callsite(monkeypatch, reject_on=False)
+
+    assert geocode_calls == []
+    assert payload["pickup_coords"] is None
+    assert payload["uwagi_pickup_parsed"]["bridge_envelope_rejected"] is True
+
+
+def test_downstream_twins_keep_bridge_rejection_fail_closed(monkeypatch):
+    from datetime import datetime, timezone
+
+    from dispatch_v2 import czasowka_scheduler, shadow_dispatcher
+    from dispatch_v2.uwagi_bridge_envelope import bridge_envelope_was_rejected
+
+    rejected = {
+        "address_id": "161",
+        "pickup_coords": None,
+        "uwagi_pickup_parsed": {"bridge_envelope_rejected": True},
+    }
+    assert bridge_envelope_was_rejected(rejected) is True
+    assert shadow_dispatcher._should_regeocode_pickup(rejected) is False
+
+    monkeypatch.setattr(czasowka_scheduler, "_early_morning_blocked", lambda _now: False)
+    monkeypatch.setattr(czasowka_scheduler, "_minutes_to_pickup", lambda *_args: 10.0)
+    monkeypatch.setattr(
+        czasowka_scheduler.C,
+        "FIRMOWE_KONTO_ADDRESS_IDS",
+        frozenset({161}),
+    )
+    monkeypatch.setattr(czasowka_scheduler.C, "flag", lambda *_args: False)
+    result = czasowka_scheduler._eval_czasowka_impl(
+        "900001",
+        rejected,
+        datetime(2026, 7, 22, 10, 0, tzinfo=timezone.utc),
+    )
+    assert result["decision"] == "KOORD"
+    assert result["reason"] == "no_pickup_geocode"
+
+    legacy = {"uwagi_pickup_parsed": {"geocode_rejected": True}}
+    assert bridge_envelope_was_rejected(legacy) is False
+    assert shadow_dispatcher._should_regeocode_pickup(legacy) is True
+
+
 def test_callsite_logs_distinguishable_unknown_bridge_version(
     monkeypatch, caplog
 ):
-    future = STREET_SPORT.replace("SRC:EPAKA_BRIDGE:v1", "SRC:EPAKA_BRIDGE:v2")
+    future = STREET_SPORT.replace("SRC:EPAKA_BRIDGE:v2", "SRC:EPAKA_BRIDGE:v3")
     with caplog.at_level(logging.ERROR, logger="panel_watcher"):
         payload, geocode_calls = _run_panel_callsite(
             monkeypatch,
@@ -415,6 +672,251 @@ def test_callsite_logs_distinguishable_unknown_bridge_version(
     assert geocode_calls == []
     assert payload["pickup_coords"] is None
     assert any(
-        "bridge_reason='unsupported_source_version:v2'" in record.getMessage()
+        "bridge_reason='unsupported_source_version:v3'" in record.getMessage()
         for record in caplog.records
     )
+
+
+def test_callsite_out_of_bbox_geocode_rejects_without_central_fallback(monkeypatch):
+    from dispatch_v2.common import FIRMOWE_KONTO_FALLBACK_COORDS
+
+    payload, geocode_calls = _run_panel_callsite(
+        monkeypatch,
+        reject_on=True,
+        geocode_result=(52.2297, 21.0122),  # Warszawa, poza bboxem Białegostoku
+    )
+    assert geocode_calls == [("Boruty 17", "Białystok", 2.0)]
+    assert payload["pickup_coords"] is None
+    assert payload["pickup_coords"] != list(FIRMOWE_KONTO_FALLBACK_COORDS)
+
+
+def test_shadow_metric_is_jsonl_and_contains_no_pii(monkeypatch, tmp_path):
+    from dispatch_v2 import panel_watcher as watcher
+
+    path = tmp_path / "uwagi_bridge_envelope.jsonl"
+    monkeypatch.setattr(watcher, "_UWAGI_BRIDGE_SHADOW_LOG_PATH", str(path))
+    watcher._write_uwagi_bridge_shadow_metric(
+        "900001",
+        envelope_seen=True,
+        version=2,
+        reason="parsed_v2",
+        parsed=True,
+        geocode_ok=True,
+        central_fallback=False,
+    )
+    record = json.loads(path.read_text(encoding="utf-8"))
+    assert set(record) == {
+        "order_id_hash",
+        "envelope_seen",
+        "version",
+        "reason",
+        "parsed",
+        "geocode_ok",
+        "central_fallback",
+    }
+    serialized = json.dumps(record, ensure_ascii=False)
+    for pii in ("Boruty", "Białystok", "Street-Sport", "900001"):
+        assert pii not in serialized
+
+
+def test_shadow_metric_is_in_canonical_rotation():
+    from dispatch_v2.core import jsonl_rotation
+
+    assert (
+        "/root/.openclaw/workspace/dispatch_state/uwagi_bridge_envelope.jsonl"
+        in jsonl_rotation.JSONL_PATHS
+    )
+
+
+@pytest.mark.parametrize(
+    "bridge_enabled,reject_enabled,expected",
+    [(False, False, False), (False, True, False), (True, False, False), (True, True, True)],
+)
+def test_fail_closed_flag_binding(bridge_enabled, reject_enabled, expected):
+    from dispatch_v2 import common as C
+
+    assert C.uwagi_bridge_flags_coherent(
+        bridge_enabled=bridge_enabled,
+        reject_enabled=reject_enabled,
+    ) is expected
+
+
+def test_flag_lifecycle_registry_binds_bridge_to_reject():
+    registry_path = os.path.join(
+        os.path.dirname(os.path.dirname(__file__)),
+        "tools",
+        "flag_lifecycle_registry.json",
+    )
+    flags = json.loads(open(registry_path, encoding="utf-8").read())["flags"]
+    bridge = "ENABLE_UWAGI_BRIDGE_NADAWCA"
+    reject = "ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL"
+    assert flags[bridge]["default"] is False
+    assert flags[bridge]["twin_of"] == [reject]
+    assert bridge in flags[reject]["twin_of"]
+
+
+# --------------------------------------------------------------------------
+# Anti-replay: order-id binding + freshness (2026-07-22 P1-1)
+# --------------------------------------------------------------------------
+from dispatch_v2.uwagi_bridge_envelope import (  # noqa: E402
+    DEFAULT_ENVELOPE_MAX_AGE_SECONDS,
+    verify_bridge_envelope,
+)
+
+
+def _fresh_envelope(order_id=45520):
+    """A valid v2 envelope for a given source order id, signed 'now'."""
+    payload = (
+        f"Street-Sport #{order_id} | NADAWCA: FLM SP.K tel 604 593 684 | "
+        "FLM SP.K, NIP 5423039093, Boruty 17, 15-157 Białystok, a@b.pl | "
+        "Odbiorca: FLM SP.K. | oryg. adres: Kijowska 12 | Paczek: 1"
+    )
+    return sign_bridge_envelope(
+        payload, TEST_HMAC_MATERIAL, order_id=order_id, issued_at=_FRESH_TS
+    )
+
+
+def test_replay_envelope_of_order_111_into_999_is_order_id_mismatch():
+    """Reviewer PoC: a valid envelope signed for order 111 must not be accepted
+    for a different order 999 (caller supplies the independent expected id)."""
+    envelope = _fresh_envelope(order_id=111)
+    # Sanity: with the matching expected id it authenticates.
+    ok = inspect_bridge_nadawca(envelope, expected_order_id="111", now=_FRESH_TS)
+    assert ok.pickup is not None
+    assert ok.reason == "parsed_v2"
+    # Same bearer envelope, different processed order -> replay rejected.
+    replayed = inspect_bridge_nadawca(envelope, expected_order_id="999", now=_FRESH_TS)
+    assert replayed.pickup is None
+    assert replayed.reason == "order_id_mismatch"
+    assert parse_pickup_from_uwagi_full(
+        envelope, expected_order_id="999"
+    ) is None
+
+
+def test_signed_oid_not_matching_content_hash_is_order_id_mismatch():
+    """Internal consistency: an envelope whose authenticated oid is not the
+    ``#<oid>`` printed in the content is rejected even without an expected id."""
+    payload = (
+        "Street-Sport #999 | NADAWCA: FLM tel 1 | FLM, Boruty 17, "
+        "15-157 Białystok, a@b.pl | Odbiorca: X | oryg. adres: Y 1 | Paczek: 1"
+    )
+    # Sign a DIFFERENT oid (111) than the content advertises (#999).
+    envelope = sign_bridge_envelope(
+        payload, TEST_HMAC_MATERIAL, order_id=111, issued_at=_FRESH_TS
+    )
+    attempt = inspect_bridge_nadawca(envelope, now=_FRESH_TS)
+    assert attempt.pickup is None
+    assert attempt.reason == "order_id_mismatch"
+
+
+def test_expired_envelope_is_rejected_envelope_expired():
+    """An authentic envelope older than the freshness window -> envelope_expired."""
+    envelope = _fresh_envelope(order_id=45520)
+    stale_now = _FRESH_TS + DEFAULT_ENVELOPE_MAX_AGE_SECONDS + 3600
+    attempt = inspect_bridge_nadawca(envelope, now=stale_now)
+    assert attempt.pickup is None
+    assert attempt.reason == "envelope_expired"
+    # And below the window it still parses.
+    fresh = inspect_bridge_nadawca(envelope, now=_FRESH_TS + 60)
+    assert fresh.reason == "parsed_v2"
+
+
+def test_future_dated_envelope_beyond_skew_is_expired():
+    """A ts implausibly in the future (forged/clock-abuse) -> envelope_expired."""
+    envelope = _fresh_envelope()
+    attempt = inspect_bridge_nadawca(envelope, now=_FRESH_TS - 4000)
+    assert attempt.pickup is None
+    assert attempt.reason == "envelope_expired"
+
+
+def test_happy_path_v2_still_authenticates_and_parses():
+    """Scenario (c): a fresh, consistent v2 envelope parses the sender pickup."""
+    envelope = _fresh_envelope(order_id=45520)
+    v = verify_bridge_envelope(envelope, TEST_HMAC_MATERIAL, now=_FRESH_TS)
+    assert v.authenticated is True
+    assert v.reason == "authenticated_v2"
+    assert v.order_id == "45520"
+    assert v.issued_at == _FRESH_TS
+    parsed = parse_pickup_from_uwagi(envelope, bridge_format=True)
+    assert parsed is not None
+    assert (parsed.street, parsed.number) == ("Boruty", "17")
+
+
+def test_max_age_is_configurable_via_env(monkeypatch):
+    from dispatch_v2 import uwagi_bridge_envelope as env
+
+    envelope = _fresh_envelope()
+    old_now = _FRESH_TS + 2 * 3600  # 2h later
+    # Default 24h -> still fresh.
+    assert verify_bridge_envelope(
+        envelope, TEST_HMAC_MATERIAL, now=old_now
+    ).reason == "authenticated_v2"
+    # Tighten window to 1h via env -> now expired.
+    monkeypatch.setenv(env.ENVELOPE_MAX_AGE_ENV, "3600")
+    assert verify_bridge_envelope(
+        envelope, TEST_HMAC_MATERIAL, now=old_now
+    ).reason == "envelope_expired"
+
+
+def parse_pickup_from_uwagi_full(text, **kwargs):
+    return _parse_pickup_from_uwagi(
+        text, bridge_format=True, bridge_hmac_material=TEST_HMAC_MATERIAL, **kwargs
+    )
+
+
+# --- Producer fail-safe: missing secret -> legacy, never raises (scenario d) ---
+def test_producer_without_secret_falls_back_to_legacy_without_exception(monkeypatch):
+    from dispatch_v2 import uwagi_bridge_envelope as env
+
+    def _raise_no_secret():
+        raise BridgeCredentialError("bridge HMAC unavailable: FileNotFoundError")
+
+    monkeypatch.setattr(env, "load_bridge_hmac", _raise_no_secret)
+    calls = {"legacy": 0}
+
+    def _legacy():
+        calls["legacy"] += 1
+        return "Street-Sport #45520 | Odbiorca: X | SRC:EPAKA_BRIDGE:v1"
+
+    warnings = []
+
+    class _Logger:
+        def warning(self, *a, **k):
+            warnings.append((a, k))
+
+    result = build_bridge_uwagi(
+        {"name": "Street-Sport", "verbose_uwagi": True},
+        45520,
+        {"sender": {"street": "Boruty 17"}},
+        _legacy,
+        logger=_Logger(),
+    )
+    assert calls["legacy"] == 1
+    assert result.endswith("SRC:EPAKA_BRIDGE:v1")
+    assert warnings, "missing secret must warn"
+
+
+def test_producer_with_secret_emits_authenticated_v2(monkeypatch):
+    from dispatch_v2 import uwagi_bridge_envelope as env
+
+    monkeypatch.setattr(env, "load_bridge_hmac", lambda: TEST_HMAC_MATERIAL)
+
+    def _legacy():
+        raise AssertionError("legacy builder must not run when secret is present")
+
+    result = build_bridge_uwagi(
+        {"name": "Street-Sport", "verbose_uwagi": True},
+        45520,
+        {
+            "sender": {
+                "name": "Jan", "lastname": "Kowalski", "phone": "1",
+                "company": "FLM", "street": "Boruty 17",
+                "post_code": "15-157", "city": "Białystok",
+            },
+            "name": "Anna", "address": "Kijowska 12",
+        },
+        _legacy,
+    )
+    attempt = inspect_bridge_nadawca(result, expected_order_id="45520", now=_FRESH_TS)
+    assert attempt.pickup is not None
+    assert (attempt.pickup.street, attempt.pickup.number) == ("Boruty", "17")

@@ -27,6 +27,7 @@ from dispatch_v2.core.decide import decide as _decide  # K09: fasada decyzji (de
 from dispatch_v2.core.world_state import WorldState
 from dispatch_v2.identity.candidate_pool import alternative_candidates
 from dispatch_v2.telegram_approver import tg_request
+from dispatch_v2.uwagi_bridge_envelope import bridge_envelope_was_rejected
 
 WARSAW = ZoneInfo("Europe/Warsaw")
 
@@ -295,6 +296,7 @@ def _eval_czasowka_impl(order_id: str, order_state: dict, now_utc: datetime) -> 
     _pc = order_state.get("pickup_coords")
     _is_no_geocode = _pc is None or _pc == [0.0, 0.0] or _pc == (0.0, 0.0)
     if _is_no_geocode:
+        _bridge_rejected = bridge_envelope_was_rejected(order_state)
         _aid_raw = order_state.get("address_id")
         try:
             _aid_int = int(_aid_raw) if _aid_raw is not None else None
@@ -303,7 +305,7 @@ def _eval_czasowka_impl(order_id: str, order_state: dict, now_utc: datetime) -> 
         _firmowe = _aid_int is not None and _aid_int in C.FIRMOWE_KONTO_ADDRESS_IDS
         _reject = C.flag("ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL",
                          C.ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL)
-        if _firmowe and not _reject:
+        if _firmowe and not _reject and not _bridge_rejected:
             # Legacy (reject OFF): firmowe → fallback coords zamiast KOORD.
             # Mutate local order_state copy NIE persist (state machine source-of-truth).
             order_state = dict(order_state)
@@ -321,7 +323,8 @@ def _eval_czasowka_impl(order_id: str, order_state: dict, now_utc: datetime) -> 
             if _firmowe:
                 _log.error(
                     f"V328_CZASOWKA_FIRMOWE_REJECT oid={order_id} address_id={_aid_int} "
-                    f"— brak pickup geocode → KOORD (reject+flag, NIE centrala)"
+                    f"— brak pickup geocode → KOORD (reject+flag lub odrzucona "
+                    f"koperta, NIE centrala)"
                 )
             return {
                 "decision": "KOORD",
