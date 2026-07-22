@@ -1148,6 +1148,53 @@ def _nogps_neutral_score_pass(candidates, order_id=None, *, apply_on=None):
     return neutral_km, applied
 
 
+def _select_with_position_model_shadow(
+    selection_ctx,
+    candidates,
+    *,
+    explicit_effective: bool,
+    explicit_requested: bool,
+    flag_conflict: bool,
+):
+    """Uruchom actual i kontrfaktyk przez ten sam pełny selektor."""
+    import copy as _copy
+
+    counter_mode = "legacy" if explicit_effective else "explicit"
+    counter_candidates = []
+    for candidate in candidates:
+        variants = getattr(candidate, "_position_model_variants", {}) or {}
+        variant = variants.get(counter_mode, candidate)
+        if variant is not None:
+            counter_candidates.append(_copy.deepcopy(variant))
+    counter_ctx = _copy.copy(selection_ctx)
+    counter_ctx.position_model_mode = counter_mode
+    counter_ctx.shadow_only = True
+    counter_selected = _selection.select_and_emit(counter_ctx, counter_candidates)
+    selected = _selection.select_and_emit(selection_ctx, candidates)
+    legacy_result = counter_selected if explicit_effective else selected
+    explicit_result = selected if explicit_effective else counter_selected
+    selected.position_model_shadow = {
+        "schema": "explicit_unknown_position.v1",
+        "flag_requested": explicit_requested,
+        "flag_effective": explicit_effective,
+        "flag_conflict": flag_conflict,
+        "selector_path": "core.selection.select_and_emit",
+        "legacy_winner_cid": (
+            str(legacy_result.best.courier_id) if legacy_result.best is not None else None
+        ),
+        "explicit_winner_cid": (
+            str(explicit_result.best.courier_id) if explicit_result.best is not None else None
+        ),
+        "would_change_winner": (
+            getattr(legacy_result.best, "courier_id", None)
+            != getattr(explicit_result.best, "courier_id", None)
+        ),
+        "legacy_verdict": legacy_result.verdict,
+        "explicit_verdict": explicit_result.verdict,
+    }
+    return selected
+
+
 def _objm_metric_min(c, k):
     """Metryka liczbowa kandydata albo None — JEDNO ŹRÓDŁO (scalenie 2 kopii
     zagnieżdżonego `_m` z pick/shadow, dedup 2026-07-17)."""
@@ -5211,40 +5258,13 @@ def _assess_order_impl(
         )
     # Kontrfaktyk idzie przez PRAWDZIWY selektor (feasibility→score→tiering→
     # buckets→best_effort→OBJM/R29→final gates), nigdy przez max(score).
-    import copy as _copy
-    _counter_mode = "legacy" if _explicit_unknown_effective else "explicit"
-    _counter_candidates = []
-    for _candidate in candidates:
-        _variants = getattr(_candidate, "_position_model_variants", {}) or {}
-        _variant = _variants.get(_counter_mode, _candidate)
-        if _variant is not None:
-            _counter_candidates.append(_copy.deepcopy(_variant))
-    _counter_ctx = _copy.copy(_selection_ctx)
-    _counter_ctx.position_model_mode = _counter_mode
-    _counter_ctx.shadow_only = True
-    _counter_selected = _selection.select_and_emit(_counter_ctx, _counter_candidates)
-    _selected = _selection.select_and_emit(_selection_ctx, candidates)
-    _legacy_result = _counter_selected if _explicit_unknown_effective else _selected
-    _explicit_result = _selected if _explicit_unknown_effective else _counter_selected
-    _selected.position_model_shadow = {
-        "schema": "explicit_unknown_position.v1",
-        "flag_requested": _explicit_unknown_requested,
-        "flag_effective": _explicit_unknown_effective,
-        "flag_conflict": _position_flag_conflict,
-        "selector_path": "core.selection.select_and_emit",
-        "legacy_winner_cid": (
-            str(_legacy_result.best.courier_id) if _legacy_result.best is not None else None
-        ),
-        "explicit_winner_cid": (
-            str(_explicit_result.best.courier_id) if _explicit_result.best is not None else None
-        ),
-        "would_change_winner": (
-            getattr(_legacy_result.best, "courier_id", None)
-            != getattr(_explicit_result.best, "courier_id", None)
-        ),
-        "legacy_verdict": _legacy_result.verdict,
-        "explicit_verdict": _explicit_result.verdict,
-    }
+    _selected = _select_with_position_model_shadow(
+        _selection_ctx,
+        candidates,
+        explicit_effective=_explicit_unknown_effective,
+        explicit_requested=_explicit_unknown_requested,
+        flag_conflict=_position_flag_conflict,
+    )
     if _timing_trace is not None:
         _timing_trace.record_since("selection_wall_ms", _selection_started)
     return _selected

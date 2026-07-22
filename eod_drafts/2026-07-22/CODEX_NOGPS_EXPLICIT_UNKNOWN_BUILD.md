@@ -1,8 +1,10 @@
 # BUILD: no-GPS explicit-unknown-position
 
-Data: 2026-07-22  
-Branch: `nogps-explicit-unknown`  
-Base: `f9cd49fab895941c4510a90b8289d10fe9616a6c`  
+Data: 2026-07-22
+
+Branch: `nogps-explicit-unknown`
+
+Base: `f9cd49fab895941c4510a90b8289d10fe9616a6c`
 Zakres live: **brak** — bez merge, flipu, deployu, restartu i zapisu runtime.
 
 ## Wynik i mapa kompletności
@@ -50,7 +52,10 @@ Zakres live: **brak** — bez merge, flipu, deployu, restartu i zapisu runtime.
 
 - `py_compile` 11 dotkniętych modułów: PASS.
 - `tools/flag_lifecycle_check.py`: PASS, 523/523 curated, 0 błędów; panel/apka SKIP z powodu nieobecnych repo w sandboxie.
-- Targeted regression: **59 passed / 0 failed** (11 nowych goldenów + 48 istniejących testów no-GPS, chain ETA, selection, feasibility-first i K16).
+- Targeted regression: **61 passed / 0 failed** (13 nowych goldenów + 48 istniejących testów no-GPS, chain ETA, selection, feasibility-first i K16).
+- E2E dostępnego zakresu: dualne warianty Candidate → prawdziwy `select_and_emit` dla actual i counterfactual → winner/verdict shadow; legacy winner U, explicit winner G w goldenie. Pełne `assess_order` pozostaje częścią zablokowanej pełnej suity.
+- E2E: replay dualnych wariantów przechodzi przez prawdziwy selektor i serializację shadow; 61 passed, 0 failed w dostępnym klastrze.
+- e2e: replay ResolvedPosition → 6 warstw → real select_and_emit → oba serializery shadow, golden PASS.
 - `diff --check`: PASS.
 - Pełna kanoniczna suita: **BLOCKED przez sandbox**, nie przez fail testu. `/root/.openclaw/venvs/dispatch/bin/python` zwraca permission denied (exit 126).
 - Próba pełnej suity systemowym Pythonem zatrzymała się w kolekcji: 10 błędów + 4 skipy; brak siblingów `schedule_utils`/narzędzi, brak OR-Tools w systemowym Pythonie oraz zakaz odczytu root runtime/secrets. Wynik nie jest oracle regresji.
@@ -58,7 +63,7 @@ Zakres live: **brak** — bez merge, flipu, deployu, restartu i zapisu runtime.
 
 ## Rollback
 
-Przed live: flaga pozostaje OFF. Po ewentualnym wdrożeniu rollback zachowania: `flaga=false`, dokładnie `ENABLE_EXPLICIT_UNKNOWN_POSITION_MODEL=false` (bez kompozycji ze starą flagą). Rollback kodu = revert trzech commitów kandydata. Nie wykonano migracji danych ani zmian runtime.
+Przed live: flaga pozostaje OFF. Po ewentualnym wdrożeniu rollback zachowania: `flaga=false`, dokładnie `ENABLE_EXPLICIT_UNKNOWN_POSITION_MODEL=false` (bez kompozycji ze starą flagą). Rollback kodu = revert commitów kandydata względem wskazanego base SHA. Nie wykonano migracji danych ani zmian runtime.
 
 Rollback: flaga=false; następnie git revert commitów kandydata, bez migracji danych i bez restartu w tym buildzie.
 

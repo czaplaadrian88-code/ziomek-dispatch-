@@ -180,6 +180,46 @@ def test_golden_true_selector_not_naive_max(monkeypatch):
     assert result.best.courier_id == "OK"
 
 
+def test_e2e_counterfactual_replay_uses_real_selector_for_both_variants(monkeypatch):
+    from dispatch_v2 import dispatch_pipeline as dp
+    from dispatch_v2.core.selection import SelectionContext
+
+    plan = SimpleNamespace(
+        sequence=["O1"], sla_violations=0, predicted_delivered_at={}, pickup_at={},
+        total_duration_min=20.0, strategy="golden",
+    )
+
+    def candidate(cid, score):
+        return dp.Candidate(
+            cid, None, score, "MAYBE", "ok", plan,
+            {"bundle_level3_dev": None, "bag_size_before": 0, "r6_bag_size": 0,
+             "pos_source": "gps", "new_pickup_late_min": 0.0,
+             "late_pickup_committed_max": 0.0},
+        )
+
+    legacy_u = candidate("U", 90.0)
+    explicit_u = candidate("U", 40.0)
+    known_g = candidate("G", 70.0)
+    legacy_u._position_model_variants = {"legacy": legacy_u, "explicit": explicit_u}
+    known_g._position_model_variants = {"legacy": known_g, "explicit": known_g}
+    monkeypatch.setattr(dp, "_classify_and_set_auto_route", lambda *a, **k: None)
+    ctx = SelectionContext(
+        now=NOW, order_event={"order_id": "E2E"}, order_id="E2E",
+        restaurant="R", delivery_address="D", pickup_coords=(53.13, 23.16),
+        delivery_coords=(53.14, 23.17), pickup_ready_at=None,
+        new_order=SimpleNamespace(order_id="O1"), fleet_snapshot={},
+        v328_fail_causes={}, position_model_mode="legacy", shadow_only=True,
+    )
+    result = dp._select_with_position_model_shadow(
+        ctx, [legacy_u, known_g], explicit_effective=False,
+        explicit_requested=False, flag_conflict=False,
+    )
+    assert result.best.courier_id == "U"
+    assert result.position_model_shadow["legacy_winner_cid"] == "U"
+    assert result.position_model_shadow["explicit_winner_cid"] == "G"
+    assert result.position_model_shadow["would_change_winner"] is True
+
+
 def test_flag_default_off_and_old_flag_superseded():
     import json
     from pathlib import Path
