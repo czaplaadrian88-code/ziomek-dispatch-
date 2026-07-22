@@ -1031,7 +1031,11 @@ def _route_order_override_shadow_pass(candidates, now=None):
     return produced
 
 
-def _nogps_neutral_score_pass(candidates, order_id=None):
+_NOGPS_LEGACY_DECISION_OVERRIDE = __import__("contextvars").ContextVar(
+    "nogps_legacy_decision_override", default=None)
+
+
+def _nogps_neutral_score_pass(candidates, order_id=None, *, apply_on=None):
     """NOGPS-NEUTRAL-SCORE (2026-07-19, memory ziomek-nogps-center-score-bug-2026-07-19).
 
     BUG: kurier bez GPS planowany w BIALYSTOK_CENTER (courier_resolver
@@ -1095,7 +1099,10 @@ def _nogps_neutral_score_pass(candidates, order_id=None):
         # 0 donorów (brak realnych kotwic ALBO wszystkie HARD-NO) →
         # mirror F1.7 fallback (5.0 km).
         neutral_km = 5.0
-    apply_on = C.decision_flag("ENABLE_NO_GPS_NEUTRAL_SCORE_DIST")
+    if apply_on is None:
+        apply_on = _NOGPS_LEGACY_DECISION_OVERRIDE.get()
+    if apply_on is None:
+        apply_on = C.decision_flag("ENABLE_NO_GPS_NEUTRAL_SCORE_DIST")
     applied = 0
     sd_new = _scoring_nn.s_dystans(float(neutral_km))
     for c in candidates:
@@ -1139,6 +1146,95 @@ def _nogps_neutral_score_pass(candidates, order_id=None):
             f"NOGPS_NEUTRAL_SCORE order={order_id} applied={applied} "
             f"neutral_km={neutral_km:.2f} (median of {len(known_kms)} known)")
     return neutral_km, applied
+
+
+def _select_with_position_model_shadow(
+    selection_ctx,
+    candidates,
+    *,
+    explicit_effective: bool,
+    explicit_requested: bool,
+    flag_conflict: bool,
+    position_model_variants=None,
+):
+    """Uruchom actual i kontrfaktyk przez ten sam pełny selektor."""
+    import copy as _copy
+
+    counter_mode = "legacy" if explicit_effective else "explicit"
+    counter_candidates = []
+    mapped_cids = set()
+    variants_by_cid = position_model_variants or {}
+    # Iteracja po fleet_snapshot zachowuje ten sam deterministyczny porządek co
+    # ThreadPoolExecutor.map. Wariant może istnieć także wtedy, gdy polityka
+    # główna odrzuciła kuriera i nie umieściła go w `candidates`.
+    for cid in selection_ctx.fleet_snapshot:
+        variants = variants_by_cid.get(str(cid))
+        if not variants:
+            continue
+        mapped_cids.add(str(cid))
+        variant = variants.get(counter_mode)
+        if variant is not None:
+            counter_candidates.append(_copy.deepcopy(variant))
+    # Kandydaci spoza per-courier eval (np. mass-fail fallback) są wspólni dla
+    # obu polityk, tak jak w kandydacie v1.
+    for candidate in candidates:
+        cid = str(getattr(candidate, "courier_id", ""))
+        if cid in mapped_cids:
+            continue
+        variants = getattr(candidate, "_position_model_variants", {}) or {}
+        variant = variants.get(counter_mode, candidate)
+        if variant is not None:
+            counter_candidates.append(_copy.deepcopy(variant))
+    counter_ctx = _copy.copy(selection_ctx)
+    counter_ctx.position_model_mode = counter_mode
+    counter_ctx.shadow_only = True
+    counter_selected = _selection.select_and_emit(counter_ctx, counter_candidates)
+    selected = _selection.select_and_emit(selection_ctx, candidates)
+    legacy_result = counter_selected if explicit_effective else selected
+    explicit_result = selected if explicit_effective else counter_selected
+    selected.position_model_shadow = {
+        "schema": "explicit_unknown_position.v1",
+        "flag_requested": explicit_requested,
+        "flag_effective": explicit_effective,
+        "flag_conflict": flag_conflict,
+        "selector_path": "core.selection.select_and_emit",
+        "legacy_winner_cid": (
+            str(legacy_result.best.courier_id) if legacy_result.best is not None else None
+        ),
+        "explicit_winner_cid": (
+            str(explicit_result.best.courier_id) if explicit_result.best is not None else None
+        ),
+        "would_change_winner": (
+            getattr(legacy_result.best, "courier_id", None)
+            != getattr(explicit_result.best, "courier_id", None)
+        ),
+        "legacy_verdict": legacy_result.verdict,
+        "explicit_verdict": explicit_result.verdict,
+    }
+    return selected
+
+
+def _select_position_model(
+    selection_ctx,
+    candidates,
+    *,
+    shadow_requested: bool,
+    explicit_effective: bool,
+    explicit_requested: bool,
+    flag_conflict: bool,
+    position_model_variants=None,
+):
+    """Jedna selekcja normalnie; dualny prawdziwy selektor tylko za shadow flagą."""
+    if not shadow_requested:
+        return _selection.select_and_emit(selection_ctx, candidates)
+    return _select_with_position_model_shadow(
+        selection_ctx,
+        candidates,
+        explicit_effective=explicit_effective,
+        explicit_requested=explicit_requested,
+        flag_conflict=flag_conflict,
+        position_model_variants=position_model_variants,
+    )
 
 
 def _objm_metric_min(c, k):
@@ -4653,6 +4749,23 @@ def _assess_order_impl(
     # wire-up in future C7 iteration. Current flow below unchanged.
 
     order_id = str(order_event.get("order_id") or "")
+    # Jedyny snapshot obu flag na decyzję. Konflikt fail-closed: nowy model nie
+    # wpływa na wynik, stary tor zachowuje dotychczasową semantykę i emitujemy ALERT.
+    _explicit_unknown_requested = C.decision_flag(
+        "ENABLE_EXPLICIT_UNKNOWN_POSITION_MODEL")
+    _explicit_unknown_shadow_requested = C.decision_flag(
+        "ENABLE_EXPLICIT_UNKNOWN_POSITION_SHADOW")
+    _legacy_nogps_requested = C.decision_flag(
+        "ENABLE_NO_GPS_NEUTRAL_SCORE_DIST")
+    _position_flag_conflict = bool(
+        _explicit_unknown_requested and _legacy_nogps_requested)
+    _explicit_unknown_effective = bool(
+        _explicit_unknown_requested and not _position_flag_conflict)
+    if _position_flag_conflict:
+        log.error(
+            "ALERT EXPLICIT_UNKNOWN_FLAG_CONFLICT order=%s; legacy retained",
+            order_id,
+        )
     restaurant = order_event.get("restaurant")
     delivery_address = order_event.get("delivery_address")
 
@@ -4891,6 +5004,7 @@ def _assess_order_impl(
 
     # K11 refaktoru: kontekst oceny = dokładnie wartości czytane dawniej z closure;
     # budowany tu (wartości finalne, wspólne dla całej puli). Delegacja 1:1.
+    _position_model_variants = {} if _explicit_unknown_shadow_requested else None
     _eval_ctx = _candidates.EvalContext(
         now=now, order_event=order_event, order_id=order_id, restaurant=restaurant,
         delivery_address=delivery_address, pickup_coords=pickup_coords,
@@ -4902,6 +5016,11 @@ def _assess_order_impl(
         loadgov_orders=loadgov_orders, loadgov_couriers=loadgov_couriers,
         plan_versions=_plan_versions_snapshot,
         timing_trace=_timing_trace,
+        position_model_mode=("explicit" if _explicit_unknown_effective else "legacy"),
+        position_model_shadow=_explicit_unknown_shadow_requested,
+        position_model_variants=_position_model_variants,
+        position_model_variants_lock=(
+            threading.Lock() if _explicit_unknown_shadow_requested else None),
     )
 
     def _v327_eval_courier(cid, cs):
@@ -5084,8 +5203,11 @@ def _assess_order_impl(
     # score z MEDIANY realnych kotwic. Apply tylko za flagą (docstring pass).
     # Pętla display używa per-kandydat metrics["bonus_nogps_neutral_applied"]
     # (ustawia pass) — display podąża DOKŁADNIE za tym, co dostał score.
+    _nogps_override_token = _NOGPS_LEGACY_DECISION_OVERRIDE.set(
+        _legacy_nogps_requested)
     _nogps_neutral_km, _nogps_neutral_applied = _nogps_neutral_score_pass(
         candidates, order_id)
+    _NOGPS_LEGACY_DECISION_OVERRIDE.reset(_nogps_override_token)
     no_gps_travel_min = max(15.0, prep_remaining_min)
     no_gps_eta_utc = now + timedelta(minutes=no_gps_travel_min)
 
@@ -5098,7 +5220,16 @@ def _assess_order_impl(
 
     for c in candidates:
         ps = c.metrics.get("pos_source")
-        if ps == "no_gps":
+        if c.metrics.get("position_kind") == "UNKNOWN" \
+                and _explicit_unknown_effective:
+            c.metrics["km_to_pickup"] = None
+            c.metrics["estimated_road_km"] = 6.5
+            c.metrics["estimated_drive_min"] = 15.0
+            c.metrics["travel_min"] = round(float(c.metrics.get("travel_min") or 15.0), 1)
+            c.metrics["drive_min"] = 15.0
+            c.metrics["eta_source"] = "unknown_profile"
+            c.metrics["position_display_text"] = "pozycja nieznana · dojazd szac. 15 min"
+        elif ps == "no_gps":
             # NOGPS-NEUTRAL-SCORE: gdy score zneutralizowany medianą (apply ON),
             # display km = TA SAMA mediana (koniec rozjazdu display≈peers vs
             # score=centrum). OFF / road realny (anchor) → legacy fleet_avg.
@@ -5164,16 +5295,25 @@ def _assess_order_impl(
     if _timing_trace is not None:
         _timing_trace.record_since("post_pool_wall_ms", _post_pool_started)
     _selection_started = _timing_trace.now_ns() if _timing_trace is not None else None
-    _selected = _selection.select_and_emit(
-        _selection.SelectionContext(
+    _selection_ctx = _selection.SelectionContext(
             now=now, order_event=order_event, order_id=order_id, restaurant=restaurant,
             delivery_address=delivery_address, pickup_coords=pickup_coords,
             delivery_coords=delivery_coords, pickup_ready_at=pickup_ready_at,
             new_order=new_order, fleet_snapshot=fleet_snapshot,
             v328_fail_causes=_v328_fail_causes,
             plan_versions=_plan_versions_snapshot,
-        ),
+            position_model_mode=("explicit" if _explicit_unknown_effective else "legacy"),
+        )
+    # Kontrfaktyk idzie przez PRAWDZIWY selektor (feasibility→score→tiering→
+    # buckets→best_effort→OBJM/R29→final gates), nigdy przez max(score).
+    _selected = _select_position_model(
+        _selection_ctx,
         candidates,
+        shadow_requested=_explicit_unknown_shadow_requested,
+        explicit_effective=_explicit_unknown_effective,
+        explicit_requested=_explicit_unknown_requested,
+        flag_conflict=_position_flag_conflict,
+        position_model_variants=_position_model_variants,
     )
     if _timing_trace is not None:
         _timing_trace.record_since("selection_wall_ms", _selection_started)

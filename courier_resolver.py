@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from dispatch_v2.identity.normalize import norm
+from dispatch_v2.position_model import resolve_courier_position
 
 from dispatch_v2.common import (
     setup_logger, now_iso, parse_panel_timestamp, DT_MIN_UTC, flag,
@@ -863,6 +864,7 @@ def _annotate_pos_resolution(cs) -> None:
         source=cs.pos_source,
         from_store=bool(getattr(cs, "pos_from_store", False)),
     )
+    cs.resolved_position = resolve_courier_position(cs)
 
 
 def _resolve_position(kid, cs, orders, gps, now_utc, fleet,

@@ -22,6 +22,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 import logging
 
 from dispatch_v2 import common as C
+from dispatch_v2.position_model import OriginTravelEstimate
 
 log = logging.getLogger("chain_eta")
 
@@ -61,6 +62,8 @@ def compute_chain_eta(
     haversine_km: Callable[[Tuple[float, float], Tuple[float, float]], float],
     speed_multiplier: float = 1.0,
     default_prep_min: Optional[int] = None,
+    origin_travel: Optional[OriginTravelEstimate] = None,
+    origin_available_from: Optional[datetime] = None,
 ) -> ChainETAResult:
     """Compute chain ETA dla proposal candidate.
 
@@ -90,6 +93,12 @@ def compute_chain_eta(
 
     if now_utc.tzinfo is None:
         now_utc = now_utc.replace(tzinfo=timezone.utc)
+    if origin_available_from is not None:
+        if origin_available_from.tzinfo is None:
+            origin_available_from = origin_available_from.replace(tzinfo=timezone.utc)
+        origin_departure = max(now_utc, origin_available_from)
+    else:
+        origin_departure = now_utc
 
     def safe_drive(from_ll, to_ll):
         """OSRM drive_min z haversine × mult fallback. Zwraca float min."""
@@ -131,9 +140,12 @@ def compute_chain_eta(
     unpicked = [o for o in (bag_orders or [])
                 if getattr(o, 'status', None) not in _SKIP_STATUSES]
 
-    # Naive reference
-    naive_pos = courier_pos if courier_pos is not None else _center_pos_fallback()
-    naive_drive = safe_drive(naive_pos, proposal_pickup_coords)
+    # Naive reference. Explicit UNKNOWN nie dostaje współrzędnych zastępczych.
+    if origin_travel is not None:
+        naive_drive = origin_travel.drive_min_soft
+    else:
+        naive_pos = courier_pos if courier_pos is not None else _center_pos_fallback()
+        naive_drive = safe_drive(naive_pos, proposal_pickup_coords)
     naive_eta = now_utc + timedelta(minutes=naive_drive)
     naive_total_min = (naive_eta - now_utc).total_seconds() / 60.0
 
@@ -146,6 +158,21 @@ def compute_chain_eta(
     # KROK 2: starting point
     if not unpicked:
         # Case A: empty bag / all picked_up already
+        if origin_travel is not None:
+            starting_point = 'unknown_profile'
+            drive_to_proposal = origin_travel.drive_min_soft
+            arrival = origin_departure + timedelta(minutes=drive_to_proposal)
+            effective_eta = max(arrival, proposal_scheduled_utc)
+            total_chain_min = (effective_eta - now_utc).total_seconds() / 60.0
+            return ChainETAResult(
+                effective_eta_utc=effective_eta,
+                starting_point=starting_point,
+                chain_details=[],
+                total_chain_min=total_chain_min,
+                delta_vs_naive_min=total_chain_min - naive_total_min,
+                warnings=warnings,
+                truncated_count=0,
+            )
         if fresh_gps():
             start_pos = courier_pos
             starting_point = 'gps'
@@ -181,7 +208,13 @@ def compute_chain_eta(
     elif first_scheduled.tzinfo is None:
         first_scheduled = first_scheduled.replace(tzinfo=timezone.utc)
 
-    if fresh_gps():
+    if origin_travel is not None:
+        drive_to_first = origin_travel.drive_min_soft
+        realistic_arrival = origin_departure + timedelta(minutes=drive_to_first)
+        effective_time = max(realistic_arrival, first_scheduled)
+        source = 'unknown_profile'
+        starting_point = 'unknown_profile'
+    elif fresh_gps():
         drive_to_first = safe_drive(courier_pos, first_pu)
         realistic_arrival = now_utc + timedelta(minutes=drive_to_first)
         effective_time = max(realistic_arrival, first_scheduled)

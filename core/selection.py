@@ -37,6 +37,8 @@ class SelectionContext:
     fleet_snapshot: Dict[str, Any]
     v328_fail_causes: Dict[str, str]
     plan_versions: Optional[Dict[str, Optional[int]]] = None
+    position_model_mode: str = "legacy"
+    shadow_only: bool = False
 
 
 def select_and_emit(ctx: SelectionContext, candidates: list):
@@ -69,6 +71,9 @@ def select_and_emit(ctx: SelectionContext, candidates: list):
     _best_effort_objm_shadow = _dp._best_effort_objm_shadow
     _best_effort_sort_key = _dp._best_effort_sort_key
     _classify_and_set_auto_route = _dp._classify_and_set_auto_route
+    if ctx.shadow_only:
+        _append_difficult_case_log = lambda *args, **kwargs: None
+        _classify_and_set_auto_route = lambda *args, **kwargs: None
     _compute_loadaware_shadow = _dp._compute_loadaware_shadow
     _demote_blind_empty = _dp._demote_blind_empty
     _e2_ab_arm = _dp._e2_ab_arm
@@ -1186,12 +1191,24 @@ def select_and_emit(ctx: SelectionContext, candidates: list):
     solo_best = None
     solo_best_score = -999
     for cid, cs in fleet_snapshot.items():
-        courier_pos = _sanitize_courier_pos(getattr(cs, "pos", None))
-        if courier_pos is None:
+        from dispatch_v2.position_model import (
+            PositionKind, origin_estimate_for, resolve_courier_position,
+        )
+        _resolved = resolve_courier_position(cs)
+        _explicit_unknown = (
+            ctx.position_model_mode == "explicit"
+            and _resolved.position_kind is PositionKind.UNKNOWN
+        )
+        _origin = origin_estimate_for(_resolved) if _explicit_unknown else None
+        courier_pos = (
+            _resolved.coords if ctx.position_model_mode == "explicit"
+            else _sanitize_courier_pos(getattr(cs, "pos", None))
+        )
+        if courier_pos is None and _origin is None:
             continue
         try:
             sv, sr, sm, sp = check_feasibility_v2(
-                courier_pos=tuple(courier_pos),
+                courier_pos=(tuple(courier_pos) if courier_pos is not None else None),
                 bag=[],  # pusty bag = solo
                 new_order=new_order,
                 shift_end=getattr(cs, "shift_end", None),
@@ -1203,6 +1220,7 @@ def select_and_emit(ctx: SelectionContext, candidates: list):
                 courier_tier=getattr(cs, "tier_bag", None),  # 2026-05-17 tier-aware DWELL
                 schedule_source_stale=getattr(cs, "schedule_source_stale", False),  # D2 (audyt 2026-05-28)
                 pos_from_store=getattr(cs, "pos_from_store", False),  # Z-06 (audyt 2026-06-10)
+                origin_travel=_origin,
             )
             if sv in ("YES", "MAYBE") and sp is not None:
                 sc = sm.get("pickup_dist_km", 999)
@@ -1220,6 +1238,7 @@ def select_and_emit(ctx: SelectionContext, candidates: list):
                         metrics={
                             **sm,
                             "solo_fallback": True,
+                            "r29_solo_score": round(solo_score, 2),
                             "pos_source": getattr(cs, "pos_source", "no_gps"),
                             "plan_expected_version": (
                                 _plan_versions.get(str(cid), 0)

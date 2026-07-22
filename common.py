@@ -350,6 +350,8 @@ ETAP4_DECISION_FLAGS = (
     # Default OFF; flip po cieniu (winner-share no-GPS → ~pula) + ACK.
     # Konsument: dispatch_pipeline._nogps_neutral_score_pass. Stała-fallback niżej.
     "ENABLE_NO_GPS_NEUTRAL_SCORE_DIST",
+    "ENABLE_EXPLICIT_UNKNOWN_POSITION_MODEL",
+    "ENABLE_EXPLICIT_UNKNOWN_POSITION_SHADOW",
     "ENABLE_OBJM_LEXR6_SELECT",
     # CZASÓWKA-W-UWAGACH SHADOW (2026-06-28, sesja 20, zlec. 484034 Sikorskiego):
     # parsuje deklarowany deadline DOSTAWY z free-text `uwagi` ("Czasówka na 17:10")
@@ -1018,7 +1020,10 @@ def setup_logger(name: str, log_file: str = None):
     ch.setFormatter(fmt)
     logger.addHandler(ch)
 
-    if log_file:
+    # Import-time pod pytest nie może nawet stat/mkdir żywego katalogu logów.
+    # Dotychczas filtr blokował dopiero rekord, ale FileHandler był tworzony po
+    # mkdir(prod), co łamało hermetyczne klony z niedostępnym /root.
+    if log_file and not _file_log_blocked_under_test():
         Path(log_file).parent.mkdir(parents=True, exist_ok=True)
         # delay=True: plik otwierany dopiero przy 1. przepuszczonym rekordzie —
         # test nie tyka (nawet nie tworzy) żywego pliku loga.
@@ -1779,6 +1784,14 @@ ENABLE_EQUAL_TREATMENT_BUCKET = _os.environ.get("ENABLE_EQUAL_TREATMENT_BUCKET",
 # NIE flipować EQUAL_TREATMENT off zamiast tego (odwrotna nadkorekta — wraca
 # stara kara). Kanon = flags.json (hot-reload), stała = fallback, default OFF.
 ENABLE_NO_GPS_NEUTRAL_SCORE_DIST = _os.environ.get("ENABLE_NO_GPS_NEUTRAL_SCORE_DIST", "0") == "1"
+# Jawny UNKNOWN (Białystok v1), shadow-first. Domyślnie OFF; konflikt ze starą
+# neutralizacją jest rozstrzygany fail-closed w dispatch_pipeline per decyzja.
+ENABLE_EXPLICIT_UNKNOWN_POSITION_MODEL = _os.environ.get(
+    "ENABLE_EXPLICIT_UNKNOWN_POSITION_MODEL", "0") == "1"
+# Osobna bramka kosztownego dual-eval + drugiego selektora. Default OFF:
+# merge z obiema flagami OFF nie uruchamia maszynerii kontrfaktycznej.
+ENABLE_EXPLICIT_UNKNOWN_POSITION_SHADOW = _os.environ.get(
+    "ENABLE_EXPLICIT_UNKNOWN_POSITION_SHADOW", "0") == "1"
 
 # R-DECLARED TRIPWIRE (L7.1, audyt 2026-06-30 root R7-I-E): reguła biznesowa
 # R-DECLARED-TIME (HARD) — `czas_kuriera >= czas_odbioru_timestamp` (deklarowany

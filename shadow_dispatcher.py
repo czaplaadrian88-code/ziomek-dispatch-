@@ -1171,6 +1171,9 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
     _stage_timing = getattr(result, "stage_timing", None)
     if isinstance(_stage_timing, dict):
         out["timing"] = _stage_timing
+    _position_shadow = getattr(result, "position_model_shadow", None)
+    if isinstance(_position_shadow, dict):
+        out["position_model_shadow"] = _json_safe(_position_shadow)
     # CHOICE-SET: OFF zachowuje legacy shape bajt-w-bajt (klucza nie ma).
     # ON zapisuje pełną pulę sprzed top-N, bez ciężkich planów/metrics.
     if C.decision_flag("ENABLE_FULL_CHOICE_SET_LOG"):

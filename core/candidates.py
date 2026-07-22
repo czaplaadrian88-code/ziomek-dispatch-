@@ -20,7 +20,7 @@ Mechanika przenosin (dowód 1:1):
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
@@ -34,6 +34,9 @@ from dispatch_v2 import pln_objective
 # do odbioru policzono z pozycji-fikcji BIALYSTOK_CENTER, czy z realnej kotwicy).
 # Bez cyklu importu: courier_resolver nie importuje core.* ani dispatch_pipeline.
 from dispatch_v2.courier_resolver import is_position_known
+from dispatch_v2.position_model import (
+    PositionKind, origin_estimate_for, resolve_courier_position, shadow_position,
+)
 from dispatch_v2.observability import stage_timing as _ST
 
 
@@ -68,6 +71,31 @@ class EvalContext:
     # Z-P1-03: jawna propagacja do workera ThreadPool (ContextVar sam nie
     # przechodzi przez executor). Pole jest wyłącznie obserwacyjne.
     timing_trace: Any = None
+    position_model_mode: str = "legacy"
+    position_model_shadow: bool = False
+    # Side-channel wyłącznie dla kontrfaktu shadow. Pozwala zachować wariant
+    # explicit odrzucony przez legacy BEZ wkładania go do głównej puli.
+    position_model_variants: Optional[Dict[str, Dict[str, Any]]] = None
+    position_model_variants_lock: Any = None
+
+
+def _origin_shadow(candidate, position, *, explicit: bool) -> dict:
+    metrics = (getattr(candidate, "metrics", None) or {}) if candidate is not None else {}
+    payload = {
+        **shadow_position(position),
+        "road_km": metrics.get("estimated_road_km", metrics.get("km_to_pickup")),
+        "drive_min": metrics.get("estimated_drive_min", metrics.get("drive_min")),
+        "feasibility": getattr(candidate, "feasibility_verdict", None),
+        "score": getattr(candidate, "score", None),
+    }
+    if explicit:
+        payload.update({
+            "r1_origin_geometry_evaluable": metrics.get("r1_origin_geometry_evaluable"),
+            "r5_origin_geometry_evaluable": metrics.get("r5_origin_geometry_evaluable"),
+            "chain_eta": metrics.get("r07_chain_eta_min"),
+            "r29_solo_score": metrics.get("r29_solo_score"),
+        })
+    return payload
 
 
 def eval_courier(ctx: EvalContext, cid, cs):
@@ -80,7 +108,47 @@ def eval_courier(ctx: EvalContext, cid, cs):
     with _ST.candidate_scope(ctx.timing_trace, str(cid)):
         _osrm_client.start_v2_request_tracking()
         try:
-            return eval_courier_inner(ctx, cid, cs)
+            # OFF-parytet/perf: bez shadow wrapper jest dokładnie jednym wywołaniem
+            # aktywnej polityki. Nie klasyfikuje pozycji i nie buduje telemetrii.
+            if not ctx.position_model_shadow:
+                return eval_courier_inner(ctx, cid, cs)
+
+            position = resolve_courier_position(cs)
+            if ctx.position_model_shadow and position.position_kind is PositionKind.UNKNOWN:
+                legacy = eval_courier_inner(replace(ctx, position_model_mode="legacy"), cid, cs)
+                explicit = eval_courier_inner(replace(ctx, position_model_mode="explicit"), cid, cs)
+                variants = {"legacy": legacy, "explicit": explicit}
+                if ctx.position_model_variants is not None:
+                    if ctx.position_model_variants_lock is None:
+                        ctx.position_model_variants[str(cid)] = variants
+                    else:
+                        with ctx.position_model_variants_lock:
+                            ctx.position_model_variants[str(cid)] = variants
+                primary = explicit if ctx.position_model_mode == "explicit" else legacy
+                if primary is not None:
+                    primary._position_model_variants = variants
+                    primary.metrics["position_model_shadow"] = {
+                        **shadow_position(position),
+                        "legacy_origin": _origin_shadow(legacy, position, explicit=False),
+                        "explicit_unknown_origin": _origin_shadow(explicit, position, explicit=True),
+                    }
+                return primary
+            candidate = eval_courier_inner(ctx, cid, cs)
+            variants = {"legacy": candidate, "explicit": candidate}
+            if ctx.position_model_variants is not None:
+                if ctx.position_model_variants_lock is None:
+                    ctx.position_model_variants[str(cid)] = variants
+                else:
+                    with ctx.position_model_variants_lock:
+                        ctx.position_model_variants[str(cid)] = variants
+            if candidate is not None:
+                candidate._position_model_variants = variants
+                candidate.metrics["position_model_shadow"] = {
+                    **shadow_position(position),
+                    "legacy_origin": _origin_shadow(candidate, position, explicit=False),
+                    "explicit_unknown_origin": _origin_shadow(candidate, position, explicit=True),
+                }
+            return candidate
         finally:
             # Idempotent cleanup — inner mogło już stop'nąć przed Candidate construction;
             # ten call wtedy zwraca None (TLS już wyczyszczony). Defense-in-depth dla raise.
@@ -142,8 +210,18 @@ def eval_courier_inner(ctx: EvalContext, cid, cs):
     _soon_free_probe = _dp._soon_free_probe
     _sync_spread_penalty = _dp._sync_spread_penalty
     # ── koniec prologu; poniżej ciało bajt-w-bajt z dawnej closure ──
-    courier_pos = _sanitize_courier_pos(getattr(cs, "pos", None))
-    if courier_pos is None:
+    resolved_position = None
+    explicit_unknown = False
+    origin_travel = None
+    if ctx.position_model_mode == "explicit":
+        resolved_position = resolve_courier_position(cs)
+        explicit_unknown = resolved_position.position_kind is PositionKind.UNKNOWN
+        origin_travel = origin_estimate_for(resolved_position) if explicit_unknown else None
+        courier_pos = resolved_position.coords
+    else:
+        # Legacy OFF-parity: nie uruchamiaj nawet resolvera nowego modelu.
+        courier_pos = _sanitize_courier_pos(getattr(cs, "pos", None))
+    if courier_pos is None and origin_travel is None:
         return None
     bag_raw = getattr(cs, "bag", []) or []
     bag_sim = [_bag_dict_to_ordersim(b) for b in bag_raw]
@@ -228,7 +306,7 @@ def eval_courier_inner(ctx: EvalContext, cid, cs):
     # trasy kurier → bag deliveries. Niezależny od L1/L2.
     bundle_level3 = False
     bundle_level3_dev = None
-    if _coords_pass(
+    if not explicit_unknown and _coords_pass(
             delivery_coords != (0.0, 0.0) and delivery_coords[0] != 0.0,
             delivery_coords):
         bag_drops = [
@@ -352,7 +430,7 @@ def eval_courier_inner(ctx: EvalContext, cid, cs):
         import time as _time
         _r07_t0 = _time.perf_counter()
         r07_chain_result = _cce(
-            courier_pos=getattr(cs, "pos", None),
+            courier_pos=(resolved_position.coords if explicit_unknown else getattr(cs, "pos", None)),
             pos_source=getattr(cs, "pos_source", None),
             pos_age_min=getattr(cs, "pos_age_min", None),
             bag_orders=bag_sim,
@@ -362,6 +440,8 @@ def eval_courier_inner(ctx: EvalContext, cid, cs):
             osrm_drive_min=_drive_min_fn,
             haversine_km=_hav,
             speed_multiplier=_speed_mult,
+            origin_travel=origin_travel,
+            origin_available_from=getattr(cs, "available_from", None),
         )
         _r07_latency_ms = (_time.perf_counter() - _r07_t0) * 1000.0
         if r07_chain_result is not None:
@@ -370,7 +450,7 @@ def eval_courier_inner(ctx: EvalContext, cid, cs):
         log.warning(f"R-07 chain_eta compute fail: {type(_r07_e).__name__}: {_r07_e}")
 
     verdict, reason, metrics, plan = check_feasibility_v2(
-        courier_pos=tuple(courier_pos),
+        courier_pos=(tuple(courier_pos) if courier_pos is not None else None),
         bag=bag_sim,
         new_order=new_order,
         shift_end=getattr(cs, "shift_end", None),
@@ -385,6 +465,7 @@ def eval_courier_inner(ctx: EvalContext, cid, cs):
         courier_tier=getattr(cs, "tier_bag", None),  # 2026-05-17 tier-aware DWELL
         schedule_source_stale=getattr(cs, "schedule_source_stale", False),  # D2 (audyt 2026-05-28)
         pos_from_store=getattr(cs, "pos_from_store", False),  # Z-06 (audyt 2026-06-10) — store-rescue to nie świeży fix
+        origin_travel=origin_travel,
     )
 
     # F1.8f hard guard: kurier którego zmiana kończy się PRZED pickup_ready_at
@@ -434,7 +515,7 @@ def eval_courier_inner(ctx: EvalContext, cid, cs):
     # Bez flag: legacy chronological-last-drop (semantycznie mylące dla
     # mid-chain insertion — kurier rzeczywiście jest przy anchor location,
     # NIE na end-of-bag location).
-    effective_start_pos = tuple(courier_pos)
+    effective_start_pos = tuple(courier_pos) if courier_pos is not None else None
     v326_anchor_restaurant = None
     v326_anchor_used = False
     v326_anchor_obj = None  # Bug D fix: keep full anchor object for bundle_level2 override
@@ -492,8 +573,11 @@ def eval_courier_inner(ctx: EvalContext, cid, cs):
     # missing) — courier_resolver loguje "courier X picked_up order Y bez delivery_coords".
     # Bez sanitize → haversine raise → V328_CP_SOLVER_FAIL_PER_COURIER spam (residual 9/7h
     # post #28 cz.1; cid=508/523 z bag=469087). Mirror _sanitize_courier_pos pattern.
-    effective_start_pos = _sanitize_courier_pos(effective_start_pos) or effective_start_pos
-    km_to_pickup_haversine = haversine(effective_start_pos, pickup_coords) * HAVERSINE_ROAD_FACTOR_BIALYSTOK
+    if origin_travel is not None:
+        km_to_pickup_haversine = origin_travel.road_km
+    else:
+        effective_start_pos = _sanitize_courier_pos(effective_start_pos) or effective_start_pos
+        km_to_pickup_haversine = haversine(effective_start_pos, pickup_coords) * HAVERSINE_ROAD_FACTOR_BIALYSTOK
 
     # NOGPS-NEUTRAL-SCORE (2026-07-19, bug ziomek-nogps-center-score-bug):
     # road_km policzony z SYNTETYCZNEJ pozycji kuriera (BIALYSTOK_CENTER fiction
@@ -582,7 +666,7 @@ def eval_courier_inner(ctx: EvalContext, cid, cs):
     # scoring.score_candidate: road_km przekazujemy jawnie (S_dystans użyje
     # effective_start_pos → pickup), a bearing (S_kierunek) nadal z courier_pos.
     score_result = scoring.score_candidate(
-        courier_pos=tuple(courier_pos),
+        courier_pos=(tuple(courier_pos) if courier_pos is not None else None),
         restaurant_pos=pickup_coords,
         bag_drop_coords=bag_drop_coords or None,
         bag_size=len(bag_sim),
@@ -598,10 +682,14 @@ def eval_courier_inner(ctx: EvalContext, cid, cs):
     # Fallback do haversine × road_factor / fleet_speed (JUŻ korkowy bucket) tylko przy
     # hard exception (osrm_client samo handluje circuit-breaker → haversine fallback).
     try:
-        from dispatch_v2 import osrm_client as _osrm_v327
-        _osrm_drive_res = _osrm_v327.route(tuple(courier_pos), pickup_coords)
-        drive_min = float(_osrm_drive_res.get("duration_min") or 0.0)
-        _drive_km_from_courier = float(_osrm_drive_res.get("distance_km") or 0.0)
+        if origin_travel is not None:
+            drive_min = origin_travel.drive_min_soft
+            _drive_km_from_courier = origin_travel.road_km
+        else:
+            from dispatch_v2 import osrm_client as _osrm_v327
+            _osrm_drive_res = _osrm_v327.route(tuple(courier_pos), pickup_coords)
+            drive_min = float(_osrm_drive_res.get("duration_min") or 0.0)
+            _drive_km_from_courier = float(_osrm_drive_res.get("distance_km") or 0.0)
     except Exception as _v327_e:
         log.warning(
             f"V3.27 drive_min OSRM exception, fallback to haversine (korkowy fleet_speed): "
@@ -629,7 +717,7 @@ def eval_courier_inner(ctx: EvalContext, cid, cs):
     # V3.26 STEP 6 (R-07 v2 CHAIN-ETA) — flag-gated override eta_pickup_utc.
     # Chain_eta already computed przed feasibility (line ~845). Tu tylko override
     # decision path gdy flag=True.
-    if C.ENABLE_V326_R07_CHAIN_ETA and r07_chain_result is not None:
+    if (C.ENABLE_V326_R07_CHAIN_ETA or explicit_unknown) and r07_chain_result is not None:
         eta_pickup_utc = r07_chain_eta_utc
         drive_min = r07_chain_result.total_chain_min
         travel_min = r07_chain_result.total_chain_min
@@ -1867,7 +1955,7 @@ def eval_courier_inner(ctx: EvalContext, cid, cs):
         # Powstal PRZED pula kandydatow, nie tuz przed pozniejszym zapisem.
         "plan_expected_version": _plan_expected_version,
         "score": score_result,
-        "km_to_pickup": round(km_to_pickup_haversine, 2),
+        "km_to_pickup": (None if explicit_unknown else round(km_to_pickup_haversine, 2)),
         # NOGPS-NEUTRAL-SCORE (2026-07-19): road_km z pozycji-fikcji (centrum)?
         # Konsument: _nogps_neutral_score_pass (neutralizacja score) + display.
         "road_km_from_synthetic_pos": road_km_from_synthetic_pos,
@@ -2235,6 +2323,15 @@ def eval_courier_inner(ctx: EvalContext, cid, cs):
             round(_r07_latency_ms, 2) if _r07_latency_ms is not None else None
         ),
     }
+    if explicit_unknown:
+        enriched_metrics.update({
+            "estimated_road_km": origin_travel.road_km,
+            "estimated_drive_min": origin_travel.drive_min_soft,
+            "position_kind": resolved_position.position_kind.value,
+            "position_provenance": resolved_position.provenance.value,
+            "position_display_text": "pozycja nieznana · dojazd szac. 15 min",
+            "r29_solo_score": round(100.0 - origin_travel.road_km * 10.0, 2),
+        })
 
     # V3.24-A: hard reject gdy extension_penalty() returned None (>60 min).
     # Override verdict na NO tylko jeśli obecny MAYBE (nie przebijaj wcześniejszego NO).
