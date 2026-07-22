@@ -8745,10 +8745,10 @@
    },
    "known_drift": false,
    "known_drift_note": "",
-   "lifecycle": "shadow",
+   "lifecycle": "deprecated",
    "lifecycle_seeded": false,
    "name": "ENABLE_NO_GPS_NEUTRAL_SCORE_DIST",
-   "notes": "KANDYDAT pre-flip (bug ziomek-nogps-center-score-bug-2026-07-19): neutralizacja s_dystans/score no-GPS mediana road_km realnych kotwic; shadow bonus_nogps_neutral_* ZAWSZE, apply za flaga. Przy flipie: dodac klucz do flags.json=false->true za ACK i uzupelnic current_snapshot.",
+   "notes": "SUPERSEDED przez ENABLE_EXPLICIT_UNKNOWN_POSITION_MODEL. Nie komponować: konflikt emituje ALERT i zachowuje legacy.",
    "owner": {
     "business": "Adrian",
     "service": "dispatch-shadow.service"
@@ -8756,6 +8756,45 @@
    "removal_condition": "po werdykcie flip/reject cienia (winner-share no-GPS -> ~pula) + 2 dni obserwacji",
    "review_date": "2026-08-19",
    "rollback": "flags.json OFF hot-reload (bez restartu); pre-flip kod inertny (OFF default)",
+   "source_of_truth": "flags.json",
+   "superseded_by": "ENABLE_EXPLICIT_UNKNOWN_POSITION_MODEL",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
+  "ENABLE_EXPLICIT_UNKNOWN_POSITION_MODEL": {
+   "carriers": [
+    "common.py:ETAP4_DECISION_FLAGS",
+    "dispatch_v2/common.py-const"
+   ],
+   "consumers": [
+    "dispatch_v2/dispatch_pipeline.py:_assess_order_impl",
+    "dispatch_v2/core/candidates.py:eval_courier",
+    "dispatch_v2/core/selection.py:select_and_emit",
+    "dispatch_v2/feasibility_v2.py:check_feasibility_v2",
+    "dispatch_v2/route_simulator_v2.py:simulate_bag_route_v2"
+   ],
+   "curated_at": "2026-07-22",
+   "current_snapshot": {},
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "shadow",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_EXPLICIT_UNKNOWN_POSITION_MODEL",
+   "notes": "Kandydat shadow-first: UNKNOWN Białystok v1 = 6.5 km SOFT, 15 min SOFT, 22 min HARD. Default OFF; flip wymaga osobnego ACK.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-shadow.service"
+   },
+   "removal_condition": "werdykt po min 300 decyzjach lub 7 dniach; target winner-share U0 45-55% G0",
+   "review_date": "2026-07-29",
+   "rollback": "flaga OFF hot-reload; brak deployu/restartu w tym kandydacie",
    "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [
