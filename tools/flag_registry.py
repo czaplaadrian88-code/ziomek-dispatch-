@@ -215,15 +215,6 @@ SERVICE_SCOPED = {
         "dispatch-czasowka.service",
         "dry-run wysyłki czasówki (czasowka_scheduler.py:52, SAFE default ON=1); "
         "tylko tick czasówki wysyła."),
-    "ENABLE_PLAN_RECHECK_LIVE_ETA_REFRESH": (
-        "dispatch-plan-recheck.service",
-        "live-ETA refresh w ticku plan-recheck (moduł-level :~89; ready ONLY w "
-        "_refresh_live_eta_from_plans — jedyny caller run_recheck:~2712 + guard "
-        ":~2710). Reachability RE-ZWERYFIKOWANA 18.07 pełnym call-grafem przy "
-        "sprincie B2 (w odróżnieniu od COMMITTED_PROPAGATION, która okazała się "
-        "multi-service): NIEOSIĄGALNA z pw (recanon/redecide nie dochodzą) → "
-        "kuracja single-service PRAWDZIWA. Migracja do flags.json = opcjonalna "
-        "higiena L0.1, bez żywego rozjazdu."),
 }
 
 # KNOWN_DIVERGENCES = rozjazdy PRAWDZIWE, cross-service, OTWARTE — wymagają

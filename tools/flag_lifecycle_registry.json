@@ -10875,8 +10875,7 @@
     "drop-in:dispatch-plan-recheck.service.d/live-eta-refresh.conf"
    ],
    "consumers": [
-    "dispatch_v2/plan_recheck.py",
-    "dispatch_v2/plan_recheck.py:ENABLE_PLAN_RECHECK_LIVE_ETA_REFRESH"
+    "brak — writer latest-wins usunięty przez kontrakt live_eta single-source"
    ],
    "curated_at": "2026-07-10",
    "current_snapshot": {
@@ -10886,22 +10885,22 @@
    },
    "default": false,
    "intentional_per_process": {
-    "reason": "SERVICE_SCOPED owner=dispatch-plan-recheck.service: live-ETA refresh w ticku plan-recheck (moduł-level :~89; ready ONLY w _refresh_live_eta_from_plans — jedyny caller run_recheck:~2712 + guard :~2710). Reachability RE-ZWERYFIKOWANA 18.07 pełnym call-grafem przy sprincie B2 (w odróżnieniu od COMMITTED_PROPAGATION, która okazała się multi-service): NIEOSIĄGALNA z pw (recanon/redecide nie dochodzą) → kuracja single-service PRAWDZIWA. Migracja do flags.json = opcjonalna higiena L0.1, bez żywego rozjazdu.",
+    "reason": "deprecated/inert: trzy zastane drop-iny mają tę samą wartość, a kod nie ma już consumera ani writera; pozostają tylko do cleanupu przy deployu za ACK",
     "value": true
    },
    "known_drift": false,
    "known_drift_note": "",
-   "lifecycle": "live",
+   "lifecycle": "deprecated",
    "lifecycle_seeded": false,
    "name": "ENABLE_PLAN_RECHECK_LIVE_ETA_REFRESH",
-   "notes": "kandydat migracji 1b za ACK (celowy per-proces)",
+   "notes": "Kod konsumenta usunięty: plan_recheck i shadow nie piszą już latest-wins. Istniejące drop-iny są inertne do kontrolowanego cleanupu przy deployu za ACK.",
    "owner": {
     "business": "Adrian",
     "service": "dispatch-plan-recheck.service"
    },
-   "removal_condition": "kandydat migracji 1b→flags.json za ACK; retire dopiero po migracji (dziś celowy per-proces)",
+   "removal_condition": "usunąć trzy inertne drop-iny w tym samym kontrolowanym deployu co live_eta single-source; potem lifecycle=dead",
    "review_date": "2026-08-10",
-   "rollback": "rm drop-in dispatch-plan-recheck.service.d/live-eta-refresh.conf + restart dispatch-b-route-shadow.service ZA ACK",
+   "rollback": "revert kandydata przed deployem; po deployu rollback kodu wymaga jawnego przywrócenia starego writera i drop-inu za ACK",
    "source_of_truth": "drop-in:dispatch-b-route-shadow.service",
    "twin_of": [],
    "worlds": [

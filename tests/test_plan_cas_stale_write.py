@@ -204,7 +204,6 @@ def test_recheck_refreshes_after_refloor_and_stale_invalidation_skips(
     monkeypatch.setattr(PR, "AUTO_INVALIDATE_STALE", True)
     monkeypatch.setattr(PR, "ENABLE_GPS_DRIFT_INVALIDATION", False)
     monkeypatch.setattr(PR, "ENABLE_PLAN_FOR_ACTUAL_BAG", False)
-    monkeypatch.setattr(PR, "ENABLE_PLAN_RECHECK_LIVE_ETA_REFRESH", False)
     monkeypatch.setattr(PM, "refloor_pickup", _refloor)
 
     summary = PR.run_recheck(_current_state_fn=lambda: orders)
@@ -228,7 +227,6 @@ def _isolate_recheck_tick(monkeypatch, orders):
     monkeypatch.setattr(PR, "_l3_maybe_gc", lambda *a, **k: None)
     monkeypatch.setattr(PR, "ENABLE_GPS_DRIFT_INVALIDATION", False)
     monkeypatch.setattr(PR, "ENABLE_PLAN_FOR_ACTUAL_BAG", False)
-    monkeypatch.setattr(PR, "ENABLE_PLAN_RECHECK_LIVE_ETA_REFRESH", False)
 
 
 def test_state_fence_blocks_refloor_from_previous_assignment_generation(

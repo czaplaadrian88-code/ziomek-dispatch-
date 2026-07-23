@@ -46,7 +46,9 @@ Wniosek nadrzędny: największa dziura to **noga ODBIORU** (system optymistyczni
 
 **Zidentyfikowane punkty wejścia ETA (`CODEMAP.md §3` + grep) `[ZWERYFIKOWANE]`:**
 - Rdzeń obliczeń: `route_simulator_v2.py` (`_simulate_sequence`, `simulate_bag_route_v2`, `_plan_from_sequence`), `tsp_solver.py` (OR-Tools), `osrm_client.py`, `common.py` (tabela ruchu + DWELL + stałe).
-- Łańcuch/cache/kalibracja: `chain_eta.py`, `calib_maps.py`, `live_eta_cache.py`, `eta_residual_infer.py`, `ml_inference.py`.
+- Żywy kontrakt powierzchni: `live_eta.py` (jeden kalkulator/snapshot) +
+  `live_eta_daemon.py` (jedyny producer cyklu); powierzchnie tylko czytają.
+  Kalibracja/analityka: `chain_eta.py`, `calib_maps.py`, `eta_residual_infer.py`, `ml_inference.py`.
 - Loggery prawdy: `eta_calibration_logger.py`, `tools/ziomek_pred_calibration.py`, `drive_min_calibration.py`.
 - Generatory map: `tools/eta_quantile_calib.py`, `tools/restaurant_prep_bias.py`, `tools/eta_cell_residual_build.py`, `tools/eta_load_aware_calibrate.py`, `tools/eta_r3_*`.
 - Konsumpcja decyzyjna: `feasibility_v2.py` (R6/SLA), `dispatch_pipeline.py`, `scoring.py`, `shadow_dispatcher.py`.
@@ -158,7 +160,9 @@ Venv `dispatch` (py3.12): **numpy 2.4.4, pandas 3.0.2, scikit-learn 1.8.0, light
 ### A.2.3 Gdzie trzymane jest ETA `[ZWERYFIKOWANE]`
 - Predykcja per decyzja → `logs/shadow_decisions.jsonl` (42 MB bieżący + 108 MB `.1`), w polu `best.plan.predicted_delivered_at` / `per_order_delivery_times`.
 - Kanon planu/kolejności → `courier_plans.json` (atomic).
-- Świeży cache ETA dla powierzchni → `dispatch_state/live_order_eta.json` (`live_eta_cache.py`, TTL 20 min) — spójność apka/konsola/Telegram.
+- Kanoniczny żywy snapshot powierzchni → `dispatch_state/live_eta_snapshot.json`
+  (`live_eta_daemon.py` + `live_eta.py`, cykl 10 s i fingerprint pozycji/trasy/floorów)
+  — jeden atomowy zapis, identyczny read-only odczyt konsoli, panelu i apki.
 - Stan zleceń → `orders_state.json`. Bazy SQLite: `courier_api.db` (apka/GPS), `events.db`, `fleet_analytics.db`. Postgres `nadajesz_panel@:5433` (konsola/analizy) `[NIEZWERYFIKOWANE co do zawartości — nie odpytano, kanon ETA = pliki JSONL]`.
 
 ### A.2.4 Przepływ end-to-end (diagram)
@@ -177,10 +181,13 @@ panel gastro ──poll HTML──> panel_watcher ──> orders_state.json
                                    │  predicted_delivered_at / pickup_at
                                    ▼
         ┌── shadow_decisions.jsonl (kanon predykcji)
-        ├── courier_plans.json (kolejność/plan)
-        └── live_order_eta.json (cache świeżego ETA)
+        └── courier_plans.json (kolejność/plan)
                                    │
-              konsola gps.nadajesz.pl/admin  +  apka kuriera :8767
+          live_eta_daemon.py → live_eta.py: GPS + kolejność + floory + jeden OSRM / kuriera / cykl
+                                   │
+                live_eta_snapshot.json (kanoniczne żywe ETA)
+                                   │
+              konsola gps.nadajesz.pl/admin + apka kuriera :8767
                                    │
    [OFFLINE, poza tickiem]  sla_log.jsonl (rzeczywisty odbiór/dostawa)
         └── eta_calibration_logger (30 min) + ziomek_pred_calibration (3 min)

@@ -68,7 +68,7 @@ flowchart TD
   SM --> CAPI[courier_api :8767<br/>apka kuriera]
   PMG --> CAPI
   CON -.->|import dispatch_v2 jako biblioteka| ENG
-  CAPI -.->|import route_podjazdy/live_eta_cache| ENG
+  CAPI -.->|import route_podjazdy/live_eta| ENG
 ```
 
 Zlecenie wchodzi przez `panel_watcher` (poll HTML gastro), ląduje w `orders_state.json` i wyzwala tick silnika, który przechodzi 10 warstw i **dopisuje decyzję do `shadow_decisions.jsonl`** (kanoniczny log) oraz zapisuje kolejność do `courier_plans.json`. Formalny `order_fsm` obserwuje zdarzenia legacy wyłącznie log-only; `state_machine` pozostaje jedynym writerem, a enforcement jest niewpięty. `events.db` ma metadane retry/DLQ, lecz nie ma automatycznego workera ani timera — replay DLQ jest ręcznym CLI. **Telegram (`telegram_approver`) jest UŚPIONY od 26.06** (czysty stop, exit 0) — to była historyczna powierzchnia „człowieka", dziś **dormant do decyzji Adriana** (WD-12 w `audyt/10-PLAN.md`). **Powierzchnie ŻYWE = (a) konsola koordynatora `gps.nadajesz.pl/admin`** (przydział, monitor floty, śledzenie) **i (b) apka kuriera** (`courier_api :8767`). Klient końcowy widzi status paczki na `/sledz`. Kluczowe: konsola i apka nie tylko czytają pliki stanu — **importują `dispatch_v2` jako bibliotekę** (patrz §9).
@@ -104,7 +104,7 @@ Zlecenie wchodzi przez `panel_watcher` (poll HTML gastro), ląduje w `orders_sta
 | `courier_plans.json` | `plan_manager`, `plan_recheck` | konsola, apka, silnik | kanon kolejności/planów |
 | `pending_proposals.json` | `panel_watcher`, `postpone_sweeper` | (dawniej TG), tools | propozycje w locie |
 | `learning_log.jsonl` (100 MB) | `panel_watcher`, `daily_briefing` | retro/learning | trail TAK/NIE/INNY/KOORD |
-| `live_order_eta.json` | `live_eta_cache` | konsola, apka | cache ETA |
+| `live_eta_snapshot.json` | `live_eta_daemon` → `live_eta` (jeden producer/kalkulator na cykl) | konsola, apka, panelowi konsumenci ETA | kanoniczny żywy snapshot; konsumenci tylko czytają |
 | `events.db` (rozmiar zmienny) | event_bus / silnik | konsumenci eventów + ręczne narzędzia retry | log zdarzeń; addytywne metadane retry/DLQ, bez automatycznego workera |
 | `courier_api.db` (26 MB) | `courier_api` | apka | stan apki (GPS/token/plany) |
 | `courier_last_pos.json` | `courier_resolver` | silnik | last-known-pos (no-GPS) |
@@ -144,7 +144,7 @@ Rejestr flag i self-test drift: `tools/flag_fingerprint_check` (CLI). Docelowo j
 
 **Konsola i apka IMPORTUJĄ `dispatch_v2` jako bibliotekę** (nie tylko czytają pliki) — to 3-repo współdzielenie kodu = źródło **dryfu bliźniaków** (ta sama reguła w N kopiach; rejestr: `../ZIOMEK_ARCHITECTURE.md §4`, m.in. route-order w 5 kopiach / 3 repa):
 - **Konsola** (`nadajesz_clone/panel`, `gps.nadajesz.pl/admin`): `app/integrations/ziomek/{shadow_quote,committed_time,courier_block,courier_provision_bridge}.py`.
-- **Apka** (`scripts/courier_api`, `:8767`): `courier_orders.py` importuje `route_podjazdy`, `live_eta_cache`, `orders_state`.
+- **Apka** (`scripts/courier_api`, `:8767`): `courier_orders.py` importuje `route_podjazdy`, `live_eta`, `orders_state`; powierzchnie tylko serializują wspólny snapshot ETA.
 
 **Mosty zewnętrzne:** OSRM (urllib→Docker `:5001`) · panel gastro (HTTP+CSRF) · **papu-bridge** (lokalka.pl → gastro, timer 5 min) · **drtusz-bridge** (11 firm B2B, timer 5 min) · **epaka** (fetcher CSV → most panelu) · **parcel** (paczki bialystok.nadajesz.pl → konsola). Sekrety = tylko ścieżki (`.secrets/*.env`), nigdy wartości.
 

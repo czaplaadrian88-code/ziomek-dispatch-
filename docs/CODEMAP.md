@@ -62,7 +62,7 @@ Pominięto szum: `.git`, `__pycache__`, `.pytest_cache`. ⚠ `.claude/skills/` t
 - `courier_resolver.py` — snapshot floty GPS + fallback last-known-pos (no-GPS); `dispatchable_fleet`
 - `osrm_client.py` — OSRM `:5001` przez stdlib urllib; haversine fail-loud
 - `geocoding.py` — geokod (Nominatim) + cache; HARD bbox Białystok
-- `chain_eta.py`, `calib_maps.py`, `live_eta_cache.py` — łańcuch ETA, mapy kalibracji, cache ETA
+- `chain_eta.py`, `calib_maps.py` — łańcuch ETA i mapy kalibracji; `live_eta.py` — jedyny kalkulator/snapshot, `live_eta_daemon.py` — jedyny producer cyklu; powierzchnie są read-only
 - `sla_tracker.py` — tracker SLA (daemon `dispatch-sla-tracker`); alerty R6 BAG_TIME
 - `event_bus.py` — szyna zdarzeń (+`events.db`, GC `event_bus_cleanup.py`)
 - `event_retry.py` — metadane/helpery retry i logicznego DLQ, automatyczny retry hard-OFF; ręczny operator: `replay_dead_letter.py`
@@ -99,7 +99,7 @@ Pominięto szum: `.git`, `__pycache__`, `.pytest_cache`. ⚠ `.claude/skills/` t
 | Stan zleceń (źródło prawdy) | `state_machine.py` → `orders_state.json` (**workspace/dispatch_state/, POZA repo**) |
 | Formalny FSM / obserwacja przejść | `order_fsm.py` + hook w `state_machine.py`; Phase A `observer=True`, `enforcement=False`, wyjątki reconcile wymagają jawnego source |
 | Pozycje kurierów / no-GPS / last-known-pos | `courier_resolver.py` → `courier_last_pos.json` (workspace) |
-| ETA / kalibracja | `chain_eta.py`, `eta_calibration_logger.py`, `calib_maps.py`, `live_eta_cache.py` |
+| ETA / kalibracja | `live_eta.py` + `live_eta_daemon.py` (kanoniczne żywe ETA, jeden producer), `chain_eta.py`, `eta_calibration_logger.py`, `calib_maps.py` |
 | Decision-time ETA / dzienna coverage | `decision_eta_log.py` → `dispatch_state/decision_eta_log.jsonl`; bramka `tools/decision_eta_coverage.py` |
 | Czasówki | `czasowka_scheduler.py` + `czasowka_proactive/` |
 | Paczki (parcel lane) | `parcel_assign.py` + `parcel_lane_merge.py` |
@@ -125,7 +125,7 @@ Pominięto szum: `.git`, `__pycache__`, `.pytest_cache`. ⚠ `.claude/skills/` t
 | Historia decyzji (ADR) | `docs/decisions/` (tworzone w K2.3 audytu) |
 | Mosty (papu / drtusz / epaka) | `../papu_dispatch_bridge/` + `../drtusz_bridge/` + `tools/epaka_fetcher.py` |
 | Konsola koordynatora (gps.nadajesz.pl/admin) | `../../nadajesz_clone/panel/` (importuje `dispatch_v2` jako lib) |
-| Apka kuriera (:8767) | `../courier_api/` (`courier_orders.py`, import `route_podjazdy`/`live_eta_cache`) |
+| Apka kuriera (:8767) | `../courier_api/` (`courier_orders.py`, import `route_podjazdy`/`live_eta`) |
 | COD / rozliczenia | `cod_weekly/` + `daily_accounting/` (venv **sheets**) |
 | SMS / powiadomienia zmian | `sms/` + `shift_notifications/` |
 | Rekoncyliacja stanu | `reconciliation/` (`reconcile_worker`, `phantom_detector`) |

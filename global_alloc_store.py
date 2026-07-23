@@ -2,7 +2,7 @@
 
 Po audycie 27.06: NIE re-emitować globalnej alokacji do współdzielonego
 `shadow_decisions.jsonl` (psułoby koord_cascade_monitor + bazę panelu = wieczna łatka).
-Zamiast tego — wzorzec `live_eta_cache` (sprawdzony LIVE od 22.06): osobny mały plik
+Zamiast tego — dedykowany, atomowo nadpisywany mały plik
 nadpisywany co tick przez resweep (proces poza gorącą ścieżką dispatchu), czytany przez
 konsolę (feed.py overlay). `shadow_decisions.jsonl` zostaje CZYSTY.
 

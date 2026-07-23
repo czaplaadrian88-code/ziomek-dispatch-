@@ -1,0 +1,16 @@
+[Unit]
+Description=Ziomek canonical live ETA producer
+After=network.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/root/.openclaw/workspace/scripts
+ExecStart=/root/.openclaw/venvs/dispatch/bin/python -m dispatch_v2.live_eta_daemon
+Restart=on-failure
+RestartSec=2
+StandardOutput=append:/root/.openclaw/workspace/scripts/logs/live_eta.log
+StandardError=append:/root/.openclaw/workspace/scripts/logs/live_eta.log
+
+[Install]
+WantedBy=multi-user.target

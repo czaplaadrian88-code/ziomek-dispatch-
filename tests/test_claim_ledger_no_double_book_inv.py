@@ -334,7 +334,6 @@ def test_run_once_hard_off_has_byte_compatible_metric_shape(tmp_path, monkeypatc
 # ═══════════════════════════════════════════════════════════════════════════
 def _run_shadow_drop_case(tmp_path, monkeypatch, *, hard):
     from dispatch_v2 import auto_assign_executor as AAE
-    from dispatch_v2 import live_eta_cache as LEC
     from dispatch_v2 import pending_proposals_store as PPS
 
     class _CS:
@@ -371,7 +370,6 @@ def _run_shadow_drop_case(tmp_path, monkeypatch, *, hard):
     processed = []
     pending_oids = []
     auto_verdicts = []
-    eta_cids = []
     monkeypatch.setattr(
         SD.event_bus, "get_pending",
         lambda limit=None, event_types=None: list(events))
@@ -419,9 +417,6 @@ def _run_shadow_drop_case(tmp_path, monkeypatch, *, hard):
     monkeypatch.setattr(
         AAE, "maybe_execute",
         lambda record, result, payload: auto_verdicts.append(record["verdict"]))
-    monkeypatch.setattr(
-        LEC, "upsert",
-        lambda **kwargs: eta_cids.append(kwargs.get("courier_id")))
     # Wymuszony mutant źródła: drugi A widzi ten sam worek co pierwszy.
     monkeypatch.setattr(CL, "tentative_assign", lambda fleet, cid, rec: dict(fleet))
 
@@ -429,7 +424,6 @@ def _run_shadow_drop_case(tmp_path, monkeypatch, *, hard):
     effects = {
         "pending_oids": pending_oids,
         "auto_verdicts": auto_verdicts,
-        "eta_cids": eta_cids,
     }
     return stats, records, processed, effects
 
@@ -445,7 +439,6 @@ def test_shadow_tick_hard_off_is_byte_compatible(tmp_path, monkeypatch):
     assert effects["pending_oids"] == ["o1", "o2", "o3", "o4"]
     assert effects["auto_verdicts"] == [
         "PROPOSE", "PROPOSE", "PROPOSE", "PROPOSE"]
-    assert effects["eta_cids"] == ["A", "A", "A", "B"]
 
 
 def test_shadow_tick_hard_drops_feral_and_continues(tmp_path, monkeypatch):
@@ -462,7 +455,6 @@ def test_shadow_tick_hard_drops_feral_and_continues(tmp_path, monkeypatch):
     assert processed == ["e1", "e2", "e3", "e4"]  # drop nie przerwał ticku
     assert effects["pending_oids"] == ["o1", "o4"]
     assert effects["auto_verdicts"] == ["PROPOSE", "PROPOSE"]
-    assert effects["eta_cids"] == ["A", "B"]
     totals = {"processed": 0, "failed": 0, "skipped": 0}
     SD._accumulate_tick_stats(totals, stats)
     assert totals["claim_ledger_feral_drops"] == 2
