@@ -37,7 +37,7 @@ Current six hashes:
 
 | artifact | SHA-256 |
 |---|---|
-| gate | `3e0d4365fcdd91ca89679d6ab764e9293c762983e4bc67e8cd0529943c828691` |
+| gate | `75fa985a4ebd3f841bfb3b093b2716e03fc8a924cccede67e8b9437349fb7833` |
 | owner auth | `954e68d4122395b14cbaa4b2df78160003225d8b90ced0a4c630fbc2d226fb0b` |
 | core | `8cce9f0cdbc9800943d7a288d5c9e16c2abf47a64ea0567891f264be170b4eec` |
 | requirements | `e4288e36c50136eaf629e8b55111d30a2c3a61554be916a5215140a29a7fefbb` |
@@ -52,10 +52,25 @@ Evidence:
 - R3 dispute and independent reproductions:
   `/root/handover/MAIN_CONTROL_FINAL_REVIEW_R3_2026-07-23/`.
 
-At handoff a canonical tools regression was still running as the only such
-process (PID `2651529`) against the verified package root
-`/tmp/main-control-r4-pkgroot.98Z3sl`. It must finish before full regression,
-exact-base comparison, unique R4 freeze, and new exact Opus/Sol reviews.
+Fresh successor then found a blocking gate-manifest mismatch: the evidence
+still declared the R3 core/tests hashes, so candidate-artifact equality was
+`3/5`, not `5/5`. After tools became terminal, one bounded re-seal updated
+exactly those two manifest hashes. The preimage remains at
+`/tmp/MAIN_EMERGENCY_RECOVERY_GATE_R4_PRE_RESEAL_20260723T140036Z.md`
+(`0600 root:root`); final equality is `5/5`, gate SHA is `75fa985a…7833`,
+compile/import passed, and final-byte focused replay is `378 passed in
+58.01s`.
+
+Canonical tools regression completed against the verified package root:
+`2363 passed, 1 known-baseline failed, 1 skipped, 9716 subtests passed in
+918.90s`. The only failure is the established
+`ASSET_HASH / ASSET-CODEX-AGENTS` node. R4 added exactly four passing tests
+relative to R3; source hashes and diff-check remained stable. Generated root
+bytecode cache was removed and the process census was clean.
+
+The fresh successor is running the full `tests/` regression on these final
+bytes. Exact-base comparison, unique R4 freeze and fresh exact Opus/Sol reviews
+remain pending.
 
 No install, live mutation, systemd change, promotion, commit, push, product
 change, flag change, Sheets access, daily-accounting read, or

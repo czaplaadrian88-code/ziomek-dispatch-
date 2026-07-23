@@ -5,7 +5,10 @@
 > `main-successor-20260723-135014`. Następca pozostaje `non-MAIN/internal-only`,
 > ponieważ host nie ma jeszcze `CONTROL_STATE` ani atomowo przekazanego lease.
 > 231/R4 ma root-cause fix Opus 4.8/max i focused `378/378`; trwa supervisor
-> tools/full/refreeze + dwa świeże review, nadal zero install/live. Task230/F0
+> tools `2363P/1 known baseline/1S`; successor wykrył i naprawił stale
+> gate-manifest u źródła (`3/5` → `5/5`, gate `75fa985a…`), a final-byte
+> focused ponownie dał `378/378`. Trwa full/refreeze + dwa świeże review,
+> nadal zero install/live. Task230/F0
 > zatrzymany na trwałym RED-first checkpointcie do przejęcia przez następcę;
 > task229 czeka za wspólną granicą F0. Handoff:
 > `eod_drafts/2026-07-23/MAIN_SESSION_ROTATION_HANDOFF.md`.
