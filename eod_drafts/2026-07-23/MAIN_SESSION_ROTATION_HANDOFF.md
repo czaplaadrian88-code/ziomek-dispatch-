@@ -23,6 +23,18 @@ session remains a relay only until an atomic lease/route commit is possible.
 This distinction must not be represented as an already completed MAIN
 promotion.
 
+Final transfer receipt:
+
+- accepted handoff SHA:
+  `80d49abd4f7be4c3b1bd848033726bc9034b0ff1d52e523bd326072fd6387782`;
+- closure receipt:
+  `/root/handover/MAIN_SESSION_CLOSURE_RECEIPT_2026-07-23.md`;
+- closure receipt SHA:
+  `fa7c7182672ff3616d9c8d0028b791fa92f3b5d9f22d4da023a7e5118cc1b416`;
+- old tmux `231` was already absent; idle
+  `r4-opus-20260723-1245` was closed after successor ACK;
+- `main-successor-20260723-135014` remains active.
+
 ## 231 / control-plane R4
 
 Worktree `/root/ziomek_main_recovery_20260722`, branch
