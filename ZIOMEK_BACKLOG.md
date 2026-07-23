@@ -1,5 +1,15 @@
 # ZIOMEK AI DISPATCHER - BACKLOG ROZWOJU
 
+> **CURRENT 2026-07-23 — MAIN ROTATION / TASK229–231 HOLD:** długi owner-facing
+> wątek przekazuje wykonanie do świeżego `gpt-5.6-sol/ultra` w tmux
+> `main-successor-20260723-135014`. Następca pozostaje `non-MAIN/internal-only`,
+> ponieważ host nie ma jeszcze `CONTROL_STATE` ani atomowo przekazanego lease.
+> 231/R4 ma root-cause fix Opus 4.8/max i focused `378/378`; trwa supervisor
+> tools/full/refreeze + dwa świeże review, nadal zero install/live. Task230/F0
+> zatrzymany na trwałym RED-first checkpointcie do przejęcia przez następcę;
+> task229 czeka za wspólną granicą F0. Handoff:
+> `eod_drafts/2026-07-23/MAIN_SESSION_ROTATION_HANDOFF.md`.
+
 > **KANDYDAT 2026-07-22 — RESWEEP G5/G6 SHADOW (`a076f74e`):** G5 loguje
 > `proposed_km`, `new_km_to_pickup` i `delta_km`; G6 utrzymuje atomowy,
 > PII-free stan kontrfaktyczny i loguje `would_pingpong_block` dla A→B→A
