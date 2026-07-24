@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
@@ -70,3 +72,48 @@ def test_corrupt_store_is_never_overwritten(tmp_path):
     with pytest.raises(ValueError, match="malformed"):
         RE.set_exemption("485123", "investigation", path=path, now=NOW)
     assert path.read_text(encoding="utf-8") == "{broken"
+
+
+def test_audit_history_is_bounded_in_the_state_file(tmp_path, monkeypatch):
+    """RED-first: operator churn must not grow the state document forever."""
+    path = tmp_path / "reclaim_exemptions.json"
+    monkeypatch.setattr(RE, "AUDIT_MAX_ENTRIES", 3)
+
+    for index in range(4):
+        RE.set_exemption("485123", "investigation", path=path, now=NOW)
+        RE.remove_exemption(
+            "485123", "operator_released", path=path, now=NOW
+        )
+
+    document = json.loads(path.read_text(encoding="utf-8"))
+    assert len(document["audit"]) == 3
+    assert document["audit_dropped"] == 5
+    assert [row["action"] for row in document["audit"]] == [
+        "remove",
+        "add",
+        "remove",
+    ]
+
+
+def test_store_and_lock_symlinks_are_rejected(tmp_path):
+    """RED-first: final path substitution must not redirect reads or locks."""
+    victim = tmp_path / "victim.json"
+    victim.write_text(
+        json.dumps({"schema": RE.SCHEMA, "entries": {}, "audit": []}),
+        encoding="utf-8",
+    )
+    store = tmp_path / "reclaim_exemptions.json"
+    store.symlink_to(victim)
+
+    with pytest.raises(OSError):
+        RE.list_exemptions(store)
+    assert victim.read_text(encoding="utf-8").startswith('{"schema"')
+
+    store.unlink()
+    Path(str(store) + ".lock").unlink()
+    lock_victim = tmp_path / "lock-victim"
+    lock_victim.write_text("do-not-open", encoding="utf-8")
+    os.symlink(lock_victim, str(store) + ".lock")
+    with pytest.raises(OSError):
+        RE.set_exemption("485123", "investigation", path=store, now=NOW)
+    assert lock_victim.read_text(encoding="utf-8") == "do-not-open"

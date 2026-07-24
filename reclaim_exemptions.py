@@ -9,6 +9,7 @@ from __future__ import annotations
 import fcntl
 import json
 import os
+import stat
 import tempfile
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -23,6 +24,7 @@ STATE_PATH = Path(
     )
 )
 SCHEMA = "czasowka_reclaim_exemptions.v1"
+AUDIT_MAX_ENTRIES = 256
 REASON_CODES = frozenset(
     {
         "business_exception",
@@ -50,7 +52,7 @@ def validate_reason_code(value: object) -> str:
 
 
 def _empty() -> dict:
-    return {"schema": SCHEMA, "entries": {}, "audit": []}
+    return {"schema": SCHEMA, "entries": {}, "audit": [], "audit_dropped": 0}
 
 
 def _validate_document(raw: object) -> dict:
@@ -60,15 +62,37 @@ def _validate_document(raw: object) -> dict:
         raw.get("audit"), list
     ):
         raise ValueError("invalid reclaim exemptions document")
+    dropped = raw.get("audit_dropped", 0)
+    if not isinstance(dropped, int) or isinstance(dropped, bool) or dropped < 0:
+        raise ValueError("invalid reclaim exemptions audit counter")
+    raw["audit_dropped"] = dropped
     return raw
+
+
+def _open_regular_nofollow(path: Path, flags: int, mode: int = 0o600) -> int:
+    nofollow = getattr(os, "O_NOFOLLOW", 0)
+    if not nofollow:
+        raise OSError("O_NOFOLLOW is required for reclaim exemption storage")
+    fd = os.open(path, flags | nofollow, mode)
+    try:
+        metadata = os.fstat(fd)
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+            raise OSError("reclaim exemption path must be a single-link regular file")
+        return fd
+    except Exception:
+        os.close(fd)
+        raise
 
 
 @contextmanager
 def _locked(path: Path, *, exclusive: bool) -> Iterator[None]:
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = Path(str(path) + ".lock")
-    with open(lock_path, "a+b") as lock_file:
-        os.chmod(lock_path, 0o600)
+    lock_fd = _open_regular_nofollow(
+        lock_path, os.O_RDWR | os.O_CREAT, 0o600
+    )
+    with os.fdopen(lock_fd, "a+b") as lock_file:
+        os.fchmod(lock_file.fileno(), 0o600)
         fcntl.flock(
             lock_file.fileno(), fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
         )
@@ -80,7 +104,8 @@ def _locked(path: Path, *, exclusive: bool) -> Iterator[None]:
 
 def _load_unlocked(path: Path) -> dict:
     try:
-        with open(path, "r", encoding="utf-8") as handle:
+        fd = _open_regular_nofollow(path, os.O_RDONLY)
+        with os.fdopen(fd, "r", encoding="utf-8") as handle:
             return _validate_document(json.load(handle))
     except FileNotFoundError:
         return _empty()
@@ -122,7 +147,9 @@ def list_exemptions(path: Optional[Path] = None) -> dict:
     target = Path(path or STATE_PATH)
     # Reader nie materializuje store ani lockfile. Pierwszy zapis należy
     # wyłącznie do jawnej komendy operatora.
-    if not target.exists():
+    try:
+        os.lstat(target)
+    except FileNotFoundError:
         return {}
     with _locked(target, exclusive=False):
         document = _load_unlocked(target)
@@ -159,6 +186,7 @@ def set_exemption(
                 "ts": stamp,
             }
         )
+        _cap_audit(document)
         _atomic_write(target, document)
     return dict(document["entries"][oid])
 
@@ -188,13 +216,23 @@ def remove_exemption(
                 "ts": stamp,
             }
         )
+        _cap_audit(document)
         _atomic_write(target, document)
     return dict(removed)
+
+
+def _cap_audit(document: dict) -> None:
+    excess = len(document["audit"]) - AUDIT_MAX_ENTRIES
+    if excess <= 0:
+        return
+    del document["audit"][:excess]
+    document["audit_dropped"] = int(document.get("audit_dropped", 0)) + excess
 
 
 __all__ = [
     "REASON_CODES",
     "STATE_PATH",
+    "AUDIT_MAX_ENTRIES",
     "get_exemption",
     "list_exemptions",
     "remove_exemption",
