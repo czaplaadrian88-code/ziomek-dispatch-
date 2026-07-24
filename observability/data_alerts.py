@@ -394,6 +394,35 @@ def evaluate_q1_missing_time(orders: Dict[str, dict], now: datetime, *,
                   considered, detail, window_open=window_open)
 
 
+def evaluate_active_order_schema(orders: Dict[str, dict]) -> Signal:
+    """Active orders must retain the canonical base-record schema."""
+    active_statuses = {"assigned", "picked_up"}
+    required = ("status", "commitment_level", "restaurant", "first_seen")
+    active = {
+        str(oid): order
+        for oid, order in orders.items()
+        if isinstance(order, dict) and order.get("status") in active_statuses
+    }
+    invalid = [
+        oid
+        for oid, order in active.items()
+        if any(key not in order or order.get(key) is None for key in required)
+    ]
+    shown = ",".join(sorted(invalid)[:5]) + ("..." if len(invalid) > 5 else "")
+    detail = (
+        f"aktywne bez bazowego schematu: {len(invalid)} z {len(active)} "
+        f"(oid: {shown or '-'}; wymagane={','.join(required)})"
+    )
+    return Signal(
+        "active_order_schema",
+        bool(invalid),
+        float(len(invalid)),
+        0.0,
+        len(active),
+        detail,
+    )
+
+
 def _orders_state_dict(raw: Optional[Any]) -> Dict[str, dict]:
     """orders_state.json bywa plaskim dictem {oid: {...}} lub z wrapperem
     {"orders": {...}} (jak konsumuje generator golden) — znormalizuj."""
@@ -424,6 +453,7 @@ def collect(now: Optional[datetime] = None, *,
         evaluate_stale_gps(positions, now),
         evaluate_ledger_stall(latest_ts, now),
         evaluate_q1_missing_time(orders, now),
+        evaluate_active_order_schema(orders),
     ]
 
 

@@ -72,6 +72,12 @@ class StateReadError(RuntimeError):
     pass
 
 
+class MissingOrderPreconditionError(RuntimeError):
+    """Lifecycle update tried to materialize an order without its base record."""
+
+    pass
+
+
 def _verify_czas_kuriera_consistency(
     warsaw_iso: Optional[str],
     raw_hhmm: Optional[str],
@@ -1088,7 +1094,13 @@ def _r_declared_tripwire(order_id: str, merged: dict, event: Optional[str]) -> N
 
 
 @_lifecycle_state_mutation
-def upsert_order(order_id: str, data: dict, event: Optional[str] = None) -> dict:
+def upsert_order(
+    order_id: str,
+    data: dict,
+    event: Optional[str] = None,
+    *,
+    require_existing: bool = False,
+) -> dict:
     """Dodaje lub aktualizuje zlecenie. Zapisuje history entry.
     Zwraca zaktualizowany rekord."""
     data = _sanitize_ingest_coords(order_id, data)
@@ -1096,6 +1108,13 @@ def upsert_order(order_id: str, data: dict, event: Optional[str] = None) -> dict
         state = _read_state_strict()        # Faza 1: raise StateReadError zamiast cichego {}
         old_count = len(state)
         existing = state.get(order_id, {})
+        # A caller-side existence check is not authoritative: durable retry or
+        # a concurrent prune can change state before apply. Keep this
+        # precondition inside the single locked orders_state write funnel.
+        if require_existing and not existing:
+            raise MissingOrderPreconditionError(
+                f"{event or 'upsert'} refused for absent order {order_id}"
+            )
         merged = {**existing, **data, "order_id": order_id}
 
         # History
@@ -1237,9 +1256,18 @@ def update_from_event(event: dict) -> Optional[dict]:
             zachowania statusu terminalnego. Błąd sidecara nie cofa poprawnie
             zapisanego eventu zlecenia, ale jest jawnie logowany.
             """
-            result = upsert_order(
-                oid, _marked(fields), event="COURIER_ASSIGNED"
-            )
+            marked = _marked(fields)
+            if payload.get("source") == "parcel_assign":
+                result = upsert_order(
+                    oid,
+                    marked,
+                    event="COURIER_ASSIGNED",
+                    require_existing=True,
+                )
+            else:
+                result = upsert_order(
+                    oid, marked, event="COURIER_ASSIGNED"
+                )
             try:
                 _availability_enabled = decision_flag(
                     "ENABLE_CID_AVAILABILITY_CONTRACT"
