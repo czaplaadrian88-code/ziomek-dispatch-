@@ -1,78 +1,71 @@
 #!/usr/bin/env python3
-"""test_state_schema_validator.py — testy READ-ONLY walidatora schematu stanu.
+"""test_state_schema_validator.py — hermetyczne testy READ-ONLY walidatora.
 
 Dwa kierunki kontraktu:
-  (a) ŻYWE pliki dispatch_state -> PASS (exit 0, brak driftu)
-  (b) SYNTETYCZNA kopia w /tmp z usuniętym wymaganym kluczem -> DRIFT (exit 1)
+  (a) SYNTETYCZNY stan zgodny z baseline -> PASS (exit 0, brak driftu)
+  (b) SYNTETYCZNY stan z usuniętym wymaganym kluczem -> DRIFT (exit 1)
 
-NIGDY nie mutujemy prawdziwych plików stanu — wyłącznie kopie w tmp_path.
+Stan live jest wejściem operatorskim narzędzia, nie oraclem regresji. Testy ani
+nie czytają, ani nie mutują prawdziwych plików — używają wyłącznie tmp_path.
 Telegram (--alert) NIE jest tu wołany.
 """
 
 from __future__ import annotations
 
 import json
-import shutil
 from pathlib import Path
 
-import pytest
-
 from dispatch_v2.tools import validate_state_schema as vss
-
-STATE_DIR = Path("/root/.openclaw/workspace/dispatch_state")
 
 
 def _baseline() -> dict:
     return vss._load_baseline()
 
 
+def _build_conformant_state(tmp_dir: Path) -> Path:
+    """Zbuduj minimalny stan spełniający każdy kontrakt bieżącego baseline."""
+    tmp_dir.mkdir(parents=True, exist_ok=True)
+    for filename, spec in _baseline()["files"].items():
+        required = spec["required_keys"]
+        if spec["shape"] == "dict_of_entries":
+            payload = {"fixture-entry": {key: "fixture" for key in required}}
+        else:
+            payload = {key: "fixture" for key in required}
+        (tmp_dir / filename).write_text(
+            json.dumps(payload),
+            encoding="utf-8",
+        )
+    return tmp_dir
+
+
 # ----------------------------------------------------------------------------
-# (a) Żywe pliki -> PASS
+# (a) Zgodna fixture -> PASS
 # ----------------------------------------------------------------------------
 
-@pytest.mark.skipif(
-    not (STATE_DIR / "orders_state.json").exists(),
-    reason="żywe pliki stanu niedostępne w tym środowisku",
-)
-def test_live_state_passes():
-    """Bieżące produkcyjne pliki nie mają driftu -> exit 0."""
-    rc = vss.main(["--state-dir", str(STATE_DIR)])
+def test_live_state_passes(tmp_path):
+    """Historyczny nodeid: dziś sprawdza hermetyczną zgodną fixture -> exit 0."""
+    state_dir = _build_conformant_state(tmp_path / "state")
+    rc = vss.main(["--state-dir", str(state_dir)])
     assert rc == 0
 
 
-@pytest.mark.skipif(
-    not (STATE_DIR / "orders_state.json").exists(),
-    reason="żywe pliki stanu niedostępne w tym środowisku",
-)
-def test_live_state_no_drift_summary():
-    summary = vss.run(_baseline(), state_dir=STATE_DIR)
+def test_live_state_no_drift_summary(tmp_path):
+    """Historyczny nodeid: zgodna fixture nie może raportować driftu."""
+    state_dir = _build_conformant_state(tmp_path / "state")
+    summary = vss.run(_baseline(), state_dir=state_dir)
     assert summary["any_drift"] is False
     # Każdy plik z baseline ok albo warn (warn = brak pliku), żaden drift/error.
     for r in summary["files"]:
-        assert r["status"] in ("ok", "warn"), (r["file"], r["status"], r["messages"])
+        assert r["status"] == "ok", (r["file"], r["status"], r["messages"])
 
 
 # ----------------------------------------------------------------------------
 # (b) Syntetyczny drift -> FAIL
 # ----------------------------------------------------------------------------
 
-def _copy_live_into(tmp_dir: Path) -> Path:
-    """Skopiuj wszystkie 4 żywe pliki do tmp_dir (jeśli istnieją)."""
-    tmp_dir.mkdir(parents=True, exist_ok=True)
-    for fn in _baseline()["files"]:
-        src = STATE_DIR / fn
-        if src.exists():
-            shutil.copy2(src, tmp_dir / fn)
-    return tmp_dir
-
-
-@pytest.mark.skipif(
-    not (STATE_DIR / "courier_ground_truth.json").exists(),
-    reason="żywe pliki stanu niedostępne — brak czego skopiować",
-)
 def test_synthetic_drift_dict_of_entries_fails(tmp_path):
     """Usuń wymagany klucz z JEDNEGO wpisu dict-of-entries -> drift, exit 1."""
-    work = _copy_live_into(tmp_path / "state")
+    work = _build_conformant_state(tmp_path / "state")
     target = work / "courier_ground_truth.json"
 
     with open(target, "r", encoding="utf-8") as f:

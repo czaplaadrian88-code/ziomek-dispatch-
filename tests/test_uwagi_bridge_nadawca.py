@@ -56,7 +56,9 @@ def sign_bridge_envelope_fixture(payload, material=TEST_HMAC_MATERIAL,
 
 
 def inspect_bridge_nadawca(text, **kwargs):
-    return _inspect_bridge_nadawca(text, hmac_material=TEST_HMAC_MATERIAL, **kwargs)
+    kwargs.setdefault("now", _FRESH_TS)
+    kwargs.setdefault("hmac_material", TEST_HMAC_MATERIAL)
+    return _inspect_bridge_nadawca(text, **kwargs)
 
 
 def parse_pickup_from_uwagi(text, bridge_format=False):
@@ -534,6 +536,9 @@ def _run_panel_callsite(
     monkeypatch.setattr(watcher.C, "flag", fake_flag)
     monkeypatch.setattr(watcher, "decision_flag", lambda *_args, **_kwargs: False)
     monkeypatch.setattr(watcher, "load_bridge_hmac", lambda: TEST_HMAC_MATERIAL)
+    # panel_watcher imports the verifier directly. Bind this frozen fixture's
+    # expiry check to the same clock that signed it.
+    monkeypatch.setattr(watcher, "inspect_bridge_nadawca", inspect_bridge_nadawca)
     monkeypatch.setattr(
         watcher,
         "_write_uwagi_bridge_shadow_metric",

@@ -2437,6 +2437,7 @@ def _diff_and_emit(
         _bridge_metric_reason = "not_evaluated"
         _bridge_parsed = False
         _bridge_geocode_ok = False
+        _bridge_binding_rejected = False
         if (_pcoords is None
                 and _is_firmowe_konto
                 and flag("ENABLE_UWAGI_ADDRESS_PARSER", True)):
@@ -2495,21 +2496,28 @@ def _diff_and_emit(
                     _bridge_metric_reason = "binding_reject_flag_off"
                 if _bridge_attempt is not None and _bridge_attempt.envelope_seen:
                     # Incoherent ON/OFF configuration must not silently parse a
-                    # signed bridge payload through the unauthenticated legacy path.
+                    # signed bridge payload through the unauthenticated legacy
+                    # path or revive the central fallback.
                     _parsed = None
+                    _bridge_binding_rejected = True
                 else:
                     _parsed = parse_pickup_from_uwagi(
                         _uwagi_text,
                         bridge_format=False,
                     )
             _bridge_rejection_reason = None
-            if (_parsed is None and _bridge_attempt is not None
-                    and _bridge_attempt.envelope_seen):
+            if _bridge_binding_rejected:
+                _bridge_rejection_reason = _bridge_metric_reason
+            elif (_parsed is None and _bridge_attempt is not None
+                  and _bridge_attempt.envelope_seen):
                 _bridge_rejection_reason = _bridge_attempt.reason
             _bridge_envelope_rejected = bool(
                 _bridge_attempt is not None
                 and _bridge_attempt.envelope_seen
-                and _bridge_attempt.pickup is None
+                and (
+                    _bridge_attempt.pickup is None
+                    or _bridge_binding_rejected
+                )
             )
             if _parsed is not None:
                 _bridge_parsed = bool(
