@@ -1230,6 +1230,52 @@ def update_from_event(event: dict) -> Optional[dict]:
         }), event="NEW_ORDER")
 
     if etype == "COURIER_ASSIGNED":
+        def _persist_assignment_and_availability(fields: dict) -> dict:
+            """Commit zlecenia, a dopiero potem oznacz CID jako jawnie ON.
+
+            Jeden chokepoint obejmuje zwykłe przypisanie, czasówkę i ścieżkę
+            zachowania statusu terminalnego. Błąd sidecara nie cofa poprawnie
+            zapisanego eventu zlecenia, ale jest jawnie logowany.
+            """
+            result = upsert_order(
+                oid, _marked(fields), event="COURIER_ASSIGNED"
+            )
+            try:
+                _availability_enabled = decision_flag(
+                    "ENABLE_CID_AVAILABILITY_CONTRACT"
+                )
+            except Exception:
+                _availability_enabled = False
+            if _availability_enabled:
+                from dispatch_v2 import courier_availability as _availability
+                # Precedencja po czasie zdarzenia: opóźniony assignment nie może
+                # wskrzesić nowszego jawnego OFF. Przekazujemy realny czas eventu,
+                # nie now(). Brak/nie-ISO created_at → None → writer użyje now().
+                _assign_at = None
+                _created_raw = event.get("created_at")
+                if isinstance(_created_raw, str) and _created_raw:
+                    try:
+                        _assign_at = datetime.fromisoformat(_created_raw)
+                    except ValueError:
+                        _assign_at = None
+                try:
+                    _availability.set_operator_availability(
+                        event.get("courier_id"),
+                        _availability.AvailabilityState.OPERATOR_ON,
+                        _availability.AvailabilityProvenance.ASSIGNMENT_EVENT,
+                        at=_assign_at,
+                    )
+                except Exception as _availability_error:
+                    # R-POOL-TRUTH fail-closed: błąd zapisu availability NIE może
+                    # raportować sukcesu assignmentu (dawniej fail-open/split-brain).
+                    _log.error(
+                        "R_POOL_TRUTH assignment availability write failed "
+                        f"oid={oid} cid={event.get('courier_id')}: "
+                        f"{type(_availability_error).__name__}"
+                    )
+                    raise
+            return result
+
         # V3.28 P4 — auto-activation koordynatora (Adrian doktryna 2026-05-10).
         # Bartek O. (cid=123) ma flag `coordinator: true` w courier_tiers.json.
         # Pierwsze COURIER_ASSIGNED dnia → activate (może już dziś jeździć).
@@ -1347,19 +1393,19 @@ def update_from_event(event: dict) -> Optional[dict]:
                         f"keep committed {prev.get('czas_kuriera_hhmm')} "
                         f"(ignore assign read {ck_hhmm})"
                     )
-                    return upsert_order(oid, _marked(merged), event="COURIER_ASSIGNED")
+                    return _persist_assignment_and_availability(merged)
                 merged["czas_kuriera_warsaw"] = ck_iso
                 merged["czas_kuriera_hhmm"] = ck_hhmm
-                _result = upsert_order(oid, _marked(merged), event="COURIER_ASSIGNED")
+                _result = _persist_assignment_and_availability(merged)
                 return _result
             else:
                 # Skip persist czas_kuriera; log ERROR done; raise after upsert.
-                _result = upsert_order(oid, _marked(merged), event="COURIER_ASSIGNED")
+                _result = _persist_assignment_and_availability(merged)
                 raise CorruptedTimestampError(
                     f"COURIER_ASSIGNED {oid}: czas_kuriera sanity fail, "
                     f"persisted bez czas_kuriera update"
                 )
-        return upsert_order(oid, _marked(merged), event="COURIER_ASSIGNED")
+        return _persist_assignment_and_availability(merged)
 
     if etype == "CZAS_KURIERA_UPDATED":
         # V3.19g1: panel_watcher detected czas_kuriera change (|Δt| ≥ 3min)

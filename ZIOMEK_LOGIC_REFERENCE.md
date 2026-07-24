@@ -438,6 +438,21 @@ held under virtual courier `id_kurier=26`).
 The flag system (`common.load_flags` / `decision_flag`) reads `flags.json` first, then falls back to
 the module constant. ~80+ flags exist. Notable **current** states:
 
+### R-POOL-TRUTH / CID-keyed availability (sandbox build 2026-07-23)
+
+`ENABLE_CID_AVAILABILITY_CONTRACT` ma default `false`. OFF zachowuje dotychczasowe
+składanie `schedule + manual_overrides` w `courier_resolver.dispatchable_fleet`
+bez zmiany. ON przełącza pulę na jeden kontrakt z ownerem
+`courier_availability.py` i jawnymi wynikami:
+`OPERATOR_ON`, `OPERATOR_OFF`, `SCHEDULED_ON`, `OFF_PLANNED`,
+`UNKNOWN_DATA_ERROR`. Trwały stan operatora jest kluczowany wyłącznie po CID;
+nie ma wyjątku dla cid=400 ani fallbacku po nazwie. Jawny ON/OFF konsoli oraz
+skuteczne `COURIER_ASSIGNED` zapisują ten sam kontrakt, a grafik automatycznie
+włącza kuriera w dotychczasowym oknie zmiany. `dispatchable_fleet` jest jedynym
+konsumentem decyzji puli. Rollback po przyszłym flipie: klucz `false` w
+produkcyjnym `flags.json`; sam flip, inicjalizacja bieżących stanów i obserwacja
+puli wymagają osobnego ACK ownera.
+
 - 🟢 **LIVE-ON:** `RECONCILIATION_ENABLED`, `ENABLE_V325_SCHEDULE_HARDENING`,
   `ENABLE_V324A_SCHEDULE_INTEGRATION`, `ENABLE_V327_WAIT_PENALTY`, `ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER`,
   `ENABLE_V326_SPEED_MULTIPLIER`, `ENABLE_R_PACZKI_FLEX`, `ENABLE_R_RETURN_TO_RESTAURANT_VETO`,

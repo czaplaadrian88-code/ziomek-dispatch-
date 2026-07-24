@@ -13,6 +13,8 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
+from dispatch_v2.common import decision_flag
+
 _WAW = ZoneInfo("Europe/Warsaw")
 
 OVERRIDES_PATH = "/root/.openclaw/workspace/dispatch_state/manual_overrides.json"
@@ -33,6 +35,14 @@ INCLUDE_KEYWORDS = ("wrócił", "wrocil", "wróciła", "wrocila", "wraca", "prac
 _WORKING_ADD_KEYWORDS = ("wrócił", "wrocil", "wróciła", "wrocila", "wraca", "pracuje", "dodaj")
 
 UNKNOWN_MSG = "❓ Nie rozumiem. Przykład: 'Mykyta nie pracuje' lub 'Mykyta wrócił'"
+
+
+def _availability_contract_enabled() -> bool:
+    """Fail-closed gate: brak/awaria flags.json = dokładne zachowanie legacy."""
+    try:
+        return decision_flag("ENABLE_CID_AVAILABILITY_CONTRACT")
+    except Exception:
+        return False
 
 
 def load() -> dict:
@@ -57,6 +67,10 @@ def load() -> dict:
 
 
 def save(data: dict) -> None:
+    if _availability_contract_enabled():
+        from dispatch_v2 import courier_availability as _availability
+        _availability.save_legacy_payload(data, path=OVERRIDES_PATH)
+        return
     data["updated_at"] = datetime.now(timezone.utc).isoformat()
     Path(OVERRIDES_PATH).parent.mkdir(parents=True, exist_ok=True)
     tmp = OVERRIDES_PATH + ".tmp"
@@ -365,6 +379,18 @@ def _do_include(data: dict, courier: str, text: str, add_to_grafik: bool = True)
     data["excluded"] = excluded
     added = _add_working(data, courier, text) if add_to_grafik else None
     save(data)
+    # R-POOL-TRUTH: konsola jest legalnym writerem WYŁĄCZNIE przez jeden
+    # CID-keyed owner. OFF-flaga pozostawia stary zapis bajt-w-bajt. ``neutral``
+    # czyści ręczny stan i oddaje decyzję grafikowi; zielony zapisuje trwałe ON.
+    if _availability_contract_enabled() and _inc_cid is not None:
+        from dispatch_v2 import courier_availability as _availability
+        _availability.set_operator_availability(
+            _inc_cid,
+            (_availability.AvailabilityState.OPERATOR_ON
+             if add_to_grafik else None),
+            _availability.AvailabilityProvenance.COORDINATOR_CONSOLE,
+            path=OVERRIDES_PATH,
+        )
     if added is not None:
         cid, start, end = added
         end_disp = "końca dnia" if end == "24:00" else end
@@ -406,6 +432,16 @@ def _do_exclude(data: dict, courier: str) -> Tuple[str, str]:
         working.pop(cid, None)
         data["working"] = working
     save(data)
+    # R-POOL-TRUTH: jawny czerwony przycisk jest trwałym OFF do kolejnego
+    # jawnego ON/neutral. Brak zapisu nowego kontraktu przy OFF-fladze.
+    if _availability_contract_enabled() and cid != "?":
+        from dispatch_v2 import courier_availability as _availability
+        _availability.set_operator_availability(
+            cid,
+            _availability.AvailabilityState.OPERATOR_OFF,
+            _availability.AvailabilityProvenance.COORDINATOR_CONSOLE,
+            path=OVERRIDES_PATH,
+        )
     return "exclude", f"🛑 {courier} (cid={cid}) STOP — wykluczony do końca dnia"
 
 

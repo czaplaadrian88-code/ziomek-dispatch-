@@ -572,6 +572,10 @@ ETAP4_DECISION_FLAGS = (
     # uśpiony state-handler, ale nie ma uzbrojonego producenta ani call-site'u.
     "ENABLE_CZASOWKA_RECLAIM_SHADOW",
     "ENABLE_CZASOWKA_RECLAIM_LIVE",
+    # CID400 / R-POOL-TRUTH (2026-07-23): jeden CID-keyed kontrakt
+    # dostępności konsumowany wyłącznie przez dispatchable_fleet. OFF =
+    # dotychczasowe składanie grafik + manual_overrides bajt-w-bajt.
+    "ENABLE_CID_AVAILABILITY_CONTRACT",
 )
 
 # Stałe-fallback (module-level OFF) dla flag dodanych do ETAP4_DECISION_FLAGS
@@ -603,6 +607,9 @@ ENABLE_CZASOWKA_CK_MANUAL_EDIT_PASSTHROUGH = False
 # nie jest kompletnym downstreamem i wymaga osobnej karty oraz ACK ownera.
 ENABLE_CZASOWKA_RECLAIM_SHADOW = False
 ENABLE_CZASOWKA_RECLAIM_LIVE = False
+# R-POOL-TRUTH: dark launch; flip dopiero po ACK, inicjalizacji stanu ON/OFF i
+# porównaniu puli. Rollback hot = false/brak klucza w flags.json.
+ENABLE_CID_AVAILABILITY_CONTRACT = False
 # W0.2 advisory (roadmapa 08, werdykt E-1 „GO hybryda"): bezpiecznik fabrykacji ETA.
 # Wykrycie: pred_carry > ETA_FABRICATION_FLOOR_MIN ∧ pred_carry > RATIO×robust_ref,
 # gdzie robust_ref = osrm_freeflow(pickup→deliv)·traffic_mult + service + slack

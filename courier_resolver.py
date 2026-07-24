@@ -1724,6 +1724,7 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
         from schedule_utils import (load_schedule, is_on_shift, match_courier,
                                      is_schedule_stale)
         schedule = load_schedule()
+        _schedule_load_error = None
         # D2 (audyt 2026-05-28): wykryj stale grafik RAZ (ten sam 30min próg co
         # shift_notifications.worker). Stempel per-courier niżej → feasibility
         # soft-degraduje zamiast hard-reject NO_ACTIVE_SHIFT przy awarii pliku.
@@ -1734,16 +1735,36 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
         match_courier = None
         is_on_shift = None
         _sched_stale = True  # load failed → traktuj jako stale (D2 soft-degrade)
+        _schedule_load_error = type(_e).__name__
+    try:
+        from dispatch_v2 import common as _availability_common
+        _availability_contract_enabled = _availability_common.decision_flag(
+            "ENABLE_CID_AVAILABILITY_CONTRACT"
+        )
+    except Exception:
+        _availability_contract_enabled = False
     try:
         from dispatch_v2 import manual_overrides
-        excluded = set(manual_overrides.get_excluded())
-        working = manual_overrides.get_working()  # {cid_str: {"start","end",...}}
+        # Za nowym kontraktem legacy state nie jest już równoległym źródłem puli.
+        # Wciąż importujemy moduł po ścieżkę store, ale nie konsumujemy jego
+        # excluded/working. OFF-flaga zachowuje dotychczasowe odczyty 1:1.
+        excluded = (
+            set() if _availability_contract_enabled
+            else set(manual_overrides.get_excluded())
+        )
+        working = (
+            {} if _availability_contract_enabled
+            else manual_overrides.get_working()
+        )  # {cid_str: {"start","end",...}}
         # Opcja A (2026-06-10): egzekucja wykluczenia PO CID, nie tylko po nazwie.
         # Naprawia desync — flota od 06-10 nadaje cs.name pełne imię z grafiku
         # ('Mateusz Ostapczuk'), a override trzyma skrót panelowy ('Mateusz O') →
         # czysty match nazw gubił blokadę. get_excluded_cids() mapuje dowolną formę
         # nazwy → cid. Flag-gated (hot-reload kill-switch), fail-soft.
-        excluded_cids = manual_overrides.get_excluded_cids()
+        excluded_cids = (
+            set() if _availability_contract_enabled
+            else manual_overrides.get_excluded_cids()
+        )
     except Exception as _e:
         _log.warning(f"manual_overrides load failed: {_e}")
         excluded = set()
@@ -1775,11 +1796,107 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
         _wo_grafik_cap_enabled = True
         _exclude_by_cid_enabled = True
     _now_utc_fleet = datetime.now(timezone.utc)
+    _availability_context = None
+    if _availability_contract_enabled:
+        from dispatch_v2 import courier_availability as _availability
+        _availability_context = _availability.load_context(
+            schedule if _schedule_load_error is None else None,
+            schedule_error=_schedule_load_error,
+            # R-POOL-TRUTH: resolver puli czyta DOKŁADNIE ten sam efektywny store,
+            # do którego pisze domyślny writer availability (assignment/konsola).
+            # Zakaz drugiego źródła ścieżki (dawniej manual_overrides.OVERRIDES_PATH),
+            # bo pod DISPATCH_STATE_DIR rozjeżdżał się z writerem.
+            overrides_path=_availability.effective_overrides_path(),
+            grafik_names_path=GRAFIK_FULL_NAMES_PATH,
+        )
     result = []
     # TASK 3: collect rejected dla observability logger (zero overhead gdy flag false)
     _rejected_for_log = []
     _passed_for_log = []
     for cs in fleet.values():
+        # R-POOL-TRUTH: jedna decyzja dostępności po CID. Ta gałąź kończy
+        # iterację (pass/reject), więc żadne legacy excluded/working/name-match
+        # poniżej nie jest drugim konsumentem puli. OFF-flaga omija ją w całości.
+        if _availability_context is not None:
+            from dispatch_v2 import common as _availability_cfg
+            _pre_shift_window = (
+                _availability_cfg.PRE_SHIFT_WINDOW_MAX_MIN
+                if _availability_cfg.ENABLE_V324A_SCHEDULE_INTEGRATION
+                else PRE_SHIFT_WINDOW_MIN
+            )
+            availability = _availability.resolve(
+                _availability_context,
+                cs.courier_id,
+                is_on_shift=is_on_shift,
+                mins_to_shift_start=_mins_to_shift_start,
+                pre_shift_window_min=_pre_shift_window,
+            )
+            if not availability.dispatchable:
+                _rejected_for_log.append({
+                    "cid": availability.cid,
+                    "panel_name": cs.name,
+                    "reason": f"availability_{availability.state.value.lower()}",
+                    "availability_provenance": availability.provenance.value,
+                    "availability_detail": availability.detail,
+                })
+                continue
+
+            if availability.state is _availability.AvailabilityState.OPERATOR_ON:
+                if cs.pos is None:
+                    _synthetic_pos_fallback(
+                        cs, "working_override_synthetic"
+                    )
+            else:
+                entry = availability.schedule_entry
+                cs.shift_start = _shift_start_dt(entry)
+                cs.shift_end = effective_shift_end(
+                    None, entry, True, _wo_grafik_cap_enabled
+                )
+                if (
+                    availability.provenance
+                    is _availability.AvailabilityProvenance.SCHEDULE_PRE_SHIFT
+                ):
+                    _mins = _mins_to_shift_start(entry)
+                    _synthetic_pos_fallback(
+                        cs, "pre_shift", shift_start_min=_mins
+                    )
+                elif (
+                    _post_shift_5min_enabled
+                    and cs.pos is None
+                    and cs.shift_start is not None
+                ):
+                    _shift_start_utc = (
+                        cs.shift_start.replace(tzinfo=timezone.utc)
+                        if cs.shift_start.tzinfo is None
+                        else cs.shift_start.astimezone(timezone.utc)
+                    )
+                    if (
+                        _now_utc_fleet - _shift_start_utc
+                    ).total_seconds() >= 300:
+                        _synthetic_pos_fallback(
+                            cs, "post_shift_start_synthetic"
+                        )
+
+            if cs.pos is None:
+                _rejected_for_log.append({
+                    "cid": availability.cid,
+                    "panel_name": cs.name,
+                    "reason": "no_position",
+                    "pos_source": cs.pos_source,
+                    "availability_state": availability.state.value,
+                })
+                continue
+            cs.schedule_source_stale = _sched_stale
+            result.append(cs)
+            _passed_for_log.append({
+                "cid": availability.cid,
+                "panel_name": cs.name,
+                "pos_source": cs.pos_source,
+                "availability_state": availability.state.value,
+                "availability_provenance": availability.provenance.value,
+            })
+            continue
+
         # Faza 7-AUTO-PROXIMITY: post-shift-start synthetic pos (Adrian decyzja 2026-05-06).
         # Mutuje cs PRZED no-position check, żeby kurier 5+ min po starcie z brakiem
         # GPS NIE był wyrzucony jako "no_position".
