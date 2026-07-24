@@ -2918,6 +2918,13 @@ _GATE_RANKING_DELTA_EXCLUSIONS = (
     ("ENABLE_REPO_COST_LIVE", "bonus_repo_cost_shadow_delta"),             # OFF (preemptive)
     ("ENABLE_BUNDLE_VALUE_SCORING", "bonus_bundle_fit_shadow_delta"),      # OFF (preemptive)
     ("ENABLE_FIX_C_ADDITIVE_PENALTY", "fix_c_additive_pen_shadow"),        # OFF (preemptive)
+    # F-2: delty stosowane zbiorczo w core/candidates. Wartości metrics są
+    # dokładnie podpisanymi składnikami dodanymi do final_score.
+    ("ENABLE_POST_SHIFT_OVERRUN_PENALTY", "post_shift_overrun_score_delta"),
+    ("ENABLE_BAG_TIME_FAIRNESS_SCORING", "bonus_bag_time_sum"),
+    ("ENABLE_BAG_TIME_FAIRNESS_SCORING", "bonus_bag_time_max"),
+    ("ENABLE_BAG_TIME_FAIRNESS_SCORING", "bonus_fifo_violation"),
+    ("ENABLE_R5_PICKUP_DETOUR_PENALTY", "bonus_r5_pickup_detour_penalty"),
 )
 
 

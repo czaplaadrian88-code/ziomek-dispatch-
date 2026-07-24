@@ -20,8 +20,6 @@ Dwa strażniki:
 import ast
 import inspect
 
-import pytest
-
 import dispatch_v2.dispatch_pipeline as DP
 from dispatch_v2.core import candidates as _cand
 
@@ -32,15 +30,6 @@ _KNOWN_GAP_FLAGS = {
 }
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "F-2 wielki-audyt 18.07: 3 flag-gated delty final_score poza "
-        "_GATE_RANKING_DELTA_EXCLUSIONS (post_shift/bag_time_fairness/"
-        "r5_pickup_detour — ta ostatnia flaga DZIŚ ON). Zdejmij xfail po "
-        "dopisaniu wpisów z poprawnym znakiem (protokół #0 + ACK; naiwny "
-        "wpis post_shift podwoiłby karę w gate)."),
-)
 def test_known_gap_flags_covered_by_exclusions():
     registry_flags = {f for f, _ in DP._GATE_RANKING_DELTA_EXCLUSIONS}
     missing = sorted(_KNOWN_GAP_FLAGS - registry_flags)
@@ -91,7 +80,7 @@ _BASELINE_PARTICIPANTS = {
     "bonus_repo_cost_shadow_delta", "bonus_bundle_fit_shadow_delta",
     "fix_c_additive_pen_shadow",
     # ZNANE LUKI F-2 (xfail wyżej pilnuje ich domknięcia):
-    "post_shift_overrun_penalty",
+    "post_shift_overrun_score_delta",
     "bonus_bag_time_sum", "bonus_bag_time_max", "bonus_fifo_violation",
     "bonus_r5_pickup_detour_penalty",
 }
@@ -113,3 +102,28 @@ def test_baseline_names_still_exist():
     src = inspect.getsource(_cand)
     dead = sorted(n for n in _BASELINE_PARTICIPANTS if n not in src)
     assert not dead, f"baseline F-2 zawiera nazwy nieobecne w źródle: {dead}"
+
+
+def test_all_f2_signed_deltas_are_removed_from_gate_score(monkeypatch):
+    """Oracle behawioralny: każda F-2 kara zmienia ranking, nie bramkę KOORD."""
+    cases = {
+        "ENABLE_POST_SHIFT_OVERRUN_PENALTY": {
+            "post_shift_overrun_score_delta": -40.0,
+        },
+        "ENABLE_BAG_TIME_FAIRNESS_SCORING": {
+            "bonus_bag_time_sum": -10.0,
+            "bonus_bag_time_max": -20.0,
+            "bonus_fifo_violation": -30.0,
+        },
+        "ENABLE_R5_PICKUP_DETOUR_PENALTY": {
+            "bonus_r5_pickup_detour_penalty": -25.0,
+        },
+    }
+
+    for flag, metrics in cases.items():
+        class Candidate:
+            score = -90.0 + sum(metrics.values())
+
+        Candidate.metrics = metrics
+        monkeypatch.setattr(DP.C, "decision_flag", lambda name, f=flag: name == f)
+        assert DP._gate_score_excluding_ranking_deltas(Candidate()) == -90.0
