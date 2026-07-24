@@ -1,0 +1,31 @@
+{
+  "bundles": [
+    {
+      "bundle_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "head": "5555555555555555555555555555555555555555",
+      "integrated": false,
+      "mtime": "2026-07-05T00:00:00Z",
+      "patch_equivalent": false,
+      "path": "/tmp/codex_missing.bundle",
+      "target_present": false
+    },
+    {
+      "bundle_sha256": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "head": "6666666666666666666666666666666666666666",
+      "integrated": false,
+      "mtime": "2026-07-06T00:00:00Z",
+      "patch_equivalent": true,
+      "path": "/tmp/codex_equivalent.bundle",
+      "target_present": true
+    },
+    {
+      "bundle_sha256": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+      "head": "7777777777777777777777777777777777777777",
+      "integrated": true,
+      "mtime": "2026-07-07T00:00:00Z",
+      "patch_equivalent": false,
+      "path": "/tmp/codex_integrated.bundle",
+      "target_present": true
+    }
+  ]
+}

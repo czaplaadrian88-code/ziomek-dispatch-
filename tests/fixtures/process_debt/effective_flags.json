@@ -1,0 +1,17 @@
+{
+  "processes": {
+    "engine": {
+      "flags": {
+        "ENABLE_ALPHA": false,
+        "ENABLED_LIVE": true,
+        "NO_EVIDENCE": false
+      }
+    },
+    "shadow": {
+      "flags": {
+        "ENABLE_ALPHA": false,
+        "NO_EVIDENCE": false
+      }
+    }
+  }
+}

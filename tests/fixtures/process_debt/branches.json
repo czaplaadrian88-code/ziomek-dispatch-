@@ -1,0 +1,29 @@
+{
+  "master_sha": "1111111111111111111111111111111111111111",
+  "branches": [
+    {
+      "committed_at": "2026-07-02T00:00:00Z",
+      "merged": false,
+      "name": "codex/patch-equivalent",
+      "patch_equivalent": true,
+      "tip": "2222222222222222222222222222222222222222",
+      "unique_patches": 0
+    },
+    {
+      "committed_at": "2026-07-03T00:00:00Z",
+      "merged": false,
+      "name": "codex/unique-work",
+      "patch_equivalent": false,
+      "tip": "3333333333333333333333333333333333333333",
+      "unique_patches": 2
+    },
+    {
+      "committed_at": "2026-07-04T00:00:00Z",
+      "merged": true,
+      "name": "codex/already-merged",
+      "patch_equivalent": false,
+      "tip": "4444444444444444444444444444444444444444",
+      "unique_patches": 0
+    }
+  ]
+}

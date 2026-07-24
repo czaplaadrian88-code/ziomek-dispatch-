@@ -1,0 +1,12 @@
+{
+  "flags": {
+    "ENABLE_ALPHA": {
+      "blocker": "Brak decyzji ownera",
+      "code_sha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "next_step": "Niezależny review replayu",
+      "opened_at": "2026-07-01T00:00:00Z",
+      "owner": "CTO",
+      "title": "ENABLE_ALPHA zbudowana i skutecznie OFF"
+    }
+  }
+}
