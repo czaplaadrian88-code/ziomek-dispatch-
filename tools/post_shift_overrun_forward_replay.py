@@ -9,7 +9,9 @@ Użycie: python -m dispatch_v2.tools.post_shift_overrun_forward_replay [--since 
 """
 import argparse
 import json
+import math
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -31,8 +33,45 @@ except ImportError:
 from contextlib import nullcontext as _nullcontext
 
 LOG = ledger_io.LEDGER["shadow"]
-GRACE = C.POST_SHIFT_OVERRUN_GRACE_MIN
 DEFAULT_SINCE = "2026-06-24T20:52:00+00:00"
+
+IDEAL = "ideal_zero"
+IMPROVEMENT = "improvement"
+WORSENED = "worsened"
+UNCHANGED = "unchanged"
+REVIEW = "review_missing_value"
+
+
+@dataclass(frozen=True)
+class OverrunChange:
+    classification: str
+    delta_min: float | None
+
+
+def classify_overrun_change(before, after):
+    """Monotoniczny oracle ownera: after < before poprawia; zero jest ideałem.
+
+    Surowa metryka silnika jest podpisanym przesunięciem względem końca zmiany,
+    więc wartości ujemne oznaczają zakończenie w godzinach pracy. Dla kryterium
+    `post_shift_overrun` kanonizujemy je do 0 minut nadgodzin.
+
+    Wartości brakujące nie są domyślnie uznawane za poprawę, bo instrument nie
+    ma wtedy dowodu kierunku zmiany.
+    """
+    if not isinstance(before, (int, float)) or not isinstance(after, (int, float)):
+        return OverrunChange(REVIEW, None)
+    if not math.isfinite(before) or not math.isfinite(after):
+        return OverrunChange(REVIEW, None)
+    before = max(0.0, float(before))
+    after = max(0.0, float(after))
+    delta = round(after - before, 2)
+    if after == 0.0 and after < before:
+        return OverrunChange(IDEAL, delta)
+    if after < before:
+        return OverrunChange(IMPROVEMENT, delta)
+    if after > before:
+        return OverrunChange(WORSENED, delta)
+    return OverrunChange(UNCHANGED, delta)
 
 
 def parse_dt(s):
@@ -74,7 +113,7 @@ def main():
     args = ap.parse_args()
     since = parse_dt(args.since)
 
-    be = with_pen = flips = good = regress = no_pen = 0
+    be = with_pen = flips = improved = ideal = worsened = unchanged = review = no_pen = 0
     examples = []
     last_ts = None
     with _nullcontext(_rotated_logs.iter_jsonl_lines(LOG, None)) as f:
@@ -113,37 +152,46 @@ def main():
             if p_off.courier_id != p_on.courier_id:
                 flips += 1
                 o_on = overs.get(p_on.courier_id)
-                nb_off = (p_off.metrics.get("plan") or {})
-                # new-bag z plan.per_order_delivery_times
-                nb_off = (getattr(p_off, "metrics", {}) or {}).get("sum_bag_time_min")
-                nb_on = (getattr(p_on, "metrics", {}) or {}).get("sum_bag_time_min")
-                if (o_off is not None and o_off > GRACE and (o_on is None or o_on <= GRACE)):
-                    good += 1
+                change = classify_overrun_change(o_off, o_on)
+                if change.classification == IDEAL:
+                    ideal += 1
+                    improved += 1
+                elif change.classification == IMPROVEMENT:
+                    improved += 1
+                elif change.classification == WORSENED:
+                    worsened += 1
+                elif change.classification == UNCHANGED:
+                    unchanged += 1
                 else:
-                    regress += 1  # flip NIE post->in-shift = podejrzane, obejrzyj
+                    review += 1
                 if len(examples) < 20:
                     examples.append((d.get("ts", "")[:19], oid, p_off.name,
                                      round(o_off, 1) if o_off is not None else None,
-                                     p_on.name, round(o_on, 1) if o_on is not None else None))
+                                     p_on.name, round(o_on, 1) if o_on is not None else None,
+                                     change.classification, change.delta_min))
 
     print("=" * 66)
     print(f"FORWARD-REPLAY post-shift overrun  (od {args.since})")
     print(f"  best_effort decyzji: {be}   (z polem penalty: {with_pen}, stare bez pola: {no_pen})")
     print(f"  ostatni rekord: {last_ts}")
     print(f"  FLIPY flaga ON: {flips}")
-    print(f"    post-shift -> in-shift (DOBRE): {good}")
-    print(f"    inne (OBEJRZYJ): {regress}")
+    print(f"    poprawa: {improved} (w tym ideał 0 min: {ideal})")
+    print(f"    pogorszenie: {worsened}")
+    print(f"    bez zmiany: {unchanged}")
+    print(f"    brak danych / REVIEW: {review}")
     for e in examples:
-        print(f"    {e[0]} oid={e[1]}: OFF {e[2]}(+{e[3]}) -> ON {e[4]}(+{e[5]})")
+        delta_text = "n/a" if e[7] is None else f"{e[7]:+g}"
+        print(f"    {e[0]} oid={e[1]}: OFF {e[2]}(+{e[3]}) -> ON {e[4]}(+{e[5]})"
+              f"  {e[6]} delta={delta_text} min")
     print("-" * 66)
     if with_pen < 20:
         verdict = "NO-GO (za mało danych — <20 best_effort z polem penalty; poczekaj na kolejny peak)"
-    elif regress == 0 and flips > 0:
-        verdict = "GO (flipy wyłącznie post-shift->in-shift, 0 podejrzanych)"
-    elif regress == 0 and flips == 0:
+    elif worsened == 0 and review == 0 and flips > 0:
+        verdict = "GO (0 pogorszeń; każda redukcja overrun jest poprawą, 0 min to ideał)"
+    elif worsened == 0 and review == 0 and flips == 0:
         verdict = "GO-neutralny (0 flipów — kara nie szkodzi; efekt rzadki)"
     else:
-        verdict = f"REVIEW ({regress} flipów innych niż post->in-shift — obejrzyj zanim flip)"
+        verdict = f"REVIEW (pogorszenia={worsened}, brak_danych={review})"
     print(f"WERDYKT: {verdict}")
     print("Flip dopiero po ACK Adriana, poza peakiem: flags.json ENABLE_POST_SHIFT_OVERRUN_PENALTY=true")
 
