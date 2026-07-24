@@ -24,6 +24,9 @@ from zoneinfo import ZoneInfo
 
 SCHEMA_VERSION = 1
 CYCLE_SECONDS = 10
+# Snapshot starszy niż tyle = martwy/zawieszony daemon → NIE serwuj (konsument fallback).
+# 6 pominiętych cykli; bez tego panel/kafel/mapa/apka pokazują starą godzinę bez końca.
+STALE_AFTER_SECONDS = 6 * CYCLE_SECONDS
 WARSAW = ZoneInfo("Europe/Warsaw")
 
 SNAPSHOT_FILE = Path(
@@ -207,6 +210,19 @@ def _read_store() -> dict:
     return {"schema_version": SCHEMA_VERSION, "entries": {}}
 
 
+def _read_store_fresh() -> dict:
+    """Kanoniczny store TYLKO jeśli świeży. Martwy/zawieszony daemon (brak/stary
+    ``generated_at``) ⇒ traktuj jak brak danych (puste entries), by żaden konsument
+    nie serwował przeterminowanej godziny. Jedyne miejsce kontroli świeżości."""
+    store = _read_store()
+    generated = _as_utc(store.get("generated_at"))
+    if generated is None:
+        return {"schema_version": SCHEMA_VERSION, "entries": {}}
+    if (_utc_now() - generated).total_seconds() > STALE_AFTER_SECONDS:
+        return {"schema_version": SCHEMA_VERSION, "entries": {}}
+    return store
+
+
 def _atomic_write_store(store: Mapping[str, object]) -> None:
     SNAPSHOT_FILE.parent.mkdir(parents=True, exist_ok=True)
     fd, tmp_name = tempfile.mkstemp(
@@ -265,7 +281,14 @@ def write_cycle(
             existing.get("cycle_id") == cycle_id
             and existing.get("input_fingerprint") == input_fingerprint
         ):
-            return read_all()
+            # Producent zwraca RAW cache bieżącego cyklu (świeży z definicji: zgodny
+            # cycle_id+fingerprint) — NIE przez read_all(), bo to konsumencki reader
+            # ze staleness-guardem (który przy odtwarzaniu historycznego now dałby pusto).
+            return {
+                str(cid): entry["snapshot"]
+                for cid, entry in existing.get("entries", {}).items()
+                if isinstance(entry, dict) and isinstance(entry.get("snapshot"), dict)
+            }
         entries: dict[str, dict] = {}
         for route in route_list:
             courier_id = str(route.get("courier_id"))
@@ -296,7 +319,7 @@ def write_cycle(
 
 def read_latest(courier_id: object) -> dict | None:
     """Read-only projekcja ostatniego kanonicznego snapshotu danego kuriera."""
-    entry = _read_store().get("entries", {}).get(str(courier_id))
+    entry = _read_store_fresh().get("entries", {}).get(str(courier_id))
     snapshot = entry.get("snapshot") if isinstance(entry, dict) else None
     return snapshot if isinstance(snapshot, dict) else None
 
@@ -304,7 +327,7 @@ def read_latest(courier_id: object) -> dict | None:
 def read_all() -> dict[str, dict]:
     """Read-only mapa wszystkich snapshotów, bez jakiejkolwiek rekalkulacji."""
     out: dict[str, dict] = {}
-    for courier_id, entry in _read_store().get("entries", {}).items():
+    for courier_id, entry in _read_store_fresh().get("entries", {}).items():
         snapshot = entry.get("snapshot") if isinstance(entry, dict) else None
         if isinstance(snapshot, dict):
             out[str(courier_id)] = snapshot

@@ -219,3 +219,57 @@ def test_ratchet_exactly_one_calculator_and_one_runtime_writer():
         source = (root / source_name).read_text(encoding="utf-8")
         assert "live_eta_cache.write" not in source
         assert "live_order_eta.json" not in source
+
+
+def test_stale_snapshot_not_served_after_daemon_death(tmp_path, monkeypatch):
+    """Martwy/zawieszony live_eta_daemon NIE może w nieskończoność serwować starej godziny
+    (Sol cross-check 2026-07-24). Odczyt po TTL musi dać None/pusto → konsument fallback."""
+    _redirect_store(tmp_path, monkeypatch)
+    store = {
+        "schema_version": live_eta.SCHEMA_VERSION,
+        "generated_at": live_eta._iso_utc(NOW),
+        "entries": {"75": {"snapshot": {"courier_id": "75", "orders": {}}}},
+    }
+    live_eta.SNAPSHOT_FILE.write_text(json.dumps(store), encoding="utf-8")
+    # świeży odczyt w oknie — serwowany
+    monkeypatch.setattr(live_eta, "_utc_now", lambda: NOW + timedelta(seconds=5))
+    assert live_eta.read_latest("75") is not None
+    assert "75" in live_eta.read_all()
+    # daemon martwy: odczyt długo po ostatnim cyklu — stale ⇒ None/pusto
+    monkeypatch.setattr(live_eta, "_utc_now", lambda: NOW + timedelta(minutes=10))
+    assert live_eta.read_latest("75") is None
+    assert live_eta.read_all() == {}
+
+
+def test_staleness_boundary_and_malformed_generated_at(tmp_path, monkeypatch):
+    """Edge-case'y guardu świeżości (Sol cross-check 2026-07-24): granica TTL, brak/malformed/
+    naive/future ``generated_at``."""
+    _redirect_store(tmp_path, monkeypatch)
+
+    def seed(generated_value):
+        store = {
+            "schema_version": live_eta.SCHEMA_VERSION,
+            "entries": {"75": {"snapshot": {"courier_id": "75", "orders": {}}}},
+        }
+        if generated_value is not None:
+            store["generated_at"] = generated_value
+        live_eta.SNAPSHOT_FILE.write_text(json.dumps(store), encoding="utf-8")
+
+    ttl = live_eta.STALE_AFTER_SECONDS
+    seed(live_eta._iso_utc(NOW))
+    # dokładnie na granicy TTL — serwowany (warunek to ">", nie ">=")
+    monkeypatch.setattr(live_eta, "_utc_now", lambda: NOW + timedelta(seconds=ttl))
+    assert live_eta.read_latest("75") is not None
+    # tuż za granicą — stale
+    monkeypatch.setattr(live_eta, "_utc_now", lambda: NOW + timedelta(seconds=ttl + 1))
+    assert live_eta.read_latest("75") is None
+    # future generated_at (zegar konsumenta przed publikacją) — serwowany, nie „stale"
+    monkeypatch.setattr(live_eta, "_utc_now", lambda: NOW - timedelta(seconds=5))
+    assert live_eta.read_latest("75") is not None
+    # brak generated_at — traktuj jak brak danych (pusto)
+    seed(None)
+    monkeypatch.setattr(live_eta, "_utc_now", lambda: NOW)
+    assert live_eta.read_latest("75") is None and live_eta.read_all() == {}
+    # malformed generated_at — fail-safe pusto
+    seed("nie-jest-data")
+    assert live_eta.read_latest("75") is None
