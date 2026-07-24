@@ -446,3 +446,27 @@ def test_audit_seed_is_not_auto_imported_and_all_records_validate(tmp_path: Path
             metadata=record["metadata"],
         )
     assert len(store.list_gates()) == 17
+
+
+def test_open_gates_view_renders_with_full_table(tmp_path: Path) -> None:
+    """RED-first: pełna tabela (10 widocznych bramek) MUSI się wyrenderować.
+
+    Sztywna asercja `20 <= len(lines) <= 30` pękała, gdy sekcja „Kontrola"
+    urosła o legendę ŚWIEŻA — czyli widok żywego ledgera przestawał się
+    generować w ogóle, mimo poprawnych danych. Rama widoku ma zależeć od
+    liczby wierszy, a nie od magicznej liczby.
+    """
+    store = GateStore(tmp_path / "gates.sqlite3")
+    for i in range(12):
+        add_gate(store, f"test.gate{i:02d}", opened_at="2026-06-01T00:00:00Z")
+    view = render_open_gates(
+        store.list_gates(),
+        as_of=datetime(2026, 7, 24, 12, tzinfo=timezone.utc),
+        source="fixture.sqlite3",
+    )
+    assert view.startswith("# OPEN GATES")
+    assert "## Kontrola" in view
+    rows = [ln for ln in view.splitlines() if ln.startswith("| test.gate")
+            or (ln.startswith("|") and "test.gate" in ln)]
+    assert len(rows) == 10, f"tabela ma pokazac 10 wierszy, ma {len(rows)}"
+    assert "Pominięte z tabeli: 2." in view

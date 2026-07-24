@@ -1416,8 +1416,24 @@ def render_open_gates(
             "- Odświeżenie: `process_debt_gate.py export --format open-gates`.",
         ]
     )
-    if not 20 <= len(lines) <= 30:
-        raise AssertionError(f"widok ma {len(lines)} linii, oczekiwano 20-30")
+    # Strażnik kompletności widoku. NIE liczymy tu całkowitych linii: sztywny
+    # zakres (dawniej 20-30) pękał przy każdej zmianie ramy — np. dopisanie
+    # jednej linii legendy „ŚWIEŻA" wywalało generowanie CAŁEGO widoku żywego
+    # ledgera, mimo poprawnych danych. Sprawdzamy INWARIANTY, nie proxy:
+    # nagłówek, sekcja kontrolna i zgodność liczby wierszy tabeli z `visible`.
+    rendered_rows = sum(1 for ln in lines if ln.startswith("| ") and " | " in ln)
+    expected_rows = len(visible) + 1  # +1 = wiersz separatora nagłówka tabeli
+    problems = []
+    if not lines or not lines[0].startswith("# OPEN GATES"):
+        problems.append("brak nagłówka '# OPEN GATES'")
+    if "## Kontrola" not in lines:
+        problems.append("brak sekcji '## Kontrola'")
+    if rendered_rows != expected_rows:
+        problems.append(
+            f"tabela ma {rendered_rows} wierszy, oczekiwano {expected_rows}"
+        )
+    if problems:
+        raise AssertionError("widok niekompletny: " + "; ".join(problems))
     return "\n".join(lines) + "\n"
 
 
