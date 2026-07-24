@@ -1,5 +1,14 @@
 # ZIOMEK AI DISPATCHER - BACKLOG ROZWOJU
 
+> **KANDYDAT 2026-07-24 — C7 POST-SHIFT REPLAY GO:** owner związał kryterium
+> monotonicznie („każde 5 min w dół to poprawa, najlepsze 0"). Branch
+> `fix/c7-exclusions-20260724`, commit `18864aff4`: klasyfikator u źródła,
+> RED 35→15, mutation powrotu do binarnego grace czerwony; replay 18–24.07
+> `10 popraw / 0 pogorszeń / 0 bez zmiany`, w tym `7×0 min`; full
+> `5827P/0F`. Werdykt GO do `READY_FOR_OWNER`; gotowa komenda transition
+> jest w `/root/handover/C7_FIX_EXCLUSIONS_2026-07-24.md`, ale nie została
+> wykonana. Zero live/flag/deploy/restart/push/merge; flip wymaga osobnego ACK.
+
 > **CURRENT 2026-07-23 — MAIN ROTATION / TASK229–231 HOLD:** długi owner-facing
 > wątek przekazuje wykonanie do świeżego `gpt-5.6-sol/ultra` w tmux
 > `main-successor-20260723-135014`. Następca pozostaje `non-MAIN/internal-only`,

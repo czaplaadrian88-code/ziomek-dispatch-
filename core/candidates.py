@@ -1869,6 +1869,7 @@ def eval_courier_inner(ctx: EvalContext, cid, cs):
     # → 0 (grafik mógł paść — nie karać na ślepo).
     post_shift_overrun_min = 0.0
     post_shift_overrun_penalty = 0.0
+    post_shift_overrun_score_delta = 0.0
     _cs_shift_end = getattr(cs, "shift_end", None)
     if _cs_shift_end is not None and plan is not None:
         _pred_new = (getattr(plan, "predicted_delivered_at", None) or {}).get(
@@ -1882,7 +1883,10 @@ def eval_courier_inner(ctx: EvalContext, cid, cs):
     final_score = score_result["total"] + bundle_bonus + timing_gap_bonus + wave_bonus + bonus_penalty_sum + bonus_bug2_continuation + v324a_extension_penalty
     # Post-shift overrun: odjęcie kary od score TYLKO gdy flaga ON (shadow-first).
     if C.decision_flag("ENABLE_POST_SHIFT_OVERRUN_PENALTY") and post_shift_overrun_penalty:
-        final_score = final_score - post_shift_overrun_penalty
+        # Kanoniczna, podpisana delta score. Bramka KOORD odwraca dokładnie tę
+        # wartość; użycie dodatniej `post_shift_overrun_penalty` podwoiłoby karę.
+        post_shift_overrun_score_delta = -post_shift_overrun_penalty
+        final_score = final_score + post_shift_overrun_score_delta
     # BUG A+B shadow (2026-05-26): bag_time fairness + r5 detour. Wszystkie
     # cztery bonus_* są 0.0 gdy flagi OFF (default) → zero behavior change
     # dopóki flagi nie zostaną włączone (env override / hot-reload).
@@ -2292,6 +2296,7 @@ def eval_courier_inner(ctx: EvalContext, cid, cs):
         # selekcji best_effort + odjęcie od score gdy ENABLE_POST_SHIFT_OVERRUN_PENALTY.
         "post_shift_overrun_min": post_shift_overrun_min,
         "post_shift_overrun_penalty": post_shift_overrun_penalty,
+        "post_shift_overrun_score_delta": post_shift_overrun_score_delta,
         # V3.25 STEP C: tier propagation dla R-04 NEW-COURIER-CAP gradient.
         # cs_tier_label = 'new' dla świeżo dodanych (Szymon Sa, Grzegorz R).
         # cs_tier_bag = bag.tier (gold|std+|std|slow|new) dla cross-ref.
