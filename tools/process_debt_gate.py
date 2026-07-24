@@ -366,6 +366,41 @@ class GateStore:
         snapshot["alarm"] = bool(snapshot.get("alarm", False))
         return canonical_json(snapshot)
 
+    @staticmethod
+    def _freshness(events: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+        latest_transition: Mapping[str, Any] | None = None
+        latest_note: Mapping[str, Any] | None = None
+        for event in events:
+            if event.get("from_state") == event.get("to_state"):
+                latest_note = event
+            else:
+                latest_transition = event
+        transition_id = (
+            int(latest_transition["event_id"]) if latest_transition is not None else 0
+        )
+        note_id = int(latest_note["event_id"]) if latest_note is not None else 0
+        fresh = latest_note is not None and note_id > transition_id
+        return {
+            "has_fresh_note": fresh,
+            "latest_event_at": (
+                str(events[-1]["occurred_at"]) if events else None
+            ),
+            "latest_transition_at": (
+                str(latest_transition["occurred_at"])
+                if latest_transition is not None
+                else None
+            ),
+            "latest_note_at": (
+                str(latest_note["occurred_at"]) if latest_note is not None else None
+            ),
+            "latest_note_actor": (
+                str(latest_note["actor"]) if latest_note is not None else None
+            ),
+            "latest_note_reason": (
+                str(latest_note["reason"]) if latest_note is not None else None
+            ),
+        }
+
     def add_gate(
         self,
         *,
@@ -584,6 +619,109 @@ class GateStore:
             connection.commit()
         return self.show_gate(gate_id)
 
+    def note(
+        self,
+        gate_id: str,
+        *,
+        expected_version: int,
+        actor: str,
+        reason: str,
+        next_step: str | None = None,
+        blocker: str | None = None,
+        code_sha: str | None = None,
+        evidence_hash: str | None = None,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Dopisz audytowaną adnotację CAS bez przejścia automatu stanów."""
+        gate_id = _validate_gate_id(gate_id)
+        if not isinstance(expected_version, int) or expected_version < 1:
+            raise ValidationError("expected_version musi być dodatnią liczbą całkowitą")
+        actor = _required_text(actor, "actor")
+        reason = _required_text(reason, "reason")
+        timestamp = iso_utc(now or utc_now())
+
+        self.initialize()
+        with self._write_connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute(
+                "SELECT * FROM gates WHERE gate_id = ?", (gate_id,)
+            ).fetchone()
+            if row is None:
+                connection.rollback()
+                raise GateNotFound(f"brak rekordu: {gate_id}")
+            if int(row["version"]) != expected_version:
+                connection.rollback()
+                raise CASConflict(
+                    f"CAS konflikt {gate_id}: oczekiwano v{expected_version}, "
+                    f"jest v{row['version']}"
+                )
+            state = str(row["state"])
+            updates = {
+                "next_step": (
+                    _required_text(next_step, "next_step")
+                    if next_step is not None
+                    else row["next_step"]
+                ),
+                "blocker": (
+                    _required_text(blocker, "blocker")
+                    if blocker is not None
+                    else row["blocker"]
+                ),
+                "code_sha": (
+                    _validate_code_sha(code_sha) if code_sha is not None else row["code_sha"]
+                ),
+                "evidence_hash": (
+                    _validate_evidence_hash(evidence_hash)
+                    if evidence_hash is not None
+                    else row["evidence_hash"]
+                ),
+            }
+            cursor = connection.execute(
+                """
+                UPDATE gates
+                SET next_step = ?, blocker = ?, code_sha = ?, evidence_hash = ?,
+                    version = version + 1, updated_at = ?
+                WHERE gate_id = ? AND version = ?
+                """,
+                (
+                    updates["next_step"],
+                    updates["blocker"],
+                    updates["code_sha"],
+                    updates["evidence_hash"],
+                    timestamp,
+                    gate_id,
+                    expected_version,
+                ),
+            )
+            if cursor.rowcount != 1:
+                connection.rollback()
+                raise CASConflict(f"CAS konflikt podczas zapisu notatki: {gate_id}")
+            updated = connection.execute(
+                "SELECT * FROM gates WHERE gate_id = ?", (gate_id,)
+            ).fetchone()
+            assert updated is not None
+            connection.execute(
+                """
+                INSERT INTO gate_events (
+                    gate_id, from_state, to_state, expected_version,
+                    result_version, actor, reason, occurred_at, snapshot_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    gate_id,
+                    state,
+                    state,
+                    expected_version,
+                    int(updated["version"]),
+                    actor,
+                    reason,
+                    timestamp,
+                    self._event_snapshot(updated),
+                ),
+            )
+            connection.commit()
+        return self.show_gate(gate_id)
+
     def show_gate(self, gate_id: str) -> dict[str, Any]:
         gate_id = _validate_gate_id(gate_id)
         with self._read_connection() as connection:
@@ -602,6 +740,7 @@ class GateStore:
                 (gate_id,),
             ).fetchall()
         gate["events"] = [dict(event) for event in events]
+        gate["freshness"] = self._freshness(gate["events"])
         return gate
 
     def list_gates(
@@ -642,7 +781,32 @@ class GateStore:
             parameters.append(limit)
         with self._read_connection() as connection:
             rows = connection.execute(query, parameters).fetchall()
-        return [self._row_to_gate(row) for row in rows]
+            gates = [self._row_to_gate(row) for row in rows]
+            if gates:
+                gate_ids = [str(gate["gate_id"]) for gate in gates]
+                placeholders = ",".join("?" for _ in gate_ids)
+                event_rows = connection.execute(
+                    f"""
+                    SELECT event_id, gate_id, from_state, to_state, actor,
+                           reason, occurred_at
+                    FROM gate_events
+                    WHERE gate_id IN ({placeholders})
+                    ORDER BY gate_id, event_id
+                    """,
+                    gate_ids,
+                ).fetchall()
+            else:
+                event_rows = []
+        events_by_gate: dict[str, list[dict[str, Any]]] = {
+            str(gate["gate_id"]): [] for gate in gates
+        }
+        for event in event_rows:
+            events_by_gate[str(event["gate_id"])].append(dict(event))
+        for gate in gates:
+            gate["freshness"] = self._freshness(
+                events_by_gate[str(gate["gate_id"])]
+            )
+        return gates
 
     def register_at_intent(
         self,
@@ -1204,13 +1368,23 @@ def render_open_gates(
         "",
         f"Otwarte: **{len(open_rows)}** | po terminie: **{overdue}** | ALARM: **{alarms}**",
         "",
-        "| dni | ID | stan | owner | termin | alarm |",
-        "|---:|---|---|---|---|---|",
+        "| dni | ID | stan | owner | termin | notatka | alarm |",
+        "|---:|---|---|---|---|---|---|",
     ]
     if visible:
         for days, gate in visible:
             due_date = parse_timestamp(str(gate["due_at"]), "due_at").date().isoformat()
             alarm = "ALARM" if gate.get("alarm") else "—"
+            freshness = gate.get("freshness")
+            note = "—"
+            if isinstance(freshness, Mapping) and freshness.get("has_fresh_note"):
+                note_at = parse_timestamp(
+                    str(freshness["latest_note_at"]), "latest_note_at"
+                ).date().isoformat()
+                note = (
+                    f"ŚWIEŻA {note_at} "
+                    f"{_display(freshness.get('latest_note_actor') or '—', 12)}"
+                )
             lines.append(
                 "| "
                 + " | ".join(
@@ -1220,13 +1394,14 @@ def render_open_gates(
                         _display(gate["state"], 22),
                         _display(gate["owner"], 20),
                         due_date,
+                        note,
                         alarm,
                     )
                 )
                 + " |"
             )
     else:
-        lines.append("| — | brak otwartych bramek | — | — | — | — |")
+        lines.append("| — | brak otwartych bramek | — | — | — | — | — |")
     lines.extend(
         [
             "",
@@ -1236,6 +1411,7 @@ def render_open_gates(
             f"- Pominięte z tabeli: {max(0, len(open_rows) - len(visible))}.",
             "- Kolejność: dni wiszenia malejąco, potem ID rosnąco.",
             "- Terminalne: CLOSED, REJECTED i SUPERSEDED nie są pokazywane.",
+            "- ŚWIEŻA = notatka audytowa nowsza niż ostatnie przejście FSM.",
             "- ALARM oznacza brak terminalnego wyniku zarejestrowanego at-joba.",
             "- Odświeżenie: `process_debt_gate.py export --format open-gates`.",
         ]
@@ -1317,6 +1493,18 @@ def build_parser() -> argparse.ArgumentParser:
     transition.add_argument("--evidence-hash")
     transition.add_argument("--metadata", type=_json_object)
 
+    note = subparsers.add_parser(
+        "note", help="audytowana adnotacja CAS bez zmiany stanu"
+    )
+    note.add_argument("gate_id")
+    note.add_argument("--expected-version", required=True, type=int)
+    note.add_argument("--actor", required=True)
+    note.add_argument("--reason", required=True)
+    note.add_argument("--next-step")
+    note.add_argument("--blocker")
+    note.add_argument("--code-sha")
+    note.add_argument("--evidence-hash")
+
     list_parser = subparsers.add_parser("list", help="lista rekordów")
     list_parser.add_argument("--state", action="append", choices=ALL_STATES)
     list_parser.add_argument("--owner")
@@ -1370,6 +1558,18 @@ def main(argv: Sequence[str] | None = None) -> int:
                 code_sha=args.code_sha,
                 evidence_hash=args.evidence_hash,
                 metadata=args.metadata,
+            )
+            output = json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        elif args.command == "note":
+            result = store.note(
+                args.gate_id,
+                expected_version=args.expected_version,
+                actor=args.actor,
+                reason=args.reason,
+                next_step=args.next_step,
+                blocker=args.blocker,
+                code_sha=args.code_sha,
+                evidence_hash=args.evidence_hash,
             )
             output = json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
         elif args.command == "list":

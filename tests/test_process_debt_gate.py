@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import stat
+import subprocess
 import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
@@ -93,6 +94,128 @@ def test_cas_rejects_stale_writer_without_partial_change(tmp_path: Path) -> None
     assert gate["state"] == "WAIT_DATA"
     assert gate["owner"] == "CTO"
     assert gate["version"] == 2
+
+
+def test_note_records_decision_without_state_change_and_refreshes_views(
+    tmp_path: Path,
+) -> None:
+    store = GateStore(tmp_path / "gates.sqlite3")
+    add_gate(store)
+    store.transition(
+        "test.gate",
+        "WAIT_DATA",
+        expected_version=1,
+        actor="pytest/transition",
+        reason="oczekiwanie na decyzję",
+        now=datetime(2026, 7, 21, 12, 1, tzinfo=timezone.utc),
+    )
+
+    gate = store.note(
+        "test.gate",
+        expected_version=2,
+        actor="OWNER",
+        reason="decyzja 2 zatwierdzona",
+        next_step="Wykonać decyzję przy najbliższym przejściu",
+        blocker="BRAK — owner zdecydował",
+        evidence_hash="a" * 64,
+        code_sha="b" * 40,
+        now=datetime(2026, 7, 22, 9, 30, tzinfo=timezone.utc),
+    )
+
+    assert gate["state"] == "WAIT_DATA"
+    assert gate["version"] == 3
+    assert gate["next_step"] == "Wykonać decyzję przy najbliższym przejściu"
+    assert gate["blocker"] == "BRAK — owner zdecydował"
+    assert gate["evidence_hash"] == "a" * 64
+    assert gate["code_sha"] == "b" * 40
+    assert gate["events"][-1]["from_state"] == "WAIT_DATA"
+    assert gate["events"][-1]["to_state"] == "WAIT_DATA"
+    assert gate["freshness"]["has_fresh_note"] is True
+    assert gate["freshness"]["latest_note_at"] == "2026-07-22T09:30:00Z"
+    assert gate["freshness"]["latest_transition_at"] == "2026-07-21T12:01:00Z"
+    assert gate["freshness"]["latest_note_actor"] == "OWNER"
+    assert gate["freshness"]["latest_note_reason"] == "decyzja 2 zatwierdzona"
+
+    listed = store.list_gates()
+    assert listed[0]["freshness"] == gate["freshness"]
+    view = render_open_gates(
+        listed,
+        as_of=datetime(2026, 7, 24, 12, tzinfo=timezone.utc),
+        source="fixture.sqlite3",
+    )
+    assert "| ŚWIEŻA 2026-07-22 OWNER |" in view
+    transitioned = store.transition(
+        "test.gate",
+        "READY_FOR_REVIEW",
+        expected_version=3,
+        actor="pytest/transition",
+        reason="konsumpcja decyzji",
+        now=datetime(2026, 7, 22, 10, 0, tzinfo=timezone.utc),
+    )
+    assert transitioned["freshness"]["has_fresh_note"] is False
+    assert transitioned["freshness"]["latest_note_at"] == "2026-07-22T09:30:00Z"
+    assert transitioned["freshness"]["latest_transition_at"] == "2026-07-22T10:00:00Z"
+
+
+def test_note_cas_rejects_stale_writer_without_partial_change(tmp_path: Path) -> None:
+    store = GateStore(tmp_path / "gates.sqlite3")
+    add_gate(store)
+    store.note(
+        "test.gate",
+        expected_version=1,
+        actor="writer-a",
+        reason="pierwsza notatka",
+        next_step="Nowy krok",
+    )
+    with pytest.raises(CASConflict):
+        store.note(
+            "test.gate",
+            expected_version=1,
+            actor="writer-b",
+            reason="stary odczyt",
+            blocker="NIE-MOŻE-WEJŚĆ",
+        )
+    gate = store.show_gate("test.gate")
+    assert gate["state"] == "BUILT_OFF"
+    assert gate["version"] == 2
+    assert gate["next_step"] == "Nowy krok"
+    assert gate["blocker"] == "BRAK"
+    assert len(gate["events"]) == 2
+
+
+def test_note_cli_requires_audited_fields_and_uses_explicit_database(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "gates.sqlite3"
+    store = GateStore(database)
+    add_gate(store)
+    tool = TOOLS / "process_debt_gate.py"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(tool),
+            "--db",
+            str(database),
+            "note",
+            "test.gate",
+            "--expected-version",
+            "1",
+            "--actor",
+            "OWNER",
+            "--reason",
+            "decyzja bez zmiany stanu",
+            "--next-step",
+            "Review dowodu",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["state"] == "BUILT_OFF"
+    assert payload["version"] == 2
+    assert payload["freshness"]["has_fresh_note"] is True
 
 
 def test_two_concurrent_cas_writers_have_exactly_one_winner(tmp_path: Path) -> None:
@@ -273,7 +396,13 @@ def test_committed_open_view_is_generator_shaped() -> None:
     # a rownosc z zywa baza zlamalaby hermetycznosc testow. Kontrakt sprawdzany
     # odtad: plik w worktree ma ksztalt wyjscia generatora (naglowek GENERATED,
     # zrodlo, hash ledgera, licznik otwartych, sekcja Kontrola, 20-30 linii).
-    committed = (TOOLS.parent / "OPEN_GATES.md").read_text(encoding="utf-8")
+    committed = (
+        TOOLS.parent
+        / "tests"
+        / "fixtures"
+        / "process_debt"
+        / "OPEN_GATES_2026-07-24.md"
+    ).read_text(encoding="utf-8")
     lines = committed.splitlines()
     assert lines[0] == "# OPEN GATES"
     assert "GENERATED — edycja bezcelowa" in committed
@@ -281,6 +410,18 @@ def test_committed_open_view_is_generator_shaped() -> None:
     assert "Otwarte: **" in committed
     assert "## Kontrola" in committed
     assert 20 <= len(lines) <= 30
+
+
+def test_open_gates_snapshot_is_copied_as_immutable_fixture() -> None:
+    fixture = (
+        TOOLS.parent
+        / "tests"
+        / "fixtures"
+        / "process_debt"
+        / "OPEN_GATES_2026-07-24.md"
+    ).read_text(encoding="utf-8")
+    assert "Ledger SHA-256: `4b9c557f8750be208bb20267ab46082c83c96c09b89f3bbf2f130fcc66e175b6`" in fixture
+    assert "| 49 | audit.fail03-k2 | WAIT_DATA | CTO | 2026-07-25 | — |" in fixture
 
 
 def test_audit_seed_is_not_auto_imported_and_all_records_validate(tmp_path: Path) -> None:
