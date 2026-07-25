@@ -12,11 +12,13 @@ import argparse
 import base64
 import hashlib
 import json
+import os
 import re
 import secrets
 import shlex
 import subprocess
 import sys
+import traceback
 import uuid
 from datetime import datetime
 from pathlib import Path
@@ -36,6 +38,58 @@ from process_debt_gate import (
 
 _AT_JOB_RE = re.compile(r"\bjob\s+(\d+)\b", re.I)
 _ATQ_RE = re.compile(r"^\s*(\d+)\s+")
+
+# ── Trwały log przebiegu at-joba ────────────────────────────────────────────────
+# LUKA SYSTEMOWA (bramka eta.gps-remeasure-checkpoint, ALARM 2026-07-25): ``at``
+# oddaje wyjście zadania przez ``mail``, którego na tym hoście NIE MA. Skutek:
+# stdout/stderr runnera szedł donikąd, więc KAŻDA porażka była cicha — job #225
+# zniknął z kolejki bez terminalnego statusu i bez jednego bajtu diagnostyki.
+#
+# Naprawa u źródła: runner zapisuje własny log NA WEJŚCIU, zanim odpali komendę.
+# Dzięki temu ślad zostaje nawet wtedy, gdy runner wywróci się przed zapisem do DB —
+# a to był dokładnie przypadek #225 (brak wpisu terminalnego = ``finish_at_job``
+# nigdy się nie wykonał). Logowanie wyłącznie po fakcie by tego NIE wykryło.
+#
+# Log NIE zawiera runner-tokenu (leży jawnym tekstem w ciele at-joba; osobny dług).
+AT_LOG_DIR = Path(os.environ.get("AT_GATE_LOG_DIR", "/root/handover/at_logs"))
+
+
+def _run_log_path(job_key: str) -> Path:
+    safe = re.sub(r"[^A-Za-z0-9_.-]", "_", job_key)[:80] or "unknown"
+    return AT_LOG_DIR / f"{utc_now().strftime('%Y%m%dT%H%M%SZ')}-{safe}.log"
+
+
+def _append_run_log(path: Path | None, text: str) -> None:
+    """Zapis best-effort: awaria logowania NIGDY nie może wywrócić runnera."""
+    if path is None:
+        return
+    try:
+        with path.open("a", encoding="utf-8", errors="replace") as handle:
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+    except OSError:
+        pass
+
+
+def _open_run_log(job_key: str) -> Path | None:
+    """Tworzy log i od razu wypisuje nagłówek, żeby crash też zostawił ślad.
+
+    Otwierany PRZED dekodowaniem ``--command-b64`` — inaczej wywrotka na samym
+    dekodowaniu argumentu też byłaby cicha.
+    """
+    try:
+        AT_LOG_DIR.mkdir(parents=True, exist_ok=True)
+        path = _run_log_path(job_key)
+    except OSError:
+        return None
+    _append_run_log(
+        path,
+        f"=== at_gate run START {iso_utc(utc_now())} ===\n"
+        f"job_key: {job_key}\n"
+        f"pid:     {os.getpid()}\n",
+    )
+    return path
 
 
 def _run_process(
@@ -192,7 +246,23 @@ def schedule(args: argparse.Namespace) -> int:
 
 
 def run_registered(args: argparse.Namespace) -> int:
-    command = _decode_command(args.command_b64)
+    log_path = _open_run_log(args.job_key)
+    try:
+        command = _decode_command(args.command_b64)
+        _append_run_log(log_path, f"argv:    {shlex.join(command)}\n\n")
+        return _run_registered_inner(args, command, log_path)
+    except BaseException as exc:  # noqa: BLE001 — ślad MUSI zostać także przy SystemExit/KeyboardInterrupt
+        _append_run_log(
+            log_path,
+            f"\n=== at_gate WYWROCIL SIE {iso_utc(utc_now())} ===\n"
+            f"{type(exc).__name__}: {exc}\n{traceback.format_exc()}\n",
+        )
+        raise
+
+
+def _run_registered_inner(
+    args: argparse.Namespace, command: Sequence[str], log_path: Path | None
+) -> int:
     try:
         result = subprocess.run(command, capture_output=True, check=False)
         exit_code = int(result.returncode)
@@ -219,6 +289,18 @@ def run_registered(args: argparse.Namespace) -> int:
     except GateError as exc:
         stderr += f"\nat_gate: ALARM: wynik nie zapisany w DB: {exc}\n".encode("utf-8")
         exit_code = 125
+        db_note = f"ALARM: wynik NIE zapisany w DB: {exc}"
+    else:
+        db_note = "OK — wynik zapisany w DB (finish_at_job)"
+    _append_run_log(
+        log_path,
+        f"exit_code: {exit_code}\n"
+        f"db:        {db_note}\n"
+        f"evidence:  {evidence}\n"
+        f"--- stdout ({len(stdout)} B) ---\n{stdout.decode('utf-8', 'replace')}\n"
+        f"--- stderr ({len(stderr)} B) ---\n{stderr.decode('utf-8', 'replace')}\n"
+        f"=== at_gate run KONIEC {iso_utc(utc_now())} ===\n",
+    )
     sys.stdout.buffer.write(stdout)
     sys.stderr.buffer.write(stderr)
     return exit_code
