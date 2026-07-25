@@ -134,6 +134,9 @@ Jawne polecenie w AKTUALNEJ sesji = ten ACK; nie przenoś zgody ze starego sprin
 commituj jawnym pathspec (nigdy `git add -A`); nigdy nie cofaj/nadpisuj cudzego WIP; przed commitem `git log -3`
 + `git status`; baseline ZIELONY przed zmianą, pełna regresja vs baseline po; manifest strażnika re-seed przy
 zmianie zbioru nodeidów (`night_guard --update-manifest`, fail-closed).
+Nowe worktree twórz wyłącznie przez `/root/projects/bin/new-worktree`, zgodnie z
+`docs/decisions/ADR-009-lokalizacja-worktree.md` i `/root/projects/LIFECYCLE.md`;
+nigdy nie umieszczaj pracy w `/tmp`.
 
 ---
 
