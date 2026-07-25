@@ -15,12 +15,13 @@ import logging
 from datetime import date
 from typing import Dict, List, Optional
 
+from dispatch_v2.common import SCRIPTS_DIR
 from dispatch_v2.daily_accounting.config import SHEET_NAME, SPREADSHEET_ID
 from dispatch_v2.daily_accounting.numbers import parse_zl
 
 log = logging.getLogger("daily_accounting.sheets")
 
-SERVICE_ACCOUNT_PATH = "/root/.openclaw/workspace/scripts/service_account.json"
+SERVICE_ACCOUNT_PATH = str(SCRIPTS_DIR / "service_account.json")
 SCOPES_RW = ["https://www.googleapis.com/auth/spreadsheets"]
 
 DATE_FMT = "%d-%m-%Y"

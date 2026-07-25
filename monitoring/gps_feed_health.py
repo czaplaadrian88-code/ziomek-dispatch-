@@ -37,10 +37,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, Iterable, Literal, Optional, Tuple
 
+from dispatch_v2.common import STATE_DIR
+
 GpsAlertKind = Literal["ENTER", "SUSTAINED", "RECOVERY"]
 
 DEFAULT_EVALUATIONS_LOG_PATH = Path(
-    "/root/.openclaw/workspace/dispatch_state/gps_feed_health_evaluations.jsonl"
+    STATE_DIR / "gps_feed_health_evaluations.jsonl"
 )
 
 

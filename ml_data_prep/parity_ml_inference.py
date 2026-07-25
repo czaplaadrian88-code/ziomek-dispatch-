@@ -23,7 +23,12 @@ from typing import Any, Dict, List
 import pandas as pd
 
 HERE = Path(__file__).resolve().parent
-SCRIPTS = Path("/root/.openclaw/workspace/scripts")
+_PACKAGE_PARENT = str(HERE.parents[1])
+if _PACKAGE_PARENT not in sys.path:
+    sys.path.insert(0, _PACKAGE_PARENT)
+from dispatch_v2.common import SCRIPTS_DIR  # noqa: E402
+
+SCRIPTS = SCRIPTS_DIR
 PROD_ML = SCRIPTS / "ml_data_prep"
 for p in (str(HERE), str(SCRIPTS), str(PROD_ML)):
     if p not in sys.path:

@@ -18,23 +18,24 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterable, Iterator, Sequence
 
+from dispatch_v2.common import LOGS_DIR, STATE_DIR
 
 JSONL_PATHS: tuple[str, ...] = (
-    "/root/.openclaw/workspace/dispatch_state/learning_log.jsonl",
-    "/root/.openclaw/workspace/dispatch_state/v319c_read_shadow_log.jsonl",
-    "/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl",
-    "/root/.openclaw/workspace/scripts/logs/sla_log.jsonl",
-    "/root/.openclaw/workspace/dispatch_state/consumer_stuck_alert_evaluations.jsonl",
-    "/root/.openclaw/workspace/dispatch_state/obj_replay_capture.jsonl",
-    "/root/.openclaw/workspace/dispatch_state/eta_calibration_log.jsonl",
-    "/root/.openclaw/workspace/dispatch_state/drive_min_enriched.jsonl",
-    "/root/.openclaw/workspace/dispatch_state/drive_min_calibration_log_v2.jsonl",
-    "/root/.openclaw/workspace/dispatch_state/plan_recheck_log.jsonl",
-    "/root/.openclaw/workspace/dispatch_state/czasowka_eval_log.jsonl",
-    "/root/.openclaw/workspace/dispatch_state/decision_eta_log.jsonl",
-    "/root/.openclaw/workspace/dispatch_state/czasowka_reclaim_shadow.jsonl",
-    "/root/.openclaw/workspace/dispatch_state/uwagi_bridge_envelope.jsonl",
-    "/root/.openclaw/workspace/scripts/logs/geocoding_log.jsonl",
+    str(STATE_DIR / "learning_log.jsonl"),
+    str(STATE_DIR / "v319c_read_shadow_log.jsonl"),
+    str(LOGS_DIR / "shadow_decisions.jsonl"),
+    str(LOGS_DIR / "sla_log.jsonl"),
+    str(STATE_DIR / "consumer_stuck_alert_evaluations.jsonl"),
+    str(STATE_DIR / "obj_replay_capture.jsonl"),
+    str(STATE_DIR / "eta_calibration_log.jsonl"),
+    str(STATE_DIR / "drive_min_enriched.jsonl"),
+    str(STATE_DIR / "drive_min_calibration_log_v2.jsonl"),
+    str(STATE_DIR / "plan_recheck_log.jsonl"),
+    str(STATE_DIR / "czasowka_eval_log.jsonl"),
+    str(STATE_DIR / "decision_eta_log.jsonl"),
+    str(STATE_DIR / "czasowka_reclaim_shadow.jsonl"),
+    str(STATE_DIR / "uwagi_bridge_envelope.jsonl"),
+    str(LOGS_DIR / "geocoding_log.jsonl"),
 )
 
 

@@ -24,9 +24,9 @@ from __future__ import annotations
 
 from typing import List
 
-from dispatch_v2.common import setup_logger
+from dispatch_v2.common import LOGS_DIR, setup_logger
 
-_log = setup_logger("broadcast_handlers", "/root/.openclaw/workspace/scripts/logs/dispatch.log")
+_log = setup_logger("broadcast_handlers", str(LOGS_DIR / "dispatch.log"))
 
 
 def dispatch_config_reload(events: List[dict], consumer_id: str) -> int:

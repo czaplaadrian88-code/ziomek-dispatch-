@@ -24,14 +24,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator, Optional
 
-from dispatch_v2.common import setup_logger
+from dispatch_v2.common import LOGS_DIR, STATE_DIR, setup_logger
 
-STATE_FILE: Path = Path("/root/.openclaw/workspace/dispatch_state/shift_confirmations.json")
-LEARNING_LOG: Path = Path("/root/.openclaw/workspace/dispatch_state/learning_log.jsonl")
+STATE_FILE: Path = STATE_DIR / "shift_confirmations.json"
+LEARNING_LOG: Path = STATE_DIR / "learning_log.jsonl"
 # ETAP 3 krok 2 (2026-06-10, Z-03): debug matchowania nazw (RESOLVE_CID_*) idzie
 # do osobnego pliku — learning_log zostaje strumieniem decyzji propozycji.
-MATCH_DEBUG_LOG: Path = Path("/root/.openclaw/workspace/dispatch_state/courier_match_debug.jsonl")
-LOG_DIR = "/root/.openclaw/workspace/scripts/logs/"
+MATCH_DEBUG_LOG: Path = STATE_DIR / "courier_match_debug.jsonl"
+LOG_DIR = str(LOGS_DIR) + "/"
 
 _log = setup_logger("shift_notifications.state", LOG_DIR + "shift_notifications.log")
 

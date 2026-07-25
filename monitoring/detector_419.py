@@ -34,14 +34,21 @@ from zoneinfo import ZoneInfo
 # SYSTEMOWA (serwer chodzi w UTC) — alert podpisywał czas UTC jako "Warsaw".
 _WARSAW_TZ = ZoneInfo("Europe/Warsaw")
 
-sys.path.insert(0, "/root/.openclaw/workspace/scripts")
+# Direct-file bootstrap; after this point common.py owns every host location.
+_PACKAGE_PARENT = str(Path(__file__).resolve().parents[2])
+if _PACKAGE_PARENT not in sys.path:
+    sys.path.insert(0, _PACKAGE_PARENT)
+from dispatch_v2.common import LOGS_DIR, SCRIPTS_DIR
 from dispatch_v2.telegram_utils import send_admin_alert
+
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
 
 WINDOW_SECONDS = 60
 THRESHOLD_COUNT = 5
 DEBOUNCE_SECONDS = 300
 PATTERN = re.compile(r"HTTP 419|csrf|unauthor", re.IGNORECASE)
-WATCHER_LOG = Path("/root/.openclaw/workspace/scripts/logs/watcher.log")
+WATCHER_LOG = LOGS_DIR / "watcher.log"
 LOG_FILE = Path("/var/log/v328_monitor_419.log")
 
 _events: Deque[Tuple[float, str]] = deque(maxlen=200)

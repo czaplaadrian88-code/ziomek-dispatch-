@@ -22,8 +22,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
+from dispatch_v2.common import STATE_DIR
 
-DEFAULT_LOG_DIR = Path("/root/.openclaw/workspace/dispatch_state/observability")
+DEFAULT_LOG_DIR = STATE_DIR / "observability"
 CANDIDATE_LOG_PREFIX = "candidate_decisions"  # rotated: candidate_decisions_YYYYMMDD.jsonl
 FLEET_FILTER_LOG_PREFIX = "fleet_filter"      # rotated: fleet_filter_YYYYMMDD.jsonl
 

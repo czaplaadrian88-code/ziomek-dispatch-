@@ -38,7 +38,12 @@ from sklearn.preprocessing import LabelEncoder
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))           # ml_data_prep/ (twomodel_common)
-PROD_ML = Path("/root/.openclaw/workspace/scripts/ml_data_prep")
+_PACKAGE_PARENT = str(HERE.parents[1])
+if _PACKAGE_PARENT not in sys.path:
+    sys.path.insert(0, _PACKAGE_PARENT)
+from dispatch_v2.common import SCRIPTS_DIR  # noqa: E402
+
+PROD_ML = SCRIPTS_DIR / "ml_data_prep"
 sys.path.insert(0, str(PROD_ML))        # produkcyjne src.lgbm_training (read-only)
 
 from twomodel_common import (  # noqa: E402

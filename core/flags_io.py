@@ -21,7 +21,9 @@ import tempfile
 from pathlib import Path
 from typing import Any, Callable
 
-FLAGS_PATH = Path("/root/.openclaw/workspace/scripts/flags.json")
+from dispatch_v2.common import FLAGS_PATH as COMMON_FLAGS_PATH
+
+FLAGS_PATH = COMMON_FLAGS_PATH
 
 
 def _atomic_write_json(path: Path, data: dict[str, Any]) -> None:

@@ -35,15 +35,17 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from dispatch_v2.common import STATE_DIR
 
-DEFAULT_LOG_PATH = Path("/root/.openclaw/workspace/dispatch_state/reconciliation_log.jsonl")
+
+DEFAULT_LOG_PATH = STATE_DIR / "reconciliation_log.jsonl"
 
 # Self-heal (2026-05-31): okno 24h liczy GHOSTy z historycznego logu bez sprawdzenia
 # czy rozjazd NADAL istnieje. Pojedynczy przejściowy ghost (TOCTOU race w jednym runie
 # reconcile — worker wczytał state PRZED zapisem `delivered`) trzymał downstream_status
 # degraded przez pełne 24h → godzinny Telegram spam. Self-heal re-waliduje każdy
 # policzony ghost przeciw bieżącemu orders_state.json; rozwiązany → nie liczy.
-DEFAULT_ORDERS_STATE_PATH = Path("/root/.openclaw/workspace/dispatch_state/orders_state.json")
+DEFAULT_ORDERS_STATE_PATH = STATE_DIR / "orders_state.json"
 # Ghost = events.db terminal + state aktywny. Rozwiązany iff bieżący state NIE jest aktywny
 # (dogonił do terminal) ALBO order zniknął ze state (oba → classify zwróciłby None).
 _ACTIVE_STATE_STATUSES = frozenset({"assigned", "picked_up"})

@@ -12,7 +12,11 @@ from zoneinfo import ZoneInfo
 
 # R4: jedna dźwignia ścieżek dla produkcji i izolowanego harnessu testowego.
 SCRIPTS_DIR = Path(os.environ.get("ZIOMEK_SCRIPTS_ROOT", "/root/.openclaw/workspace/scripts"))
-STATE_DIR = Path(os.environ.get("ZIOMEK_STATE_DIR", "/root/.openclaw/workspace/dispatch_state"))
+STATE_DIR = Path(
+    os.environ.get("ZIOMEK_STATE_DIR")
+    or os.environ.get("DISPATCH_STATE_DIR")
+    or "/root/.openclaw/workspace/dispatch_state"
+)
 LOGS_DIR = Path(os.environ.get("ZIOMEK_LOGS_DIR", str(SCRIPTS_DIR / "logs")))
 CONFIG_PATH = SCRIPTS_DIR / "config.json"
 # ETAP 4 (2026-06-10): env override TYLKO dla izolacji testów script-runner

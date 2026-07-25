@@ -36,14 +36,14 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 # Module imports
-from dispatch_v2.common import flag, setup_logger
+from dispatch_v2.common import LOGS_DIR, STATE_DIR, flag, setup_logger
 from dispatch_v2 import event_bus, lifecycle_downstream, state_machine
 from dispatch_v2.reconciliation import phantom_detector, auto_resync, reconcile_log
 
 # Config paths
-ORDERS_STATE_PATH = Path("/root/.openclaw/workspace/dispatch_state/orders_state.json")
-EVENTS_DB_PATH = Path("/root/.openclaw/workspace/dispatch_state/events.db")
-LOG_FILE = "/root/.openclaw/workspace/scripts/logs/reconcile.log"
+ORDERS_STATE_PATH = STATE_DIR / "orders_state.json"
+EVENTS_DB_PATH = STATE_DIR / "events.db"
+LOG_FILE = str(LOGS_DIR / "reconcile.log")
 
 # Flag defaults
 FLAG_DEFAULTS = {

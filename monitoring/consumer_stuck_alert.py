@@ -21,10 +21,12 @@ from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import FrozenSet, Literal, Optional, Tuple
 
+from dispatch_v2.common import STATE_DIR
+
 AlertKind = Literal["ENTER", "SUSTAINED", "RECOVERY"]
 
 DEFAULT_EVALUATIONS_LOG_PATH = Path(
-    "/root/.openclaw/workspace/dispatch_state/consumer_stuck_alert_evaluations.jsonl"
+    STATE_DIR / "consumer_stuck_alert_evaluations.jsonl"
 )
 
 

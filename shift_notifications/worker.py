@@ -31,7 +31,12 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 # Make scripts/ a sibling for `import schedule_utils` (auto_koord pattern)
-_SCRIPTS_DIR = "/root/.openclaw/workspace/scripts"
+_PACKAGE_PARENT = str(Path(__file__).resolve().parents[2])
+if _PACKAGE_PARENT not in sys.path:
+    sys.path.insert(0, _PACKAGE_PARENT)
+from dispatch_v2.common import LOGS_DIR, SCRIPTS_DIR, STATE_DIR
+
+_SCRIPTS_DIR = str(SCRIPTS_DIR)
 if _SCRIPTS_DIR not in sys.path:
     sys.path.insert(0, _SCRIPTS_DIR)
 
@@ -52,10 +57,10 @@ except Exception:  # pragma: no cover — keep importable even if scripts/ not o
         return {}
 
 WARSAW = ZoneInfo("Europe/Warsaw")
-LOG_DIR = "/root/.openclaw/workspace/scripts/logs/"
+LOG_DIR = str(LOGS_DIR) + "/"
 _log = setup_logger("shift_notifications.worker", LOG_DIR + "shift_notifications.log")
 
-KURIER_IDS_PATH = "/root/.openclaw/workspace/dispatch_state/kurier_ids.json"
+KURIER_IDS_PATH = str(STATE_DIR / "kurier_ids.json")
 
 # Module-level send shim — tests monkey-patch this to bypass Telegram.
 tg_send_text_with_keyboard = telegram_send_mod.tg_send_text_with_keyboard
@@ -250,7 +255,7 @@ def _is_garbage_name(name: str) -> bool:
     return False
 
 
-IGNORED_NAMES_PATH = '/root/.openclaw/workspace/dispatch_state/shift_ignored_names.json'
+IGNORED_NAMES_PATH = str(STATE_DIR / "shift_ignored_names.json")
 
 
 def _load_ignored_names() -> set:
@@ -652,7 +657,7 @@ def apply_unconfirmed_default(state: dict, now: datetime, today_iso: str) -> int
 
 _MP15_STALE_THRESHOLD_SEC = 30 * 60  # 30 min per master plan TOP-15 #15
 _MP15_ALERT_DEDUP_SEC = 30 * 60  # one alert per 30min (no spam)
-_MP15_STATE_PATH = "/root/.openclaw/workspace/dispatch_state/mp15_schedule_staleness.json"
+_MP15_STATE_PATH = str(STATE_DIR / "mp15_schedule_staleness.json")
 
 # Pkt 1 (2026-06-15): okno operacyjne alertu STALE_SCHEDULE_AGE.
 # Root cause nocnych false-positive: schedule_today.json odświeża się leniwie

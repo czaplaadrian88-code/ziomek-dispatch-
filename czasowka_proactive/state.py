@@ -53,13 +53,11 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Iterator, Optional
 
-from dispatch_v2.common import setup_logger
+from dispatch_v2.common import LOGS_DIR, STATE_DIR, setup_logger
 
-STATE_PATH: Path = Path(
-    "/root/.openclaw/workspace/dispatch_state/czasowka_proposals_state.json"
-)
+STATE_PATH: Path = STATE_DIR / "czasowka_proposals_state.json"
 LOCK_PATH: Path = Path(str(STATE_PATH) + ".lock")
-LOG_DIR = "/root/.openclaw/workspace/scripts/logs/"
+LOG_DIR = str(LOGS_DIR) + "/"
 
 _log = setup_logger("czasowka_proactive.state", LOG_DIR + "czasowka_proactive.log")
 

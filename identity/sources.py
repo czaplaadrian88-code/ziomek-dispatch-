@@ -19,6 +19,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
 
+from dispatch_v2.common import STATE_DIR
+
 from .schema import canon_cid
 
 __all__ = [
@@ -50,7 +52,7 @@ def default_paths(
     """
     if state_root is None:
         state_root = os.environ.get(
-            "ZIOMEK_STATE_ROOT", "/root/.openclaw/workspace/dispatch_state"
+            "ZIOMEK_STATE_ROOT", str(STATE_DIR)
         )
     if repo_root is None:
         repo_root = os.environ.get("ZIOMEK_REPO_ROOT") or str(

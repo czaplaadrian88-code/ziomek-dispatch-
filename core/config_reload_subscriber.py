@@ -7,7 +7,7 @@ swój cursor (last_seen_event_id_per_type) atomic w state file.
 Usage example:
     sub = BroadcastSubscriber(
         consumer_id="shadow_dispatcher",
-        state_path=Path("/root/.openclaw/workspace/dispatch_state/event_subscribers/shadow.json"),
+        state_path=STATE_DIR / "event_subscribers" / "shadow.json",
     )
     # In tick loop:
     new_events = sub.poll(["CONFIG_RELOAD"])
@@ -28,9 +28,9 @@ from pathlib import Path
 from typing import List
 
 from dispatch_v2 import event_bus
-from dispatch_v2.common import setup_logger
+from dispatch_v2.common import LOGS_DIR, STATE_DIR, setup_logger
 
-_log = setup_logger("config_reload_sub", "/root/.openclaw/workspace/scripts/logs/dispatch.log")
+_log = setup_logger("config_reload_sub", str(LOGS_DIR / "dispatch.log"))
 
 
 class BroadcastSubscriber:

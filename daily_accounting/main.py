@@ -28,6 +28,8 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Dict, List, Optional
 
+from dispatch_v2.common import STATE_DIR
+
 log = logging.getLogger("daily_accounting.main")
 
 
@@ -39,7 +41,7 @@ def _setup_logging():
 
 
 def _load_kurier_ids() -> Dict[str, int]:
-    path = "/root/.openclaw/workspace/dispatch_state/kurier_ids.json"
+    path = STATE_DIR / "kurier_ids.json"
     with open(path) as f:
         return json.load(f)
 

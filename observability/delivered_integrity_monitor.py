@@ -25,8 +25,10 @@ from collections import defaultdict
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from dispatch_v2.common import STATE_DIR as COMMON_STATE_DIR
+
 WARSAW = ZoneInfo("Europe/Warsaw")
-STATE_DIR = os.environ.get("DISPATCH_STATE_DIR") or "/root/.openclaw/workspace/dispatch_state"
+STATE_DIR = os.environ.get("DISPATCH_STATE_DIR") or str(COMMON_STATE_DIR)
 ORDERS_STATE = os.path.join(STATE_DIR, "orders_state.json")
 ALERT_STATE = os.path.join(STATE_DIR, "delivered_integrity_alert_state.json")
 

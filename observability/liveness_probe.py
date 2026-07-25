@@ -30,14 +30,16 @@ import time
 from datetime import datetime, timezone
 from typing import Optional, Tuple
 
+from dispatch_v2.common import STATE_DIR
+
 logger = logging.getLogger("liveness_probe")
 
-STATE_PATH = "/root/.openclaw/workspace/dispatch_state/liveness_probe_state.json"
+STATE_PATH = str(STATE_DIR / "liveness_probe_state.json")
 DEDUP_WINDOW_SEC = 1800  # do not re-alert the same unit within 30 min
 
 SHADOW_HEARTBEAT_MAX_SEC = 300
 SLA_HEARTBEAT_MAX_SEC = 300
-PANEL_PACKS_PATH = "/root/.openclaw/workspace/dispatch_state/panel_packs_cache.json"
+PANEL_PACKS_PATH = str(STATE_DIR / "panel_packs_cache.json")
 PANEL_PACKS_MTIME_MAX_SEC = 600
 GPS_PORT = 8766
 HEALTH_PORT = 8888

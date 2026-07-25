@@ -47,9 +47,11 @@ import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
+from dispatch_v2.common import STATE_DIR
+
 # ── Domyślne parametry ──────────────────────────────────────────────────────
 # Ścieżka = ta sama co CandidateLogger.DEFAULT_LOG_DIR (candidate_logger.py:26).
-DEFAULT_LOG_DIR = Path("/root/.openclaw/workspace/dispatch_state/observability")
+DEFAULT_LOG_DIR = STATE_DIR / "observability"
 DEFAULT_RETENTION_DAYS = 14            # kontrakt z logrotate l.115 + __init__.py:16
 DEFAULT_MAX_DELETE = 500              # bezpiecznik; realnie ~88 plików do skasowania
 

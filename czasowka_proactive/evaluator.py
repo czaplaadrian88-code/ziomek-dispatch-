@@ -35,9 +35,9 @@ from datetime import datetime
 from typing import Any, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
-from dispatch_v2.common import flag, load_flags, setup_logger
+from dispatch_v2.common import LOGS_DIR, flag, load_flags, setup_logger
 
-LOG_DIR = "/root/.openclaw/workspace/scripts/logs/"
+LOG_DIR = str(LOGS_DIR) + "/"
 _log = setup_logger("czasowka_proactive.evaluator", LOG_DIR + "czasowka_proactive.log")
 
 WARSAW = ZoneInfo("Europe/Warsaw")

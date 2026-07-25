@@ -3,6 +3,8 @@ import os
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from dispatch_v2.common import SCRIPTS_DIR
+
 WARSAW = ZoneInfo("Europe/Warsaw")
 UTC = ZoneInfo("UTC")
 
@@ -10,10 +12,8 @@ SPREADSHEET_ID = "1Z5kSGUB0Tfl1TiUs5ho-ecMYJVz0-VuUctoq781OSK8"
 WORKSHEET_NAME = "Wynagrodzenia Gastro"
 WORKSHEET_GID = 1014036023
 
-SERVICE_ACCOUNT_PATH = "/root/.openclaw/workspace/scripts/service_account.json"
-MAPPING_PATH = Path(
-    "/root/.openclaw/workspace/scripts/dispatch_v2/restaurant_company_mapping.json"
-)
+SERVICE_ACCOUNT_PATH = str(SCRIPTS_DIR / "service_account.json")
+MAPPING_PATH = SCRIPTS_DIR / "dispatch_v2" / "restaurant_company_mapping.json"
 
 PANEL_BASE = "https://www.gastro.nadajesz.pl"
 PANEL_DROPDOWN_URL = f"{PANEL_BASE}/admin2017/orders/zlecenia"

@@ -16,6 +16,7 @@ from pathlib import Path
 
 import pytest
 
+from dispatch_v2.common import STATE_DIR
 from dispatch_v2.monitoring.consumer_stuck_alert import (
     DEFAULT_EVALUATIONS_LOG_PATH,
     HeartbeatSnapshot,
@@ -420,5 +421,6 @@ def test_append_evaluation_appends_not_overwrites(tmp_path):
 
 def test_default_log_path_constant_correct():
     assert isinstance(DEFAULT_EVALUATIONS_LOG_PATH, Path)
-    assert "dispatch_state" in str(DEFAULT_EVALUATIONS_LOG_PATH)
-    assert "consumer_stuck_alert_evaluations.jsonl" in str(DEFAULT_EVALUATIONS_LOG_PATH)
+    assert DEFAULT_EVALUATIONS_LOG_PATH == (
+        STATE_DIR / "consumer_stuck_alert_evaluations.jsonl"
+    )

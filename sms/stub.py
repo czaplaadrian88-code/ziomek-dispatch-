@@ -19,11 +19,12 @@ import os
 from datetime import datetime, timezone
 from pathlib import Path
 
+from dispatch_v2.common import STATE_DIR
 from dispatch_v2.sms.provider import SMSProvider
 
 _log = logging.getLogger(__name__)
 
-DEFAULT_SMS_LOG_PATH = "/root/.openclaw/workspace/dispatch_state/sms_log.jsonl"
+DEFAULT_SMS_LOG_PATH = str(STATE_DIR / "sms_log.jsonl")
 
 
 class StubSMSProvider(SMSProvider):

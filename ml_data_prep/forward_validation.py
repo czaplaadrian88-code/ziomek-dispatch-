@@ -47,7 +47,12 @@ import lightgbm as lgb
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-PROD_ML = Path("/root/.openclaw/workspace/scripts/ml_data_prep")
+_PACKAGE_PARENT = str(HERE.parents[1])
+if _PACKAGE_PARENT not in sys.path:
+    sys.path.insert(0, _PACKAGE_PARENT)
+from dispatch_v2.common import SCRIPTS_DIR  # noqa: E402
+
+PROD_ML = SCRIPTS_DIR / "ml_data_prep"
 sys.path.insert(0, str(PROD_ML))
 
 import train_two_models as tm  # noqa: E402  (reuse cały aparat: pointwise/onehot/encode/pa)

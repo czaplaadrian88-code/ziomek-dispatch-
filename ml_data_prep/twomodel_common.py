@@ -26,11 +26,13 @@ from typing import Dict, List
 import numpy as np
 import pandas as pd
 
+from dispatch_v2.common import SCRIPTS_DIR, STATE_DIR
+
 # ── Ścieżki (read-only wejście) ──────────────────────────────────────────────
 # Produkcyjny pipeline ML leży OBOK dispatch_v2 (w scripts/ml_data_prep).
-PROD_ML_DIR = Path("/root/.openclaw/workspace/scripts/ml_data_prep")
+PROD_ML_DIR = SCRIPTS_DIR / "ml_data_prep"
 DATASET_DIR = PROD_ML_DIR / "data" / "datasets" / "v2.0"
-COURIER_TIERS_PATH = Path("/root/.openclaw/workspace/dispatch_state/courier_tiers.json")
+COURIER_TIERS_PATH = STATE_DIR / "courier_tiers.json"
 
 # ── Cechy "bundlowe" usuwane z modelu SOLO ──────────────────────────────────
 # To cechy opisujące ŁADUNEK worka kandydata. W trybie solo winner ma pusty

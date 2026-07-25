@@ -24,9 +24,13 @@ import sys
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
+from dispatch_v2.common import LOGS_DIR, STATE_DIR as COMMON_STATE_DIR
+
 WARSAW = ZoneInfo("Europe/Warsaw")
-STATE_DIR = os.environ.get("DISPATCH_STATE_DIR") or "/root/.openclaw/workspace/dispatch_state"
-LOG = os.environ.get("SHADOW_DECISIONS_LOG") or "/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl"
+STATE_DIR = os.environ.get("DISPATCH_STATE_DIR") or str(COMMON_STATE_DIR)
+LOG = os.environ.get("SHADOW_DECISIONS_LOG") or str(
+    LOGS_DIR / "shadow_decisions.jsonl"
+)
 ALERT_STATE = os.path.join(STATE_DIR, "koord_cascade_alert_state.json")
 THRESHOLD = int(os.environ.get("KOORD_CASCADE_ALERT_THRESHOLD", "1"))
 

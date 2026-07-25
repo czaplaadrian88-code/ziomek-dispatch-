@@ -40,7 +40,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-CRON_HEALTH_PATH = Path("/root/.openclaw/workspace/dispatch_state/cron_health.json")
+from dispatch_v2.common import STATE_DIR
+
+CRON_HEALTH_PATH = STATE_DIR / "cron_health.json"
 SCHEMA_VERSION = 1
 
 # ── systemd truth cross-check (audyt 2.0 motyw #2) ──────────────────────────────────

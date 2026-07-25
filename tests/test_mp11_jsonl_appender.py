@@ -755,7 +755,17 @@ def test_logrotate_wrapper_manifest_matches_every_jsonl_config_path():
         for line in config_path.read_text(encoding="utf-8").splitlines()
         if line.strip().startswith("/") and line.strip().endswith(".jsonl")
     }
-    assert configured == set(jr.JSONL_PATHS)
+    remapped = set()
+    for raw_path in configured:
+        if "/dispatch_state/" in raw_path:
+            remapped.add(
+                str(jr.STATE_DIR / raw_path.split("/dispatch_state/", 1)[1])
+            )
+        elif "/scripts/logs/" in raw_path:
+            remapped.add(str(jr.LOGS_DIR / raw_path.split("/scripts/logs/", 1)[1]))
+        else:  # pragma: no cover - config contract rejects unknown roots below
+            remapped.add(raw_path)
+    assert remapped == set(jr.JSONL_PATHS)
     service = (deploy / "dispatch-v2-jsonl-logrotate.service").read_text(
         encoding="utf-8"
     )

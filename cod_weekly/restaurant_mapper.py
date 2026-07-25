@@ -26,7 +26,11 @@ import urllib.error
 from datetime import datetime
 from pathlib import Path
 
-sys.path.insert(0, "/root/.openclaw/workspace/scripts")
+# Direct-file bootstrap; after this point common.py owns every host location.
+_PACKAGE_PARENT = str(Path(__file__).resolve().parents[2])
+if _PACKAGE_PARENT not in sys.path:
+    sys.path.insert(0, _PACKAGE_PARENT)
+from dispatch_v2.common import SCRIPTS_DIR
 from dispatch_v2.panel_client import login
 from dispatch_v2.cod_weekly.config import (
     PANEL_DROPDOWN_URL,
@@ -40,6 +44,9 @@ from dispatch_v2.cod_weekly.config import (
     ROW_START,
 )
 from dispatch_v2.cod_weekly.aliases import ALIAS_MAP, SHEET_SKIP_PREFIXES
+
+if str(SCRIPTS_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_DIR))
 
 log = logging.getLogger("cod_weekly.mapper")
 

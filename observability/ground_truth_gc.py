@@ -32,7 +32,9 @@ import os
 import shutil
 import sys
 
-STATE_DIR = os.environ.get("DISPATCH_STATE_DIR") or "/root/.openclaw/workspace/dispatch_state"
+from dispatch_v2.common import STATE_DIR as COMMON_STATE_DIR
+
+STATE_DIR = os.environ.get("DISPATCH_STATE_DIR") or str(COMMON_STATE_DIR)
 GT_PATH = os.path.join(STATE_DIR, "courier_ground_truth.json")
 ORDERS_STATE = os.path.join(STATE_DIR, "orders_state.json")
 TERMINAL = ("delivered", "cancelled", "returned_to_pool")

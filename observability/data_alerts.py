@@ -73,6 +73,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
+from dispatch_v2.common import LOGS_DIR, STATE_DIR
+
 # Rotation-aware READ-kanon ledgera (fala L1.2). Import odporny na uruchomienie
 # spod tools/ jak i jako pakiet dispatch_v2.
 try:
@@ -87,8 +89,8 @@ WARSAW = ZoneInfo("Europe/Warsaw")
 _log = logging.getLogger("observability.data_alerts")
 
 # ── Ścieżki (READ-only źródła + zapis stanu/logu) ────────────────────────────
-_STATE_DIR = Path("/root/.openclaw/workspace/dispatch_state")
-_LOGS_DIR = Path("/root/.openclaw/workspace/scripts/logs")
+_STATE_DIR = STATE_DIR
+_LOGS_DIR = LOGS_DIR
 DEFAULT_STATE_PATH = _STATE_DIR / "data_alerts_state.json"
 DEFAULT_LOG_PATH = _LOGS_DIR / "data_alerts.log"
 SCHEDULE_PATH = _STATE_DIR / "schedule_today.json"

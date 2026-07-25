@@ -23,9 +23,9 @@ import os
 import subprocess
 from typing import Optional
 
-from dispatch_v2.common import setup_logger
+from dispatch_v2.common import LOGS_DIR, setup_logger
 
-LOG_DIR = "/root/.openclaw/workspace/scripts/logs/"
+LOG_DIR = str(LOGS_DIR) + "/"
 _log = setup_logger("shift_notifications.telegram", LOG_DIR + "shift_notifications.log")
 
 TELEGRAM_SECRETS_PATH = "/root/.openclaw/workspace/.secrets/telegram.env"

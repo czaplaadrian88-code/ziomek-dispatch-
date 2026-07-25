@@ -733,9 +733,8 @@ def test_shadow_metric_is_jsonl_and_contains_no_pii(monkeypatch, tmp_path):
 def test_shadow_metric_is_in_canonical_rotation():
     from dispatch_v2.core import jsonl_rotation
 
-    assert (
-        "/root/.openclaw/workspace/dispatch_state/uwagi_bridge_envelope.jsonl"
-        in jsonl_rotation.JSONL_PATHS
+    assert str(jsonl_rotation.STATE_DIR / "uwagi_bridge_envelope.jsonl") in (
+        jsonl_rotation.JSONL_PATHS
     )
 
 

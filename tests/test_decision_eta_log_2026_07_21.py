@@ -241,7 +241,11 @@ def test_daily_coverage_uses_unique_shadow_decisions_as_denominator(tmp_path):
 def test_contract_registry_rotation_and_source_hooks():
     assert C.ENABLE_DECISION_ETA_LOG is False
     assert "ENABLE_DECISION_ETA_LOG" in C.ETAP4_DECISION_FLAGS
-    assert str(dtlog.LOG_PATH) in jsonl_rotation.JSONL_PATHS
+    # Rootowy writer przechodzi na common.STATE_DIR w R4 kroku 3; krok 2
+    # utrzymuje jego basename w kanonicznym manifeście rotacji.
+    assert str(jsonl_rotation.STATE_DIR / dtlog.LOG_PATH.name) in (
+        jsonl_rotation.JSONL_PATHS
+    )
     root = Path(__file__).resolve().parents[1]
     expected = {
         "shadow_dispatcher.py": "record_pipeline_decision",
