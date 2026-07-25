@@ -190,7 +190,8 @@ def _send_silent(text: str) -> bool:
 
 def route(text: str, source: str | None = None, priority: str | None = None) -> bool:
     """Zaklasyfikuj + zrutuj alert. Zwraca True gdy główny bot MA wysłać
-    (HIGH lub flaga OFF), False gdy LOW przejęte przez cichy bot + feed.
+    (HIGH, flaga OFF lub błąd cichego transportu), False dopiero gdy LOW
+    skutecznie przejęte przez cichy bot + feed.
 
     Wołane z telegram_utils.send_admin_alert. Zawsze zapisuje wpis do feedu.
     """
@@ -205,8 +206,11 @@ def route(text: str, source: str | None = None, priority: str | None = None) -> 
     proceed_main = True
 
     if flag_on and pri == "low":
-        sent_silent = _send_silent(text)
-        proceed_main = False  # odetnij od głównego bota
+        try:
+            sent_silent = _send_silent(text)
+        except Exception as e:  # noqa: BLE001 — transport LOW nie może zablokować main
+            log.warning(f"notify_router: cichy bot exception — fail-open main: {e}")
+        proceed_main = not sent_silent  # fail-open: odetnij main dopiero po sukcesie
 
     _append_feed(text, pri, source, sent_main=proceed_main, sent_silent=sent_silent)
     return proceed_main

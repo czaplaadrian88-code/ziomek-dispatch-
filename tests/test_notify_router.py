@@ -64,6 +64,10 @@ def test_source_priority_override(tmp_feed, monkeypatch):
 
 def test_route_flag_off_always_proceeds_main(tmp_feed, monkeypatch):
     monkeypatch.setattr("dispatch_v2.common.flag", lambda name, default=False: False)
+    monkeypatch.setattr(
+        nr, "_send_silent",
+        lambda text: pytest.fail("flaga OFF nie może dotknąć cichego transportu"),
+    )
     assert nr.route("Briefing dzienny", source="daily_briefing") is True  # mimo LOW
     rows = _feed_rows(tmp_feed)
     assert len(rows) == 1
@@ -76,11 +80,41 @@ def test_route_flag_off_always_proceeds_main(tmp_feed, monkeypatch):
 
 def test_route_flag_on_low_diverted(tmp_feed, monkeypatch):
     monkeypatch.setattr("dispatch_v2.common.flag", lambda name, default=False: True)
-    # _send_silent zablokowany pytest-guardem → zwraca False, ale proceed_main=False
+    monkeypatch.setattr(nr, "_send_silent", lambda text: True)
     assert nr.route("Briefing dzienny", source="daily_briefing") is False
     rows = _feed_rows(tmp_feed)
     assert rows[0]["priority"] == "low"
     assert rows[0]["sent_main"] is False       # odcięte od głównego bota
+    assert rows[0]["sent_silent"] is True
+
+
+def test_route_flag_on_low_fails_open_when_silent_transport_fails(
+        tmp_feed, monkeypatch):
+    """LOW wolno odciąć od main wyłącznie po potwierdzonym silent delivery."""
+    monkeypatch.setattr("dispatch_v2.common.flag", lambda name, default=False: True)
+    monkeypatch.setattr(nr, "_send_silent", lambda text: False)
+
+    assert nr.route("Briefing dzienny", source="daily_briefing") is True
+    rows = _feed_rows(tmp_feed)
+    assert rows[0]["priority"] == "low"
+    assert rows[0]["sent_main"] is True
+    assert rows[0]["sent_silent"] is False
+
+
+def test_route_flag_on_low_fails_open_when_silent_transport_raises(
+        tmp_feed, monkeypatch):
+    """Wyjątek transportu też nie może przerwać ścieżki głównej ani feedu."""
+    monkeypatch.setattr("dispatch_v2.common.flag", lambda name, default=False: True)
+
+    def _raise(_text):
+        raise TimeoutError("synthetic silent timeout")
+
+    monkeypatch.setattr(nr, "_send_silent", _raise)
+
+    assert nr.route("Briefing dzienny", source="daily_briefing") is True
+    rows = _feed_rows(tmp_feed)
+    assert rows[0]["sent_main"] is True
+    assert rows[0]["sent_silent"] is False
 
 
 def test_route_flag_on_high_stays_main(tmp_feed, monkeypatch):
