@@ -470,6 +470,10 @@ ETAP4_DECISION_FLAGS = (
     "ENABLE_CARRIED_AGE_TZ_FIX",
     "ENABLE_LEX_COMMITTED_WINDOW_SHADOW",
     "ENABLE_LEX_COMMITTED_WINDOW",
+    # WB2 (2026-07-27): guardy warunkowe P-1 — flaga DECYZYJNA (zmienia zbiór
+    # dopuszczalnych permutacji), więc wchodzi do fingerprintu i do strippowania
+    # w conftest (testy sterują stałą modułu).
+    "ENABLE_LEX_WINDOW_GUARDS_V2",
     "ENABLE_RELAX_COLOC_PICKUP",
     "ENABLE_NONCARRIED_DROPOFF_REORDER",
     # === D.3 fala B (2026-07-02): para atomowa V326 (common.py, oba env-default
@@ -772,6 +776,14 @@ ENABLE_CARRIED_FIRST_RELAX = True
 ENABLE_CARRIED_AGE_TZ_FIX = True
 ENABLE_LEX_COMMITTED_WINDOW_SHADOW = True
 ENABLE_LEX_COMMITTED_WINDOW = True
+# WB2 (2026-07-27, incydent CZASY 492): guardy WARUNKOWE warstwy P-1 okna odbioru.
+# Spec `docs/WB2_CONDITIONAL_GUARDS.md`, owner ACK D1+D2 z 27.07. OFF (default) =
+# warstwa dokladnie jak przed WB2 (bajt-w-bajt: legacy carry_cap + delay_tol tylko
+# na assigned). ON = filtr dopuszczalnosci na KAZDEJ nie-identity permutacji
+# (G1 opoznienia kazdej dostawy, G2 swiezosc per sztuka + cap trybu, G3 minimalny
+# zysk jazdy) z wyjatkiem D1 przy SCISLEJ poprawie okna. Hierarchia klucza lex
+# (okno -> jazda -> swiezosc) NIETKNIETA. Flip = osobny ACK ownera po >=2 dniach cienia.
+ENABLE_LEX_WINDOW_GUARDS_V2 = False
 ENABLE_RELAX_COLOC_PICKUP = True
 ENABLE_NONCARRIED_DROPOFF_REORDER = True
 # Sprint 1 NO-GPS-EQUAL (Adrian 2026-06-29 „bez kary przed zmianą"): gdy ON → zeruje
@@ -801,6 +813,13 @@ FLAGS_JSON_NUMERIC_OVERRIDES = (
     "PICKUP_COORDS_DRIFT_WARN_M",
     # L6.C2 (2026-07-04): kwantyzacja termów czasowych lex_qual (patrz stała ~2910)
     "LEXQUAL_TIME_QUANT_MIN",
+    # WB2 (2026-07-27, CZASY 492): progi guardów warunkowych warstwy P-1.
+    # Kalibracja z ledgera v2 po ≥48 h czystego baseline'u ma iść flags.json
+    # (hot-reload), nie restartem procesu i nie env-em w drop-inie.
+    "LEX_WINDOW_DELAY_TOL_MIN",
+    "LEX_WINDOW_CARRY_CAP_MIN",
+    "LEX_WINDOW_CARRY_CAP_ALARM_MIN",
+    "LEX_WINDOW_MIN_GAIN_MIN",
     # BUNDLE-06 Faza 1 + BUNDLE-03 (2026-06-12):
     "BUNDLE_FIT_W_COS",
     "BUNDLE_FIT_THERMAL_FREE_MIN",
@@ -3602,6 +3621,27 @@ O2_CAPZ_Z_MIN = float(_os.environ.get("O2_CAPZ_Z_MIN", "20"))
 O2_CAPZ_DETOUR_MAX_MIN = float(_os.environ.get("O2_CAPZ_DETOUR_MAX_MIN", "8"))
 O2_CAPZ_MIN_GAIN_MIN = float(_os.environ.get("O2_CAPZ_MIN_GAIN_MIN", "2"))
 O2_CAPZ_MAX_STOPS = int(_os.environ.get("O2_CAPZ_MAX_STOPS", "8"))
+
+# ── WB2 (2026-07-27, CZASY 492): progi warstwy P-1 okna odbioru ──
+# KANONICZNY wlasciciel wartosci. `plan_recheck` wiaze je jako modul-globale
+# (hot-reload D.3 fala A + powierzchnia monkeypatcha w testach), ale NIE liczy
+# ich po raz drugi — przeplyw jest jednokierunkowy common -> plan_recheck.
+# Override produkcyjny idzie przez flags.json (FLAGS_JSON_NUMERIC_OVERRIDES
+# nizej), NIGDY przez os.environ dla progu decyzyjnego (wymog 13.2 p.8);
+# env zostaje wylacznie tam, gdzie byl przed WB2, zeby sciezka OFF pozostala
+# bajt-w-bajt. Wartosci startowe = decyzja ownera D2 z 2026-07-27.
+LEX_WINDOW_TOL_MIN = float(_os.environ.get("LEX_WINDOW_TOL_MIN", "5"))
+LEX_WINDOW_DELAY_TOL_MIN = float(_os.environ.get("LEX_WINDOW_DELAY_TOL_MIN", "3"))
+LEX_WINDOW_MAX_STOPS = int(_os.environ.get("LEX_WINDOW_MAX_STOPS", "8"))
+# G2: absolutny cap swiezosci niesionego. 35 = R6 (BAG_TIME_HARD_MAX_MIN);
+# 40 TYLKO w kanonicznym Alarmie (ESKALACJA poziom 3) — dzis nieosiagalne, bo
+# nie istnieje producent Alarm certificate (OD-04, patrz core/loadgov_snapshot).
+LEX_WINDOW_CARRY_CAP_MIN = 35.0
+LEX_WINDOW_CARRY_CAP_ALARM_MIN = 40.0
+# G3: minimalny MATERIALNY zysk jazdy, ponizej ktorego przestawienie trasy nie
+# ma uzasadnienia (inclusive: 1,0 przechodzi). Nie obowiazuje przy scislej
+# poprawie okna (wyjatek D1).
+LEX_WINDOW_MIN_GAIN_MIN = 1.0
 
 # ESKALACJA best_effort (2026-06-23, reguła Adriana 3-stopniowa): gdy 0 feasible (Tier 1
 # zawodzi), PRZED rozciąganiem worka (Tier 3) sprawdź Tier 2 = „daj pierwszemu wolnemu"

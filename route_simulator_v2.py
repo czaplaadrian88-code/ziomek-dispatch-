@@ -901,6 +901,7 @@ def _capz_bag_metrics(plan, bag, new_order, cap_min):
     `_compute_o2_metrics` (istniejąca ENABLE_O2_READY_ANCHOR_SWEEP nietknięta) — osobne,
     paczka-świadome liczenie WYŁĄCZNIE dla cap-Z reseq. Wzór 1:1 z bundle_calib._max_carried_age
     (max wieku NIESIONYCH picked_up) + overage (Σ max(0, age−cap)). (None,None) gdy brak per_order."""
+    from dispatch_v2.core import carry_freshness as _cf
     pt = plan.per_order_delivery_times
     if not pt:
         return None, None
@@ -910,14 +911,20 @@ def _capz_bag_metrics(plan, bag, new_order, cap_min):
               if getattr(o, "picked_up_at", None) is not None
               or getattr(o, "status", None) == "picked_up"}
     overage = 0.0
-    carried = []
+    carried = {}
     for oid, age in pt.items():
         if age is None or oid in paczka:
             continue
         overage += max(0.0, age - cap_min)
         if oid in picked:
-            carried.append(age)
-    return round(overage, 1), (round(max(carried), 1) if carried else 0.0)
+            carried[oid] = age
+    # WB2 (13.2 p.3): agregat „max wieku niesionego" idzie przez JEDEN moduł
+    # wspólny z guardem G2 warstwy P-1. Wartości wejściowe są już liczone jak
+    # `handoff − possession` (`predicted_delivered_at` zawiera dwell dostawy,
+    # kotwica = `r6_thermal_anchor`), więc jest to ta sama metryka, nie jej
+    # kuzyn. POLITYKA cap-Z (Opcja 3: Z=20, overage, detour) NIETKNIĘTA —
+    # wspólna jest miara, nie próg.
+    return round(overage, 1), round(_cf.max_carry_min(carried), 1)
 
 
 def _capz_reseq_plan(baseline_plan, nodes, leg_min, bag_delivery_idxs,
