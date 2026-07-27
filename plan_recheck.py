@@ -573,11 +573,17 @@ ENABLE_CARRIED_AGE_TZ_FIX = _CF.decision_flag("ENABLE_CARRIED_AGE_TZ_FIX")  # D.
 #  APPLY (zmień decyzję) → flip po obserwacji. Default OFF.
 ENABLE_LEX_COMMITTED_WINDOW_SHADOW = _CF.decision_flag("ENABLE_LEX_COMMITTED_WINDOW_SHADOW")  # D.3 fala A: KANON=flags.json
 ENABLE_LEX_COMMITTED_WINDOW = _CF.decision_flag("ENABLE_LEX_COMMITTED_WINDOW")  # D.3 fala A: KANON=flags.json
-# Tolerancja okna: strict 5 (load-aware loose 10 @ loadgov≥4.5 = TODO wpiąć loadgov w plan_recheck;
-# na razie stała, tunable z shadow). Mirror OBJ_COMMITTED_PICKUP_TOL_STRICT_MIN.
-LEX_WINDOW_TOL_MIN = float(os.environ.get("LEX_WINDOW_TOL_MIN", "5"))
-LEX_WINDOW_DELAY_TOL_MIN = float(os.environ.get("LEX_WINDOW_DELAY_TOL_MIN", "3"))
-LEX_WINDOW_MAX_STOPS = int(os.environ.get("LEX_WINDOW_MAX_STOPS", "8"))
+# WB2 (2026-07-27): guardy WARUNKOWE tej warstwy — spec `docs/WB2_CONDITIONAL_GUARDS.md`,
+# owner ACK D1+D2. OFF = warstwa bajt-w-bajt jak przed WB2. ON = filtr dopuszczalności
+# kandydatów (G1/G2/G3 + wyjątek D1), hierarchia klucza lex NIETKNIĘTA.
+ENABLE_LEX_WINDOW_GUARDS_V2 = _CF.decision_flag("ENABLE_LEX_WINDOW_GUARDS_V2")
+# Progi: KANON = `common.py` (+ flags.json override, hot-reload). Tu wyłącznie
+# WIĄZANIE modułowe — przepływ jednokierunkowy, żadnego drugiego liczenia wartości.
+# Tolerancja okna: strict 5; loose 10 wymaga snapshotu loadgov ORAZ kanonicznego
+# Alarm certificate (G5, `core/loadgov_snapshot.py`) — dziś nieosiągalne.
+LEX_WINDOW_TOL_MIN = _CF.LEX_WINDOW_TOL_MIN
+LEX_WINDOW_DELAY_TOL_MIN = _CF.LEX_WINDOW_DELAY_TOL_MIN
+LEX_WINDOW_MAX_STOPS = _CF.LEX_WINDOW_MAX_STOPS
 # WB1 faza 1 (2026-07-27, CZASY 492): JEDYNY writer ledgera okna odbioru — właściciel
 # obu formatów (v1 legacy + v2) i jedyne miejsce mapujące rolę wywołania na plik
 # (spec `docs/WB1_LEDGER_V2_SCHEMA.md`). Stała LEX_WINDOW_SHADOW_PATH świadomie tu NIE
@@ -585,6 +591,11 @@ LEX_WINDOW_MAX_STOPS = int(os.environ.get("LEX_WINDOW_MAX_STOPS", "8"))
 # Rola podróżuje jawnie w `ledger_ctx`; brak kontekstu = obserwator (fail-safe: gubimy
 # wiersz kanoniczny, nigdy go nie zanieczyszczamy).
 from dispatch_v2.core import lex_window_ledger as _lex_ledger  # noqa: E402
+# WB2 faza 1: guardy warunkowe + jedna metryka świeżości (wspólna z cap-Z reseq)
+# + czytnik snapshotu loadgov (G5 strict-stub). Moduły czyste, bez efektów ubocznych.
+from dispatch_v2.core import carry_freshness as _cfresh  # noqa: E402
+from dispatch_v2.core import lex_window_guards as _lex_guards  # noqa: E402
+from dispatch_v2.core import loadgov_snapshot as _loadgov_snap  # noqa: E402
 
 
 def _lex_pending_attempt(ledger_ctx, attempt_id) -> None:
@@ -657,6 +668,7 @@ _D3_FALA_A_FLAGS = (
     "ENABLE_CARRIED_AGE_TZ_FIX",
     "ENABLE_LEX_COMMITTED_WINDOW_SHADOW",
     "ENABLE_LEX_COMMITTED_WINDOW",
+    "ENABLE_LEX_WINDOW_GUARDS_V2",  # WB2 2026-07-27: hot-flip guardów P-1
     "ENABLE_RELAX_COLOC_PICKUP",
     "ENABLE_NONCARRIED_DROPOFF_REORDER",
     "ENABLE_PLAN_RECHECK_COMMITTED_PROPAGATION",  # migracja B2 2026-07-18 (hot-reload w pw)
@@ -1051,6 +1063,11 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
     # gdy re-czasowanie się nie uda, zostaje surowa kolejność z reorderu (ETA z
     # symulatora) — nadal lepsza kolejność niż bez F6.
     _f6_stale = False  # v3: F6 przestawił, ale czasy NIE zostały przeliczone
+    # WB2/G4: koperta = plan sprzed CAŁEGO stosu reorderów (surowe czasy symulatora,
+    # spójne ze swoją własną kolejnością). Służy dwóm rzeczom: jest bezpiecznym
+    # powrotem, gdy re-czasowanie padnie, i punktem odniesienia finalnego walidatora.
+    _g4_on = bool(ENABLE_LEX_WINDOW_GUARDS_V2)
+    _g4_envelope = [dict(s) for s in stops] if _g4_on else None
     if ENABLE_PLAN_CANON_ORDER_INVARIANTS:
         try:
             reordered = _apply_canon_order_invariants(stops, orders_state, pos, now,
@@ -1058,9 +1075,22 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
             if [s["order_id"] for s in reordered] != [s["order_id"] for s in stops] or \
                [s["type"] for s in reordered] != [s["type"] for s in stops]:
                 retimed = _retime_stops(reordered, pos, anchor_departure, orders_state, now)
-                if retimed is None:
-                    _f6_stale = True  # pre-existing fallback; pin niżej NIE może na nim budować
-                stops = retimed if retimed is not None else reordered
+                if retimed is None and _g4_on:
+                    # G4: NIE WOLNO zapisać przestawionej kolejności ze starymi
+                    # ETA — to jest dokładnie defekt incydentu 492 (kurier widzi
+                    # trasę A z czasami trasy B). Wracamy do kolejności sprzed
+                    # reorderu, której czasy są jej własne i prawdziwe. Reorder
+                    # jest SOFT: rezygnacja z niego kosztuje kilka minut jazdy,
+                    # zapis zatrutych czasów kosztuje zaufanie kuriera.
+                    _log.warning(
+                        f"G4 RETIME_FAIL_KEEP_PRE_REORDER cid={cid} oids={oids} — "
+                        f"re-czasowanie po reorderze padło, zapisuję kolejność "
+                        f"sprzed reorderu (koniec _f6_stale na tej ścieżce)")
+                    stops = [dict(s) for s in _g4_envelope]
+                else:
+                    if retimed is None:
+                        _f6_stale = True  # legacy fallback (guardy OFF); pin niżej NIE może na nim budować
+                    stops = retimed if retimed is not None else reordered
         except Exception as e:
             _log.warning(f"canon_order_invariants cid={cid} fail: {type(e).__name__}: {e}")
 
@@ -1110,6 +1140,20 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
             stops = _floor_pickups_to_committed(stops, orders_state)
         except Exception as e:
             _log.warning(f"floor_pickups_to_committed cid={cid} fail: {type(e).__name__}: {e}")
+
+    # ── G4: FINALNY walidator — ostatnia bramka przed CAS-em (post-floor/post-pin) ──
+    _g4_final = None
+    if _g4_on:
+        _g4_final = _g4_final_validator(stops, _g4_envelope, orders_state, now)
+        if not _g4_final.get("ok"):
+            _log.warning(
+                f"G4 FINAL_VALIDATOR_REJECT cid={cid} oids={oids} "
+                f"reason={_g4_final.get('reason')} detail={_g4_final.get('detail')} "
+                f"— plan NIE zapisany, poprzedni nietknięty")
+            _lex_write_receipt(_lctx, cid, "regen", "not_attempted",
+                               expected=expected_version,
+                               error=f"g4_{_g4_final.get('reason')}")
+            return False
 
     _gps = gps_positions.get(cid) or {}
     body = {
@@ -1323,6 +1367,140 @@ def _floor_pickups_to_committed(stops, orders_state, min_delta_sec: float = 60.0
             if sp is not None:
                 s2["predicted_at"] = (sp + shift).isoformat()
     return stops
+
+
+def _g4_final_validator(stops, envelope_stops, orders_state, now):
+    """G4 — FINALNY walidator sekwencji, PO floorze i PO pinie, PRZED CAS-em.
+
+    Ostatnia rzecz, jaka dzieje się z planem przed zapisem. Sprawdza to, czego
+    żadna warstwa wyżej nie sprawdza, bo każda widzi tylko swój własny krok:
+
+      1. POKRYCIE — każdy stop ma dający się sparsować `predicted_at`;
+      2. MONOTONICZNOŚĆ — czasy nie cofają się wzdłuż trasy (kurier nie
+         teleportuje się w tył). To jest test, który złapałby zapis
+         „przestawiona kolejność + stare ETA" (`_f6_stale`) u samego wyjścia;
+      3. PRECEDENCJA — odbiór zlecenia przed jego dostawą;
+      4. KOPERTA ŚWIEŻOŚCI — niesione jedzenie nie przekracza capa trybu.
+         Kopertą jest plan sprzed CAŁEGO stosu reorderów (relax → cap-Z → lex),
+         dzięki czemu dwa lokalne „+3 min" nie mogą się skumulować w ciszy
+         (warunek Sola RUN3-b, sekcja 3 G1). Gdy koperta SAMA była już nad
+         capem, wymagamy wyłącznie „nie gorzej" — inaczej worek, który raz
+         przekroczył 35 min z powodów fizycznych, nie dałby się już nigdy
+         zapisać.
+
+    Zwraca dict `{"ok": bool, "reason": str|None, "detail": ...}` — trafia do
+    `validator.final` w ledgerze v2. NIGDY nie rzuca: błąd walidatora nie może
+    być powodem, dla którego kurier zostaje bez planu, więc wyjątek = `ok`
+    z powodem `validator_error` (i głośnym WARNINGIEM).
+    """
+    try:
+        if not stops:
+            return {"ok": False, "reason": "empty_plan"}
+        prev_t = None
+        seen_pickup = set()
+        for s in stops:
+            t = _parse_dt(s.get("predicted_at"))
+            if t is None:
+                return {"ok": False, "reason": "coverage_gap",
+                        "detail": str(s.get("order_id"))}
+            if prev_t is not None and t < prev_t:
+                return {"ok": False, "reason": "non_monotonic",
+                        "detail": str(s.get("order_id"))}
+            prev_t = t
+            oid = str(s.get("order_id"))
+            if s.get("type") == "pickup":
+                seen_pickup.add(oid)
+            else:
+                rec = orders_state.get(oid) or {}
+                if rec.get("status") != "picked_up" and oid not in seen_pickup:
+                    # Dostawa przed własnym odbiorem ma sens WYŁĄCZNIE dla
+                    # zlecenia już niesionego (odbiór poza tym planem).
+                    return {"ok": False, "reason": "precedence", "detail": oid}
+
+        # Cap z TEGO SAMEGO źródła co G2 — walidator i guard nie mogą mieć
+        # własnych sufitów tej samej prawdy.
+        cap = _lex_guards.load_thresholds().carry_cap_min
+        env = _g4_carry_map(envelope_stops, orders_state, now)
+        fin = _g4_carry_map(stops, orders_state, now)
+        for oid, carry in fin.items():
+            if carry is None or carry <= cap:
+                continue
+            base = env.get(oid)
+            if base is not None and base > cap and carry <= base:
+                continue
+            return {"ok": False, "reason": "freshness_envelope",
+                    "detail": {"order_id": oid, "carry_min": round(carry, 2),
+                               "envelope_min": (None if base is None
+                                                else round(base, 2)),
+                               "cap_min": cap}}
+        return {"ok": True, "reason": None}
+    except Exception as e:
+        _log.warning("G4 final validator fail: %s: %s", type(e).__name__, e)
+        return {"ok": True, "reason": "validator_error"}
+
+
+def _g4_assert_current_valid_plan(cid, plan, oids, orders_state, phase):
+    """G4 — czy „zostaje poprzedni plan" znaczy COKOLWIEK w tym momencie.
+
+    „Poprzedni plan" to wyłącznie ostatni TRWAŁY, zwalidowany plan o dokładnie
+    tym samym aktywnym zbiorze zamówień, zgodnej sygnaturze worka i obecnym
+    tokenie generacji. Gdy takiego planu nie ma, „nie zapisuję, zostaje stary"
+    jest zdaniem PUSTYM — kurier zostaje z planem opisującym inny worek. Ten
+    stan nie może być cichy, dlatego kończy się `NO_CURRENT_VALID_PLAN` + ALERT.
+    Plik pozostaje NIETKNIĘTY w obu wypadkach — to jest diagnoza, nie zapis.
+    """
+    try:
+        reason = None
+        if not isinstance(plan, dict) or not (plan.get("stops") or []):
+            reason = "brak planu"
+        elif not isinstance(plan.get("plan_version"), int) or isinstance(
+                plan.get("plan_version"), bool):
+            reason = "brak tokenu generacji"
+        else:
+            want = _bag_signature(oids, orders_state)
+            have = plan.get("bag_signature")
+            if have and have != want:
+                reason = f"sygnatura worka {have} != {want}"
+            else:
+                active = {str(s.get("order_id")) for s in (plan.get("stops") or [])
+                          if s.get("type") == "dropoff"}
+                if active != {str(o) for o in oids}:
+                    reason = "inny aktywny zbiór zamówień"
+        if reason is None:
+            return True
+        _log.warning(
+            f"G4 NO_CURRENT_VALID_PLAN cid={cid} phase={phase} oids={oids} "
+            f"reason={reason} — kurier NIE MA ważnego poprzedniego planu, "
+            f"plik nietknięty (wymagany retry/regeneracja)")
+        return False
+    except Exception as e:
+        _log.warning(f"G4 assert_current_valid_plan cid={cid} fail: "
+                     f"{type(e).__name__}: {e}")
+        return True
+
+
+def _g4_carry_map(stops, orders_state, now):
+    """`{oid: carry_min}` niesionych — przez JEDNĄ metrykę `core.carry_freshness`."""
+    out = {}
+    for s in stops or []:
+        if s.get("type") != "dropoff":
+            continue
+        oid = str(s.get("order_id"))
+        rec = orders_state.get(oid) or {}
+        if rec.get("status") != "picked_up":
+            continue
+        t = _parse_dt(s.get("predicted_at"))
+        try:
+            from dispatch_v2.common import parse_panel_timestamp
+            pa = parse_panel_timestamp(rec.get("picked_up_at"))
+        except Exception:
+            pa = None
+        if t is None or pa is None:
+            out[oid] = None
+            continue
+        handoff = _cfresh.handoff_min(t.timestamp() / 60.0, s.get("dwell_min") or 3.5)
+        out[oid] = _cfresh.carry_min(handoff, pa.timestamp() / 60.0)
+    return out
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1871,6 +2049,33 @@ def _reorder_noncarried_min_drive(seq, orders_state, start_pos, now):
     return seq
 
 
+def _facts_of(deliv, dwell, kind_pick, oid_of, carried, carried_age, viol, drive):
+    """Fakty permutacji dla guardów WB2 — JEDNA metryka handoff/carry.
+
+    Cała arytmetyka idzie przez `core.carry_freshness`, ten sam moduł, którego
+    używa `route_simulator_v2._capz_reseq_plan` — dlatego świeżość liczona tutaj
+    i w cap-Z jest na tym samym zegarze (handoff = przyjazd + dwell dostawy).
+    To NIE jest metryka klucza lex: klucz (`n_viol`, `drive`, `maxcarry`)
+    pozostaje nietknięty, guardy zawężają wyłącznie zbiór dopuszczalnych.
+
+    Kotwica possession jest wyrażona względem `now` jako `-age`, bo cała
+    symulacja tej warstwy liczy minuty od „stąd i teraz": jedzenie odebrane
+    `age` minut temu weszło do torby w chwili `-age`.
+    """
+    handoff, carry = {}, {}
+    for i in range(len(oid_of)):
+        if kind_pick[i]:
+            continue
+        oid = oid_of[i]
+        h = _cfresh.handoff_min(deliv[i], dwell[i])
+        handoff[oid] = h
+        if oid in carried:
+            age = carried_age.get(oid)
+            carry[oid] = _cfresh.carry_min(h, None if age is None else -float(age))
+    return _lex_guards.Facts(window_viol=viol, drive_min=drive,
+                             handoff_by_order=handoff, carry_by_order=carry)
+
+
 def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
                                   ledger_ctx=None):
     """P-1 (handoff 2026-06-24): okno odbioru committed (R-DECLARED-TIME ±tol) PRZED
@@ -1945,6 +2150,21 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
     carried_rest = {_pickup_rest_key({"type": "pickup", "order_id": o}, orders_state)
                     for o in carried}
     carried_rest.discard(None)
+    # G5 (WB2, strict-stub): tolerancja okna wraz z PROWENIENCJĄ. Bez guardów
+    # zostaje stała modułu (bajt-w-bajt). Z guardami idzie przez czytnik snapshotu
+    # loadgov, który dziś zawsze zwraca strict — ale zapisuje w ledgerze, DLACZEGO,
+    # więc po wpięciu producenta da się udowodnić próg każdej historycznej decyzji.
+    _win_tol, _g5_src = LEX_WINDOW_TOL_MIN, "module_const"
+    if ENABLE_LEX_WINDOW_GUARDS_V2:
+        try:
+            _snap, _lg_meta = _loadgov_snap.read_snapshot(now)
+            _win_tol, _g5_src = _loadgov_snap.window_tol_min(now, snapshot=_snap)
+        except Exception as e:
+            _log.warning("loadgov snapshot fail: %s: %s", type(e).__name__, e)
+            _lg_meta = {"source": "error"}
+    else:
+        _lg_meta = {k: None for k in ("source", "age_s", "fingerprint", "ewma",
+                                      "observed_at", "valid_until", "generation")}
 
     def _metrics(perm):
         t = 0.0; drive = 0.0; prev = 0
@@ -1966,7 +2186,7 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
         for i in range(n):
             if kind_pick[i]:
                 cr = committed_rel[i]
-                if cr is not None and pick[i] is not None and (pick[i] - cr) > LEX_WINDOW_TOL_MIN:
+                if cr is not None and pick[i] is not None and (pick[i] - cr) > _win_tol:
                     n_viol += 1
                 continue
             oid = oid_of[i]; dt = deliv[i]
@@ -1990,6 +2210,18 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
         return seq
     bdrive, bdeliv, bpick, bviol, bbreach, bcarry, blegs = base
     carry_cap = max(35.0, bcarry)
+    # ── WB2: guardy warunkowe (spec docs/WB2_CONDITIONAL_GUARDS.md) ──
+    # OFF ⇒ ani jedna linia niżej nie zmienia zachowania (legacy carry_cap +
+    # delay_tol na samych `assigned`). ON ⇒ te dwa filtry ZASTĘPUJE jeden
+    # spójny zestaw G1/G2/G3 z wyjątkiem D1 — nie dokładamy trzeciego
+    # równoległego progu do tej samej prawdy.
+    _guards_on = bool(ENABLE_LEX_WINDOW_GUARDS_V2)
+    _thr = _lex_guards.load_thresholds() if _guards_on else None
+    _bfacts = _facts_of(bdeliv, dwell, kind_pick, oid_of, carried,
+                        carried_age, bviol, bdrive) if _guards_on else None
+    _guard_rej = _lex_guards.empty_rejection_counters() if _guards_on else {}
+    _guard_exempt = 0
+    _best_guard = None
     best = None
     # WB1: liczniki puli kandydatów (ledger v2). Czysta obserwacja — nie dotykają
     # ani jednego warunku decyzyjnego poniżej.
@@ -2014,20 +2246,42 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
             _rej["metrics"] += 1
             continue
         drive, deliv, pick, n_viol, breaches, maxcarry, _mlegs = m
-        if maxcarry > carry_cap:
-            _rej["carry_cap"] += 1
-            continue
+        # R6 HARD zostaje bezwarunkowy w OBU trybach — SOFT nie osłabia HARD,
+        # a wyjątek D1 dotyczy wyłącznie guardów SOFT (delta i zysk jazdy).
         if breaches > bbreach:
             _rej["breaches"] += 1
             continue
-        bad = False
-        for oid in assigned:
-            a, b = bdeliv[dpos[oid]], deliv[dpos[oid]]
-            if a is not None and b is not None and (b - a) > LEX_WINDOW_DELAY_TOL_MIN:
-                bad = True; break
-        if bad:
-            _rej["delay_tol"] += 1
-            continue
+        _gres = None
+        if _guards_on:
+            _identity_perm = list(perm) == list(range(n))
+            if not _identity_perm:
+                # Filtr na KAŻDEJ nie-identity permutacji PRZED wyborem minimum
+                # (Sol RUN3-b: „wybierz zwycięzcę, potem odrzuć" pomija bezpiecznego
+                # drugiego kandydata). Identity zawsze zostaje dopuszczalnym baseline.
+                _gres = _lex_guards.evaluate(
+                    _bfacts,
+                    _facts_of(deliv, dwell, kind_pick, oid_of, carried,
+                              carried_age, n_viol, drive),
+                    assigned_ids=assigned, carried_ids=carried, thresholds=_thr)
+                if not _gres.admissible:
+                    _k = _lex_guards.rejection_counter_key(_gres.reason)
+                    if _k:
+                        _guard_rej[_k] += 1
+                    continue
+                if _gres.exemption:
+                    _guard_exempt += 1
+        else:
+            if maxcarry > carry_cap:
+                _rej["carry_cap"] += 1
+                continue
+            bad = False
+            for oid in assigned:
+                a, b = bdeliv[dpos[oid]], deliv[dpos[oid]]
+                if a is not None and b is not None and (b - a) > LEX_WINDOW_DELAY_TOL_MIN:
+                    bad = True; break
+            if bad:
+                _rej["delay_tol"] += 1
+                continue
         key = (n_viol, round(drive, 1), round(maxcarry, 1))
         _feasible += 1
         # Krotka, nie dict: worek 8 stopów daje do 40320 permutacji, a budowa dicta
@@ -2035,6 +2289,7 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
         _summary.append((n_viol, round(drive, 2), round(maxcarry, 2), perm))
         if best is None or key < best[0]:
             best = (key, perm, n_viol, drive, deliv, pick, breaches, maxcarry, _mlegs)
+            _best_guard = _gres    # werdykty guardów ZWYCIĘZCY → ledger v2
     if best is None:
         return seq
     _bkey, bperm, dviol, ddrive, ddeliv, dpick, dbreach, dcarry, dlegs = best
@@ -2105,14 +2360,22 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
                                   if ledger_ctx is not None else None),
                    "sequence_lock": bool(ENABLE_PLAN_SEQUENCE_LOCK)},
             candidates={"pool_size": _pool, "feasible": _feasible,
-                        "rejected": _rej, "summary": _cand_summary()},
+                        "rejected": dict(_rej, **_guard_rej),
+                        "summary": _cand_summary()},
             baseline=_side(bdrive, bdeliv, bpick, bviol, bbreach, bcarry,
                            tuple(range(n))),
             chosen=_side(ddrive, ddeliv, dpick, dviol, dbreach, _bkey[2], bperm),
             items=_items,
-            thresholds={"window_tol_min": LEX_WINDOW_TOL_MIN,
+            thresholds={"window_tol_min": _win_tol,
                         "delay_tol_min": LEX_WINDOW_DELAY_TOL_MIN,
                         "max_stops": LEX_WINDOW_MAX_STOPS},
+            # WB2: werdykty guardów ZWYCIĘZCY z progiem efektywnym (pola `guards`
+            # są w schemacie v2 od WB1 — wypełniamy je, nie tworzymy drugiego
+            # writera). Bez guardów zostaje `null`, czyli „nie oceniano".
+            guards=(dict(_best_guard.ledger_guards(),
+                         G5=_lex_guards.g5_verdict(_win_tol, _g5_src))
+                    if (_guards_on and _best_guard is not None) else None),
+            loadgov=(_lg_meta if _guards_on else None),
             apply_flag=bool(ENABLE_LEX_COMMITTED_WINDOW),
             shadow_flag=bool(ENABLE_LEX_COMMITTED_WINDOW_SHADOW),
             decided=_decided,
@@ -2129,6 +2392,12 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
         _lex_pending_attempt(ledger_ctx, _attempt_id)
     _log.info("LEX_COMMITTED_WINDOW base_viol=%d lex_viol=%d d_drive=%.1f apply=%s",
               bviol, dviol, ddrive - bdrive, ENABLE_LEX_COMMITTED_WINDOW)
+    if _guards_on:
+        # Osobna linia, żeby NIE zmieniać kształtu linii wyżej (czytają ją
+        # istniejące narzędzia i test odtworzenia incydentu).
+        _log.info("LEX_WINDOW_GUARDS exempt=%d rejected=%s tol=%.1f cap=%.1f gain=%.1f",
+                  _guard_exempt, _guard_rej, _thr.delay_tol_min,
+                  _thr.carry_cap_min, _thr.min_gain_min)
     if ENABLE_LEX_COMMITTED_WINDOW:
         return [seq[i] for i in bperm]
     return seq
@@ -2333,6 +2602,9 @@ def _retime_one_bag_plan(cid: str, plan: Dict[str, Any], oids: List[str],
     stops = plan.get("stops") or []
     if not stops:
         return False
+    # WB2/G4: koperta świeżości = plan PRZED kanonem tego przebiegu (ostatni trwały).
+    _g4_on = bool(ENABLE_LEX_WINDOW_GUARDS_V2)
+    _g4_envelope = [dict(s) for s in stops] if _g4_on else None
     # WB1: kontekst ledgera zawężony do tego kuriera i tej generacji planu.
     _lctx = (ledger_ctx.for_courier(cid, expected_version)
              if ledger_ctx is not None else None)
@@ -2383,6 +2655,13 @@ def _retime_one_bag_plan(cid: str, plan: Dict[str, Any], oids: List[str],
             return False
         raise
     if new_stops is None:
+        # G4 ratchet: retime=None ⇒ `save_plan` NIEWYWOŁYWALNE (return niżej jest
+        # jedynym wyjściem tej gałęzi). Dodatkowo sprawdzamy, czy „zostaje
+        # poprzedni plan" w ogóle ma desygnat — cisza w tym miejscu była jedną
+        # ze współ-awarii incydentu 492.
+        if _g4_on:
+            _g4_assert_current_valid_plan(cid, plan, oids, orders_state,
+                                          "retime_none")
         if _op_pin_ctx is not None:
             # pin aktywny, retime padł → zapisu nie ma (plan nietknięty),
             # a odmowa MUSI być widoczna w cieniu (WARNING przed eventem).
@@ -2398,6 +2677,25 @@ def _retime_one_bag_plan(cid: str, plan: Dict[str, Any], oids: List[str],
                     f"error={type(e).__name__}: {e!r}"
                 )
         return False
+
+    # ── G4: FINALNY walidator także na ścieżce re-czasowania (wspólna granica
+    # commitu: transform → strict retime → validator → CAS). Bez tego ścieżka
+    # recanon miałaby SŁABSZĄ bramkę niż regeneracja, czyli tę samą prawdę
+    # w dwóch siłach — dokładnie wzorzec, który WB2 likwiduje.
+    _g4_final = None
+    if _g4_on:
+        _g4_final = _g4_final_validator(new_stops, _g4_envelope, orders_state, now)
+        if not _g4_final.get("ok"):
+            _log.warning(
+                f"G4 FINAL_VALIDATOR_REJECT cid={cid} writer=retime oids={oids} "
+                f"reason={_g4_final.get('reason')} detail={_g4_final.get('detail')} "
+                f"— plan NIE zapisany, poprzedni nietknięty")
+            _g4_assert_current_valid_plan(cid, plan, oids, orders_state,
+                                          "validator_reject")
+            _lex_write_receipt(_lctx, cid, "retime", "not_attempted",
+                               expected=expected_version,
+                               error=f"g4_{_g4_final.get('reason')}")
+            return False
 
     _gps = gps_positions.get(cid) or {}
     body = {
