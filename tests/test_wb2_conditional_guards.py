@@ -50,11 +50,25 @@ def fx():
 
 @pytest.fixture(autouse=True)
 def _isolate(monkeypatch, tmp_path):
-    """Zero dotknięć żywego stanu: ledger na tmp, OSRM zamockowany per test."""
+    """Zero dotknięć żywego stanu: ledger na tmp, OSRM zamockowany per test.
+
+    Kill-switch ledgera przypięty do STAŁEJ MODUŁU. `ENABLE_LEX_WINDOW_LEDGER_V2`
+    nie należy do `ETAP4_DECISION_FLAGS` (spec WB1 §6.1), a `_isolate_flags_json`
+    wycina z tmp-kopii wyłącznie `ETAP4_DECISION_FLAGS`,
+    `FLAGS_JSON_NUMERIC_OVERRIDES` i `TEST_ISOLATED_INFRA_FLAGS` — więc żywa
+    wartość przechodziła przez sito i wygrywała nad stałą ustawianą przez test.
+    Pin idzie na `ledger_v2_enabled()`, bo to jedyny czytnik tej flagi w module.
+    Efekt: wynik nie zależy od stanu `flags.json` ownera (zielone przy `True`
+    i przy `False`), a testy sterują wersją ledgera przez stałą, jak zamierzono.
+    """
     monkeypatch.setattr(LWL, "LEGACY_V1_PATH", str(tmp_path / "v1.jsonl"))
     monkeypatch.setattr(LWL, "CANONICAL_PATH", str(tmp_path / "v2.jsonl"))
     monkeypatch.setattr(LWL, "OBSERVATION_PATH", str(tmp_path / "v2_obs.jsonl"))
     monkeypatch.setattr(LG, "SNAPSHOT_PATH", str(tmp_path / "loadgov.json"))
+    monkeypatch.setattr(C, "ENABLE_LEX_WINDOW_LEDGER_V2", False, raising=False)
+    monkeypatch.setattr(
+        LWL, "ledger_v2_enabled",
+        lambda: bool(getattr(C, "ENABLE_LEX_WINDOW_LEDGER_V2", False)))
     LWL.reset_state()
     # Progi startowe = decyzja ownera D2 (2026-07-27).
     monkeypatch.setattr(P, "ENABLE_LEX_COMMITTED_WINDOW", True)
@@ -564,7 +578,6 @@ def test_G4_ratchet_f6_stale_nie_moze_wrocic_na_sciezce_guardow():
 
 def test_werdykty_guardow_traja_do_ledgera_v2(monkeypatch, fx):
     monkeypatch.setattr(C, "ENABLE_LEX_WINDOW_LEDGER_V2", True)
-    monkeypatch.setattr(C, "load_flags", lambda: {"ENABLE_LEX_WINDOW_LEDGER_V2": True})
     fx2 = _strict_improvement(fx)
     ctx = LWL.writer_context("test", "tick").for_courier("492", 4)
     _mock_osrm(monkeypatch, fx2)
@@ -591,7 +604,6 @@ def test_werdykty_guardow_traja_do_ledgera_v2(monkeypatch, fx):
 
 def test_guardy_OFF_zostawiaja_pola_guards_puste(monkeypatch, fx):
     monkeypatch.setattr(C, "ENABLE_LEX_WINDOW_LEDGER_V2", True)
-    monkeypatch.setattr(C, "load_flags", lambda: {"ENABLE_LEX_WINDOW_LEDGER_V2": True})
     ctx = LWL.writer_context("test", "tick").for_courier("492", 4)
     _mock_osrm(monkeypatch, fx)
     monkeypatch.setattr(P, "ENABLE_LEX_WINDOW_GUARDS_V2", False)
@@ -608,7 +620,6 @@ def test_guardy_OFF_zostawiaja_pola_guards_puste(monkeypatch, fx):
 
 def test_liczniki_odrzucen_guardow_w_ledgerze(monkeypatch, fx):
     monkeypatch.setattr(C, "ENABLE_LEX_WINDOW_LEDGER_V2", True)
-    monkeypatch.setattr(C, "load_flags", lambda: {"ENABLE_LEX_WINDOW_LEDGER_V2": True})
     ctx = LWL.writer_context("test", "tick").for_courier("492", 4)
     _mock_osrm(monkeypatch, fx)
     monkeypatch.setattr(P, "ENABLE_LEX_WINDOW_GUARDS_V2", True)
@@ -623,3 +634,20 @@ def test_liczniki_odrzucen_guardow_w_ledgerze(monkeypatch, fx):
                ("guard_g1_delay", "guard_g2_delta", "guard_g2_cap",
                 "guard_g3_gain", "guard_window", "guard_unevaluable")) > 0, \
         "guardy odrzuciły kandydatów, ale ledger tego nie pokazuje"
+
+
+def test_ratchet_zywy_flags_json_nie_steruje_wersja_ledgera(monkeypatch):
+    """Ratchet hermetyczności — bliźniak testu z bramki WB1, na fixture WB2.
+
+    Oba pliki mają WŁASNY autouse `_isolate`, więc niezależność musi być
+    dowiedziona osobno dla każdego z nich; jeden ratchet nie broni drugiego.
+    """
+    zywa = C.load_flags().get("ENABLE_LEX_WINDOW_LEDGER_V2")
+
+    monkeypatch.setattr(C, "ENABLE_LEX_WINDOW_LEDGER_V2", False, raising=False)
+    assert LWL.ledger_v2_enabled() is False, (
+        f"żywy flags.json ({zywa!r}) przeciekł do testu — pin nie trzyma OFF")
+
+    monkeypatch.setattr(C, "ENABLE_LEX_WINDOW_LEDGER_V2", True, raising=False)
+    assert LWL.ledger_v2_enabled() is True, (
+        f"żywy flags.json ({zywa!r}) przeciekł do testu — pin nie trzyma ON")

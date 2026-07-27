@@ -72,13 +72,33 @@ def _kind(path, kind):
 
 @pytest.fixture(autouse=True)
 def _isolate(monkeypatch, tmp_path):
-    """Pełna izolacja: OSRM zamockowany, WSZYSTKIE trzy pliki ledgera w tmp."""
+    """Pełna izolacja: OSRM zamockowany, WSZYSTKIE trzy pliki ledgera w tmp.
+
+    Kill-switch ledgera przypięty do STAŁEJ MODUŁU — bo `ENABLE_LEX_WINDOW_LEDGER_V2`
+    świadomie NIE należy do `ETAP4_DECISION_FLAGS` (nie zmienia treści decyzji,
+    spec WB1 §6.1), a `_isolate_flags_json` w `tests/conftest.py` wycina z tmp-kopii
+    tylko `ETAP4_DECISION_FLAGS`, `FLAGS_JSON_NUMERIC_OVERRIDES` i
+    `TEST_ISOLATED_INFRA_FLAGS`. Wartość z ŻYWEGO `flags.json` przechodziła więc
+    przez sito i wygrywała w `decision_flag()` nad stałą, którą ustawia test —
+    po flipie ownera na `True` bramka kompatybilności („OFF ⇒ v1 bajt-w-bajt")
+    testowała stan, którego nie da się w tym procesie osiągnąć.
+
+    Pin idzie na `ledger_v2_enabled()`, bo to JEDYNY czytnik tej flagi w module
+    (`record_decision`, `record_write_receipt`, `record_served_receipt` wołają
+    wyłącznie ją). Dzięki temu idiom „patch stałej modułu steruje zachowaniem"
+    działa znów w całym pliku, a wynik NIE zależy od tego, co owner ma dziś
+    w `flags.json` — testy są zielone przy żywej fladze `True` i `False`.
+    """
     monkeypatch.setattr(osrm_client, "table", _fake_table)
     monkeypatch.setattr(LWL, "CANONICAL_PATH", str(tmp_path / "canon.jsonl"))
     monkeypatch.setattr(LWL, "OBSERVATION_PATH", str(tmp_path / "obs.jsonl"))
     monkeypatch.setattr(LWL, "LEGACY_V1_PATH", str(tmp_path / "v1.jsonl"))
     monkeypatch.setattr(P, "ENABLE_LEX_COMMITTED_WINDOW", True)
     monkeypatch.setattr(P, "LEX_WINDOW_TOL_MIN", 5.0)
+    monkeypatch.setattr(C, "ENABLE_LEX_WINDOW_LEDGER_V2", False, raising=False)
+    monkeypatch.setattr(
+        LWL, "ledger_v2_enabled",
+        lambda: bool(getattr(C, "ENABLE_LEX_WINDOW_LEDGER_V2", False)))
     LWL.reset_state()
     yield
     LWL.reset_state()
@@ -86,7 +106,7 @@ def _isolate(monkeypatch, tmp_path):
 
 @pytest.fixture
 def v2_on(monkeypatch):
-    """Kill-switch ON (klucza nie ma w flags.json → decision_flag bierze stałą)."""
+    """Kill-switch ON — przez stałą modułu, którą `_isolate` uczynił kanonem."""
     monkeypatch.setattr(C, "ENABLE_LEX_WINDOW_LEDGER_V2", True, raising=False)
     assert LWL.ledger_v2_enabled(), "kill-switch musi być ON w tym teście"
 
@@ -385,3 +405,26 @@ def test_plan_recheck_nie_ma_juz_wlasnej_sciezki_ledgera():
     """Ratchet na wygaszony duplikat nazwy (dwie nazwy jednej prawdy)."""
     assert not hasattr(P, "LEX_WINDOW_SHADOW_PATH"), (
         "ścieżka ledgera ma JEDNEGO właściciela: core.lex_window_ledger")
+
+
+def test_ratchet_zywy_flags_json_nie_steruje_wersja_ledgera(monkeypatch):
+    """Ratchet hermetyczności: o wersji ledgera decyduje TEST, nie owner.
+
+    `ENABLE_LEX_WINDOW_LEDGER_V2` świadomie nie jest flagą decyzyjną (spec WB1
+    §6.1), więc `_isolate_flags_json` NIE wycina jej z tmp-kopii `flags.json`
+    i żywa wartość wygrywała w `decision_flag()` nad stałą ustawianą przez test.
+    Skutkiem był fałszywie czerwony test kompatybilności po flipie ownera na
+    `True` — bramka „OFF ⇒ v1 bajt-w-bajt" sprawdzała stan nieosiągalny.
+
+    Ten test dowodzi ROZŁĄCZNOŚCI obu źródeł w jednym procesie: cokolwiek stoi
+    w żywym pliku, oba kierunki pinu muszą się trzymać.
+    """
+    zywa = C.load_flags().get("ENABLE_LEX_WINDOW_LEDGER_V2")
+
+    monkeypatch.setattr(C, "ENABLE_LEX_WINDOW_LEDGER_V2", False, raising=False)
+    assert LWL.ledger_v2_enabled() is False, (
+        f"żywy flags.json ({zywa!r}) przeciekł do testu — pin nie trzyma OFF")
+
+    monkeypatch.setattr(C, "ENABLE_LEX_WINDOW_LEDGER_V2", True, raising=False)
+    assert LWL.ledger_v2_enabled() is True, (
+        f"żywy flags.json ({zywa!r}) przeciekł do testu — pin nie trzyma ON")
