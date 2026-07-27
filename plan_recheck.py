@@ -578,7 +578,35 @@ ENABLE_LEX_COMMITTED_WINDOW = _CF.decision_flag("ENABLE_LEX_COMMITTED_WINDOW")  
 LEX_WINDOW_TOL_MIN = float(os.environ.get("LEX_WINDOW_TOL_MIN", "5"))
 LEX_WINDOW_DELAY_TOL_MIN = float(os.environ.get("LEX_WINDOW_DELAY_TOL_MIN", "3"))
 LEX_WINDOW_MAX_STOPS = int(os.environ.get("LEX_WINDOW_MAX_STOPS", "8"))
-LEX_WINDOW_SHADOW_PATH = "/root/.openclaw/workspace/dispatch_state/lex_committed_window_shadow.jsonl"
+# WB1 faza 1 (2026-07-27, CZASY 492): JEDYNY writer ledgera okna odbioru — właściciel
+# obu formatów (v1 legacy + v2) i jedyne miejsce mapujące rolę wywołania na plik
+# (spec `docs/WB1_LEDGER_V2_SCHEMA.md`). Stała LEX_WINDOW_SHADOW_PATH świadomie tu NIE
+# zostaje nawet jako alias: dwie nazwy jednej prawdy to wzorzec, który WB1 likwiduje.
+# Rola podróżuje jawnie w `ledger_ctx`; brak kontekstu = obserwator (fail-safe: gubimy
+# wiersz kanoniczny, nigdy go nie zanieczyszczamy).
+from dispatch_v2.core import lex_window_ledger as _lex_ledger  # noqa: E402
+
+
+def _lex_pending_attempt(ledger_ctx, attempt_id) -> None:
+    """Powiąż nadchodzący fakt zapisu (`written`) z tą próbą decyzji."""
+    try:
+        _lex_ledger.set_pending_attempt(ledger_ctx, attempt_id)
+    except Exception:
+        pass
+
+
+def _lex_write_receipt(ledger_ctx, cid, writer, outcome, *, expected=None,
+                       current=None, error=None) -> None:
+    """Zapisz fakt utrwalenia planu — ROZŁĄCZNY od `decided` (koniec `applied`)."""
+    try:
+        att = _lex_ledger.pop_pending_attempt(ledger_ctx)
+        if att is None:
+            return
+        _lex_ledger.record_write_receipt(
+            ledger_ctx, attempt_id=att, courier_id=cid, outcome=outcome,
+            writer=writer, cas_expected=expected, cas_current=current, error=error)
+    except Exception:
+        pass
 
 # FIX K — WSPÓŁLOKALNY ODBIÓR (Adrian 2026-06-24, case Kuba Olchowik 370 Rany Julek):
 # reguła no-return seeduje restauracje carried jako 'opuszczone przed trasą' (idx=-2 w
@@ -773,7 +801,8 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
                       gps_positions: Dict[str, Any], now: datetime,
                       R: Any, *, expected_version: int,
                       _raise_on_corrupt: bool = False,
-                      _state_fenced_save: Optional[Callable[..., bool]] = None) -> bool:
+                      _state_fenced_save: Optional[Callable[..., bool]] = None,
+                      ledger_ctx=None) -> bool:
     """Wygeneruj+zapisz plan Ziomka dla faktycznego worka kuriera.
 
     Zwraca True gdy zapisano, False gdy skip (worek za duży / brak GPS / brak
@@ -788,6 +817,9 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
         return False
     if len(oids) > PLAN_FOR_ACTUAL_BAG_MAX:
         return False
+    # WB1: kontekst ledgera zawężony do tego kuriera i tej generacji planu.
+    _lctx = (ledger_ctx.for_courier(cid, expected_version)
+             if ledger_ctx is not None else None)
     anchor = _start_anchor(cid, oids, orders_state, gps_positions, now)
     if anchor is None:
         return False  # ani (świeży) GPS, ani kotwica czasowa → nie ma od czego liczyć
@@ -1021,7 +1053,8 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
     _f6_stale = False  # v3: F6 przestawił, ale czasy NIE zostały przeliczone
     if ENABLE_PLAN_CANON_ORDER_INVARIANTS:
         try:
-            reordered = _apply_canon_order_invariants(stops, orders_state, pos, now)
+            reordered = _apply_canon_order_invariants(stops, orders_state, pos, now,
+                                                      ledger_ctx=_lctx)
             if [s["order_id"] for s in reordered] != [s["order_id"] for s in stops] or \
                [s["type"] for s in reordered] != [s["type"] for s in stops]:
                 retimed = _retime_stops(reordered, pos, anchor_departure, orders_state, now)
@@ -1167,6 +1200,8 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
     try:
         if (_state_fenced_save is not None
                 and not _state_fenced_save(cid, oids, orders_state, _save)):
+            _lex_write_receipt(_lctx, cid, "regen", "not_attempted",
+                               expected=expected_version)
             return False
         if _state_fenced_save is None:
             _save()
@@ -1176,7 +1211,10 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
             f"expected={e.expected_version} current={e.current_version} "
             f"policy=keep_current"
         )
+        _lex_write_receipt(_lctx, cid, "regen", "skipped_cas",
+                           expected=e.expected_version, current=e.current_version)
         return False
+    _lex_write_receipt(_lctx, cid, "regen", "written", expected=expected_version)
     if _op_pin_ctx is not None:
         try:
             # v2/v3: ewaluacja HARD po pinie (read-only) — wynik do eventu
@@ -1833,7 +1871,8 @@ def _reorder_noncarried_min_drive(seq, orders_state, start_pos, now):
     return seq
 
 
-def _lex_committed_window_reorder(seq, orders_state, start_pos, now):
+def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
+                                  ledger_ctx=None):
     """P-1 (handoff 2026-06-24): okno odbioru committed (R-DECLARED-TIME ±tol) PRZED
     carried-first. Anchored na `seq` (wynik carried-first+relax) → identity zawsze feasible,
     więc lex-min ≤ baseline = NIGDY nie regresuje. Lex-min (naruszenia_okna, jazda, wiek_carried)
@@ -1909,11 +1948,12 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now):
 
     def _metrics(perm):
         t = 0.0; drive = 0.0; prev = 0
-        deliv = [None] * n; pick = [None] * n
+        deliv = [None] * n; pick = [None] * n; legs = [None] * n
         for si in perm:
             lg = leg[prev][si + 1]
             if lg >= 9e8:
                 return None
+            legs[si] = lg
             drive += lg; t += lg; prev = si + 1
             if kind_pick[si]:
                 cr = committed_rel[si]
@@ -1943,29 +1983,42 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now):
                                           committed_rel[ppos[oid]] if oid in ppos else None, _ra_on)
             if bag is not None and bag > 35.0:
                 breaches += 1
-        return drive, deliv, pick, n_viol, breaches, maxcarry
+        return drive, deliv, pick, n_viol, breaches, maxcarry, legs
 
     base = _metrics(tuple(range(n)))
     if base is None:
         return seq
-    bdrive, bdeliv, bpick, bviol, bbreach, bcarry = base
+    bdrive, bdeliv, bpick, bviol, bbreach, bcarry, blegs = base
     carry_cap = max(35.0, bcarry)
     best = None
+    # WB1: liczniki puli kandydatów (ledger v2). Czysta obserwacja — nie dotykają
+    # ani jednego warunku decyzyjnego poniżej.
+    _pool = 0
+    _feasible = 0
+    _rej = {"precedence": 0, "no_return": 0, "metrics": 0,
+            "carry_cap": 0, "breaches": 0, "delay_tol": 0}
+    _summary = []
     for perm in itertools.permutations(range(n)):
+        _pool += 1
         pos = [0] * n
         for j, si in enumerate(perm):
             pos[si] = j
         if any(pos[p] > pos[d] for p, d in pairs):
+            _rej["precedence"] += 1
             continue
         if _detect_departed_pickup_revisit([seq[i] for i in perm], orders_state, carried_rest):
+            _rej["no_return"] += 1
             continue
         m = _metrics(perm)
         if m is None:
+            _rej["metrics"] += 1
             continue
-        drive, deliv, pick, n_viol, breaches, maxcarry = m
+        drive, deliv, pick, n_viol, breaches, maxcarry, _mlegs = m
         if maxcarry > carry_cap:
+            _rej["carry_cap"] += 1
             continue
         if breaches > bbreach:
+            _rej["breaches"] += 1
             continue
         bad = False
         for oid in assigned:
@@ -1973,29 +2026,107 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now):
             if a is not None and b is not None and (b - a) > LEX_WINDOW_DELAY_TOL_MIN:
                 bad = True; break
         if bad:
+            _rej["delay_tol"] += 1
             continue
         key = (n_viol, round(drive, 1), round(maxcarry, 1))
+        _feasible += 1
+        # Krotka, nie dict: worek 8 stopów daje do 40320 permutacji, a budowa dicta
+        # per kandydat byłaby najdroższą częścią ledgera. Top-K wybieramy raz, niżej.
+        _summary.append((n_viol, round(drive, 2), round(maxcarry, 2), perm))
         if best is None or key < best[0]:
-            best = (key, perm, n_viol, drive)
+            best = (key, perm, n_viol, drive, deliv, pick, breaches, maxcarry, _mlegs)
     if best is None:
         return seq
-    _bkey, bperm, dviol, ddrive = best
-    if list(bperm) == list(range(n)):
-        return seq                                  # baseline już lex-optymalny
-    # rozjazd: lex-D różny od baseline (i ≤ baseline po anchorze). Shadow log + apply za flagą.
+    _bkey, bperm, dviol, ddrive, ddeliv, dpick, dbreach, dcarry, dlegs = best
+    _identity = list(bperm) == list(range(n))
+    _decided = bool(ENABLE_LEX_COMMITTED_WINDOW) and not _identity
+
+    # WB1 (spec docs/WB1_LEDGER_V2_SCHEMA.md): JEDEN kanoniczny writer ledgera.
+    # Rola wywołania przychodzi JAWNIE w `ledger_ctx` (brak = obserwator → plik
+    # obserwacyjny, nigdy kanon). `applied` nie istnieje w v2 — zastępują je
+    # rozłączne fakty decided/written/served. Log-only: wynik ignorowany, wyjątki
+    # pochłaniane w module, decyzja silnika przeżywa każdy błąd zapisu.
+    _attempt_id = None
     try:
-        from dispatch_v2.core.jsonl_appender import append_jsonl
-        append_jsonl(LEX_WINDOW_SHADOW_PATH, {
-            "ts": now.isoformat(), "carried": sorted(carried),
-            "base_window_viol": bviol, "lex_window_viol": dviol,
-            "d_drive_min": round(ddrive - bdrive, 1),
-            "base_max_carry": round(bcarry, 1), "lex_max_carry": round(_bkey[2], 1),
-            "applied": ENABLE_LEX_COMMITTED_WINDOW,
-            "base_seq": [(oid_of[i], "P" if kind_pick[i] else "D") for i in range(n)],
-            "lex_seq": [(oid_of[i], "P" if kind_pick[i] else "D") for i in bperm],
-        })
-    except Exception as e:
-        _log.warning("lex_window shadow log fail: %s: %s", type(e).__name__, e)
+        def _seq_of(perm):
+            return [(oid_of[i], "P" if kind_pick[i] else "D") for i in perm]
+
+        def _cand_summary():
+            import heapq
+            top = heapq.nsmallest(_lex_ledger.CANDIDATE_SUMMARY_MAX, _summary)
+            return [{"perm": list(p), "window_viol": v,
+                     "drive_min": d, "max_carry_min": c} for v, d, c, p in top]
+
+        def _side(drive, deliv, pick, viol, breach, carry, perm):
+            return {"seq": _seq_of(perm), "window_viol": viol, "breaches": breach,
+                    "drive_min": drive, "max_carry_min": carry}
+
+        _items = []
+        for i in range(n):
+            rec = orders_state.get(oid_of[i]) or {}
+            _arr = dpick[i] if kind_pick[i] else ddeliv[i]
+            _barr = bpick[i] if kind_pick[i] else bdeliv[i]
+            try:
+                _parcel = "paczka" if _CF.is_paczka_order(rec) else "jedzenie"
+            except Exception:
+                _parcel = None
+            _oid = oid_of[i]
+            _raw_w = None
+            if kind_pick[i] and committed_rel[i] is not None and _arr is not None:
+                _raw_w = _arr - committed_rel[i]
+            _raw_carry = None
+            if not kind_pick[i] and _oid in carried and _arr is not None:
+                _age = carried_age.get(_oid)
+                _raw_carry = (_age + _arr) if _age is not None else None
+            _items.append({
+                "order_id": _oid,
+                "kind": "pickup" if kind_pick[i] else "dropoff",
+                "arrival_min": _arr,
+                "handoff_min": (_arr + dwell[i]) if _arr is not None else None,
+                "baseline_arrival_min": _barr,
+                "dwell_min": dwell[i],
+                "possession_source": (rec.get("effective_pickup_source")
+                                      if _oid in carried else None),
+                "parcel_mode": _parcel,
+                "raw_W_min": _raw_w,
+                "raw_drive_min": dlegs[i],
+                "raw_carry_min": _raw_carry,
+            })
+
+        _attempt_id = _lex_ledger.record_decision(
+            ledger_ctx,
+            now=now,
+            courier_id=(ledger_ctx.courier_id if ledger_ctx is not None else None),
+            carried=carried,
+            bag={"signature": _bag_signature(sorted(set(oid_of)), orders_state),
+                 "active_order_ids": sorted(set(oid_of)),
+                 "size": len(set(oid_of))},
+            route={"generation": (ledger_ctx.route_generation
+                                  if ledger_ctx is not None else None),
+                   "sequence_lock": bool(ENABLE_PLAN_SEQUENCE_LOCK)},
+            candidates={"pool_size": _pool, "feasible": _feasible,
+                        "rejected": _rej, "summary": _cand_summary()},
+            baseline=_side(bdrive, bdeliv, bpick, bviol, bbreach, bcarry,
+                           tuple(range(n))),
+            chosen=_side(ddrive, ddeliv, dpick, dviol, dbreach, _bkey[2], bperm),
+            items=_items,
+            thresholds={"window_tol_min": LEX_WINDOW_TOL_MIN,
+                        "delay_tol_min": LEX_WINDOW_DELAY_TOL_MIN,
+                        "max_stops": LEX_WINDOW_MAX_STOPS},
+            apply_flag=bool(ENABLE_LEX_COMMITTED_WINDOW),
+            shadow_flag=bool(ENABLE_LEX_COMMITTED_WINDOW_SHADOW),
+            decided=_decided,
+            identity=_identity,
+        )
+    except Exception as e:  # ledger NIGDY nie może wywrócić decyzji
+        _log.warning("lex_window ledger fail: %s: %s", type(e).__name__, e)
+
+    if _identity:
+        return seq                                  # baseline już lex-optymalny
+    if ledger_ctx is not None and _attempt_id is not None:
+        # Writer zapisuje plan dopiero wyżej (po CAS) — przekaż uchwyt, żeby fakt
+        # `written` powstał osobno od faktu `decided`.
+        _lex_pending_attempt(ledger_ctx, _attempt_id)
     _log.info("LEX_COMMITTED_WINDOW base_viol=%d lex_viol=%d d_drive=%.1f apply=%s",
               bviol, dviol, ddrive - bdrive, ENABLE_LEX_COMMITTED_WINDOW)
     if ENABLE_LEX_COMMITTED_WINDOW:
@@ -2003,7 +2134,8 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now):
     return seq
 
 
-def _apply_canon_order_invariants(stops, orders_state, start_pos=None, now=None):
+def _apply_canon_order_invariants(stops, orders_state, start_pos=None, now=None, *,
+                                  ledger_ctx=None):
     """F6: TWARDE niezmienniki kolejności kanonu (1:1 jak build_view, ale w decyzji):
     (1) niesione (picked_up) dropoffy → front (kolejność względna zachowana),
     (2) odbiory wg committed (czas_kuriera) rosnąco. Deterministyczne, niezależne od
@@ -2063,7 +2195,8 @@ def _apply_canon_order_invariants(stops, orders_state, start_pos=None, now=None)
     # Shadow log zawsze gdy flaga shadow/apply; zmiana decyzji tylko gdy APPLY flaga.
     if start_pos is not None and now is not None:
         try:
-            lexed = _lex_committed_window_reorder(seq, orders_state, start_pos, now)
+            lexed = _lex_committed_window_reorder(seq, orders_state, start_pos, now,
+                                                  ledger_ctx=ledger_ctx)
             if lexed is not seq and ENABLE_LEX_COMMITTED_WINDOW and \
                     [s.get("order_id") for s in lexed] != [s.get("order_id") for s in seq]:
                 _log.info("LEX_COMMITTED_WINDOW applied seq=%s",
@@ -2181,7 +2314,8 @@ def _retime_one_bag_plan(cid: str, plan: Dict[str, Any], oids: List[str],
                          orders_state: Dict[str, Any],
                          gps_positions: Dict[str, Any], now: datetime, *,
                          _raise_on_corrupt: bool = False,
-                         _state_fenced_save: Optional[Callable[..., bool]] = None) -> bool:
+                         _state_fenced_save: Optional[Callable[..., bool]] = None,
+                         ledger_ctx=None) -> bool:
     """F2 RE-CZASOWANIE: przelicz predicted_at wzdłuż ISTNIEJĄCEJ, STAŁEJ sekwencji.
 
     Ziomek zdecydował kolejność przy zmianie worka; tu tylko odświeżamy czasy
@@ -2199,6 +2333,9 @@ def _retime_one_bag_plan(cid: str, plan: Dict[str, Any], oids: List[str],
     stops = plan.get("stops") or []
     if not stops:
         return False
+    # WB1: kontekst ledgera zawężony do tego kuriera i tej generacji planu.
+    _lctx = (ledger_ctx.for_courier(cid, expected_version)
+             if ledger_ctx is not None else None)
     anchor = _start_anchor(cid, oids, orders_state, gps_positions, now)
     if anchor is None:
         return False
@@ -2209,7 +2346,8 @@ def _retime_one_bag_plan(cid: str, plan: Dict[str, Any], oids: List[str],
     # poprawiają na następnym ticku, bez czekania na zmianę worka.
     if ENABLE_PLAN_CANON_ORDER_INVARIANTS:
         try:
-            stops = _apply_canon_order_invariants(stops, orders_state, pos, now)
+            stops = _apply_canon_order_invariants(stops, orders_state, pos, now,
+                                                  ledger_ctx=_lctx)
         except Exception as e:
             _log.warning(f"canon_order_invariants(retime) cid={cid} fail: {type(e).__name__}: {e}")
     # OPERATOR PIN (2026-07-19): jak w _gen_one_bag_plan — sekwencja operatora
@@ -2290,6 +2428,8 @@ def _retime_one_bag_plan(cid: str, plan: Dict[str, Any], oids: List[str],
     try:
         if (_state_fenced_save is not None
                 and not _state_fenced_save(cid, oids, orders_state, _save)):
+            _lex_write_receipt(_lctx, cid, "retime", "not_attempted",
+                               expected=expected_version)
             return False
         if _state_fenced_save is None:
             _save()
@@ -2299,7 +2439,10 @@ def _retime_one_bag_plan(cid: str, plan: Dict[str, Any], oids: List[str],
             f"expected={e.expected_version} current={e.current_version} "
             f"policy=keep_current"
         )
+        _lex_write_receipt(_lctx, cid, "retime", "skipped_cas",
+                           expected=e.expected_version, current=e.current_version)
         raise
+    _lex_write_receipt(_lctx, cid, "retime", "written", expected=expected_version)
     if _op_pin_ctx is not None:
         try:
             _op_hb = _operator_pin_hard_report(cid, new_stops, orders_state, now)
@@ -2608,6 +2751,9 @@ def redecide_courier(courier_id: str, orders_state: Optional[Dict[str, Any]] = N
             cid, oids, orders_state, gps_positions, now, R,
             expected_version=expected_version,
             _raise_on_corrupt=_raise_on_error,
+            # WB1: ta ścieżka MOŻE utrwalić plan → rola WRITER (kanon ledgera).
+            ledger_ctx=_lex_ledger.writer_context(
+                "plan_recheck.redecide_courier", f"redecide:{reason}"),
         )
         if ok:
             _log.info(f"REDECIDE_ON_{reason.upper()} cid={cid} bag={len(oids)}")
@@ -2709,6 +2855,9 @@ def recanon_courier(courier_id: str, orders_state: Optional[Dict[str, Any]] = No
             # porównać dokładną generację worka; CAS plan_version nie wykrywa
             # równoległej zmiany orders_state bez writera planu.
             _state_fenced_save=state_fenced_save,
+            # WB1: ta ścieżka MOŻE utrwalić plan → rola WRITER (kanon ledgera).
+            ledger_ctx=_lex_ledger.writer_context(
+                "plan_recheck.recanon_courier", f"recanon:{reason}"),
         )
         # False jest poprawnym, trwałym no-opem (brak kotwicy/OSRM albo state
         # fence wykrył nowszą generację). Nie może trzymać causal FIFO w
@@ -2765,7 +2914,8 @@ def _pickup_approaching(oids: List[str], orders_state: Dict[str, Any],
 def _gap_fill_plans(orders_state: Dict[str, Any], plans: Dict[str, Any],
                     gps_positions: Dict[str, Any], now: datetime,
                     summary: Dict[str, Any], *,
-                    _state_fenced_save: Optional[Callable[..., bool]] = None) -> None:
+                    _state_fenced_save: Optional[Callable[..., bool]] = None,
+                    ledger_ctx=None) -> None:
     """Dla kuriera z realnym workiem bez planu LUB z planem CZĘŚCIOWYM →
     wygeneruj plan Ziomka i zapisz, by apka pokazała ziomek_plan zamiast
     fallback_nn.
@@ -2826,6 +2976,7 @@ def _gap_fill_plans(orders_state: Dict[str, Any], plans: Dict[str, Any],
                     if _retime_one_bag_plan(
                         cid, existing, oids, orders_state, gps_positions, now,
                         _state_fenced_save=_state_fenced_save,
+                        ledger_ctx=ledger_ctx,
                     ):
                         summary["bag_plans_retimed"] += 1
                         _bug4_reseq_shadow(cid, oids, existing, orders_state,
@@ -2845,6 +2996,7 @@ def _gap_fill_plans(orders_state: Dict[str, Any], plans: Dict[str, Any],
                     cid, oids, orders_state, gps_positions, now, R,
                     expected_version=expected_version,
                     _state_fenced_save=_state_fenced_save,
+                    ledger_ctx=ledger_ctx,
                 )
             except Exception as e:
                 summary["bag_plans_skipped"] += 1
@@ -2875,6 +3027,7 @@ def _gap_fill_plans(orders_state: Dict[str, Any], plans: Dict[str, Any],
                 cid, oids, orders_state, gps_positions, now, R,
                 expected_version=expected_version,
                 _state_fenced_save=_state_fenced_save,
+                ledger_ctx=ledger_ctx,
             )
         except Exception as e:
             summary["bag_plans_skipped"] += 1
@@ -3267,6 +3420,9 @@ def run_recheck(*, _current_state_fn: Optional[
             now,
             summary,
             _state_fenced_save=_save_plan_if_bag_current,
+            # WB1: tick plan-recheck MOZE utrwalic plan -> rola WRITER (kanon ledgera).
+            ledger_ctx=_lex_ledger.writer_context(
+                "plan_recheck.run_recheck", "tick"),
         )
 
     # L3 (F2/K2): fold liczników bramki ZAPISU regenu (compare-and-keep R6) do
