@@ -2309,6 +2309,20 @@ def run() -> int:
     # identyczny w shadow / czasowka / plan-recheck (jeden silnik cross-proces).
     _log.info("FLAG_FINGERPRINT proc=shadow %s", C.flag_fingerprint())
 
+    # G5 (2026-07-27, CZASY 492): TA pętla jest kanonicznym producentem snapshotu
+    # loadgov. Zgłoszenie jest tutaj, a nie w imporcie modułu, bo `dispatch_pipeline`
+    # importuje się także w czasówce, plan-recheck i panel-quote — procesach
+    # świeżych per tick, których EWMA po pierwszej próbce RÓWNA SIĘ obciążeniu
+    # chwilowemu. Samo zgłoszenie nic nie publikuje: publikacja wymaga jeszcze
+    # kill-switcha ENABLE_LOADGOV_SNAPSHOT_PUBLISH (default OFF).
+    try:
+        from dispatch_v2.core import loadgov_publisher as _lg_pub
+        _lg_pub.claim_producer_role(
+            getattr(C, "LOADGOV_SNAPSHOT_PRODUCER_ROLE", "dispatch-shadow"))
+    except Exception as _lgp_e:
+        _log.warning("loadgov snapshot: zgłoszenie roli producenta nieudane "
+                     f"({type(_lgp_e).__name__}: {_lgp_e}) — snapshot nie powstanie")
+
     # V3.27 Phase 1F (2026-04-25 wieczór): warm-up ortools import na startup.
     # D2 verified pierwszy thread cold import 153.5ms — eliminujemy z ścieżki
     # critical pierwszego proposal po restart. Idempotent, no-op gdy already

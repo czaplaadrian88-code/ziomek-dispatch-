@@ -57,6 +57,18 @@ ENABLE_STAGE_TIMING_OBSERVATION = False
 # Nie nalezy do ETAP4_DECISION_FLAGS, bo nie zmienia tresci decyzji (jak wyzej).
 ENABLE_LEX_WINDOW_LEDGER_V2 = False
 
+# G5 (2026-07-27, incydent CZASY 492): niedecyzyjny kill-switch KANONICZNEGO
+# PRODUCENTA snapshotu load-governora (`core/loadgov_publisher.py`, spec
+# `docs/G5_LOADGOV_SNAPSHOT.md`). OFF (default) = plik snapshotu nie powstaje,
+# czytnik WB2 widzi `absent` i bierze STRICT 5 — czyli stan sprzed G5.
+# ON = kanoniczny producent (tylko `dispatch-shadow`) publikuje atomowy
+# snapshot; czytnik nadal zwraca STRICT, bo tolerancja loose wymaga wg OD-04
+# Alarm certificate, ktorego NIKT nie produkuje. Dlatego flaga jest dzis poza
+# ETAP4_DECISION_FLAGS (precedens ENABLE_LEX_WINDOW_LEDGER_V2 z WB1).
+# ⚠ Z dniem powstania producenta Alarm certificate flaga STAJE SIE decyzyjna
+# i MUSI zostac przeniesiona do ETAP4_DECISION_FLAGS.
+ENABLE_LOADGOV_SNAPSHOT_PUBLISH = False
+
 # ─── K05 refaktor (2026-07-06, ADR-R01): FlagSnapshot per tick ───
 # Problem: flagi czytane z dysku w TRAKCIE decyzji (nawet z perf-lazy TTL 0,25 s
 # odświeżenie może wypaść W ŚRODKU ticku) → zmiana flags.json mid-tick daje
@@ -825,6 +837,12 @@ FLAGS_JSON_NUMERIC_OVERRIDES = (
     "LEX_WINDOW_CARRY_CAP_MIN",
     "LEX_WINDOW_CARRY_CAP_ALARM_MIN",
     "LEX_WINDOW_MIN_GAIN_MIN",
+    # G5 (2026-07-27, CZASY 492): okres/ważność/rozgrzewka snapshotu loadgov.
+    # Strojenie w cieniu ma iść flags.json (hot-reload), nie restartem shadow.
+    "LOADGOV_SNAPSHOT_MIN_INTERVAL_S",
+    "LOADGOV_SNAPSHOT_TTL_S",
+    "LOADGOV_SNAPSHOT_MIN_SAMPLES",
+    "LOADGOV_FLEET_STATS_MAX_AGE_S",
     # BUNDLE-06 Faza 1 + BUNDLE-03 (2026-06-12):
     "BUNDLE_FIT_W_COS",
     "BUNDLE_FIT_THERMAL_FREE_MIN",
@@ -3482,6 +3500,31 @@ OBJ_COMMITTED_PICKUP_PENALTY_COEFF = float(_os.environ.get(
 OBJ_COMMITTED_PICKUP_TOL_STRICT_MIN = 5.0
 OBJ_COMMITTED_PICKUP_TOL_LOOSE_MIN = 10.0
 OBJ_COMMITTED_PICKUP_LOAD_THRESHOLD = 4.5   # loadgov_ewma ≥ to → loosening (Adrian: 50 zleceń/11 std ≈ 4,5)
+
+# ── G5 (2026-07-27, CZASY 492): kanoniczny PRODUCENT snapshotu loadgov ──
+# Kanoniczny właściciel progów = TEN plik; override przez flags.json
+# (FLAGS_JSON_NUMERIC_OVERRIDES, hot-reload), NIGDY przez os.environ.
+# ROLA: tylko proces, który zgłosił się przez `loadgov_publisher.claim_producer_role`
+# TĄ nazwą, publikuje. EWMA jest stanem pamięci procesu, więc producentem może
+# być wyłącznie pętla długo żyjąca (shadow); czasówka/plan-recheck/panel-quote
+# startują od próbki chwilowej i publikowanie stamtąd dałoby drugi governor.
+LOADGOV_SNAPSHOT_PRODUCER_ROLE = "dispatch-shadow"
+# Dławienie ZAPISU (seria EWMA aktualizuje się co próbkę — dławiony jest wyłącznie
+# plik, żeby nie robić fsync w ścieżce decyzji częściej niż to potrzebne).
+LOADGOV_SNAPSHOT_MIN_INTERVAL_S = 30.0
+# Ważność snapshotu. MUSI przeżyć przerwę między dwoma zapisami zdrowego
+# producenta (publisher przycina od dołu do 2× okresu) — inaczej konsument
+# widziałby `expired` w środku normalnej pracy. Cisza dłuższa niż TTL (brak
+# nowych zleceń = brak próbek) świadomie wygasza snapshot → czytnik STRICT.
+LOADGOV_SNAPSHOT_TTL_S = 180.0
+# Minimalna liczba próbek serii przed pierwszą publikacją. Po JEDNEJ próbce
+# „EWMA" jest dosłownie obciążeniem chwilowym — publikowanie jej jako miary
+# wygładzonej byłoby tym samym kłamstwem, przed którym broni zakaz recompute.
+LOADGOV_SNAPSHOT_MIN_SAMPLES = 2
+# Maksymalny wiek migawki filtra puli (`courier_resolver.last_fleet_filter_stats`)
+# akceptowany jako mianownik. Starsza = mianownik z innego stanu świata niż
+# licznik → nie publikujemy (fail-safe: brak snapshotu ⇒ czytnik STRICT).
+LOADGOV_FLEET_STATS_MAX_AGE_S = 120.0
 
 # ESKALACJA kary committed (Adrian 2026-06-22 D1): "±5 za darmo, od +6 kara MOCNO
 # ROSNĄCA o każdą minutę". Pojedynczy SetCumulVarSoftUpperBound jest LINIOWY → drugi
