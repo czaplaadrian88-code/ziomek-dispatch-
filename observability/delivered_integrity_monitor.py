@@ -18,17 +18,104 @@ strażnika"). Uruchamiany przez dispatch-delivered-integrity.timer (co ~20 min).
 
 Dry-run bez wysyłki: PYTEST_CURRENT_TEST=1 python -m dispatch_v2.observability.delivered_integrity_monitor
 """
+import sys
+
+_ORIGINAL_SYS_PATH = tuple(sys.path)
+_RUNTIME_PYTHON_VERSION = (
+    f"python{sys.version_info.major}.{sys.version_info.minor}"
+)
+_RUNTIME_PYTHON_ZIP = (
+    f"python{sys.version_info.major}{sys.version_info.minor}.zip"
+)
+_TRUSTED_STDLIB_PATHS = frozenset(
+    path
+    for prefix in dict.fromkeys(
+        str(prefix).rstrip("/")
+        for prefix in (sys.base_prefix, sys.prefix, sys.exec_prefix)
+        if prefix
+    )
+    for path in (
+        f"{prefix}/{sys.platlibdir}/{_RUNTIME_PYTHON_VERSION}",
+        f"{prefix}/{sys.platlibdir}/{_RUNTIME_PYTHON_VERSION}/lib-dynload",
+        f"{prefix}/{sys.platlibdir}/{_RUNTIME_PYTHON_ZIP}",
+    )
+)
+_TRUSTED_SITE_PATHS = frozenset(
+    path
+    for prefix in dict.fromkeys(
+        str(prefix).rstrip("/")
+        for prefix in (sys.base_prefix, sys.prefix, sys.exec_prefix)
+        if prefix
+    )
+    for path in (
+        f"{prefix}/{sys.platlibdir}/{_RUNTIME_PYTHON_VERSION}/site-packages",
+        f"{prefix}/{sys.platlibdir}/{_RUNTIME_PYTHON_VERSION}/dist-packages",
+        f"{prefix}/local/{sys.platlibdir}/{_RUNTIME_PYTHON_VERSION}/dist-packages",
+        f"{prefix}/{sys.platlibdir}/python{sys.version_info.major}/dist-packages",
+    )
+)
+sys.path[:] = [
+    entry
+    for entry in sys.path
+    if entry and entry in _TRUSTED_STDLIB_PATHS
+]
+
+import importlib.util
+
 import json
 import os
-import sys
 from collections import defaultdict
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
+if __package__ in (None, ""):
+    _package_dir = Path(__file__).resolve().parent.parent
+    _package_init = _package_dir / "__init__.py"
+    if not _package_init.is_file():
+        raise RuntimeError("cannot locate physical dispatch_v2 package")
+    if any(
+        name == "dispatch_v2" or name.startswith("dispatch_v2.")
+        for name in sys.modules
+    ):
+        raise RuntimeError("conflicting preloaded dispatch_v2 package")
+    _trusted_local_paths = (
+        str(_package_dir),
+        str(Path(__file__).resolve().parent),
+    )
+    sys.path[:] = list(
+        dict.fromkeys(
+            (
+                *_trusted_local_paths,
+                *(
+                    entry
+                    for entry in _ORIGINAL_SYS_PATH
+                    if entry in _TRUSTED_STDLIB_PATHS
+                    or entry in _TRUSTED_SITE_PATHS
+                ),
+            )
+        )
+    )
+    _package_spec = importlib.util.spec_from_file_location(
+        "dispatch_v2",
+        _package_init,
+        submodule_search_locations=[str(_package_dir)],
+    )
+    if _package_spec is None or _package_spec.loader is None:
+        raise RuntimeError("cannot attest physical dispatch_v2 package")
+    _package_module = importlib.util.module_from_spec(_package_spec)
+    sys.modules["dispatch_v2"] = _package_module
+    try:
+        _package_spec.loader.exec_module(_package_module)
+    except BaseException:
+        sys.modules.pop("dispatch_v2", None)
+        raise
+else:
+    sys.path[:] = _ORIGINAL_SYS_PATH
 from dispatch_v2.common import STATE_DIR as COMMON_STATE_DIR
 
 WARSAW = ZoneInfo("Europe/Warsaw")
-STATE_DIR = os.environ.get("DISPATCH_STATE_DIR") or str(COMMON_STATE_DIR)
+STATE_DIR = str(COMMON_STATE_DIR)
 ORDERS_STATE = os.path.join(STATE_DIR, "orders_state.json")
 ALERT_STATE = os.path.join(STATE_DIR, "delivered_integrity_alert_state.json")
 

@@ -241,10 +241,16 @@ def test_daily_coverage_uses_unique_shadow_decisions_as_denominator(tmp_path):
 def test_contract_registry_rotation_and_source_hooks():
     assert C.ENABLE_DECISION_ETA_LOG is False
     assert "ENABLE_DECISION_ETA_LOG" in C.ETAP4_DECISION_FLAGS
-    # Rootowy writer przechodzi na common.STATE_DIR w R4 kroku 3; krok 2
-    # utrzymuje jego basename w kanonicznym manifeście rotacji.
-    assert str(jsonl_rotation.STATE_DIR / dtlog.LOG_PATH.name) in (
-        jsonl_rotation.JSONL_PATHS
+    assert str(dtlog.LOG_PATH) in jsonl_rotation.resolve_jsonl_paths(
+        {
+            "paths": {
+                "shadow_log": str(C.LOGS_DIR / "shadow_decisions.jsonl")
+            }
+        }
+    )
+    assert decision_eta_coverage.DEFAULT_ETA_LOG == str(dtlog.LOG_PATH)
+    assert decision_eta_coverage.DEFAULT_DECISIONS == str(
+        C.LOGS_DIR / "shadow_decisions.jsonl"
     )
     root = Path(__file__).resolve().parents[1]
     expected = {
@@ -256,6 +262,8 @@ def test_contract_registry_rotation_and_source_hooks():
     }
     for relative, call in expected.items():
         assert call in (root / relative).read_text(encoding="utf-8")
-    assert "decision_eta_log.jsonl" in (
+    rotation_policy = (
         root / "deploy/dispatch-v2-jsonl-logrotate.conf"
     ).read_text(encoding="utf-8")
+    assert rotation_policy.count(jsonl_rotation.JSONL_PATHS_MARKER) == 1
+    assert "decision_eta_log.jsonl" not in rotation_policy

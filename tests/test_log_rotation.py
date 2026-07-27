@@ -1,9 +1,7 @@
 """Behawioralne testy observability/log_rotation.py (audyt 2.0 L13, C13).
 
-Import PRZEZ ŚCIEŻKĘ PLIKU (nie przez pakiet dispatch_v2), bo conftest wpina
-KANONICZNY /scripts na sys.path, gdzie log_rotation.py był usunięty 2026-06-11.
-Ścieżka liczona względem tego pliku → testuje moduł LEŻĄCY OBOK (worktree teraz,
-kanon po merge'u).
+Import przez pakiet z dokładnego hermetycznego pkgroot. Direct-file bootstrap
+celowo odrzuca proces, który wcześniej załadował dowolny `dispatch_v2*`.
 
 Fixtures: sztuczne pliki z podrobionym mtime (os.utime) + wstrzykiwany `now`, więc
 granice wieku są deterministyczne. Katalog testowy = PODKATALOG tmp_path
@@ -16,18 +14,12 @@ Zasady sprawdzane behawioralnie:
   - --max-delete respektowany (kasuje najstarsze, reszta zostaje, capped=True)
   - UNMATCHED (datowany .jsonl spoza allowlisty) NIE jest kasowany
 """
-import importlib.util
 import os
 import time
 from pathlib import Path
 
 import pytest
-
-# ── Import modułu pod testem po ścieżce (co-located) ────────────────────────
-_MOD_PATH = Path(__file__).resolve().parent.parent / "observability" / "log_rotation.py"
-_spec = importlib.util.spec_from_file_location("observability_log_rotation_under_test", _MOD_PATH)
-lr = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(lr)
+from dispatch_v2.observability import log_rotation as lr
 
 # "Teraz" = realny czas importu. Dzięki temu testy z wstrzykniętym now=NOW ORAZ
 # testy CLI (main() używa time.time()) widzą ten sam, spójny punkt odniesienia

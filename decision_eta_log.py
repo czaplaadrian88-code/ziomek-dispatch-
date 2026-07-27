@@ -11,7 +11,6 @@ import logging
 import math
 import threading
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from dispatch_v2 import common as C
@@ -19,9 +18,7 @@ from dispatch_v2 import common as C
 
 SCHEMA = "decision_eta.v1"
 FLAG = "ENABLE_DECISION_ETA_LOG"
-LOG_PATH = Path(
-    "/root/.openclaw/workspace/dispatch_state/decision_eta_log.jsonl"
-)
+LOG_PATH = C.STATE_DIR / "decision_eta_log.jsonl"
 
 _log = logging.getLogger("decision_eta_log")
 _stats_lock = threading.Lock()

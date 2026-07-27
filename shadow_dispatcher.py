@@ -25,7 +25,11 @@ from typing import Dict, Optional
 
 from dispatch_v2 import calib_maps  # SP-B2 (2026-06-11): prep-bias shadow w _serialize_result
 from dispatch_v2 import common as C, event_bus, pending_pool, state_machine
-from dispatch_v2.common import load_config, now_iso, setup_logger
+from dispatch_v2.common import (
+    load_config,
+    now_iso,
+    setup_logger,
+)
 from dispatch_v2.core.broadcast_handlers import dispatch_config_reload
 from dispatch_v2.core.config_reload_subscriber import BroadcastSubscriber
 from dispatch_v2.courier_resolver import build_fleet_snapshot, dispatchable_fleet
@@ -66,7 +70,7 @@ POLL_BATCH_SIZE = 50
 
 _log = setup_logger(
     "shadow_dispatcher",
-    "/root/.openclaw/workspace/scripts/logs/shadow.log",
+    str(C.LOGS_DIR / "shadow.log"),
 )
 # V3.28 (2026-05-09) — observability gap fix (FAZA 0 finding):
 # route_simulator_v2 logger nie miał handlera w shadow_dispatcher process,
@@ -76,11 +80,11 @@ _log = setup_logger(
 # Fix: explicit setup dla route_simulator_v2 logger w shadow_dispatcher entry point.
 _route_simulator_log = setup_logger(
     "route_simulator_v2",
-    "/root/.openclaw/workspace/scripts/logs/route_simulator.log",
+    str(C.LOGS_DIR / "route_simulator.log"),
 )
 _telegram_approver_log = setup_logger(
     "telegram_approver",
-    "/root/.openclaw/workspace/scripts/logs/telegram_approver.log",
+    str(C.LOGS_DIR / "telegram_approver.log"),
 )
 _shutdown = False
 
@@ -98,7 +102,7 @@ def _sigterm_handler(signum, frame):
 
 # V3.28 R-04 v2.0: lazy mtime cache dla tier_suggestions.json (5-min TTL).
 # Phase 1 SHADOW: serializes r04 fields to decision_record bez behavior change.
-_R04_TIER_SUGGESTIONS_PATH = "/root/.openclaw/workspace/dispatch_state/tier_suggestions.json"
+_R04_TIER_SUGGESTIONS_PATH = C.STATE_DIR / "tier_suggestions.json"
 _R04_CACHE: Dict[str, object] = {"mtime": 0.0, "checked_at": 0.0, "data": {}}
 _R04_CACHE_TTL_SEC = 300
 
@@ -1264,9 +1268,13 @@ def append_czasowka_reclaim_observation(path: str, evaluation: dict) -> dict:
     """Zapisz PII-free observation do kanonicznego shadow_decisions.jsonl."""
     record = serialize_czasowka_reclaim_observation(evaluation)
     from dispatch_v2.core.jsonl_appender import append_jsonl_once
+    from dispatch_v2.core.jsonl_rotation import (
+        register_shadow_jsonl_writer_path,
+    )
 
+    registered_path = register_shadow_jsonl_writer_path(path)
     append_jsonl_once(
-        path,
+        registered_path,
         record,
         dedupe_key="event_id",
         dedupe_value=record["event_id"],
@@ -2287,11 +2295,15 @@ def _accumulate_tick_stats(totals: dict, tick_stats: dict) -> None:
 
 
 def run() -> int:
+    from dispatch_v2.core.jsonl_rotation import (
+        register_shadow_decisions_writer_path,
+    )
+
     signal.signal(signal.SIGTERM, _sigterm_handler)
     signal.signal(signal.SIGINT, _sigterm_handler)
 
     cfg = load_config()
-    shadow_log_path = cfg["paths"]["shadow_log"]
+    shadow_log_path = str(register_shadow_decisions_writer_path(cfg))
     meta_path = cfg["paths"]["restaurant_meta"]
     meta = _load_restaurant_meta(meta_path)
 
@@ -2351,9 +2363,7 @@ def run() -> int:
     try:
         _broadcast_sub = BroadcastSubscriber(
             consumer_id="shadow_dispatcher",
-            state_path=Path(
-                "/root/.openclaw/workspace/dispatch_state/event_subscribers/shadow.json"
-            ),
+            state_path=C.STATE_DIR / "event_subscribers" / "shadow.json",
         )
         _log.info("A4.1 BroadcastSubscriber init OK consumer=shadow_dispatcher")
     except Exception as _bs_e:

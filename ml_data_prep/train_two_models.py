@@ -21,15 +21,116 @@ Uruchom (venv pipeline'u ML ma pyarrow+lightgbm+sklearn):
 """
 from __future__ import annotations
 
+import sys
+
+_ORIGINAL_SYS_PATH = tuple(sys.path)
+_RUNTIME_PYTHON_VERSION = (
+    f"python{sys.version_info.major}.{sys.version_info.minor}"
+)
+_RUNTIME_PYTHON_ZIP = (
+    f"python{sys.version_info.major}{sys.version_info.minor}.zip"
+)
+_TRUSTED_STDLIB_PATHS = frozenset(
+    path
+    for prefix in dict.fromkeys(
+        str(prefix).rstrip("/")
+        for prefix in (sys.base_prefix, sys.prefix, sys.exec_prefix)
+        if prefix
+    )
+    for path in (
+        f"{prefix}/{sys.platlibdir}/{_RUNTIME_PYTHON_VERSION}",
+        f"{prefix}/{sys.platlibdir}/{_RUNTIME_PYTHON_VERSION}/lib-dynload",
+        f"{prefix}/{sys.platlibdir}/{_RUNTIME_PYTHON_ZIP}",
+    )
+)
+_TRUSTED_SITE_PATHS = frozenset(
+    path
+    for prefix in dict.fromkeys(
+        str(prefix).rstrip("/")
+        for prefix in (sys.base_prefix, sys.prefix, sys.exec_prefix)
+        if prefix
+    )
+    for path in (
+        f"{prefix}/{sys.platlibdir}/{_RUNTIME_PYTHON_VERSION}/site-packages",
+        f"{prefix}/{sys.platlibdir}/{_RUNTIME_PYTHON_VERSION}/dist-packages",
+        f"{prefix}/local/{sys.platlibdir}/{_RUNTIME_PYTHON_VERSION}/dist-packages",
+        f"{prefix}/{sys.platlibdir}/python{sys.version_info.major}/dist-packages",
+    )
+)
+sys.path[:] = [
+    entry
+    for entry in sys.path
+    if entry and entry in _TRUSTED_STDLIB_PATHS
+]
+
+import importlib.util
+
 import argparse
 import json
 import logging
 import pickle
-import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Dict, List, Tuple
+
+if __package__ in (None, ""):
+    _package_dir = Path(__file__).resolve().parent.parent
+    _package_init = _package_dir / "__init__.py"
+    if not _package_init.is_file():
+        raise RuntimeError("cannot locate physical dispatch_v2 package")
+    if any(
+        name == "dispatch_v2" or name.startswith("dispatch_v2.")
+        for name in sys.modules
+    ):
+        raise RuntimeError("conflicting preloaded dispatch_v2 package")
+    _trusted_local_paths = (
+        str(_package_dir),
+        str(Path(__file__).resolve().parent),
+    )
+    sys.path[:] = list(
+        dict.fromkeys(
+            (
+                *_trusted_local_paths,
+                *(
+                    entry
+                    for entry in _ORIGINAL_SYS_PATH
+                    if entry in _TRUSTED_STDLIB_PATHS
+                    or entry in _TRUSTED_SITE_PATHS
+                ),
+            )
+        )
+    )
+    _package_spec = importlib.util.spec_from_file_location(
+        "dispatch_v2",
+        _package_init,
+        submodule_search_locations=[str(_package_dir)],
+    )
+    if _package_spec is None or _package_spec.loader is None:
+        raise RuntimeError("cannot attest physical dispatch_v2 package")
+    _package_module = importlib.util.module_from_spec(_package_spec)
+    sys.modules["dispatch_v2"] = _package_module
+    try:
+        _package_spec.loader.exec_module(_package_module)
+    except BaseException:
+        sys.modules.pop("dispatch_v2", None)
+        raise
+else:
+    sys.path[:] = _ORIGINAL_SYS_PATH
+from dispatch_v2.common import SCRIPTS_DIR  # noqa: E402
+
+from dispatch_v2._physical_import import (  # noqa: E402
+    attest_physical_scripts_dir,
+    load_physical_scripts_sibling,
+)
+
+if __package__ in (None, ""):
+    attest_physical_scripts_dir(SCRIPTS_DIR)
+load_physical_scripts_sibling(
+    "src",
+    "ml_data_prep/src",
+    package=True,
+)
 
 import numpy as np
 import pandas as pd
@@ -37,16 +138,10 @@ import lightgbm as lgb
 from sklearn.preprocessing import LabelEncoder
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE))           # ml_data_prep/ (twomodel_common)
-_PACKAGE_PARENT = str(HERE.parents[1])
-if _PACKAGE_PARENT not in sys.path:
-    sys.path.insert(0, _PACKAGE_PARENT)
-from dispatch_v2.common import SCRIPTS_DIR  # noqa: E402
 
 PROD_ML = SCRIPTS_DIR / "ml_data_prep"
-sys.path.insert(0, str(PROD_ML))        # produkcyjne src.lgbm_training (read-only)
 
-from twomodel_common import (  # noqa: E402
+from dispatch_v2.ml_data_prep.twomodel_common import (  # noqa: E402
     BUNDLE_ONLY_BASE_FEATURES,
     RECON_ONLY_DECISION_FEATURES,
     TIER_ORD_COL,

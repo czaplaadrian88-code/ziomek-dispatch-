@@ -41,6 +41,7 @@ import fcntl
 import gzip
 import json
 import os
+import stat
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Iterable
@@ -51,20 +52,93 @@ _NAMESPACE_LOCK_SUFFIX = ".append.lock"
 _NAMESPACE_RETRIES = 3
 
 
+def open_attested_regular_file(
+    path: str | os.PathLike,
+    flags: int,
+    mode: int = _DEFAULT_FILE_MODE,
+    *,
+    label: str = "file",
+    exclusive_lock: bool = False,
+) -> int:
+    """Attest one pathname against its fd inside the stable-root boundary."""
+    target = Path(path)
+    last_error: OSError | None = None
+    for _attempt in range(_NAMESPACE_RETRIES):
+        fd = os.open(
+            str(target),
+            flags | getattr(os, "O_NOFOLLOW", 0),
+            mode,
+        )
+        keep_open = False
+        try:
+            opened_before = os.fstat(fd)
+            for metadata in (opened_before,):
+                if not stat.S_ISREG(metadata.st_mode):
+                    raise OSError(f"{label} is not a regular file: {target}")
+                if metadata.st_nlink == 0:
+                    last_error = OSError(f"{label} pathname moved: {target}")
+                    break
+                if metadata.st_nlink != 1:
+                    raise OSError(
+                        f"{label} has multiple hard links: {target}"
+                    )
+            if opened_before.st_nlink == 0:
+                continue
+            if exclusive_lock:
+                fcntl.flock(fd, fcntl.LOCK_EX)
+            try:
+                current = os.stat(target, follow_symlinks=False)
+            except OSError as exc:
+                last_error = exc
+                continue
+            opened_after = os.fstat(fd)
+            for metadata in (current, opened_after):
+                if not stat.S_ISREG(metadata.st_mode):
+                    raise OSError(f"{label} is not a regular file: {target}")
+            identities = {
+                (opened_before.st_dev, opened_before.st_ino),
+                (current.st_dev, current.st_ino),
+                (opened_after.st_dev, opened_after.st_ino),
+            }
+            if len(identities) != 1:
+                last_error = OSError(f"{label} pathname moved: {target}")
+                continue
+            if opened_after.st_nlink == 0:
+                last_error = OSError(f"{label} pathname moved: {target}")
+                continue
+            for metadata in (current, opened_after):
+                if metadata.st_nlink != 1:
+                    raise OSError(
+                        f"{label} has multiple hard links: {target}"
+                    )
+            keep_open = True
+            return fd
+        finally:
+            if not keep_open:
+                os.close(fd)
+    raise OSError(f"{label} pathname kept moving: {target}") from last_error
+
+
 @contextmanager
 def _locked_namespace(path: Path):
-    """Serialize writers on a stable inode that log rotation never renames."""
+    """Serialize and yield the canonical pathname guarded by that namespace."""
+    from dispatch_v2.core.jsonl_rotation import (
+        register_managed_jsonl_writer_path,
+    )
+
+    path = register_managed_jsonl_writer_path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     lock_path = path.with_name(path.name + _NAMESPACE_LOCK_SUFFIX)
-    lock_fd = os.open(
-        str(lock_path),
-        os.O_RDWR | os.O_CREAT,
+    lock_fd = open_attested_regular_file(
+        lock_path,
+        os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0),
         _DEFAULT_FILE_MODE,
+        label="JSONL namespace lock",
+        exclusive_lock=True,
     )
     try:
-        fcntl.flock(lock_fd, fcntl.LOCK_EX)
         try:
-            yield
+            yield path
         finally:
             fcntl.flock(lock_fd, fcntl.LOCK_UN)
     finally:
@@ -73,18 +147,12 @@ def _locked_namespace(path: Path):
 
 def _open_current(path: Path, flags: int) -> int:
     """Open the active pathname, rejecting an inode already renamed by rotate."""
-    last_error: OSError | None = None
-    for _attempt in range(_NAMESPACE_RETRIES):
-        fd = os.open(str(path), flags | os.O_CREAT, _DEFAULT_FILE_MODE)
-        try:
-            opened = os.fstat(fd)
-            current = os.stat(path)
-            if (opened.st_dev, opened.st_ino) == (current.st_dev, current.st_ino):
-                return fd
-        except OSError as exc:
-            last_error = exc
-        os.close(fd)
-    raise OSError(f"active JSONL pathname kept moving: {path}") from last_error
+    return open_attested_regular_file(
+        path,
+        flags | os.O_CREAT,
+        _DEFAULT_FILE_MODE,
+        label="active JSONL path",
+    )
 
 
 def append_jsonl(
@@ -138,7 +206,7 @@ def append_jsonl_durable(
         raise TypeError("append_jsonl_durable record must be a dict")
     line = (json.dumps(record, ensure_ascii=ensure_ascii) + "\n").encode("utf-8")
     p = Path(path)
-    with _locked_namespace(p):
+    with _locked_namespace(p) as p:
         fd = _open_current(p, os.O_RDWR | os.O_APPEND)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)
@@ -188,7 +256,7 @@ def append_jsonl_once(
 
     line = (json.dumps(record, ensure_ascii=ensure_ascii) + "\n").encode("utf-8")
     p = Path(path)
-    with _locked_namespace(p):
+    with _locked_namespace(p) as p:
         fd = _open_current(p, os.O_RDWR | os.O_APPEND)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)
@@ -274,7 +342,7 @@ def append_jsonl_batch_durable(
         for record in materialized
     ).encode("utf-8")
     p = Path(path)
-    with _locked_namespace(p):
+    with _locked_namespace(p) as p:
         fd = _open_current(p, os.O_RDWR | os.O_APPEND)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)
@@ -298,7 +366,7 @@ def _append_bytes(path: str | os.PathLike, data: bytes) -> None:
     releases lock implicitly on close.
     """
     p = Path(path)
-    with _locked_namespace(p):
+    with _locked_namespace(p) as p:
         fd = _open_current(p, os.O_RDWR | os.O_APPEND)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)

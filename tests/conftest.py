@@ -268,6 +268,22 @@ except Exception:  # pragma: no cover
     _osrm_mod = None
     _PRISTINE_OSRM = {}
 
+# C40 (R4 krok 2): bliźniaki nazwy `schedule_utils` w JEDNYM procesie suity.
+# Legacy testy dispatchera importują żywe scripts/schedule_utils.py zwykłą
+# maszynerią z sys.path, a shift_notifications.worker wiąże tę samą nazwę
+# przez exact physical loader (required=False). Kontrakt ownera (C40): brak
+# opcjonalnego pliku NIE omija walidatora konfliktu nazw — obcy moduł pod tą
+# nazwą przy imporcie workera = twardy RuntimeError (oracle obu kierunków:
+# test_r4_step2_module_paths.py::test_worker_binds_physical_schedule_utils_*
+# / ::test_worker_optional_absent_with_foreign_preload_fails_closed).
+# Dlatego worker wchodzi do sys.modules PIERWSZY: przy fizycznie nieobecnym
+# siblingu loader zwraca stub i nie wiąże nazwy (późniejsze `import
+# schedule_utils` legacy testów działa bez konfliktu), a przy fizycznie
+# obecnym siblingu loader wiąże go zanim ktokolwiek wprowadzi obcy moduł.
+# Bez tego pinu o współistnieniu bliźniaków decydowałaby alfabetyczna
+# kolejność kolekcji (błędy kolekcji w plikach importujących workera).
+import dispatch_v2.shift_notifications.worker  # noqa: E402,F401
+
 
 @pytest.fixture(autouse=True)
 def _restore_osrm_state():

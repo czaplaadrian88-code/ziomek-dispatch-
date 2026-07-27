@@ -734,7 +734,15 @@ def test_shadow_metric_is_in_canonical_rotation():
     from dispatch_v2.core import jsonl_rotation
 
     assert str(jsonl_rotation.STATE_DIR / "uwagi_bridge_envelope.jsonl") in (
-        jsonl_rotation.JSONL_PATHS
+        jsonl_rotation.resolve_jsonl_paths(
+            {
+                "paths": {
+                    "shadow_log": str(
+                        jsonl_rotation.LOGS_DIR / "shadow_decisions.jsonl"
+                    )
+                }
+            }
+        )
     )
 
 

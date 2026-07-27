@@ -1,10 +1,10 @@
 """Read-only adapters over the 10 identity sources (Z-P1-05 Faza A).
 
-Every loader takes an EXPLICIT path — no path is baked into a signature default
-and none is a frozen module constant used implicitly (C17). ``default_paths()``
-computes the live locations late (env override -> canon fallback; repo_root
-self-locates from this file). ``load_all()`` returns a :class:`SourceBundle`
-plus a list of human-readable notes (missing/optional sources).
+Every loader takes an EXPLICIT path — no path is baked into a signature
+default. ``default_paths()`` uses the process-wide canonical
+``common.STATE_DIR``; an explicit argument may still select a different
+read-only source bundle. ``repo_root`` self-locates from this file.
+``load_all()`` returns a :class:`SourceBundle` plus human-readable notes.
 
 Nothing here writes, connects to a network, or mutates the sources. The sqlite
 source (courier_api.db) is optional and opened read-only; a missing/locked db is
@@ -44,16 +44,14 @@ def default_paths(
     state_root: Optional[str] = None,
     repo_root: Optional[str] = None,
 ) -> Dict[str, str]:
-    """Late-bound canonical paths for all sources.
+    """Canonical paths for all sources.
 
-    ``state_root`` (env ``ZIOMEK_STATE_ROOT`` -> dispatch_state) holds the JSON
-    state + courier_api.db. ``repo_root`` (env ``ZIOMEK_REPO_ROOT`` -> the
-    dispatch_v2 dir containing this package) holds daily_accounting/*.
+    ``state_root`` (explicit argument -> canonical ``common.STATE_DIR``) holds
+    the JSON state + courier_api.db. ``repo_root`` (env ``ZIOMEK_REPO_ROOT`` ->
+    the dispatch_v2 dir containing this package) holds daily_accounting/*.
     """
     if state_root is None:
-        state_root = os.environ.get(
-            "ZIOMEK_STATE_ROOT", str(STATE_DIR)
-        )
+        state_root = str(STATE_DIR)
     if repo_root is None:
         repo_root = os.environ.get("ZIOMEK_REPO_ROOT") or str(
             Path(__file__).resolve().parents[1]

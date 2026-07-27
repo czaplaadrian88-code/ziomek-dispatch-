@@ -29,29 +29,111 @@ Uruchom (venv pipeline'u ML ma pyarrow+lightgbm+sklearn):
 """
 from __future__ import annotations
 
+import sys
+
+_ORIGINAL_SYS_PATH = tuple(sys.path)
+_RUNTIME_PYTHON_VERSION = (
+    f"python{sys.version_info.major}.{sys.version_info.minor}"
+)
+_RUNTIME_PYTHON_ZIP = (
+    f"python{sys.version_info.major}{sys.version_info.minor}.zip"
+)
+_TRUSTED_STDLIB_PATHS = frozenset(
+    path
+    for prefix in dict.fromkeys(
+        str(prefix).rstrip("/")
+        for prefix in (sys.base_prefix, sys.prefix, sys.exec_prefix)
+        if prefix
+    )
+    for path in (
+        f"{prefix}/{sys.platlibdir}/{_RUNTIME_PYTHON_VERSION}",
+        f"{prefix}/{sys.platlibdir}/{_RUNTIME_PYTHON_VERSION}/lib-dynload",
+        f"{prefix}/{sys.platlibdir}/{_RUNTIME_PYTHON_ZIP}",
+    )
+)
+_TRUSTED_SITE_PATHS = frozenset(
+    path
+    for prefix in dict.fromkeys(
+        str(prefix).rstrip("/")
+        for prefix in (sys.base_prefix, sys.prefix, sys.exec_prefix)
+        if prefix
+    )
+    for path in (
+        f"{prefix}/{sys.platlibdir}/{_RUNTIME_PYTHON_VERSION}/site-packages",
+        f"{prefix}/{sys.platlibdir}/{_RUNTIME_PYTHON_VERSION}/dist-packages",
+        f"{prefix}/local/{sys.platlibdir}/{_RUNTIME_PYTHON_VERSION}/dist-packages",
+        f"{prefix}/{sys.platlibdir}/python{sys.version_info.major}/dist-packages",
+    )
+)
+sys.path[:] = [
+    entry
+    for entry in sys.path
+    if entry and entry in _TRUSTED_STDLIB_PATHS
+]
+
+import importlib.util
+
 import argparse
 import json
 import os
-import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+if __package__ in (None, ""):
+    _package_dir = Path(__file__).resolve().parent.parent
+    _package_init = _package_dir / "__init__.py"
+    if not _package_init.is_file():
+        raise RuntimeError("cannot locate physical dispatch_v2 package")
+    if any(
+        name == "dispatch_v2" or name.startswith("dispatch_v2.")
+        for name in sys.modules
+    ):
+        raise RuntimeError("conflicting preloaded dispatch_v2 package")
+    _trusted_local_paths = (
+        str(_package_dir),
+        str(Path(__file__).resolve().parent),
+    )
+    sys.path[:] = list(
+        dict.fromkeys(
+            (
+                *_trusted_local_paths,
+                *(
+                    entry
+                    for entry in _ORIGINAL_SYS_PATH
+                    if entry in _TRUSTED_STDLIB_PATHS
+                    or entry in _TRUSTED_SITE_PATHS
+                ),
+            )
+        )
+    )
+    _package_spec = importlib.util.spec_from_file_location(
+        "dispatch_v2",
+        _package_init,
+        submodule_search_locations=[str(_package_dir)],
+    )
+    if _package_spec is None or _package_spec.loader is None:
+        raise RuntimeError("cannot attest physical dispatch_v2 package")
+    _package_module = importlib.util.module_from_spec(_package_spec)
+    sys.modules["dispatch_v2"] = _package_module
+    try:
+        _package_spec.loader.exec_module(_package_module)
+    except BaseException:
+        sys.modules.pop("dispatch_v2", None)
+        raise
+else:
+    sys.path[:] = _ORIGINAL_SYS_PATH
+from dispatch_v2.common import SCRIPTS_DIR  # noqa: E402
+
+if __package__ in (None, ""):
+    from dispatch_v2._physical_import import attest_physical_scripts_dir
+
+    attest_physical_scripts_dir(SCRIPTS_DIR)
+
 os.environ.setdefault("OMP_NUM_THREADS", "2")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "2")
 
-# Mirror online_shadow_parity.py sys.path setup.
 HERE = Path(__file__).resolve().parent
-_PACKAGE_PARENT = str(HERE.parents[1])
-if _PACKAGE_PARENT not in sys.path:
-    sys.path.insert(0, _PACKAGE_PARENT)
-from dispatch_v2.common import SCRIPTS_DIR  # noqa: E402
-
-SCRIPTS = SCRIPTS_DIR
-PROD_ML = SCRIPTS / "ml_data_prep"
-for _p in (str(HERE), str(SCRIPTS), str(PROD_ML)):
-    if _p not in sys.path:
-        sys.path.insert(0, _p)
 
 OUT_DIR = HERE / "models_twomodel" / "arbitrage"
 OUT = OUT_DIR / "arbitrage_report.json"
@@ -184,7 +266,7 @@ def _train_regime_model(pairs, drop_bundle: bool, seed: int = 42):
     na `pairs` (które caller gwarantuje że są < cutoff i bez calib).
     """
     import lightgbm as lgb
-    import train_two_models as tm
+    from dispatch_v2.ml_data_prep import train_two_models as tm
 
     d = sorted(pairs["_date"].dropna().unique())
     nval = max(1, int(len(d) * 0.10))
@@ -218,7 +300,7 @@ def _score_pointwise(pw, model_pack, drop_bundle: bool) -> Dict[Tuple[str, str],
     """
     import numpy as np
     import pandas as pd
-    import train_two_models as tm
+    from dispatch_v2.ml_data_prep import train_two_models as tm
     booster, le, tc, fo = model_pack
     enc = tm.apply_tier_onehot(tm.apply_label_encoders(pw, le), tc)
     # BUGFIX (2026-06-20): tm.to_arrays SORTUJE wewnętrznie po decision_id, więc preds
@@ -605,8 +687,12 @@ def _per_day_mixed(decisions, calibrators, best_arb: str) -> List[Dict[str, Any]
 
 def run(forward_days: int = 14, seed: int = 42, end_offset: int = 0) -> Dict[str, Any]:
     import pandas as pd
-    import train_two_models as tm  # noqa: F401  (import wcześnie by złapać brak pyarrow czytelnie)
-    from twomodel_common import load_split, apply_prod_feature_shaping, solo_mask
+    from dispatch_v2.ml_data_prep import train_two_models as tm  # noqa: F401
+    from dispatch_v2.ml_data_prep.twomodel_common import (
+        apply_prod_feature_shaping,
+        load_split,
+        solo_mask,
+    )
 
     # 1) wczytaj + shape + daty + cutoff
     frames = [load_split(s) for s in ("train", "val", "test")]

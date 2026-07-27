@@ -42,6 +42,10 @@ if not os.environ.get("DISPATCH_STATE_DIR"):
     _sandbox = _hs.make_sandbox_state_dir()
     os.environ["DISPATCH_STATE_DIR"] = _sandbox
     atexit.register(shutil.rmtree, _sandbox, True)  # ignore_errors=True (pozycyjnie)
+os.environ["DISPATCH_JSONL_ROTATION_REGISTRY"] = os.path.join(
+    os.environ["DISPATCH_STATE_DIR"],
+    "jsonl_rotation_paths.json",
+)
 
 # (b2) SITECUSTOMIZE dla SUBPROCESOW (ACK Adrian 10.07 — domkniecie luki #1 ZP207):
 # in-process guard NIE dziedziczy sie na dzieci (script-runnery, subprocess.run w testach).

@@ -12,15 +12,7 @@ Testowane czyste funkcje (importowane z ml_data_prep/arbitrage_forward.py):
 """
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-# Wstaw ml_data_prep na sys.path (harness leży tam; importujemy tylko czyste helpery).
-ML_DATA_PREP = Path(__file__).resolve().parent.parent / "ml_data_prep"
-if str(ML_DATA_PREP) not in sys.path:
-    sys.path.insert(0, str(ML_DATA_PREP))
-
-import arbitrage_forward as arb  # noqa: E402
+from dispatch_v2.ml_data_prep import arbitrage_forward as arb
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -31,6 +31,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import pytest
+from dispatch_v2.ml_data_prep import twomodel_common as tmc
 
 # ── ścieżki ──────────────────────────────────────────────────────────────────
 HERE = Path(__file__).resolve().parent              # dispatch_v2/tests
@@ -38,11 +39,8 @@ ML_PREP = HERE.parent / "ml_data_prep"              # dispatch_v2/ml_data_prep
 PROD_ML = Path("/root/.openclaw/workspace/scripts/ml_data_prep")
 MODELS_TWOMODEL = ML_PREP / "models_twomodel"
 
-for p in (str(ML_PREP), str(PROD_ML)):
-    if p not in sys.path:
-        sys.path.insert(0, p)
-
-import twomodel_common as tmc  # noqa: E402  (pandas/numpy only — bezpieczny import)
+if str(PROD_ML) not in sys.path:
+    sys.path.insert(0, str(PROD_ML))
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -157,20 +155,39 @@ class TestDerivedFeatureParity:
         assert 16 not in PEAK_DINNER and 20 not in PEAK_DINNER
 
     def test_reference_matches_production_feature_engineering_if_importable(self):
-        """Jeśli scipy dostępne — porównaj referencję z PRAWDZIWYM src.feature_engineering."""
-        fe = pytest.importorskip(
-            "src.feature_engineering",
-            reason="src.feature_engineering wymaga scipy (brak w tym interpreterze)",
-        )
-        for v in [None, 0, 1, 2, 5, 11]:
-            assert fe.bag_size_category(v) == ref_bag_size_category(v)
-        for v in [0, 4.9, 5, 14.9, 15, 29.9, 30, 100]:
-            assert fe.idle_category(v) == ref_idle_category(v)
-            assert fe.idle_capped(v) == ref_idle_capped(v)
-        # time_features.season przez prawdziwy kod
-        for month, exp in [(1, "winter"), (4, "spring"), (7, "summer"), (10, "autumn")]:
-            ts = pd.Timestamp(f"2026-{month:02d}-15 12:30")
-            assert fe.time_features(ts)["season"] == ref_season(month)
+        """Jeśli scipy dostępne — porównaj referencję z PRAWDZIWYM src.feature_engineering.
+
+        C40 (R4 krok 2): ten test wiąże `src` z ŻYWEGO drzewa przez sys.path
+        (PROD_ML) — to zanieczyszczenie globalnego sys.modules nazwą, której
+        JEDYNYM ownerem w konsumentach pakietu jest exact physical loader.
+        Pozostawiony wpis kolidowałby (twardy konflikt ownera) z późniejszym
+        `importorskip("dispatch_v2.ml_data_prep.train_two_models")`, więc po
+        asercjach test USUWA wpisy `src*`, które sam wprowadził.
+        """
+        preexisting_src = {
+            name
+            for name in sys.modules
+            if name == "src" or name.startswith("src.")
+        }
+        try:
+            fe = pytest.importorskip(
+                "src.feature_engineering",
+                reason="src.feature_engineering wymaga scipy (brak w tym interpreterze)",
+            )
+            for v in [None, 0, 1, 2, 5, 11]:
+                assert fe.bag_size_category(v) == ref_bag_size_category(v)
+            for v in [0, 4.9, 5, 14.9, 15, 29.9, 30, 100]:
+                assert fe.idle_category(v) == ref_idle_category(v)
+                assert fe.idle_capped(v) == ref_idle_capped(v)
+            # time_features.season przez prawdziwy kod
+            for month, exp in [(1, "winter"), (4, "spring"), (7, "summer"), (10, "autumn")]:
+                ts = pd.Timestamp(f"2026-{month:02d}-15 12:30")
+                assert fe.time_features(ts)["season"] == ref_season(month)
+        finally:
+            if not preexisting_src:
+                for name in tuple(sys.modules):
+                    if name == "src" or name.startswith("src."):
+                        sys.modules.pop(name, None)
 
 
 class TestTierOneHotParity:
@@ -179,7 +196,7 @@ class TestTierOneHotParity:
     @pytest.fixture
     def train_mod(self):
         return pytest.importorskip(
-            "train_two_models",
+            "dispatch_v2.ml_data_prep.train_two_models",
             reason="train_two_models wymaga lightgbm/sklearn (brak w tym interpreterze)",
         )
 
@@ -224,7 +241,7 @@ class TestLabelEncodeParity:
     @pytest.fixture
     def train_mod(self):
         return pytest.importorskip(
-            "train_two_models",
+            "dispatch_v2.ml_data_prep.train_two_models",
             reason="train_two_models wymaga lightgbm/sklearn",
         )
 

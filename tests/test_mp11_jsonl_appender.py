@@ -24,7 +24,11 @@ import builtins
 import gzip
 import json
 import os
+import shutil
+import subprocess
+import sys
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -299,9 +303,11 @@ def test_jsonl_logrotate_uses_rename_not_copytruncate():
             prefix.append(line)
 
     jsonl_blocks = [
-        body for paths, body in blocks if any(path.endswith(".jsonl") for path in paths)
+        body
+        for paths, body in blocks
+        if "@@DISPATCH_V2_JSONL_PATHS@@" in paths
     ]
-    assert len(jsonl_blocks) == 2
+    assert len(jsonl_blocks) == 1
     assert all("copytruncate" not in body for body in jsonl_blocks)
     assert all("create 0644 root root" in body for body in jsonl_blocks)
     assert all("daily" in body for body in jsonl_blocks)
@@ -705,10 +711,12 @@ def test_logrotate_wrapper_defers_while_legacy_data_inode_is_open(
 
     with p.open("a", encoding="utf-8"):
         with pytest.raises(jr.OpenJsonlInodeError, match="still open"):
-            jr.run_logrotate(
-                str(tmp_path / "logrotate.conf"),
-                paths=(p,),
+            monkeypatch.setattr(
+                jr,
+                "resolve_jsonl_paths",
+                lambda _config=None, **_kwargs: (str(p),),
             )
+            jr.run_logrotate(str(tmp_path / "logrotate.conf"))
 
     assert called == []
 
@@ -736,8 +744,24 @@ def test_legacy_writer_opening_after_gate_stays_linked_by_rename(
         return Completed()
 
     monkeypatch.setattr(jr.subprocess, "run", rename_while_legacy_fd_is_open)
+    monkeypatch.setattr(
+        jr,
+        "resolve_jsonl_paths",
+        lambda _config=None, **_kwargs: (str(p),),
+    )
+    policy = tmp_path / "policy.conf"
+    policy.write_text(
+        "@@DISPATCH_V2_JSONL_PATHS@@\n"
+        "{\n"
+        "    daily\n"
+        "    rotate 30\n"
+        "    missingok\n"
+        "    create 0644 root root\n"
+        "}\n",
+        encoding="utf-8",
+    )
 
-    assert jr.run_logrotate("unused.conf", paths=(p,)) == 0
+    assert jr.run_logrotate(str(policy)) == 0
     assert [
         json.loads(line)["event"]
         for line in rotated.read_text(encoding="utf-8").splitlines()
@@ -750,22 +774,20 @@ def test_logrotate_wrapper_manifest_matches_every_jsonl_config_path():
 
     deploy = Path(__file__).resolve().parents[1] / "deploy"
     config_path = deploy / "dispatch-v2-jsonl-logrotate.conf"
+    template = config_path.read_text(encoding="utf-8")
+    assert template.count(jr.JSONL_PATHS_MARKER) == 1
+    assert not any(
+        line.strip().startswith("/") and line.strip().endswith(".jsonl")
+        for line in template.splitlines()
+    )
+    resolved_paths = jr.resolve_jsonl_paths()
+    rendered = jr.render_jsonl_logrotate_config(template, resolved_paths)
     configured = {
-        line.strip()
-        for line in config_path.read_text(encoding="utf-8").splitlines()
-        if line.strip().startswith("/") and line.strip().endswith(".jsonl")
+        json.loads(line.strip())
+        for line in rendered.splitlines()
+        if line.strip().startswith('"') and line.strip().endswith('"')
     }
-    remapped = set()
-    for raw_path in configured:
-        if "/dispatch_state/" in raw_path:
-            remapped.add(
-                str(jr.STATE_DIR / raw_path.split("/dispatch_state/", 1)[1])
-            )
-        elif "/scripts/logs/" in raw_path:
-            remapped.add(str(jr.LOGS_DIR / raw_path.split("/scripts/logs/", 1)[1]))
-        else:  # pragma: no cover - config contract rejects unknown roots below
-            remapped.add(raw_path)
-    assert remapped == set(jr.JSONL_PATHS)
+    assert configured == set(resolved_paths)
     service = (deploy / "dispatch-v2-jsonl-logrotate.service").read_text(
         encoding="utf-8"
     )
@@ -775,6 +797,1456 @@ def test_logrotate_wrapper_manifest_matches_every_jsonl_config_path():
     assert "dispatch_v2.core.jsonl_rotation" in service
     assert "/etc/logrotate-dispatch-v2-jsonl.conf" in service
     assert "OnCalendar=" in timer
+
+
+def test_logrotate_operation_uses_exact_late_bound_manifest(
+    tmp_path,
+    monkeypatch,
+):
+    """Writer, lock, atestacja i realny config mają jeden manifest."""
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    deploy = Path(__file__).resolve().parents[1] / "deploy"
+    policy = tmp_path / "dispatch-v2-jsonl-logrotate.conf"
+    policy.write_text(
+        (deploy / "dispatch-v2-jsonl-logrotate.conf").read_text(
+            encoding="utf-8"
+        ),
+        encoding="utf-8",
+    )
+    writer_log = tmp_path / "alternate-writer" / "shadow.jsonl"
+    config = {"paths": {"shadow_log": str(writer_log)}}
+    expected = tuple(sorted(jr.resolve_jsonl_paths(config)))
+    captured = {}
+
+    @contextmanager
+    def capture_locks(paths):
+        captured["locked"] = tuple(paths)
+        yield
+
+    def capture_attestation(paths, *, proc_root):
+        captured["attested"] = tuple(paths)
+        captured["proc_root"] = proc_root
+
+    class Completed:
+        returncode = 0
+
+    def capture_run(command, *, check, pass_fds):
+        assert check is False
+        assert command[:-1] == [
+            "/usr/sbin/logrotate",
+            "--state",
+            str(tmp_path / "logrotate.status"),
+        ]
+        generated = Path(command[-1])
+        assert generated != policy
+        assert str(generated).startswith("/proc/self/fd/")
+        assert pass_fds == (int(generated.name),)
+        rendered = generated.read_text(encoding="utf-8")
+        captured["rotated"] = tuple(
+            sorted(
+                json.loads(line.strip())
+                for line in rendered.splitlines()
+                if line.strip().startswith('"')
+                and line.strip().endswith('"')
+            )
+        )
+        captured["generated"] = generated
+        return Completed()
+
+    monkeypatch.setattr(jr, "hold_jsonl_rotation_locks", capture_locks)
+    monkeypatch.setattr(jr, "assert_no_open_jsonl_inodes", capture_attestation)
+    monkeypatch.setattr(jr.subprocess, "run", capture_run)
+
+    assert jr.run_logrotate(
+        str(policy),
+        config=config,
+        state_path=tmp_path / "logrotate.status",
+        proc_root=tmp_path / "proc",
+    ) == 0
+    assert captured["locked"] == expected
+    assert captured["attested"] == expected
+    assert captured["rotated"] == expected
+    assert captured["proc_root"] == tmp_path / "proc"
+    assert writer_log.as_posix() in captured["rotated"]
+    assert not captured["generated"].exists()
+
+
+def test_logrotate_policy_without_exact_marker_fails_closed(tmp_path):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    policy = tmp_path / "invalid.conf"
+    policy.write_text(
+        '"/stale/owner.jsonl"\n{\n    daily\n}\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(jr.JsonlRotationConfigError, match="exactly one"):
+        jr.render_jsonl_logrotate_config(
+            policy.read_text(encoding="utf-8"),
+            (tmp_path / "current.jsonl",),
+        )
+
+
+def test_logrotate_policy_with_second_static_owner_fails_closed(tmp_path):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    policy = (
+        jr.JSONL_PATHS_MARKER
+        + '\n"/stale/unlocked.jsonl"\n'
+        "{\n    daily\n}\n"
+    )
+    with pytest.raises(jr.JsonlRotationConfigError, match="marker-owned"):
+        jr.render_jsonl_logrotate_config(
+            policy,
+            (tmp_path / "current.jsonl",),
+        )
+
+
+def test_logrotate_policy_comment_braces_cannot_hide_second_block(tmp_path):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    policy = (
+        jr.JSONL_PATHS_MARKER
+        + "\n{\n    daily\n"
+        "} # close marker block\n"
+        '"/stale/unlocked.jsonl" { # hidden second block\n'
+        "    daily\n}\n"
+    )
+    with pytest.raises(
+        jr.JsonlRotationConfigError,
+        match="inline comments|marker-owned",
+    ):
+        jr.render_jsonl_logrotate_config(
+            policy,
+            (tmp_path / "current.jsonl",),
+        )
+
+
+def test_logrotate_policy_rejects_inline_comment_bytes(tmp_path):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    policy = (
+        jr.JSONL_PATHS_MARKER
+        + "\n{\n"
+        "    daily # bytes not covered by the policy whitelist\n"
+        "}\n"
+    )
+    with pytest.raises(jr.JsonlRotationConfigError, match="inline comments"):
+        jr.render_jsonl_logrotate_config(
+            policy,
+            (tmp_path / "current.jsonl",),
+        )
+
+
+def test_logrotate_policy_rejects_include_directive(tmp_path):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    policy = (
+        jr.JSONL_PATHS_MARKER
+        + "\n{\n"
+        "    daily\n"
+        "    include /stale/unlocked.conf\n"
+        "}\n"
+    )
+    with pytest.raises(jr.JsonlRotationConfigError, match="unsafe"):
+        jr.render_jsonl_logrotate_config(
+            policy,
+            (tmp_path / "current.jsonl",),
+        )
+
+
+def test_logrotate_manifest_rejects_filename_patterns(tmp_path):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    deploy = Path(__file__).resolve().parents[1] / "deploy"
+    policy = (deploy / "dispatch-v2-jsonl-logrotate.conf").read_text(
+        encoding="utf-8"
+    )
+    with pytest.raises(jr.JsonlRotationConfigError, match="patterns"):
+        jr.render_jsonl_logrotate_config(
+            policy,
+            (tmp_path / "events[12].jsonl",),
+        )
+
+
+def test_jsonl_contract_rejects_symlink_before_write_and_rotation(tmp_path):
+    from dispatch_v2 import common as C
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    target = tmp_path / "physical.jsonl"
+    target.write_text("", encoding="utf-8")
+    alias = tmp_path / "alias.jsonl"
+    alias.symlink_to(target)
+
+    with pytest.raises(ValueError, match="symlink"):
+        C.validate_jsonl_path(alias)
+    with pytest.raises(jr.JsonlRotationConfigError, match="symlink"):
+        jr._normalize_jsonl_paths((alias,))
+
+
+def test_jsonl_contract_checks_final_component_after_parent_resolution(
+    tmp_path,
+    monkeypatch,
+):
+    from dispatch_v2 import common as C
+
+    path = tmp_path / "events.jsonl"
+    victim = tmp_path / "victim.jsonl"
+    path.write_text("", encoding="utf-8")
+    victim.write_text("", encoding="utf-8")
+    real_resolve = Path.resolve
+    injected = False
+
+    def inject_final_symlink(self, strict=False):
+        nonlocal injected
+        if self == path and not injected:
+            path.unlink()
+            path.symlink_to(victim)
+            injected = True
+            return real_resolve(self, strict=strict)
+        resolved = real_resolve(self, strict=strict)
+        if self == path.parent and not injected:
+            path.unlink()
+            path.symlink_to(victim)
+            injected = True
+        return resolved
+
+    monkeypatch.setattr(Path, "resolve", inject_final_symlink)
+    with pytest.raises(ValueError, match="symlink"):
+        C.validate_jsonl_path(path)
+    assert injected
+
+
+def test_jsonl_contract_preserves_symlink_parent_dotdot_semantics(tmp_path):
+    from dispatch_v2 import common as C
+
+    target = tmp_path / "target"
+    nested = target / "nested"
+    nested.mkdir(parents=True)
+    link = tmp_path / "link"
+    link.symlink_to(nested, target_is_directory=True)
+    raw_path = link / ".." / "events.jsonl"
+
+    assert C.validate_jsonl_path(raw_path) == target / "events.jsonl"
+    assert C.validate_jsonl_path(raw_path) == raw_path.resolve(strict=False)
+    assert C.validate_jsonl_path(raw_path) != tmp_path / "events.jsonl"
+
+
+def test_jsonl_appender_rejects_symlink_and_hardlink_at_open_time(tmp_path):
+    from dispatch_v2.core.jsonl_appender import append_jsonl
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    target = tmp_path / "physical.jsonl"
+    target.write_text("", encoding="utf-8")
+    symlink = tmp_path / "symlink.jsonl"
+    symlink.symlink_to(target)
+    with pytest.raises(jr.JsonlRotationConfigError, match="symlink"):
+        append_jsonl(symlink, {"event": "must-not-follow"})
+
+    hardlink = tmp_path / "hardlink.jsonl"
+    os.link(target, hardlink)
+    with pytest.raises(jr.JsonlRotationConfigError, match="hard link"):
+        append_jsonl(target, {"event": "must-not-split"})
+    assert target.read_text(encoding="utf-8") == ""
+
+
+def test_managed_symlink_is_rejected_before_registry_publish(
+    tmp_path,
+    monkeypatch,
+):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    target_dir = tmp_path / "target"
+    target_dir.mkdir()
+    target = target_dir / "decision_eta_log.jsonl"
+    target.write_text("", encoding="utf-8")
+    alias_dir = tmp_path / "alias"
+    alias_dir.mkdir()
+    alias = alias_dir / "decision_eta_log.jsonl"
+    alias.symlink_to(target)
+    published = []
+    monkeypatch.setattr(
+        jr,
+        "register_jsonl_writer_path",
+        lambda path: published.append(Path(path)) or Path(path),
+    )
+
+    with pytest.raises(jr.JsonlRotationConfigError, match="symlink"):
+        jr.register_managed_jsonl_writer_path(alias)
+    assert published == []
+
+
+def test_locked_namespace_yields_the_registered_canonical_path(
+    tmp_path,
+    monkeypatch,
+):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    canonical_dir = tmp_path / "canonical"
+    canonical_dir.mkdir()
+    canonical = canonical_dir / "decision_eta_log.jsonl"
+    lexical = tmp_path / "lexical" / "decision_eta_log.jsonl"
+    monkeypatch.setattr(
+        jr,
+        "register_managed_jsonl_writer_path",
+        lambda _path: canonical,
+    )
+
+    with ja._locked_namespace(lexical) as locked_path:
+        assert locked_path == canonical
+
+
+def test_jsonl_appender_rechecks_hardlink_count_after_path_lookup(
+    tmp_path,
+    monkeypatch,
+):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    target = tmp_path / "events.jsonl"
+    alias = tmp_path / "late-hardlink.jsonl"
+    target.write_text("", encoding="utf-8")
+    real_stat = os.stat
+    injected = False
+
+    def inject_hardlink(path, *, dir_fd=None, follow_symlinks=True):
+        nonlocal injected
+        if not follow_symlinks and Path(path) == target and not injected:
+            os.link(target, alias)
+            injected = True
+        return real_stat(
+            path,
+            dir_fd=dir_fd,
+            follow_symlinks=follow_symlinks,
+        )
+
+    monkeypatch.setattr(ja.os, "stat", inject_hardlink)
+    with pytest.raises(jr.JsonlRotationConfigError, match="hard link"):
+        ja.append_jsonl(target, {"event": "must-not-write-after-race"})
+    assert injected
+    assert target.read_text(encoding="utf-8") == ""
+
+
+def test_jsonl_registry_lock_rejects_symlink_without_touching_target(tmp_path):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    registry = tmp_path / "registry.json"
+    foreign = tmp_path / "foreign.txt"
+    foreign.write_text("do-not-touch", encoding="utf-8")
+    foreign.chmod(0o644)
+    lock_path = registry.with_name(registry.name + ".lock")
+    lock_path.symlink_to(foreign)
+
+    with pytest.raises(OSError):
+        jr.register_jsonl_writer_path(
+            tmp_path / "events.jsonl",
+            registry_path=registry,
+        )
+    assert foreign.stat().st_mode & 0o777 == 0o644
+    assert foreign.read_text(encoding="utf-8") == "do-not-touch"
+
+
+def test_attested_lock_rechecks_path_after_flock(tmp_path, monkeypatch):
+    lock_path = tmp_path / "events.jsonl.append.lock"
+    displaced = tmp_path / "displaced.lock"
+    lock_path.write_text("", encoding="utf-8")
+    real_flock = ja.fcntl.flock
+    injected = False
+
+    def replace_before_first_flock(fd, operation):
+        nonlocal injected
+        if operation == ja.fcntl.LOCK_EX and not injected:
+            lock_path.rename(displaced)
+            lock_path.write_text("", encoding="utf-8")
+            injected = True
+        return real_flock(fd, operation)
+
+    monkeypatch.setattr(ja.fcntl, "flock", replace_before_first_flock)
+    fd = ja.open_attested_regular_file(
+        lock_path,
+        os.O_RDWR,
+        label="test namespace lock",
+        exclusive_lock=True,
+    )
+    try:
+        assert injected
+        assert os.path.samefile(lock_path, f"/proc/self/fd/{fd}")
+        assert not os.path.samefile(displaced, f"/proc/self/fd/{fd}")
+    finally:
+        real_flock(fd, ja.fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def test_registry_reader_retries_cooperative_atomic_replace(
+    tmp_path,
+    monkeypatch,
+):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    registry = tmp_path / "registry.json"
+    old_path = tmp_path / "old" / "events.jsonl"
+    new_path = tmp_path / "new" / "events.jsonl"
+    registry.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "writers": [{"path": str(old_path), "role": "static"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    replacement = tmp_path / "replacement.json"
+    replacement.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "writers": [{"path": str(new_path), "role": "static"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    initial_identity = (registry.stat().st_dev, registry.stat().st_ino)
+    real_fstat = ja.os.fstat
+    swapped = False
+
+    def replace_after_first_fd_snapshot(fd):
+        nonlocal swapped
+        metadata = real_fstat(fd)
+        if (
+            (metadata.st_dev, metadata.st_ino) == initial_identity
+            and not swapped
+        ):
+            os.replace(replacement, registry)
+            swapped = True
+        return metadata
+
+    monkeypatch.setattr(ja.os, "fstat", replace_after_first_fd_snapshot)
+    assert jr.registered_jsonl_paths(registry) == (str(new_path),)
+    assert swapped
+
+
+def test_registry_reader_retries_replace_before_first_fd_snapshot(
+    tmp_path,
+    monkeypatch,
+):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    registry = tmp_path / "registry.json"
+    old_path = tmp_path / "old" / "events.jsonl"
+    new_path = tmp_path / "new" / "events.jsonl"
+    registry.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "writers": [{"path": str(old_path), "role": "static"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    replacement = tmp_path / "replacement.json"
+    replacement.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "writers": [{"path": str(new_path), "role": "static"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    real_fstat = ja.os.fstat
+    swapped = False
+
+    def replace_before_first_fd_snapshot(fd):
+        nonlocal swapped
+        if not swapped:
+            os.replace(replacement, registry)
+            swapped = True
+        return real_fstat(fd)
+
+    monkeypatch.setattr(ja.os, "fstat", replace_before_first_fd_snapshot)
+    assert jr.registered_jsonl_paths(registry) == (str(new_path),)
+    assert swapped
+
+
+def test_registry_reader_retries_replace_before_second_fd_snapshot(
+    tmp_path,
+    monkeypatch,
+):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    registry = tmp_path / "registry.json"
+    old_path = tmp_path / "old" / "events.jsonl"
+    new_path = tmp_path / "new" / "events.jsonl"
+    registry.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "writers": [{"path": str(old_path), "role": "static"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    replacement = tmp_path / "replacement.json"
+    replacement.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "writers": [{"path": str(new_path), "role": "static"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+    real_fstat = ja.os.fstat
+    snapshots = 0
+    swapped = False
+
+    def replace_before_second_fd_snapshot(fd):
+        nonlocal snapshots, swapped
+        snapshots += 1
+        if snapshots == 2:
+            os.replace(replacement, registry)
+            swapped = True
+        return real_fstat(fd)
+
+    monkeypatch.setattr(ja.os, "fstat", replace_before_second_fd_snapshot)
+    assert jr.registered_jsonl_paths(registry) == (str(new_path),)
+    assert swapped
+
+
+def test_run_logrotate_freezes_registry_before_manifest_snapshot(
+    tmp_path,
+    monkeypatch,
+):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    registry = tmp_path / "registry.json"
+    registry_lock = registry.with_name(registry.name + ".lock")
+    data_path = tmp_path / "events.jsonl"
+    data_path.write_text("", encoding="utf-8")
+    template = tmp_path / "logrotate.conf"
+    template.write_text(
+        f"{jr.JSONL_PATHS_MARKER}\n{{\n  daily\n  rotate 1\n  missingok\n}}\n",
+        encoding="utf-8",
+    )
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    observed_locked_registry = False
+
+    def resolve_while_registry_must_be_frozen(
+        _config=None,
+        *,
+        registry_path=jr.JSONL_PATH_REGISTRY,
+        **_kwargs,
+    ):
+        nonlocal observed_locked_registry
+        assert Path(registry_path) == registry
+        contender = os.open(registry_lock, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            with pytest.raises(BlockingIOError):
+                ja.fcntl.flock(
+                    contender,
+                    ja.fcntl.LOCK_EX | ja.fcntl.LOCK_NB,
+                )
+            observed_locked_registry = True
+        finally:
+            os.close(contender)
+        return (str(data_path),)
+
+    monkeypatch.setattr(
+        jr,
+        "resolve_jsonl_paths",
+        resolve_while_registry_must_be_frozen,
+    )
+    assert (
+        jr.run_logrotate(
+            str(template),
+            logrotate_bin="/bin/true",
+            registry_path=registry,
+            proc_root=proc_root,
+        )
+        == 0
+    )
+    assert observed_locked_registry
+
+
+def test_jsonl_rotation_rejects_lexical_aliases_of_one_inode(tmp_path):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    path = tmp_path / "events.jsonl"
+    path.write_text("", encoding="utf-8")
+    double_slash = "/" + str(path)
+    assert os.path.samefile(path, double_slash)
+    assert jr._normalize_jsonl_paths((path, double_slash)) == (str(path),)
+
+
+def test_jsonl_rotation_rejects_single_multiply_linked_file(tmp_path):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    path = tmp_path / "events.jsonl"
+    path.write_text("", encoding="utf-8")
+    os.link(path, tmp_path / "second-name.jsonl")
+    with pytest.raises(jr.JsonlRotationConfigError, match="hard link"):
+        jr._normalize_jsonl_paths((path,))
+
+
+def test_jsonl_manifest_rejects_ancestor_descendant_data_paths(tmp_path):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    outer = tmp_path / "events.jsonl"
+    inner = outer / "child.jsonl"
+    with pytest.raises(
+        jr.JsonlRotationConfigError,
+        match="ancestor|nested",
+    ):
+        jr._normalize_jsonl_paths((outer, inner))
+    assert not outer.exists()
+
+
+def test_jsonl_manifest_rejects_numeric_rotation_as_second_data_path(
+    tmp_path,
+):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    active = tmp_path / "events.jsonl"
+    rotated = tmp_path / "events.jsonl.1.gz"
+    with pytest.raises(
+        jr.JsonlRotationConfigError,
+        match="rotation namespace",
+    ):
+        jr._normalize_jsonl_paths((active, rotated))
+
+
+def test_jsonl_manifest_rejects_data_nested_below_another_writer_lock(
+    tmp_path,
+):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    active = tmp_path / "events.jsonl"
+    nested = tmp_path / "events.jsonl.append.lock" / "child.jsonl"
+    with pytest.raises(
+        jr.JsonlRotationConfigError,
+        match="namespace lock",
+    ):
+        jr._normalize_jsonl_paths((active, nested))
+    assert not active.with_name(active.name + ".append.lock").exists()
+
+
+def test_jsonl_writer_must_not_share_registry_namespace(tmp_path):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    registry = tmp_path / "jsonl_rotation_paths.json"
+    with pytest.raises(
+        jr.JsonlRotationConfigError,
+        match="registry namespace",
+    ):
+        jr.register_jsonl_writer_path(
+            registry,
+            registry_path=registry,
+        )
+    assert not registry.exists()
+
+    config = {"paths": {"shadow_log": str(registry)}}
+    with pytest.raises(
+        jr.JsonlRotationConfigError,
+        match="registry namespace",
+    ):
+        jr.resolve_jsonl_paths(config, registry_path=registry)
+
+    active = tmp_path / "events.jsonl"
+    rotated_registry = tmp_path / "events.jsonl.1"
+    with pytest.raises(
+        jr.JsonlRotationConfigError,
+        match="registry namespace",
+    ):
+        jr.register_jsonl_writer_path(
+            active,
+            registry_path=rotated_registry,
+        )
+
+
+def test_registry_rejects_new_writer_colliding_with_registered_lock(
+    tmp_path,
+):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    registry = tmp_path / "jsonl_rotation_paths.json"
+    active = tmp_path / "events.jsonl"
+    colliding = tmp_path / "events.jsonl.append.lock"
+    jr.register_jsonl_writer_path(active, registry_path=registry)
+    original = registry.read_bytes()
+
+    with pytest.raises(
+        jr.JsonlRotationConfigError,
+        match="namespace lock",
+    ):
+        jr.register_jsonl_writer_path(
+            colliding,
+            registry_path=registry,
+        )
+    assert registry.read_bytes() == original
+    assert jr.registered_jsonl_paths(registry) == (str(active),)
+
+
+def test_registry_rejects_dynamic_writer_colliding_with_static_manifest(
+    tmp_path,
+    monkeypatch,
+):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    registry = tmp_path / "registry.json"
+    static_path = tmp_path / "learning_log.jsonl"
+    dynamic_path = tmp_path / "learning_log.jsonl.append.lock"
+    monkeypatch.setattr(
+        jr,
+        "static_managed_jsonl_paths",
+        lambda: (str(static_path),),
+    )
+    config = {"paths": {"shadow_log": str(dynamic_path)}}
+
+    with pytest.raises(
+        jr.JsonlRotationConfigError,
+        match="namespace lock",
+    ):
+        jr.register_shadow_decisions_writer_path(
+            config,
+            registry_path=registry,
+        )
+    assert not registry.exists()
+
+
+def test_shadow_registration_rejects_exact_static_writer_path(
+    tmp_path,
+    monkeypatch,
+):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    registry = tmp_path / "registry.json"
+    static_path = tmp_path / "learning_log.jsonl"
+    monkeypatch.setattr(
+        jr,
+        "static_managed_jsonl_paths",
+        lambda: (str(static_path),),
+    )
+    config = {"paths": {"shadow_log": str(static_path)}}
+
+    with pytest.raises(
+        jr.JsonlRotationConfigError,
+        match="shadow_log overlaps static managed writer",
+    ):
+        jr.register_shadow_decisions_writer_path(
+            config,
+            registry_path=registry,
+        )
+    assert not registry.exists()
+
+
+def test_registry_role_history_rejects_static_path_reused_as_shadow_after_root_change(
+    tmp_path,
+    monkeypatch,
+):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    registry = tmp_path / "registry.json"
+    historic_static = tmp_path / "old-state" / "learning_log.jsonl"
+    current_static = tmp_path / "new-state" / "learning_log.jsonl"
+    monkeypatch.setattr(
+        jr,
+        "static_managed_jsonl_paths",
+        lambda: (str(historic_static),),
+    )
+    jr.register_jsonl_writer_path(historic_static, registry_path=registry)
+
+    monkeypatch.setattr(
+        jr,
+        "static_managed_jsonl_paths",
+        lambda: (str(current_static),),
+    )
+    with pytest.raises(
+        jr.JsonlRotationConfigError,
+        match="historic.*role|role.*static.*shadow",
+    ):
+        jr.register_shadow_decisions_writer_path(
+            {"paths": {"shadow_log": str(historic_static)}},
+            registry_path=registry,
+        )
+
+
+def test_shadow_writer_with_static_basename_keeps_shadow_role_on_append(
+    tmp_path,
+) -> None:
+    registry = tmp_path / "control" / "registry.json"
+    state_dir = tmp_path / "state"
+    shadow_path = tmp_path / "separate-shadow" / "learning_log.jsonl"
+    env = os.environ.copy()
+    env["DISPATCH_STATE_DIR"] = str(state_dir)
+    env["DISPATCH_JSONL_ROTATION_REGISTRY"] = str(registry)
+    code = (
+        "from dispatch_v2.core.jsonl_appender import append_jsonl\n"
+        "from dispatch_v2.core.jsonl_rotation import "
+        "register_shadow_jsonl_writer_path, registered_jsonl_writer_roles\n"
+        f"path = {str(shadow_path)!r}\n"
+        "register_shadow_jsonl_writer_path(path)\n"
+        "append_jsonl(path, {'event': 'shadow-role-must-survive'})\n"
+        "assert registered_jsonl_writer_roles() == ((path, 'shadow'),)\n"
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_roleless_v1_registry_fails_closed_instead_of_guessing_role(
+    tmp_path,
+):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    registry = tmp_path / "registry.json"
+    registry.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "paths": [str(tmp_path / "historic.jsonl")],
+            }
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(jr.JsonlRotationConfigError, match="schema"):
+        jr.registered_jsonl_writer_roles(registry)
+
+
+def test_registry_rejects_physical_alias_of_registry_namespace(
+    tmp_path,
+    monkeypatch,
+):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    registry = tmp_path / "mount-a" / "registry.json"
+    writer = tmp_path / "mount-b" / "registry.json"
+    registry.parent.mkdir()
+    writer.parent.mkdir()
+    real_signature = getattr(jr, "_physical_namespace_signature", None)
+
+    def aliased_signature(path):
+        if Path(path) in (registry, writer):
+            return ((123, 456), ("registry.json",))
+        assert real_signature is not None
+        return real_signature(path)
+
+    monkeypatch.setattr(
+        jr,
+        "_physical_namespace_signature",
+        aliased_signature,
+        raising=False,
+    )
+    with pytest.raises(
+        jr.JsonlRotationConfigError,
+        match="physical namespace alias",
+    ):
+        jr.register_jsonl_writer_path(writer, registry_path=registry)
+    assert not registry.exists()
+
+
+def test_manifest_rejects_missing_paths_through_physical_parent_alias(
+    tmp_path,
+    monkeypatch,
+):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    first = tmp_path / "mount-a" / "events.jsonl"
+    second = tmp_path / "mount-b" / "events.jsonl"
+    first.parent.mkdir()
+    second.parent.mkdir()
+    real_signature = getattr(jr, "_physical_namespace_signature", None)
+
+    def aliased_signature(path):
+        if Path(path) in (first, second):
+            return ((123, 456), ("events.jsonl",))
+        assert real_signature is not None
+        return real_signature(path)
+
+    monkeypatch.setattr(
+        jr,
+        "_physical_namespace_signature",
+        aliased_signature,
+        raising=False,
+    )
+    with pytest.raises(
+        jr.JsonlRotationConfigError,
+        match="physical namespace alias",
+    ):
+        jr._normalize_jsonl_paths((first, second))
+
+
+def test_manifest_rejects_physical_alias_between_writer_locks(
+    tmp_path,
+    monkeypatch,
+):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    first = tmp_path / "a.jsonl"
+    second = tmp_path / "b.jsonl"
+    first_lock = tmp_path / "a.jsonl.append.lock"
+    second_lock = tmp_path / "b.jsonl.append.lock"
+    real_signature = jr._physical_namespace_signature
+
+    def aliased_signature(path):
+        if Path(path) in (first_lock, second_lock):
+            return ((123, 456), ())
+        return real_signature(path)
+
+    monkeypatch.setattr(jr, "_physical_namespace_signature", aliased_signature)
+    with pytest.raises(
+        jr.JsonlRotationConfigError,
+        match="namespace lock",
+    ):
+        jr._normalize_jsonl_paths((first, second))
+
+
+def test_manifest_rejects_physical_alias_between_data_and_own_lock(
+    tmp_path,
+    monkeypatch,
+):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    data_path = tmp_path / "events.jsonl"
+    data_lock = tmp_path / "events.jsonl.append.lock"
+    real_signature = jr._physical_namespace_signature
+
+    def aliased_signature(path):
+        if Path(path) in (data_path, data_lock):
+            return ((123, 456), ())
+        return real_signature(path)
+
+    monkeypatch.setattr(jr, "_physical_namespace_signature", aliased_signature)
+    with pytest.raises(
+        jr.JsonlRotationConfigError,
+        match="own namespace lock",
+    ):
+        jr._normalize_jsonl_paths((data_path,))
+
+
+def test_dynamic_shadow_log_must_not_reuse_static_writer_path(tmp_path):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    static_path = jr.static_managed_jsonl_paths()[0]
+    config = {"paths": {"shadow_log": static_path}}
+    with pytest.raises(
+        jr.JsonlRotationConfigError,
+        match="shadow_log overlaps static managed writer",
+    ):
+        jr.resolve_jsonl_paths(
+            config,
+            registry_path=tmp_path / "registry.json",
+        )
+
+
+@pytest.mark.parametrize("collision", ("registry", "data", "config"))
+def test_logrotate_state_path_must_be_disjoint(
+    tmp_path,
+    collision,
+    monkeypatch,
+):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    registry = tmp_path / "registry.json"
+    data_path = tmp_path / "events.jsonl"
+    template = tmp_path / "logrotate.conf"
+    template.write_text(
+        f"{jr.JSONL_PATHS_MARKER}\n{{\n  daily\n  rotate 1\n  missingok\n}}\n",
+        encoding="utf-8",
+    )
+    state_path = {
+        "registry": registry,
+        "data": data_path,
+        "config": template,
+    }[collision]
+    config = {"paths": {"shadow_log": str(data_path)}}
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    monkeypatch.setattr(jr, "static_managed_jsonl_paths", lambda: ())
+
+    with pytest.raises(
+        jr.JsonlRotationConfigError,
+        match="state",
+    ):
+        jr.run_logrotate(
+            str(template),
+            logrotate_bin="/bin/true",
+            state_path=state_path,
+            config=config,
+            registry_path=registry,
+            proc_root=proc_root,
+        )
+
+
+def test_logrotate_config_must_not_occupy_data_rotation_namespace(
+    tmp_path,
+    monkeypatch,
+):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    data_path = tmp_path / "events.jsonl"
+    template = tmp_path / "events.jsonl.1"
+    template.write_text(
+        f"{jr.JSONL_PATHS_MARKER}\n{{\n  daily\n  rotate 1\n  missingok\n}}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(jr, "static_managed_jsonl_paths", lambda: ())
+    config = {"paths": {"shadow_log": str(data_path)}}
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+
+    with pytest.raises(
+        jr.JsonlRotationConfigError,
+        match="config.*rotation namespace",
+    ):
+        jr.run_logrotate(
+            str(template),
+            logrotate_bin="/bin/true",
+            config=config,
+            registry_path=tmp_path / "registry.json",
+            proc_root=proc_root,
+        )
+
+
+def test_writer_registration_reserves_logrotate_control_paths_before_first_append(
+    tmp_path,
+    monkeypatch,
+):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    controls = {
+        "config": tmp_path / "control" / "policy.conf",
+        "state": tmp_path / "control" / "logrotate.status",
+    }
+    monkeypatch.setattr(
+        jr,
+        "JSONL_LOGROTATE_CONFIG_PATH",
+        controls["config"],
+        raising=False,
+    )
+    monkeypatch.setattr(
+        jr,
+        "JSONL_LOGROTATE_STATE_PATH",
+        controls["state"],
+        raising=False,
+    )
+    for role, control_path in controls.items():
+        registry = tmp_path / f"{role}-registry.json"
+        with pytest.raises(
+            jr.JsonlRotationConfigError,
+            match="control namespace",
+        ):
+            jr.register_jsonl_writer_path(
+                control_path,
+                registry_path=registry,
+            )
+        assert not registry.exists()
+
+
+@pytest.mark.parametrize(
+    "sidecar_name",
+    (
+        "logrotate.status.tmp",
+        ".registry.json.synthetic.tmp",
+    ),
+)
+def test_writer_registration_reserves_control_sidecar_namespaces(
+    tmp_path,
+    monkeypatch,
+    sidecar_name,
+):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    registry = tmp_path / "control" / "registry.json"
+    config = tmp_path / "control" / "policy.conf"
+    state = tmp_path / "control" / "logrotate.status"
+    data_path = tmp_path / "control" / sidecar_name
+    monkeypatch.setattr(jr, "static_managed_jsonl_paths", lambda: ())
+
+    with pytest.raises(
+        jr.JsonlRotationConfigError,
+        match="control|state|registry|namespace",
+    ):
+        jr.register_jsonl_writer_path(
+            data_path,
+            registry_path=registry,
+            config_path=config,
+            state_path=state,
+        )
+    assert not registry.exists()
+    assert not data_path.exists()
+
+
+@pytest.mark.parametrize("alias_kind", ("symlink", "hardlink"))
+def test_writer_registration_attests_existing_state_sidecar(
+    tmp_path,
+    monkeypatch,
+    alias_kind,
+):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    registry = tmp_path / "control" / "registry.json"
+    config = tmp_path / "control" / "policy.conf"
+    state = tmp_path / "control" / "logrotate.status"
+    sidecar = state.with_name(state.name + ".tmp")
+    target = tmp_path / "must-not-be-touched"
+    sidecar.parent.mkdir(parents=True)
+    target.write_text("sentinel", encoding="utf-8")
+    if alias_kind == "symlink":
+        sidecar.symlink_to(target)
+        match = "symlink"
+    else:
+        os.link(target, sidecar)
+        match = "hard link"
+    monkeypatch.setattr(jr, "static_managed_jsonl_paths", lambda: ())
+
+    with pytest.raises(jr.JsonlRotationConfigError, match=match):
+        jr.register_jsonl_writer_path(
+            tmp_path / "data" / "events.jsonl",
+            registry_path=registry,
+            config_path=config,
+            state_path=state,
+        )
+    assert target.read_text(encoding="utf-8") == "sentinel"
+    assert not registry.exists()
+
+
+def test_run_logrotate_always_passes_explicit_validated_state(
+    tmp_path,
+    monkeypatch,
+):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    template = tmp_path / "policy.conf"
+    template.write_text(
+        f"{jr.JSONL_PATHS_MARKER}\n{{\n  daily\n  rotate 1\n  missingok\n}}\n",
+        encoding="utf-8",
+    )
+    state = tmp_path / "control" / "logrotate.status"
+    monkeypatch.setattr(
+        jr,
+        "JSONL_LOGROTATE_STATE_PATH",
+        state,
+        raising=False,
+    )
+    monkeypatch.setattr(jr, "static_managed_jsonl_paths", lambda: ())
+    proc_root = tmp_path / "proc"
+    proc_root.mkdir()
+    captured = []
+
+    class Completed:
+        returncode = 0
+
+    def capture_run(command, *, check, pass_fds):
+        captured.append((command, check, pass_fds))
+        return Completed()
+
+    monkeypatch.setattr(jr.subprocess, "run", capture_run)
+    assert (
+        jr.run_logrotate(
+            str(template),
+            logrotate_bin="/usr/sbin/logrotate",
+            state_path=None,
+            config={"paths": {"shadow_log": str(tmp_path / "shadow.jsonl")}},
+            registry_path=tmp_path / "registry.json",
+            proc_root=proc_root,
+        )
+        == 0
+    )
+    assert captured
+    assert captured[0][0][1:3] == ["--state", str(state)]
+
+
+def test_run_logrotate_rejects_nested_registry_before_mkdir(tmp_path):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    data_path = tmp_path / "events.jsonl"
+    nested_registry = data_path / "registry.json"
+    config = {"paths": {"shadow_log": str(data_path)}}
+    with pytest.raises(
+        jr.JsonlRotationConfigError,
+        match="registry namespace",
+    ):
+        jr.run_logrotate(
+            str(tmp_path / "policy.conf"),
+            config=config,
+            registry_path=nested_registry,
+            proc_root=tmp_path / "proc",
+        )
+    assert not data_path.exists()
+
+
+def test_logrotate_manifest_rejects_relative_writer_before_rotation(
+    tmp_path,
+    monkeypatch,
+):
+    from dispatch_v2 import common as C
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(
+        jr.JsonlRotationConfigError,
+        match="JSONL path must be absolute",
+    ):
+        ja.append_jsonl(
+            "decision_eta_log.jsonl",
+            {"event": "relative-managed-path-must-not-bypass-registry"},
+        )
+
+    config = {"paths": {"shadow_log": "relative.jsonl"}}
+    with pytest.raises(ValueError, match="absolute"):
+        C.resolve_shadow_decisions_writer_path(config)
+    for unsafe in (
+        "/var/log/shadow*.jsonl",
+        "/var/log/shadow[1].jsonl",
+        "/var/log/shadow~",
+        "/var/log/shadow\\name.jsonl",
+        '/var/log/shadow"name.jsonl',
+        "/var/log/shadow#name.jsonl",
+    ):
+        with pytest.raises(ValueError, match="patterns"):
+            C.resolve_shadow_decisions_writer_path(
+                {"paths": {"shadow_log": unsafe}}
+            )
+
+    called = []
+    monkeypatch.setattr(
+        jr,
+        "resolve_jsonl_paths",
+        lambda _config, **_kwargs: ("relative.jsonl",),
+    )
+    monkeypatch.setattr(
+        jr.subprocess,
+        "run",
+        lambda *_args, **_kwargs: called.append(True),
+    )
+    with pytest.raises(jr.JsonlRotationConfigError, match="absolute"):
+        jr.run_logrotate(
+            str(tmp_path / "policy.conf"),
+            config=config,
+            proc_root=tmp_path / "proc",
+        )
+    assert called == []
+
+
+def test_unmanaged_appender_still_enforces_canonical_jsonl_path(
+    tmp_path,
+    monkeypatch,
+):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(
+        jr.JsonlRotationConfigError,
+        match="absolute",
+    ):
+        ja.append_jsonl(
+            "unmanaged.jsonl",
+            {"event": "relative-unmanaged-must-not-bypass-contract"},
+        )
+    assert not (tmp_path / "unmanaged.jsonl").exists()
+
+    unsafe = tmp_path / "unmanaged#unsafe.jsonl"
+    with pytest.raises(
+        jr.JsonlRotationConfigError,
+        match="patterns",
+    ):
+        ja.append_jsonl(
+            unsafe,
+            {"event": "unsafe-unmanaged-must-not-bypass-contract"},
+        )
+    assert not unsafe.exists()
+
+
+def test_unmanaged_appender_cannot_occupy_reserved_rotation_namespaces(
+    tmp_path,
+    monkeypatch,
+):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    registry = tmp_path / "control" / "registry.json"
+    config = tmp_path / "control" / "policy.conf"
+    state = tmp_path / "control" / "logrotate.status"
+    static_path = tmp_path / "data" / "managed.jsonl"
+    monkeypatch.setattr(jr, "JSONL_PATH_REGISTRY", registry)
+    monkeypatch.setattr(jr, "JSONL_LOGROTATE_CONFIG_PATH", config)
+    monkeypatch.setattr(jr, "JSONL_LOGROTATE_STATE_PATH", state)
+    monkeypatch.setattr(
+        jr,
+        "static_managed_jsonl_paths",
+        lambda: (str(static_path),),
+    )
+
+    reserved = (
+        registry,
+        registry.with_name(registry.name + ".lock"),
+        config,
+        state,
+        static_path.with_name(static_path.name + ".append.lock"),
+        static_path.with_name(static_path.name + ".1"),
+        static_path.with_name(static_path.name + ".1.gz"),
+        static_path / "nested.jsonl",
+    )
+    for path in reserved:
+        with pytest.raises(
+            jr.JsonlRotationConfigError,
+            match="namespace|rotation|nested",
+        ):
+            ja.append_jsonl(
+                path,
+                {"event": "unmanaged-must-not-occupy-reserved-namespace"},
+            )
+        assert not path.exists()
+        assert not path.with_name(path.name + ".append.lock").exists()
+
+
+@pytest.mark.parametrize("alias_kind", ("symlink", "hardlink"))
+def test_unmanaged_namespace_cache_revalidates_data_path(
+    tmp_path,
+    monkeypatch,
+    alias_kind,
+):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    candidate = tmp_path / "data" / "unmanaged.jsonl"
+    target = tmp_path / "target.jsonl"
+    monkeypatch.setattr(jr, "static_managed_jsonl_paths", lambda: ())
+    monkeypatch.setattr(
+        jr,
+        "JSONL_PATH_REGISTRY",
+        tmp_path / "control" / "registry.json",
+    )
+    monkeypatch.setattr(
+        jr,
+        "JSONL_LOGROTATE_CONFIG_PATH",
+        tmp_path / "control" / "policy.conf",
+    )
+    monkeypatch.setattr(
+        jr,
+        "JSONL_LOGROTATE_STATE_PATH",
+        tmp_path / "control" / "logrotate.status",
+    )
+    jr._attest_unmanaged_writer_namespace.cache_clear()
+    try:
+        assert jr.register_managed_jsonl_writer_path(candidate) == candidate
+        candidate.parent.mkdir(parents=True)
+        target.write_text("sentinel", encoding="utf-8")
+        if alias_kind == "symlink":
+            candidate.symlink_to(target)
+            match = "symlink"
+        else:
+            os.link(target, candidate)
+            match = "hard link"
+        with pytest.raises(jr.JsonlRotationConfigError, match=match):
+            jr.register_managed_jsonl_writer_path(candidate)
+        assert target.read_text(encoding="utf-8") == "sentinel"
+    finally:
+        jr._attest_unmanaged_writer_namespace.cache_clear()
+
+
+def test_unmanaged_namespace_cache_key_tracks_static_and_controls(
+    tmp_path,
+    monkeypatch,
+):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    managed = tmp_path / "data" / "managed.jsonl"
+    candidate = managed.with_name(managed.name + ".append.lock")
+    registry = tmp_path / "control" / "registry.json"
+    monkeypatch.setattr(jr, "static_managed_jsonl_paths", lambda: ())
+    monkeypatch.setattr(jr, "JSONL_PATH_REGISTRY", registry)
+    monkeypatch.setattr(
+        jr,
+        "JSONL_LOGROTATE_CONFIG_PATH",
+        tmp_path / "control" / "policy.conf",
+    )
+    monkeypatch.setattr(
+        jr,
+        "JSONL_LOGROTATE_STATE_PATH",
+        tmp_path / "control" / "logrotate.status",
+    )
+    jr._attest_unmanaged_writer_namespace.cache_clear()
+    try:
+        assert jr.register_managed_jsonl_writer_path(candidate) == candidate
+        monkeypatch.setattr(
+            jr,
+            "static_managed_jsonl_paths",
+            lambda: (str(managed),),
+        )
+        with pytest.raises(jr.JsonlRotationConfigError, match="namespace lock"):
+            jr.register_managed_jsonl_writer_path(candidate)
+
+        monkeypatch.setattr(jr, "static_managed_jsonl_paths", lambda: ())
+        monkeypatch.setattr(jr, "JSONL_PATH_REGISTRY", candidate)
+        with pytest.raises(
+            jr.JsonlRotationConfigError,
+            match="registry namespace",
+        ):
+            jr.register_managed_jsonl_writer_path(candidate)
+    finally:
+        jr._attest_unmanaged_writer_namespace.cache_clear()
+
+
+def test_logrotate_cli_rejects_second_config_before_subprocess(
+    tmp_path,
+    monkeypatch,
+):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    called = []
+    monkeypatch.setattr(
+        jr.subprocess,
+        "run",
+        lambda *_args, **_kwargs: called.append(True),
+    )
+
+    with pytest.raises(SystemExit):
+        jr.main(
+            [
+                str(tmp_path / "policy.conf"),
+                str(tmp_path / "unlocked-extra.conf"),
+            ]
+        )
+
+    assert called == []
+
+
+def test_generated_logrotate_config_parses_with_real_binary(tmp_path):
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    binary = shutil.which("logrotate")
+    if binary is None:
+        pytest.skip("logrotate binary unavailable")
+    deploy = Path(__file__).resolve().parents[1] / "deploy"
+    policy = deploy / "dispatch-v2-jsonl-logrotate.conf"
+    paths = (tmp_path / "state with space" / "events.jsonl",)
+
+    with jr.materialize_jsonl_logrotate_config(
+        policy,
+        paths,
+    ) as (generated, generated_fd):
+        with pytest.raises(OSError):
+            os.pwrite(generated_fd, b"tamper", 0)
+        completed = subprocess.run(
+            [
+                binary,
+                "-d",
+                "-s",
+                str(tmp_path / "logrotate.state"),
+                str(generated),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            pass_fds=(generated_fd,),
+        )
+
+    assert completed.returncode == 0, completed.stdout + completed.stderr
+    assert not generated.exists()
 
 
 def test_every_known_rotated_jsonl_writer_uses_shared_appender():
@@ -957,3 +2429,50 @@ def test_panel_watcher_panel_override_uses_shim(monkeypatch, tmp_path):
     assert rec["actual_courier_id"] == "999"
     assert rec["proposed_courier_id"] == "100"
     assert rec["action"] == "PANEL_OVERRIDE"
+
+
+def test_registry_reserves_numeric_descendants_for_every_writer_role(
+    tmp_path,
+    monkeypatch,
+):
+    """Candidate37 F1: typed registry (kazda rola) rezerwuje numeric rotacje.
+
+    Oracle defektu: shadow.jsonl zarejestrowany rola shadow, a
+    register_managed_jsonl_writer_path(shadow.jsonl.1) przechodzil jako
+    unmanaged writer, bo fence porownywal tylko static manifest.
+    """
+    from dispatch_v2.core import jsonl_rotation as jr
+
+    registry = tmp_path / "control" / "registry.json"
+    shadow = tmp_path / "data" / "shadow.jsonl"
+    monkeypatch.setattr(jr, "static_managed_jsonl_paths", lambda: ())
+    monkeypatch.setattr(jr, "JSONL_PATH_REGISTRY", registry)
+    monkeypatch.setattr(
+        jr,
+        "JSONL_LOGROTATE_CONFIG_PATH",
+        tmp_path / "control" / "policy.conf",
+    )
+    monkeypatch.setattr(
+        jr,
+        "JSONL_LOGROTATE_STATE_PATH",
+        tmp_path / "control" / "logrotate.status",
+    )
+    jr._attest_unmanaged_writer_namespace.cache_clear()
+    try:
+        jr.register_jsonl_writer_path(
+            shadow,
+            registry_path=registry,
+            writer_role=jr.JSONL_WRITER_ROLE_SHADOW,
+        )
+        assert jr.register_managed_jsonl_writer_path(shadow) == shadow
+        for descendant in ("shadow.jsonl.1", "shadow.jsonl.1.gz"):
+            with pytest.raises(
+                jr.JsonlRotationConfigError,
+                match="rotation",
+            ):
+                jr.register_managed_jsonl_writer_path(
+                    shadow.with_name(descendant)
+                )
+        assert jr.register_managed_jsonl_writer_path(shadow) == shadow
+    finally:
+        jr._attest_unmanaged_writer_namespace.cache_clear()

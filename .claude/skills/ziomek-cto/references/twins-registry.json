@@ -1,11 +1,12 @@
 {
   "_meta": {
-    "wersja": 2,
+    "wersja": 3,
     "data_seed": "2026-07-17",
     "zrodla": [
       "ZIOMEK_ARCHITECTURE.md §4 REJESTR BLIŹNIAKÓW (kanon zatw. Adrian 01.07, korekta 06.07)",
       "memory/ziomek-change-protocol.md — Załącznik A (klasa→miejsca) + sekcja 'DYSKRYMINACJA POZYCJI' (8 bliźniaków, Adrian 29.06) + wzorce #1-#18",
-      "weryfikacja grep na żywym HEAD a370e65 (2026-07-17): każdy symbol poniżej znaleziony w podanym pliku"
+      "weryfikacja grep na żywym HEAD a370e65 (2026-07-17): każdy symbol poniżej znaleziony w podanym pliku",
+      "R4 Candidate35 (2026-07-26): role-aware JSONL registry, pełny namespace control+sidecar i zamknięty bootstrap 19 direct-entrypointów"
     ],
     "zasada": "To są MIEJSCA DO SPRAWDZENIA przy zmianie danej klasy (ETAP 3 protokołu #0), nie dowód poprawności. Cel każdej pozycji wg kanonu = 1 źródło (rejestr ma MALEĆ). Zmieniasz mapę → edytuj TEN plik (dane), driver zostaje bez zmian. Driver weryfikuje żywo: DRYF-SYMBOLU/BRAK-PLIKU = mapa się zestarzała → popraw wpis i sprawdź, czy reguła nie przeniosła się gdzie indziej.",
     "typ_legenda": "blizniaki-plikowe = kopie tej samej reguły w plikach (dod sprawdza parytet dotknięcia); procedura = checklista miejsc/wymogów danej klasy zmiany (dod nie wymusza współ-dotknięcia)"
@@ -186,6 +187,22 @@
       "miejsca": [
         {"nazwa": "rejestr shadow-jobów + status kalibracji", "plik": "/root/.claude/projects/-root/memory/shadow-jobs-registry.md", "symbol": null, "uwaga": "rekoncyliacja atq/timery na starcie KAŻDEGO zadania"},
         {"nazwa": "kanoniczny czytnik ledgera (rotation-aware)", "plik": "tools/ledger_io.py", "symbol": null, "uwaga": "'0 przypadków w oknie' stwierdzaj TYLKO odczytem rotation-aware (C16)"}
+      ]
+    },
+    "r4-filesystem-import-boundary": {
+      "typ": "procedura",
+      "opis": "R4: wspólna granica filesystem/import dla wszystkich writerów JSONL, logrotate i direct-entrypointów. Stały control-plane rejestru, rola po fizycznej ścieżce, namespace data/control oraz bootstrap są jednym kontraktem fail-closed.",
+      "keywords": ["r4", "jsonl registry", "jsonl writer", "unmanaged jsonl", "logrotate", "state tmp", "registry temp", "filesystem boundary", "pythonpath", "sys.path", "direct entrypoint", "physical sibling import", "qualified import", "bootstrap import", "preloaded dispatch", "control namespace", "writer role", "static basename"],
+      "przypomnienie": "Zmiana writera/rotacji wymaga mapy static+shadow+unmanaged+registry+registry-lock+registry-temp-family+config+state+state.tmp, testu historycznej roli i stałego registry niezależnego od STATE_DIR; basename nie określa roli. Każdy append ponownie waliduje data path; stabilna atestacja relacji namespace ma bounded cache kluczowany całym kontraktem static/control. Przed rozróżnieniem managed/unmanaged rezerwuj static data, locki, rotacje numeryczne, nested oraz pełny control-plane. Zmiana direct-run wymaga identycznego prefixu wszystkich 19 plików z DIRECT_ENTRYPOINT_FILES, zakazu post-bootstrap sys.path mutation i kwalifikowanych importów pakietu; zewnętrzny legacy moduł ładuj wyłącznie exact physical sibling loaderem.",
+      "miejsca": [
+        {"nazwa": "kanoniczni ownerzy data/control roots", "plik": "common.py", "symbol": "validate_runtime_control_path", "uwaga": "osobny validator data vs control; registry ma stały default /var/lib niezależny od STATE_DIR"},
+        {"nazwa": "wspólny appender wszystkich writerów", "plik": "core/jsonl_appender.py", "symbol": "register_managed_jsonl_writer_path", "uwaga": "każdy path ponownie przechodzi validate_jsonl_path; bounded cache obejmuje wyłącznie stabilne relacje static/control i zmienia klucz przy zmianie kontraktu"},
+        {"nazwa": "rejestr v2 + manifest + wrapper logrotate", "plik": "core/jsonl_rotation.py", "symbol": "register_jsonl_writer_path", "uwaga": "role static|shadow, monotoniczność cross-state-root, data/lock/numeric/nested + registry temp family + state.tmp, jawny --state"},
+        {"nazwa": "dwaj publisherzy shadow", "plik": "shadow_dispatcher.py", "symbol": "register_shadow_jsonl_writer_path", "uwaga": "startup oraz czasówka reclaim muszą publikować rolę shadow"},
+        {"nazwa": "carrier config/state procesu rotacji", "plik": "deploy/dispatch-v2-jsonl-logrotate.service", "symbol": "--state", "uwaga": "musi być zgodny bajtowo z common.py; deploy/restart nadal za ACK"},
+        {"nazwa": "exact loader legacy siblingów", "plik": "_physical_import.py", "symbol": "load_physical_scripts_sibling", "uwaga": "wiąże tylko moduł obok fizycznego dispatch_v2; SCRIPTS_DIR musi być tym samym fizycznym rootem, zero sys.path expansion"},
+        {"nazwa": "ratchet 19 direct-entrypointów", "plik": "tests/test_r4_step2_module_paths.py", "symbol": "DIRECT_ENTRYPOINT_FILES", "uwaga": "jeden AST prefix, exact stdlib/site/local dirs, zero post-bootstrap sys.path mutation, tylko qualified package imports, reject dowolnego preloaded dispatch_v2*"},
+        {"nazwa": "oracles writer↔rotator", "plik": "tests/test_mp11_jsonl_appender.py", "symbol": "test_registry_role_history", "uwaga": "historyczna rola, unmanaged reserved namespaces, state.tmp + registry-temp family, sidecar symlink/hardlink oraz cache revalidation/invalidation"}
       ]
     },
     "prog-czasowka-60": {

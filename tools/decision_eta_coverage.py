@@ -17,12 +17,13 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 from zoneinfo import ZoneInfo
 
+from dispatch_v2 import common as C
 from dispatch_v2.tools import _rotated_logs
 
 
 WARSAW = ZoneInfo("Europe/Warsaw")
-DEFAULT_DECISIONS = "/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl"
-DEFAULT_ETA_LOG = "/root/.openclaw/workspace/dispatch_state/decision_eta_log.jsonl"
+DEFAULT_DECISIONS = str(C.resolve_shadow_decisions_input_path())
+DEFAULT_ETA_LOG = str(C.STATE_DIR / "decision_eta_log.jsonl")
 REQUIRED_TOP_LEVEL = {
     "schema", "decision_id", "decision_ts", "recorded_at", "decision_kind",
     "source", "order_id", "selected_cid", "outcome", "candidate_pool_scope",

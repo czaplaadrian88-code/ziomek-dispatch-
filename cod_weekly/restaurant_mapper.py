@@ -12,13 +12,56 @@ Fuzzy/Levenshtein CELOWO wyłączony — był źródłem cichego błędu
 
 Value w mapping może być int (single company) lub list[int] (multi-company sum).
 """
+import sys
+
+_ORIGINAL_SYS_PATH = tuple(sys.path)
+_RUNTIME_PYTHON_VERSION = (
+    f"python{sys.version_info.major}.{sys.version_info.minor}"
+)
+_RUNTIME_PYTHON_ZIP = (
+    f"python{sys.version_info.major}{sys.version_info.minor}.zip"
+)
+_TRUSTED_STDLIB_PATHS = frozenset(
+    path
+    for prefix in dict.fromkeys(
+        str(prefix).rstrip("/")
+        for prefix in (sys.base_prefix, sys.prefix, sys.exec_prefix)
+        if prefix
+    )
+    for path in (
+        f"{prefix}/{sys.platlibdir}/{_RUNTIME_PYTHON_VERSION}",
+        f"{prefix}/{sys.platlibdir}/{_RUNTIME_PYTHON_VERSION}/lib-dynload",
+        f"{prefix}/{sys.platlibdir}/{_RUNTIME_PYTHON_ZIP}",
+    )
+)
+_TRUSTED_SITE_PATHS = frozenset(
+    path
+    for prefix in dict.fromkeys(
+        str(prefix).rstrip("/")
+        for prefix in (sys.base_prefix, sys.prefix, sys.exec_prefix)
+        if prefix
+    )
+    for path in (
+        f"{prefix}/{sys.platlibdir}/{_RUNTIME_PYTHON_VERSION}/site-packages",
+        f"{prefix}/{sys.platlibdir}/{_RUNTIME_PYTHON_VERSION}/dist-packages",
+        f"{prefix}/local/{sys.platlibdir}/{_RUNTIME_PYTHON_VERSION}/dist-packages",
+        f"{prefix}/{sys.platlibdir}/python{sys.version_info.major}/dist-packages",
+    )
+)
+sys.path[:] = [
+    entry
+    for entry in sys.path
+    if entry and entry in _TRUSTED_STDLIB_PATHS
+]
+
+import importlib.util
+
 import argparse
 import html as html_lib
 import json
 import logging
 import os
 import re
-import sys
 import tempfile
 import time
 import unicodedata
@@ -27,10 +70,50 @@ from datetime import datetime
 from pathlib import Path
 
 # Direct-file bootstrap; after this point common.py owns every host location.
-_PACKAGE_PARENT = str(Path(__file__).resolve().parents[2])
-if _PACKAGE_PARENT not in sys.path:
-    sys.path.insert(0, _PACKAGE_PARENT)
-from dispatch_v2.common import SCRIPTS_DIR
+if __package__ in (None, ""):
+    _package_dir = Path(__file__).resolve().parent.parent
+    _package_init = _package_dir / "__init__.py"
+    if not _package_init.is_file():
+        raise RuntimeError("cannot locate physical dispatch_v2 package")
+    if any(
+        name == "dispatch_v2" or name.startswith("dispatch_v2.")
+        for name in sys.modules
+    ):
+        raise RuntimeError("conflicting preloaded dispatch_v2 package")
+    _trusted_local_paths = (
+        str(_package_dir),
+        str(Path(__file__).resolve().parent),
+    )
+    sys.path[:] = list(
+        dict.fromkeys(
+            (
+                *_trusted_local_paths,
+                *(
+                    entry
+                    for entry in _ORIGINAL_SYS_PATH
+                    if entry in _TRUSTED_STDLIB_PATHS
+                    or entry in _TRUSTED_SITE_PATHS
+                ),
+            )
+        )
+    )
+    _package_spec = importlib.util.spec_from_file_location(
+        "dispatch_v2",
+        _package_init,
+        submodule_search_locations=[str(_package_dir)],
+    )
+    if _package_spec is None or _package_spec.loader is None:
+        raise RuntimeError("cannot attest physical dispatch_v2 package")
+    _package_module = importlib.util.module_from_spec(_package_spec)
+    sys.modules["dispatch_v2"] = _package_module
+    try:
+        _package_spec.loader.exec_module(_package_module)
+    except BaseException:
+        sys.modules.pop("dispatch_v2", None)
+        raise
+else:
+    sys.path[:] = _ORIGINAL_SYS_PATH
+from dispatch_v2.common import SCRIPTS_DIR as _OWNED_SCRIPTS_DIR  # noqa: E402,F401
 from dispatch_v2.panel_client import login
 from dispatch_v2.cod_weekly.config import (
     PANEL_DROPDOWN_URL,
@@ -44,9 +127,6 @@ from dispatch_v2.cod_weekly.config import (
     ROW_START,
 )
 from dispatch_v2.cod_weekly.aliases import ALIAS_MAP, SHEET_SKIP_PREFIXES
-
-if str(SCRIPTS_DIR) not in sys.path:
-    sys.path.insert(0, str(SCRIPTS_DIR))
 
 log = logging.getLogger("cod_weekly.mapper")
 

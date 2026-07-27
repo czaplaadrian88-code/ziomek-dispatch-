@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import re
+import stat
 import threading
 import time
 import contextlib
@@ -10,14 +11,132 @@ from pathlib import Path
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-# R4: jedna dźwignia ścieżek dla produkcji i izolowanego harnessu testowego.
-SCRIPTS_DIR = Path(os.environ.get("ZIOMEK_SCRIPTS_ROOT", "/root/.openclaw/workspace/scripts"))
-STATE_DIR = Path(
-    os.environ.get("ZIOMEK_STATE_DIR")
-    or os.environ.get("DISPATCH_STATE_DIR")
-    or "/root/.openclaw/workspace/dispatch_state"
+_UNSAFE_RUNTIME_PATH_CHARACTERS = frozenset(
+    ("\0", "\n", "\r", "*", "?", "[", "]", "{", "}", "~", "\\", '"', "#")
 )
-LOGS_DIR = Path(os.environ.get("ZIOMEK_LOGS_DIR", str(SCRIPTS_DIR / "logs")))
+STATE_DIR_ENV_PRECEDENCE = (
+    "DISPATCH_STATE_DIR",
+    "ZIOMEK_STATE_DIR",
+    "ZIOMEK_STATE_ROOT",
+)
+RUNTIME_NAMESPACE_TRUST_BOUNDARY = (
+    "canonical runtime roots are owner-managed stable namespaces; privileged "
+    "rename, relink or mount replacement after attestation is outside the "
+    "cooperative writer-rotator contract"
+)
+
+
+def _validate_runtime_path(
+    path_value: str | os.PathLike,
+    *,
+    label: str,
+    file_path: bool = False,
+) -> Path:
+    """Canonicalize one process snapshot inside the stable-root trust boundary."""
+    raw = os.fspath(path_value)
+    path = Path(raw)
+    if not path.is_absolute():
+        raise ValueError(f"{label} must be absolute: {raw!r}")
+    if any(character in raw for character in _UNSAFE_RUNTIME_PATH_CHARACTERS):
+        if label == "JSONL path":
+            raise ValueError(f"JSONL path patterns are forbidden: {raw!r}")
+        raise ValueError(f"{label} contains unsafe characters: {raw!r}")
+    if file_path and raw.rsplit("/", 1)[-1] in ("", ".", ".."):
+        raise ValueError(
+            f"{label} has unstable final component: {raw!r}"
+        )
+    try:
+        if file_path:
+            canonical = path.parent.resolve(strict=False) / path.name
+        else:
+            canonical = path.resolve(strict=False)
+    except OSError as exc:
+        raise ValueError(f"cannot canonicalize {label} {raw!r}: {exc}") from exc
+    if file_path:
+        try:
+            metadata = canonical.lstat()
+        except FileNotFoundError:
+            metadata = None
+        except OSError as exc:
+            raise ValueError(f"cannot inspect {label} {raw!r}: {exc}") from exc
+        if metadata is not None:
+            if stat.S_ISLNK(metadata.st_mode):
+                raise ValueError(f"{label} must not be a symlink: {raw!r}")
+            if not stat.S_ISREG(metadata.st_mode):
+                raise ValueError(f"{label} must be a regular file: {raw!r}")
+            if metadata.st_nlink != 1:
+                raise ValueError(
+                    f"{label} must have exactly one hard link: {raw!r}"
+                )
+    if label.endswith("_DIR") and canonical.exists() and not canonical.is_dir():
+        raise ValueError(f"{label} must be a directory: {raw!r}")
+    return canonical
+
+
+def validate_runtime_control_path(
+    path_value: str | os.PathLike,
+    *,
+    label: str = "runtime control path",
+) -> Path:
+    """Validate a non-data file in the writer/rotator control namespace."""
+    return _validate_runtime_path(
+        path_value,
+        label=label,
+        file_path=True,
+    )
+
+
+def _resolve_state_dir_once() -> Path:
+    """Resolve the documented precedence table exactly once per process."""
+    raw = next(
+        (
+            os.environ[name]
+            for name in STATE_DIR_ENV_PRECEDENCE
+            if os.environ.get(name)
+        ),
+        "/root/.openclaw/workspace/dispatch_state",
+    )
+    return _validate_runtime_path(raw, label="STATE_DIR")
+
+
+# R4: one validated process snapshot for production and isolated test harnesses.
+SCRIPTS_DIR = _validate_runtime_path(
+    os.environ.get(
+        "ZIOMEK_SCRIPTS_ROOT",
+        "/root/.openclaw/workspace/scripts",
+    ),
+    label="SCRIPTS_DIR",
+)
+STATE_DIR = _resolve_state_dir_once()
+LOGS_DIR = _validate_runtime_path(
+    os.environ.get("ZIOMEK_LOGS_DIR", str(SCRIPTS_DIR / "logs")),
+    label="LOGS_DIR",
+)
+JSONL_ROTATION_REGISTRY_PATH = validate_runtime_control_path(
+    os.environ.get(
+        "DISPATCH_JSONL_ROTATION_REGISTRY",
+        "/var/lib/dispatch-v2/jsonl_rotation_paths.json",
+    ),
+    label="JSONL rotation registry",
+)
+JSONL_LOGROTATE_CONFIG_PATH = validate_runtime_control_path(
+    "/etc/logrotate-dispatch-v2-jsonl.conf",
+    label="JSONL logrotate config",
+)
+JSONL_LOGROTATE_STATE_PATH = validate_runtime_control_path(
+    "/var/lib/logrotate/dispatch-v2-jsonl.status",
+    label="JSONL logrotate state",
+)
+
+
+def resolve_shadow_decisions_input_path() -> Path:
+    """Rozstrzygnij wejście read-only replay/monitora, nie ścieżkę writera."""
+    return validate_jsonl_path(
+        os.environ.get("SHADOW_DECISIONS_LOG")
+        or (LOGS_DIR / "shadow_decisions.jsonl")
+    )
+
+
 CONFIG_PATH = SCRIPTS_DIR / "config.json"
 # ETAP 4 (2026-06-10): env override TYLKO dla izolacji testów script-runner
 # (conftest ScriptRunItem podaje subprocesowi kopię bez flag decyzyjnych).
@@ -79,6 +198,21 @@ def load_config():
             _config_cache = json.load(f)
         _config_mtime = mtime
     return _config_cache
+
+
+def validate_jsonl_path(path_value: str | os.PathLike) -> Path:
+    """Jeden kontrakt akceptacji ścieżki dla writera, locków i logrotate."""
+    return _validate_runtime_path(
+        path_value,
+        label="JSONL path",
+        file_path=True,
+    )
+
+
+def resolve_shadow_decisions_writer_path(config: dict | None = None) -> Path:
+    """Zwróć ścieżkę single-writera z kanonicznego config.paths."""
+    effective = config if config is not None else load_config()
+    return validate_jsonl_path(effective["paths"]["shadow_log"])
 
 
 def load_flags():

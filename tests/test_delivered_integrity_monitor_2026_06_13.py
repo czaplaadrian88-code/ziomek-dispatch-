@@ -9,19 +9,25 @@ ma delivered_at, read-fail → exit 0 (nie onfailure).
 import json
 import os
 import sys
-import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
-_TMP = tempfile.mkdtemp(prefix="deliv_integrity_")
-os.environ["DISPATCH_STATE_DIR"] = _TMP
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from dispatch_v2.observability import delivered_integrity_monitor as M  # noqa: E402
 from dispatch_v2 import telegram_utils  # noqa: E402
 
-_STATE = os.path.join(_TMP, "orders_state.json")
-_ALERT = os.path.join(_TMP, "delivered_integrity_alert_state.json")
+
+@pytest.fixture(autouse=True)
+def _isolated_state(tmp_path, monkeypatch):
+    monkeypatch.setattr(M, "ORDERS_STATE", str(tmp_path / "orders_state.json"))
+    monkeypatch.setattr(
+        M,
+        "ALERT_STATE",
+        str(tmp_path / "delivered_integrity_alert_state.json"),
+    )
 
 
 def _now_iso():
@@ -39,13 +45,13 @@ def _deliv(cid, delivered_at, at_iso, coords=None):
 
 
 def _write(orders):
-    with open(_STATE, "w") as f:
+    with open(M.ORDERS_STATE, "w") as f:
         json.dump(orders, f)
 
 
 def _reset_alert():
-    if os.path.exists(_ALERT):
-        os.remove(_ALERT)
+    if os.path.exists(M.ALERT_STATE):
+        os.remove(M.ALERT_STATE)
 
 
 def test_alerts_on_delivered_at_null_today_only():
@@ -100,8 +106,8 @@ def test_silent_when_all_have_delivered_at():
 
 
 def test_read_fail_returns_0():
-    if os.path.exists(_STATE):
-        os.remove(_STATE)
+    if os.path.exists(M.ORDERS_STATE):
+        os.remove(M.ORDERS_STATE)
     assert M.main() == 0  # brak pliku → 0 (transient, nie onfailure)
 
 
