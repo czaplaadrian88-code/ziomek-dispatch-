@@ -1,17 +1,5 @@
 # ZIOMEK AI DISPATCHER - BACKLOG ROZWOJU
 
-> **KANDYDAT 2026-07-27 — C7 NORMAL-PATH INSTRUMENT:** K1 obalił
-> mierzalność normalnej ścieżki z dotychczasowych danych, więc flip C7 pozostaje
-> HOLD mimo starszego replayu best-effort. Worktree
-> `feat/c7-normal-path-instrument-20260727` dodaje default-OFF
-> `c7_normal_path.v1`: pełna pula przed top[:16], dwa kanoniczne ramiona C7
-> OFF/ON, parity oracle realnego best/verdict/routing, stage score/OBJM/E2/gate,
-> PII-free payload w istniejącym shadow recordzie i fail-safe. Benchmark puli
-> 16: mediana 2,970 ms, p95 3,335 ms (sampling niewymagany przy progu 5 ms);
-> klaster systemowym Pythonem 107P/0F. Kanoniczny venv, pełna suita + delta,
-> review/commit/merge/push/flip/deploy pozostają CTO; zero operacji live.
-> Dowód: `docs/C7_NORMAL_PATH_INSTRUMENT.md`.
-
 > **KANDYDAT 2026-07-24 — C7 POST-SHIFT REPLAY GO:** owner związał kryterium
 > monotonicznie („każde 5 min w dół to poprawa, najlepsze 0"). Branch
 > `fix/c7-exclusions-20260724`, commit `18864aff4`: klasyfikator u źródła,

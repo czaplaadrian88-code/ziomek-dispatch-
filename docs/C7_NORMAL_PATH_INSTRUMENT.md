@@ -175,3 +175,12 @@ Rollback instrumentu to hot `ENABLE_C7_NORMAL_PATH_LOG=false` albo brak klucza.
 Kod jest addytywny i fail-safe. W tym worktree nie wolno modyfikować żywego
 `flags.json`, deployować ani restartować usługi. Flip kill-switcha, C7, merge,
 push i deploy pozostają osobną decyzją CTO/ownera.
+
+## Wpis kandydata (przeniesiony z ZIOMEK_BACKLOG.md — plik był w cudzym WIP na masterze)
+
+> **KANDYDAT 2026-07-27 — C7 NORMAL-PATH INSTRUMENT:** K1 obalił mierzalność normalnej ścieżki
+> z dotychczasowych danych, więc flip C7 pozostaje HOLD mimo starszego replayu best-effort.
+> Branch feat/c7-normal-path-instrument-20260727 dodaje default-OFF c7_normal_path.v1: pełna pula
+> przed top[:16], dwa kanoniczne ramiona C7 OFF/ON, parity oracle realnego best/verdict/routing,
+> stage score/OBJM/E2/gate, PII-free payload w istniejącym shadow recordzie i fail-safe.
+> Benchmark puli 16: mediana 2,970 ms, p95 3,335 ms (sampling niewymagany przy progu 5 ms).
