@@ -47,10 +47,55 @@ def _valid_coord(value: object) -> bool:
 
 
 def _start(gps_row: object) -> tuple[float, float] | None:
+    """Legacy start (R3 flaga OFF): celowo bez kontroli timestampu."""
     if not isinstance(gps_row, Mapping):
         return None
     value = (gps_row.get("lat"), gps_row.get("lon"))
     return (float(value[0]), float(value[1])) if _valid_coord(value) else None
+
+
+def _warm_source_enabled() -> bool:
+    """Hot-reload z kanonicznego flags.json; brak/błąd = bezpieczne OFF."""
+    try:
+        from dispatch_v2 import common
+
+        return common.decision_flag("ENABLE_LIVE_ETA_WARM_SOURCE")
+    except Exception:
+        return False
+
+
+def _source_start(
+    courier_id: str,
+    gps_row: object,
+    orders_state: Mapping[str, object],
+    now: datetime,
+) -> tuple[tuple[float, float] | None, str]:
+    """R3: jedyny selektor startu i klasy źródła LIVE/WARM/PLANNED."""
+    if isinstance(gps_row, Mapping):
+        coord = _start(gps_row)
+        gps_at = live_eta._as_utc(gps_row.get("timestamp"))
+        if coord is not None and gps_at is not None:
+            age_s = (now - gps_at).total_seconds()
+            if 0 <= age_s <= live_eta.LIVE_POSITION_MAX_AGE_SECONDS:
+                return coord, live_eta.SOURCE_LIVE
+
+    # Reużywamy jedynego istniejącego parsera history[].at i mapowania eventu
+    # na współrzędne. Jego ogólny limit 6 h jest tylko preselekcją; kontrakt R3
+    # stosuje tutaj własny, ostrzejszy próg 180 s.
+    try:
+        from dispatch_v2 import plan_recheck
+
+        event = plan_recheck._last_event_anchor(
+            courier_id, dict(orders_state), now
+        )
+    except Exception:
+        event = None
+    if event is not None:
+        coord, event_at = event
+        age_s = (now - event_at).total_seconds()
+        if 0 <= age_s <= live_eta.WARM_EVENT_MAX_AGE_SECONDS:
+            return coord, live_eta.SOURCE_WARM
+    return None, live_eta.SOURCE_PLANNED
 
 
 def _available_floor(courier_id: str, now: datetime) -> str | None:
@@ -71,8 +116,14 @@ def build_routes(
     gps: Mapping[str, object],
     *,
     now: datetime,
+    warm_source_enabled: bool | None = None,
 ) -> list[dict]:
     """Autorytatywne wejście kalkulatora dla wszystkich aktywnych worków."""
+    source_contract = (
+        _warm_source_enabled()
+        if warm_source_enabled is None
+        else bool(warm_source_enabled)
+    )
     bags: dict[str, list[dict]] = {}
     for order_id, raw in orders_state.items():
         if not isinstance(raw, Mapping) or raw.get("status") not in ACTIVE_STATUSES:
@@ -111,6 +162,19 @@ def build_routes(
         for kind, order_ids in sequence:
             first = by_id.get(str(order_ids[0]))
             if first is None:
+                if source_contract:
+                    stops.append(
+                        {
+                            "kind": kind,
+                            "order_ids": [str(order_id) for order_id in order_ids],
+                            "coord": None,
+                            "floor_at": [],
+                            "dwell_s": 120.0 if kind == "pickup" else 60.0,
+                            "planned_at": None,
+                            "unpriced_reason": "missing_order",
+                        }
+                    )
+                    continue
                 route_complete = False
                 break
             coord = (
@@ -119,6 +183,12 @@ def build_routes(
                 else first.get("delivery_coords")
             )
             if not _valid_coord(coord):
+                if source_contract:
+                    coord = None
+                else:
+                    route_complete = False
+                    break
+            if coord is None and not source_contract:
                 route_complete = False
                 break
             floors: list[object] = []
@@ -133,12 +203,16 @@ def build_routes(
                     )
                 floors.append(available_floor)
             dwell_values = []
+            planned_values: list[datetime] = []
             for order_id in order_ids:
                 step = plan_steps.get((str(order_id), kind)) or {}
                 try:
                     dwell_values.append(float(step.get("dwell_min")) * 60.0)
                 except (TypeError, ValueError):
                     pass
+                planned = live_eta._as_utc(step.get("predicted_at"))
+                if planned is not None:
+                    planned_values.append(planned)
             stops.append(
                 {
                     "kind": kind,
@@ -149,15 +223,43 @@ def build_routes(
                         dwell_values,
                         default=120.0 if kind == "pickup" else 60.0,
                     ),
+                    **(
+                        {
+                            "planned_at": (
+                                live_eta._iso_utc(max(planned_values))
+                                if planned_values
+                                else None
+                            ),
+                            "unpriced_reason": (
+                                "bad_coords" if coord is None else None
+                            ),
+                        }
+                        if source_contract
+                        else {}
+                    ),
                 }
             )
-        if not route_complete:
+        if not route_complete and not source_contract:
             stops = []
+        if source_contract:
+            start, start_source = _source_start(
+                courier_id, gps.get(courier_id), orders_state, now
+            )
+        else:
+            start, start_source = _start(gps.get(courier_id)), None
         routes.append(
             {
                 "courier_id": courier_id,
-                "start": _start(gps.get(courier_id)),
+                "start": start,
                 "stops": stops,
+                **(
+                    {
+                        "start_source": start_source,
+                        "source_contract": True,
+                    }
+                    if source_contract
+                    else {}
+                ),
             }
         )
     return routes

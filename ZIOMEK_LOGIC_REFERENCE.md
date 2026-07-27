@@ -659,6 +659,21 @@ zwiększa procesowy licznik i nie zmienia werdyktu. Dzienna bramka:
 `tools/decision_eta_coverage.py` (100% unikalnych eventów shadow; brak denominatora
 = HOLD). Rotacja: daily/30/maxsize 100M. Flip nadal wymaga ACK ownera.
 
+**R3 live-ETA source contract (SOURCE-ONLY 2026-07-28):**
+`ENABLE_LIVE_ETA_WARM_SOURCE` jest w ETAP4, ma fallback **False** i jest
+czytana hot-reload przez jedynego producenta `live_eta_daemon`. OFF zachowuje
+legacy snapshot bajt w bajt. ON publikuje przy każdym stopie addytywne
+`source ∈ {live,warm,planned}`: `live` wyłącznie dla GPS age ≤120 s, `warm`
+wyłącznie dla kanonicznego `history[].at` last-event age ≤180 s, a brak
+pozycji/współrzędnych/pewnego łańcucha oznacza `planned` — nigdy fałszywe
+`live`. Stop bez współrzędnych ma `eta_at=null` i `unpriced_reason`; nie kasuje
+poprawnych stopów całego worka. Narzędzie read-only
+`tools/live_eta_coverage.py` liczy LIVE/WARM/PLANNED/bez wyceny. WARM nie ma
+żadnego konsumenta decyzyjnego w `dispatch_v2` (ratchet AST); flip wymaga
+porannego ACK ownera oraz potwierdzenia, że każda powierzchnia nazywa WARM
+osobno. Rollback: `flags.json ENABLE_LIVE_ETA_WARM_SOURCE=false` (hot-reload);
+kod/rejestr można cofnąć jednym revertem R3.
+
 **K6 P50/P80 (SOURCE-ONLY 2026-07-27):** kandydat może dodatkowo nieść
 `pred_op` (jawnie P50) i `p80` poślizgu pickup względem `czas_kuriera`, zawsze
 razem z `prediction_version=eta_pickup_quantiles.v1` i provenance modelu/cech.

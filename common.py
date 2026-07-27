@@ -257,6 +257,11 @@ ETAP4_DECISION_FLAGS = (
     # wybranego kuriera i puli w chwili decyzji/commitu planu. Log-only,
     # wszystkie wyjątki fail-safe; brak klucza flags.json = OFF.
     "ENABLE_DECISION_ETA_LOG",
+    # R3 LIVE-ETA SOURCES (2026-07-28): addytywny kontrakt per-stop
+    # LIVE(gps<=120s)/WARM(last_event<=180s)/PLANNED + izolacja bad-coords.
+    # OFF = legacy snapshot bajt-w-bajt. Flip dopiero po porannym ACK ownera
+    # i potwierdzeniu, że wszystkie powierzchnie pokazują WARM jako WARM.
+    "ENABLE_LIVE_ETA_WARM_SOURCE",
     # JOIN-HARDENING (2026-07-21): PANEL_AGREE/OVERRIDE wiąże learning_log
     # z event_id źródłowej decyzji shadow. Osobna flaga, bo świeży E1 używał
     # tej samej nazwy pola dla ID późniejszego COURIER_ASSIGNED.
@@ -673,6 +678,7 @@ ENABLE_MODE_LAYER_SHADOW = False
 # flipie = flags.json przez decision_flag(); brak module-level odczytu env.
 ENABLE_FULL_CHOICE_SET_LOG = False
 ENABLE_DECISION_ETA_LOG = False
+ENABLE_LIVE_ETA_WARM_SOURCE = False
 ENABLE_LEARNING_LOG_DECISION_JOIN = False
 ENABLE_C7_NORMAL_PATH_LOG = False
 ETA_FABRICATION_FLOOR_MIN = 60.0     # T=60: E-1 łapie 100% fabrykacji (>90 gubi połowę)
