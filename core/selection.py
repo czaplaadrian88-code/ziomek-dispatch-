@@ -39,6 +39,9 @@ class SelectionContext:
     plan_versions: Optional[Dict[str, Optional[int]]] = None
     position_model_mode: str = "legacy"
     shadow_only: bool = False
+    # Log-only instruments may request stage winners. None on the production
+    # path, therefore zero behavior/serialization change for ordinary calls.
+    selection_trace: Optional[Dict[str, Optional[str]]] = None
 
 
 def select_and_emit(ctx: SelectionContext, candidates: list):
@@ -136,6 +139,13 @@ def select_and_emit(ctx: SelectionContext, candidates: list):
     # Tiering/LEXR6 niżej tylko PERMUTUJĄ ten sam zbiór (nie dodają NO). Fail-loud guard.
     _assert_feasibility_first(feasible, order_id)
 
+    def _trace_stage(stage, candidate):
+        if isinstance(ctx.selection_trace, dict):
+            cid = getattr(candidate, "courier_id", None) if candidate is not None else None
+            ctx.selection_trace[stage] = str(cid) if cid is not None else None
+
+    _trace_stage("score", feasible[0] if feasible else None)
+
     # R-LATE-PICKUP tiering (2026-05-31, Adrian) — FINAL reorder pass, AFTER demote.
     # NIE usuwa kandydatów (→ „zawsze daje propozycje"), tylko ustawia priorytet:
     #   tier 0: nie psuje umówionego odbioru ORAZ zdąży na nowy ≤5 min (na czas)
@@ -185,6 +195,8 @@ def select_and_emit(ctx: SelectionContext, candidates: list):
             else:
                 feasible.sort(key=lambda c: (_lp_tier(c), _new_eta_key(c), _orig_order[id(c)]))
 
+        _trace_stage("score", feasible[0] if feasible else None)
+
         # FAZA 2 OBJM-LEXR6 (2026-06-18, flaga ENABLE_OBJM_LEXR6_SELECT default OFF): live-flip.
         # PO tier-gate sorcie, PRZED wyborem feasible[0]: przesuń R6-primary-lex pick na czoło
         # JEGO grupy (tier×bucket). Zachowuje bramkę tierów/committed (grupa = ten sam tier),
@@ -204,6 +216,7 @@ def select_and_emit(ctx: SelectionContext, candidates: list):
                     except Exception:
                         pass
 
+        _trace_stage("OBJM", feasible[0] if feasible else None)
         _winner = feasible[0]
         _wm = _winner.metrics or {}
         _wtier = _lp_tier(_winner)
@@ -356,6 +369,9 @@ def select_and_emit(ctx: SelectionContext, candidates: list):
     # R6BREACH-01/GATE-02 SHADOW — RETIRED 2026-06-11 (Adrian: „duplikat R6 =
     # R6BREACH, wytnij"). Zero danych zebranych (flaga OFF od commitu f64ff81).
 
+    if isinstance(ctx.selection_trace, dict) and "OBJM" not in ctx.selection_trace:
+        _trace_stage("OBJM", feasible[0] if feasible else None)
+
     if feasible:
         top = feasible[:TOP_N_CANDIDATES]
         # V3.26 STEP 1 (R-11): build rationale dla BEST candidate (flag-gated).
@@ -441,6 +457,7 @@ def select_and_emit(ctx: SelectionContext, candidates: list):
                     top[0].metrics["pln_ab_arm"] = _e2_arm
             except Exception:
                 pass
+        _trace_stage("E2", top[0] if top else None)
 
         # D2 SHADOW (2026-06-17): objm R6-primary lexicographic selektor — OBSERWACYJNY,
         # flaga default OFF (zero wpływu na selekcję/werdykt). Po E2 hooku → top[0] = finalny
@@ -813,12 +830,15 @@ def select_and_emit(ctx: SelectionContext, candidates: list):
         # Default OFF — shadow-first. Aktywacja po ACK Etap 3.
         try:
             _diff_floor = float(getattr(C, "DIFFICULT_CASE_SCORE_FLOOR", -30.0))
-            _diff_top_score = float(getattr(top[0], "score", 0.0) or 0.0)
+            # C7 i inne delty rankingowe mogą zmienić zwycięzcę, ale nie mogą
+            # samodzielnie zmienić verdictu przez difficult-case gate.
+            _diff_top_score = float(
+                _gate_score_excluding_ranking_deltas(top[0]) or 0.0)
             _diff_top_blocked = _v325_score_blocked(top[0])
             _diff_above = sum(
                 1 for _c in top
                 if not _v325_score_blocked(_c)
-                and float(getattr(_c, "score", 0.0) or 0.0) >= _diff_floor
+                and float(_gate_score_excluding_ranking_deltas(_c) or 0.0) >= _diff_floor
             )
             # Detect — zawsze (shadow); apply — tylko gdy flag ON.
             _diff_should_redirect = (
@@ -1147,7 +1167,9 @@ def select_and_emit(ctx: SelectionContext, candidates: list):
         # P3-D3 2026-05-11 (root cause 3): MIN_PROPOSE_SCORE gate aligned z feasible
         # branch (line ~2800). Pre-fix: best_effort skip gate → score=-390 carry
         # przeszedł jako PROPOSE (Bartek O. 187/196 min case 10.05).
-        _be_best_score = getattr(best, "score", None)
+        # Rankingowa delta C7 wybiera kandydata, lecz verdict low-score ma być
+        # neutralny na tę deltę (parytet z normalnym MIN_PROPOSE gate).
+        _be_best_score = _gate_score_excluding_ranking_deltas(best)
         _min_prop_be = _min_propose_score()  # SCALE-01: flags.json hot → common
         if (isinstance(_be_best_score, (int, float)) and _be_best_score < _min_prop_be
                 and not _always_propose_on()):  # ALWAYS-PROPOSE: proponuj best_effort z bannerem ⚠️

@@ -271,6 +271,10 @@ ETAP4_DECISION_FLAGS = (
     # cross-proces (shadow/czasowka/plan-recheck liczą tym samym silnikiem).
     # Default OFF; flip po replay + ACK poza peakiem. common.post_shift_overrun_penalty.
     "ENABLE_POST_SHIFT_OVERRUN_PENALTY",
+    # C7 NORMAL-PATH INSTRUMENT (2026-07-27): log-only dualny kanoniczny
+    # selektor OFF/ON na pełnej puli przed top[:16]. Nie zmienia decyzji;
+    # ETAP4 zapewnia hot-reload, fingerprint i izolację testów.
+    "ENABLE_C7_NORMAL_PATH_LOG",
     # ETAP4-GAP DOMKNIĘTY (2026-06-25): live-decyzyjna flaga selekcji best_effort
     # (carry-aware objm pick) była POZA rejestrem → poza zasięgiem flag_registry/
     # parytetu cross-proces/izolacji conftest (testy dziedziczyły żywy flags.json=ON).
@@ -634,6 +638,7 @@ ENABLE_MODE_LAYER_SHADOW = False
 ENABLE_FULL_CHOICE_SET_LOG = False
 ENABLE_DECISION_ETA_LOG = False
 ENABLE_LEARNING_LOG_DECISION_JOIN = False
+ENABLE_C7_NORMAL_PATH_LOG = False
 ETA_FABRICATION_FLOOR_MIN = 60.0     # T=60: E-1 łapie 100% fabrykacji (>90 gubi połowę)
 ETA_FABRICATION_RATIO = 2.5          # pred>2,5×robust_ref (komponent ratio Opusa vs FP kryzysu)
 ETA_ROBUST_SERVICE_MIN = 12.0        # service_time (odbiór+wydanie) w robust_ref
@@ -895,6 +900,7 @@ _FINGERPRINT_EXTRA_FLAGS = (
 # toggle byłby race-unsafe; thread-local izoluje per-wątek. food_age_override(True)
 # wymusza ON tylko wokół re-computu shadow, NIE ruszając decyzji produkcyjnej.
 _FOOD_AGE_TL = threading.local()
+_POST_SHIFT_OVERRUN_TL = threading.local()
 
 
 @contextlib.contextmanager
@@ -908,6 +914,17 @@ def food_age_override(value):
         _FOOD_AGE_TL.override = _prev
 
 
+@contextlib.contextmanager
+def post_shift_overrun_override(value):
+    """Wymuś C7 OFF/ON tylko w bieżącym wątku kontrfaktyku log-only."""
+    _prev = getattr(_POST_SHIFT_OVERRUN_TL, "override", None)
+    _POST_SHIFT_OVERRUN_TL.override = value
+    try:
+        yield
+    finally:
+        _POST_SHIFT_OVERRUN_TL.override = _prev
+
+
 def decision_flag(name: str) -> bool:
     """Flaga decyzyjna wspólna cross-proces: flags.json → stała modułu → False.
 
@@ -919,6 +936,10 @@ def decision_flag(name: str) -> bool:
     """
     if name == "ENABLE_OBJ_DELIVERY_FOOD_AGE":
         _ov = getattr(_FOOD_AGE_TL, "override", None)
+        if _ov is not None:
+            return bool(_ov)
+    if name == "ENABLE_POST_SHIFT_OVERRUN_PENALTY":
+        _ov = getattr(_POST_SHIFT_OVERRUN_TL, "override", None)
         if _ov is not None:
             return bool(_ov)
     return bool(load_flags().get(name, globals().get(name, False)))
