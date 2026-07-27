@@ -59,6 +59,12 @@
   kalibratora i pozycji. `tools/decision_eta_coverage.py` wymaga dziennie 100%
   joinu unikalnych eventów `shadow_decisions`; denominator=0 daje HOLD. Do flipa
   i minimum 2 dni poprawnej coverage slot pozostaje żółty.
+  Opcjonalne K6 `pred_op`=P50 i `p80` są zapisywane wyłącznie jako kompletna,
+  monotoniczna para z `prediction_version` i `prediction_provenance`; brak pól
+  w rekordzie legacy jest kompatybilny, lecz D5 pozostaje nieobliczalne.
+  `tools/gps_decision_eta_remeasure.py` liczy osobno denominator, stare kompletne
+  timestampy oraz labelled complete-cases i importuje `n>=200`/coverage z
+  owner-bound `KPI_BINDING_V1`, bez lokalnej kopii progu.
 - ✅ **VOID-y kontraktu ⑤ ZLIKWIDOWANE 2026-07-05 (Sprint 1 Z1+Z2 — re-oracle C9 + strażnicy z zębami; historia niżej):**
   *(STATUS 2026-07-02, L1.2: READ-side przyczyn część usunięta — WRONG-SOURCE martwy sla 3→0 [no_gps_eta_error, prep_bias_r6_replay, b_route_shadow_review real_joined 0→322] + 40 tooli rotation-aware; formalne zdjęcie VOID = re-oracle C9 przy następnym użyciu przyrządu. Szczegóły: adendum w `eod_drafts/2026-06-30/FAZA1_03_rejestr_przyrzadow.md`.)*
   - 🟢 `carried_first_guard` — *(de-VOID Z2 05.07)* przyczyna (pusty env → 91,7% fikcyjnych `no_position`) usunięta przez L0.2 (drop-in `engine-env-parity.conf` + `test_carried_first_guard_env_parity`) i D3 (gros flag → flags.json hot-reload = parytet z konstrukcji dla oneshot-procesu). **Re-oracle świeże okno od 02.07: 4901 rekordów, `no_position` = 0** (klasyfikacje realne: ok 4120 / plan_invalidated 462 / canon_divergence 235 / carried_first 83 / coverage_gap 1); timer żywy co 3 min. Mutation-probe ×2 (drop-in −1 flaga → parity FAIL; smell→False → detekcja FAIL). Dowód: `eod_drafts/2026-07-05/A1_INVARIANTS_devoid_dowod.md`.

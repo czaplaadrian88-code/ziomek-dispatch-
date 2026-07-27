@@ -38,6 +38,11 @@ append-only snapshot wybranego CID i ocenionej puli do
 `dispatch_state/decision_eta_log.jsonl`. Nie jest wejściem feasibility, scoringu,
 selekcji ani renderu. Coverage względem kanonicznego ledgeru mierzy
 `tools/decision_eta_coverage.py`; flip wymaga osobnego ACK ownera.
+K6 (27.07, source-only) dodaje do snapshotu kandydata opcjonalne, wersjonowane
+`pred_op`=P50 i `p80` poślizgu pickup względem `czas_kuriera`, z provenance
+jednego producenta `eta_calib_serving.predict_pickup_quantiles_batch`. Stare rekordy
+bez pól są poprawne; checker D5 `tools/gps_decision_eta_remeasure.py` daje na
+nich jawne HOLD i liczy próbę labelled complete-case wobec owner-bound D4.
 
 ---
 
