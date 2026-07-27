@@ -44,6 +44,14 @@ E = _load_worktree_executor()
 NOW = datetime(2026, 7, 2, 3, 0, tzinfo=timezone.utc)
 
 
+@pytest.fixture(autouse=True)
+def _owner_authorized(grant_owner_autonomy_auth):
+    """AUTON-02/T2: ten plik bada TOCTOU/dry-first/idempotencję/sentinel, czyli
+    warstwę PO autoryzacji — dostaje ważne upoważnienie właściciela i zostaje
+    odcięty od żywego dziennika audytu. Definicja: `tests/conftest.py`."""
+    grant_owner_autonomy_auth(E, NOW)
+
+
 def _record(oid="480300", cid="101", name="Kurier Testowy", target_min=12):
     tgt = (NOW + timedelta(minutes=target_min)).isoformat()
     return {"verdict": "PROPOSE", "order_id": oid,
