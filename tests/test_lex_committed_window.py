@@ -13,6 +13,7 @@ import pytest
 
 from dispatch_v2 import plan_recheck as P
 from dispatch_v2 import osrm_client
+from dispatch_v2.core import lex_window_ledger as LWL
 
 
 def _hav_m(a, b):
@@ -31,7 +32,7 @@ def _fake_table(pts_a, pts_b):
 def _mock_osrm(monkeypatch, tmp_path):
     monkeypatch.setattr(osrm_client, "table", _fake_table)
     # NIGDY nie pisz do produkcyjnego shadow jsonl z testów
-    monkeypatch.setattr(P, "LEX_WINDOW_SHADOW_PATH", str(tmp_path / "lex_shadow.jsonl"))
+    monkeypatch.setattr(LWL, "LEGACY_V1_PATH", str(tmp_path / "lex_shadow.jsonl"))
 
 
 NOW = datetime(2026, 6, 24, 13, 0, 0, tzinfo=timezone.utc)
@@ -85,7 +86,6 @@ def test_shadow_only_does_not_change_order(monkeypatch):
     # SHADOW ON, APPLY OFF → liczy + loguje, ale kolejność NIE zmieniona
     monkeypatch.setattr(P, "ENABLE_LEX_COMMITTED_WINDOW_SHADOW", True)
     monkeypatch.setattr(P, "ENABLE_LEX_COMMITTED_WINDOW", False)
-    monkeypatch.setattr(P, "LEX_WINDOW_SHADOW_PATH", "/tmp/_lex_window_test_shadow.jsonl")
     out = P._lex_committed_window_reorder(_carried_first_stops(), ORDERS, START, NOW)
     assert _ids(out) == _ids(_carried_first_stops()), "shadow-only NIE zmienia decyzji"
 
