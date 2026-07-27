@@ -872,6 +872,14 @@ TEST_ISOLATED_INFRA_FLAGS = (
     # zegara). Testy sterują flagą JAWNIE (monkeypatch stałej), nie żywym
     # flags.json.
     "ENABLE_PERF_LAZY_MEMBERS",
+    # WB1 (2026-07-27, CZASY 492): kill-switch ledgera okna odbioru v2.
+    # NIEDECYZYJNY (nie zmienia treści decyzji, wzorzec
+    # ENABLE_STAGE_TIMING_OBSERVATION wyżej) → świadomie POZA
+    # ETAP4_DECISION_FLAGS. Bez tego wpisu żywa wartość przechodziła przez sito
+    # `_isolate_flags_json` i wygrywała w `decision_flag()` nad stałą modułu:
+    # po flipie ownera na `true` bramka „OFF ⇒ v1 bajt-w-bajt" sprawdzała stan
+    # nieosiągalny w procesie testowym. Testy sterują wersją ledgera stałą.
+    "ENABLE_LEX_WINDOW_LEDGER_V2",
 )
 
 # Flagi zunifikowane już wcześniej wzorcem runtime (E2 audytu 10.06) — wchodzą

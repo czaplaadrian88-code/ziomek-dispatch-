@@ -1098,3 +1098,40 @@ Flagi LIVE (wszystkie `flags.json=true`, hot-reload), dotąd nieudokumentowane w
 | `ENABLE_PLANNER_UNIFIED` | core/planner.py (tier_params+plan_bag) + plan_recheck._gen_one_bag_plan (parametry i `_sweep`→plan_bag z simulate_fn=R) | K15 refaktoru (ADR-R03, kontrakt ①): bliźniak parametryzacji tier→(dwell,tempo) silnik↔re-planer sprowadzony do JEDNEGO źródła. Silnik deleguje tier_params ZAWSZE (przenosiny 1:1, nie za flagą; simulate zostaje lokalnym symbolem feasibility — kontrakt monkeypatch suity). Re-planer: OFF/brak klucza = stary inline bajt-w-bajt; ON = parametry+wywołanie przez core.planner (semantyka TIER_DWELL zachowana, flaga czytana HOT — env-rozjazd drop-inów bez znaczenia dla tej ścieżki) |
 | `ENABLE_PLANNER_UNIFIED_SHADOW` | plan_recheck._gen_one_bag_plan (gałąź OFF głównej) | K15 refaktoru: przy głównej OFF liczy parametry OBIEMA drogami (inline i core.planner) i loguje rozjazd `PLANNER_PARAM_MISMATCH` (WARNING, log-only, bez drugiej symulacji — zero wpływu na plan). Dowód parytetu na żywo przed flipem głównej |
 | `ENABLE_OPERATOR_ROUTE_ORDER_OVERRIDE` | operator_route_override.pin_stops + plan_recheck._gen_one_bag_plan / _retime_one_bag_plan (hook PO F6, przed retime) + dispatch_pipeline._route_order_override_shadow_pass (PO finalnym firewallu) | 2026-07-19/20 (zadanie ownera): koordynator ustawia KOLEJNOŚĆ podjazdów kuriera (`dispatch_state/operator_route_overrides.json`: pełna permutacja aktywnego worka + set_by/set_at/ttl_min) → kanon `courier_plans.json` = sekwencja operatora (nadrzędna wobec soft-heurystyk kolejności F6: carried-first/relax/no-return/lex-window), ETA legów przeliczane ISTNIEJĄCYM `_retime_stops` (łańcuch OSRM + clamp committed). Walidacja: zbiór id == zbiór aktywnych zleceń kuriera, TTL od set_at, fail-open na brak/uszkodzony plik. `czas_kuriera` NIETYKALNY (R27) — spóźnienie odbioru > 5 min logowane w `committed_breaches`. Telemetria dedykowana ZAWSZE (też OFF): `dispatch_state/operator_route_override_events.jsonl`, zdarzenia `operator_route_override_{applied\|rejected\|expired}`. Dodatkowo ważny manual-seq jest liczony wspólnym walidatorem na każdym wyniku silnika i auto-serializowany A+B do kanonicznego `shadow_decisions.jsonl` jako `route_order_would_apply`, skróty `route_order_manual_seq` / `route_order_engine_seq` oraz `route_order_divergence`; brak wpisu lub odrzut = brak pól. Konsola (`fleet_state._build_route` → `route_order.order_podjazdy`) i apka czytają kanon = przezroczyste. OFF/brak klucza = score/verdict/plan/winner 1:1; jedyna różnica to addytywna telemetria ledgera |
+
+### Sprint WB1 + C7 (2026-07-27) — dwie flagi LOG-ONLY (obserwowalność incydentu CZASY 492)
+
+Obie są **NIEDECYZYJNE**: nie zmieniają ani jednej decyzji silnika (kolejność stopów, score,
+feasibility, verdict, wybór kuriera). Sterują wyłącznie tym, **co i gdzie się zapisuje**.
+Wzorzec 1:1 jak `ENABLE_STAGE_TIMING_OBSERVATION` wyżej. Default kodu = `False`;
+**żywy `flags.json` = `true` od 2026-07-27 za ACK ownera**. Rollback obu = flip `false`
+(hot-reload, bez restartu, bez migracji danych).
+
+- `ENABLE_LEX_WINDOW_LEDGER_V2` — kill-switch schematu ledgera warstwy P-1 okna odbioru
+  (`core/lex_window_ledger.py`, spec `docs/WB1_LEDGER_V2_SCHEMA.md`). **OFF** = zapis v1
+  bajt-w-bajt jak przed WB1 do `lex_committed_window_shadow.jsonl` (z polem `applied`).
+  **ON** = wyłącznie schemat v2 do `lex_window_ledger_v2.jsonl`, a plik v1 zostaje
+  ZAMROŻONY na dysku jako historia — nigdy nie ma momentu, w którym dwa writery piszą tę
+  samą prawdę. Sedno naprawy: w v1 pole `applied` było **wartością flagi
+  `ENABLE_LEX_COMMITTED_WINDOW`, a nie faktem zapisu planu**, więc trzy timery obserwatorów
+  (carried-first-guard, b-route-shadow, bundle-calib-shadow) wołające tę samą warstwę kanonu
+  co silnik dawały `applied: true` w 612/612 wierszy na dobę (62,7 % to powtórki, mediana
+  odstępu 0,36 min). v2 rozbija to na trzy ROZŁĄCZNE fakty — `decided` (warstwa reorderu
+  wybrała sekwencję), `written` (plan utrwalony po CAS), `served` (sekwencja wyszła do
+  konsumenta) — z których żaden nie implikuje następnego. Rola wywołania podróżuje jawnie
+  w `LedgerContext`; **brak kontekstu = OBSERVER** (fail-safe: gubimy wiersz kanoniczny,
+  co widać w `coverage`, zamiast zanieczyścić kanon). Wpisy obserwatorów idą do osobnego
+  `lex_window_ledger_v2_observations.jsonl` i **nigdy** nie są wejściem kalibracji progów.
+  Świadomie POZA `ETAP4_DECISION_FLAGS` (nie wchodzi do `flag_fingerprint`), za to
+  w `TEST_ISOLATED_INFRA_FLAGS` — inaczej żywa wartość przeciekała do testów i bramka
+  „OFF ⇒ v1 bajt-w-bajt" sprawdzała stan nieosiągalny.
+
+- `ENABLE_C7_NORMAL_PATH_LOG` — instrument log-only ścieżki normalnej C7
+  (kontrakt `c7_normal_path.v1`). **OFF** = brak zapisu, zero różnicy w zachowaniu.
+  **ON** = pomiar, który jest WARUNKIEM WSTĘPNYM flipu C7 (wg pomiaru K1): najpierw
+  dowód z żywych danych, dopiero potem decyzja o zmianie reguły. Sam instrument niczego
+  nie egzekwuje — nie jest wejściem selekcji, feasibility ani scoringu. Ta flaga należy
+  do `ETAP4_DECISION_FLAGS` (a więc wchodzi do `flag_fingerprint` i jest strippowana
+  w conftest) — wpis odziedziczony przy jej wprowadzeniu; z punktu widzenia strażnika
+  strip-guarda jest to pokrycie wystarczające, więc nie ruszamy jej członkostwa, bo
+  przeniesienie zmieniłoby odcisk flag bez korzyści dla obserwowalności.
