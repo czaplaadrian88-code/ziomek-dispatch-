@@ -1,0 +1,6 @@
+regresja: focused route-order 38 passed, 1 skipped, 0 failed; full regression N-D because canonical dispatch venv is denied by sandbox
+e2e: canon -> injected real-shape backend DTO -> faithful Kotlin buildSteps projection; live read-only smoke fail-closed BROKEN infra 0/0
+pozytywny-wplyw: zero-work changes from false OK to EXPECTED_NO_DATA and panel proxy is replaced by backend DTO plus Kotlin projection
+rollback: source-only git revert of explicit PAR commits; no runtime rollback because zero install deploy restart flag or live write
+N-D: systemd install and legacy unit removal — separate owner ACK
+N-D: full suite and canonical night-guard reseed — dispatch venv and gitdir denied by sandbox
