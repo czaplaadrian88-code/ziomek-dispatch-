@@ -1,6 +1,6 @@
 {
   "base_sha": "c18c7a0a8",
-  "manifest_version": 32,
+  "manifest_version": 33,
   "nodeids": [
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix1_kurier_ids_load_fail_logs_error_and_dedups",
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix2_bag_not_stale_dedup_same_input",
@@ -4757,7 +4757,17 @@
     "tests/test_route_order_golden.py::test_golden_structural_invariants",
     "tests/test_route_order_golden.py::test_pickup_merge_min_pinned_to_corpus",
     "tests/test_route_order_golden.py::test_plan_docs_use_stops_key",
-    "tests/test_route_order_live_parity.py::test_live_route_order_parity_and_flag_pin",
+    "tests/test_route_order_live_parity.py::test_ENABLE_PLAN_AWARE_PODJAZDY_on_off_drift_is_broken_without_data",
+    "tests/test_route_order_live_parity.py::test_kotlin_projection_real_dto_structures",
+    "tests/test_route_order_live_parity.py::test_kotlin_projection_reuses_existing_route_order_golden_min_three_cases",
+    "tests/test_route_order_live_parity.py::test_live_route_order_parity_read_only_smoke",
+    "tests/test_route_order_live_parity.py::test_mutation_probe_bypassed_kotlin_projection_is_broken",
+    "tests/test_route_order_live_parity.py::test_mutation_probe_zero_work_to_ok_is_rejected",
+    "tests/test_route_order_live_parity.py::test_qualifying_bag_backend_error_is_broken_not_no_data",
+    "tests/test_route_order_live_parity.py::test_real_backend_builder_known_writer_is_suppressed_and_restored",
+    "tests/test_route_order_live_parity.py::test_result_file_is_atomic_0600_and_contains_heartbeat",
+    "tests/test_route_order_live_parity.py::test_structural_ratchet_uses_backend_dto_and_not_panel_twin",
+    "tests/test_route_order_live_parity.py::test_tristate_ok_oracle",
     "tests/test_route_order_unify_s30.py::test_all_public_symbols_reexported",
     "tests/test_route_order_unify_s30.py::test_build_stop_sequence_equals_branch1_transform",
     "tests/test_route_order_unify_s30.py::test_order_matches_golden_corpus",
@@ -5835,7 +5845,7 @@
     "tests/test_zombie01_pickup_guard.py::test_picked_up_recent_kept",
     "tests/test_zombie01_pickup_guard.py::test_zombie_assigned_with_stale_pickup_filtered"
   ],
-  "nodeids_sha256": "bd18e593569a91b35a0f6914659b5f2a92b3d1ad945d79fd513dbcafba1163b6",
+  "nodeids_sha256": "44160e5b604298df8945a9537f2721a933082e23e952a91ac0337269d5134aa1",
   "outcome_contracts": {
     "tests/test_canon_static_check_a1.py::test_defer_completion_guard_armed_when_defer_exists": [
       "skipped"
@@ -5951,7 +5961,7 @@
     ]
   },
   "owner": "Codex-Sol",
-  "reason": "R2 proposal freshness: assignment-time CAS log + shadow-only fleet refresh, obie flagi default OFF",
+  "reason": "PAR route-order monitor: tri-state backend DTO to Kotlin projection oracles and exact live-smoke quarantine",
   "schema_version": 1,
   "updated_at_utc": "2026-07-28T00:00:00+00:00"
 }

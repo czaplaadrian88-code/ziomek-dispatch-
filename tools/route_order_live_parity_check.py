@@ -1,42 +1,36 @@
 #!/usr/bin/env python3
-"""SPRINT0 A0-ROUTEORDER (2026-07-05) — NASTĘPCA `ziomek_time_route_monitor` Q3.
+"""End-to-end route-order parity monitor (backend DTO -> Kotlin projection).
 
-Monitor (panel repo, timer 10-min) wygasa SAM 2026-07-10 (MONITOR_STOP_AFTER)
-i decyzją konsolidacji 05.07 NIE jest przedłużany. Ten tool = jego pion Q3
-(parytet kolejności trasy) jako ONE-SHOT bez daty wygaśnięcia:
+The monitor deliberately does not compare two Python renderers.  For every
+qualifying live courier bag it compares:
 
-  INV-SRC-ROUTE-ORDER: dla każdego ŻYWEGO worka kolejność stopów liczona przez
-  kanon apki (`dispatch_v2.route_podjazdy.order_podjazdy`) == kolejność konsoli
-  (`fleet_state._build_route`) na TYCH SAMYCH wejściach (bag + plan Ziomka),
-  przy EFEKTYWNYCH flagach produkcyjnych (drop-iny courier-api + env panelu —
-  wzorzec #15: harness mirroruje produkcję, nie defaulty).
+    route_order canon -> real courier-api ``build_view`` DTO
+    -> a faithful legacy-field projection of Kotlin ``RouteLogic.buildSteps``.
 
-Dodatkowo pilnuje DRYFU KONFIGURACJI: flagi porządkotwórcze odczytane z żywej
-produkcji muszą równać się flagom zamrożonym w meta golden-korpusu
-(`tests/golden/route_order_corpus.json`). Legalny flip flagi => regeneracja
-korpusu generatorem + commit razem ze zmianą; czerwony check bez regeneracji
-= niezamierzony dryf konfiguracji (klasa #9/#15).
+WB3 v3 will add stop identity fields later.  Until then this monitor projects
+only the legacy fields and reuses ``tests/golden/route_order_corpus.json``;
+it is not a second cross-language golden.
 
-URUCHAMIAĆ venv-em PANELU (deps fleet_state):
-  /root/.openclaw/workspace/nadajesz_clone/panel/backend/.venv/bin/python \
-      tools/route_order_live_parity_check.py [--json]
+Verdicts and exits:
+  0 OK                  qualifying bags were checked and all matched
+  3 EXPECTED_NO_DATA    no qualifying active courier bags (never reported OK)
+  1 BROKEN              parity/configuration failure
+  2 BROKEN              infrastructure/coverage/output failure
 
-Exit: 0 = parytet + brak dryfu (lub zero żywych worków — noc), 1 = rozjazd
-kolejności LUB dryf flag, 2 = błąd infrastruktury (brak venv/state/importu).
-READ-ONLY — zero zapisu poza stdout.
-
-Aktywacja w CI (ZA ACK Adriana): tests/test_route_order_live_parity.py
-odpala ten tool przy env ENABLE_ROUTE_ORDER_LIVE_PARITY=1 (domyślnie SKIP,
-żeby regresja była deterministyczna offline; po ACK gate znika/env wchodzi
-do kanonicznej komendy regresji). Q1/Q2 monitora (czas przekazany / drift
-czasu) mają OSOBNYCH strażników — patrz raport SPRINT0_ZAD2.
+The command is read-only unless ``--result-path`` is supplied.  The future
+systemd unit must supply that path; writes are atomic and mode 0600.
 """
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import os
 import sys
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any, Callable, Mapping, Sequence
 
 _BACKEND = Path("/root/.openclaw/workspace/nadajesz_clone/panel/backend")
 _SCRIPTS = Path("/root/.openclaw/workspace/scripts")
@@ -46,88 +40,426 @@ sys.path.insert(0, str(_SCRIPTS))
 STATE_DIR = Path("/root/.openclaw/workspace/dispatch_state")
 ORDERS_PATH = STATE_DIR / "orders_state.json"
 PLANS_PATH = STATE_DIR / "courier_plans.json"
-CORPUS_PATH = _SCRIPTS / "dispatch_v2" / "tests" / "golden" / "route_order_corpus.json"
+CORPUS_PATH = (
+    _SCRIPTS / "dispatch_v2" / "tests" / "golden" / "route_order_corpus.json"
+)
 
-ACTIVE_STATES = {"assigned", "picked_up", "en_route"}
+EXIT_OK = 0
+EXIT_PARITY_BROKEN = 1
+EXIT_INFRA_BROKEN = 2
+EXIT_EXPECTED_NO_DATA = 3
+PICKUP_MERGE_MIN = 10  # Kotlin RouteLogic.kt contract, pinned by golden tests.
+GATE_ID = "obs.route-parity-telemetry"
+GATE_DUE = "2026-08-01"
 
 
 def _load_gen():
-    """Reużyj helperów generatora (jedno źródło odczytu flag prod — bez kopii)."""
+    """Reuse the existing corpus/live-bag adapter and effective flag readers."""
     sys.path.insert(0, str(_SCRIPTS / "dispatch_v2" / "tools"))
     import route_order_golden_corpus_gen as gen  # noqa: PLC0415
+
     return gen
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--json", action="store_true", help="pełny werdykt JSON na stdout")
-    args = ap.parse_args()
+def _load_backend_dto_builder() -> Callable[[str], Mapping[str, Any]]:
+    """Load the same builder that serves ``/api/courier/orders``.
+
+    Import failure is infrastructure BROKEN.  There is intentionally no local
+    DTO reconstruction fallback: that would certify a second implementation
+    instead of the payload consumed by the app.
+    """
+    # courier_orders has a legacy best-effort alert in its import-error branch.
+    # Prove these imports first so a broken monitor cannot enter that branch,
+    # read alert credentials, or attempt a network send.
+    from dispatch_v2 import live_eta as _live_eta  # noqa: F401,PLC0415
+    from dispatch_v2 import route_podjazdy as _route_podjazdy  # noqa: F401,PLC0415
 
     try:
-        gen = _load_gen()
-        plan_aware = gen._dropin_on(gen.PLAN_AWARE_DROPIN, "ENABLE_PLAN_AWARE_PODJAZDY")
-        trust_canon = gen._dropin_on(gen.TRUST_CANON_DROPIN,
-                                     "ENABLE_BUILD_VIEW_TRUST_CANON_ORDER")
-        panel_flags = gen._panel_prod_flags()
-        import os  # noqa: PLC0415
-        for name, val in panel_flags.items():
-            os.environ[f"PANEL_FLAG_{name}"] = "1" if val else "0"
-        from app.integrations.ziomek.fleet_state import _build_route, BagOrder  # noqa: E402,PLC0415
-        from dispatch_v2 import route_podjazdy as RP  # noqa: E402,PLC0415
-        raw = json.loads(ORDERS_PATH.read_text(encoding="utf-8"))
-        orders = raw if isinstance(raw, list) else list(
-            (raw.get("orders", raw) or {}).values()) if isinstance(raw, dict) else []
-        plans = json.loads(PLANS_PATH.read_text(encoding="utf-8"))
-        corpus_meta = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))["meta"]
-    except Exception as e:  # noqa: BLE001
-        print(json.dumps({"verdict": "INFRA_ERROR",
-                          "error": f"{type(e).__name__}: {e}"[:300]}))
-        return 2
+        from courier_api import courier_orders  # type: ignore  # noqa: PLC0415
+    except ImportError:
+        sys.path.insert(0, str(_SCRIPTS / "courier_api"))
+        import courier_orders  # type: ignore  # noqa: PLC0415
 
-    # --- dryf konfiguracji vs golden-pin (wzorzec #9/#15) ---
-    live_flags = {"plan_aware": plan_aware, "trust_canon": trust_canon,
-                  "panel": panel_flags}
-    flag_drift = (live_flags != corpus_meta.get("flags"))
+    builder = getattr(courier_orders, "build_view", None)
+    if not callable(builder):
+        raise RuntimeError("courier_orders.build_view is unavailable")
+    return _read_only_backend_builder(courier_orders, builder)
 
-    # --- parytet kolejności na żywych workach ---
-    bags = gen._bag_dicts_live(orders)
-    checked, mismatches, errors = 0, [], []
-    for cid, bag in sorted(bags.items()):
-        plan_doc = plans.get(cid) if isinstance(plans, dict) else None
-        bag_objs = [BagOrder(**{k: v for k, v in d.items() if k in gen.BAG_FIELDS})
-                    for d in bag]
-        canon = gen._proj(RP.order_podjazdy(bag_objs, plan_doc,
-                                            plan_aware=plan_aware,
-                                            trust_canon=trust_canon))
+
+def _read_only_backend_builder(
+    module: Any,
+    builder: Callable[[str], Mapping[str, Any]],
+) -> Callable[[str], Mapping[str, Any]]:
+    """Suppress the known read-side earnings writer around real DTO building.
+
+    ``courier_orders.build_view`` currently calls
+    ``earnings_history.record_day`` despite its read-only docstring.  The
+    monitor must not mutate that history.  The narrowly scoped replacement is
+    restored even when DTO construction raises.
+    """
+
+    def build(courier_id: str) -> Mapping[str, Any]:
+        earnings = getattr(module, "earnings_history", None)
+        record_day = getattr(earnings, "record_day", None)
+        if not callable(record_day):
+            raise RuntimeError(
+                "courier_orders earnings_history.record_day contract changed"
+            )
+        earnings.record_day = lambda *_args, **_kwargs: None
         try:
-            stops, _src = _build_route(plan_doc, bag_objs, None,
-                                       {b.order_id: {} for b in bag_objs})
-            console = gen._proj(stops)
-        except Exception as e:  # noqa: BLE001
-            errors.append({"cid": cid, "error": f"{type(e).__name__}: {e}"[:200]})
+            return builder(courier_id)
+        finally:
+            earnings.record_day = record_day
+
+    return build
+
+
+def _pickup_min(value: Any) -> int | None:
+    """Faithful port of Kotlin ``pickupMin`` (including equality fallback)."""
+    if not isinstance(value, str):
+        return None
+    parts = value.split(":")
+    if len(parts) != 2:
+        return None
+    try:
+        return int(parts[0].strip()) * 60 + int(parts[1].strip())
+    except ValueError:
+        return None
+
+
+def _pickup_together(left: Any, right: Any) -> bool:
+    left_min = _pickup_min(left)
+    right_min = _pickup_min(right)
+    if left_min is not None and right_min is not None:
+        return abs(left_min - right_min) <= PICKUP_MERGE_MIN
+    return left == right
+
+
+def _restaurant_key(place: Any) -> str:
+    """Faithful projection of Kotlin ``restaurantKey(PlaceDto)``."""
+    doc = place if isinstance(place, Mapping) else {}
+    lat, lon = doc.get("lat"), doc.get("lon")
+    if lat is not None and lon is not None:
+        return f"{float(lat):.4f},{float(lon):.4f}"
+    name = str(doc.get("name") or "").strip().lower()
+    address = str(doc.get("address") or "").strip().lower()
+    return f"{name}|{address}"
+
+
+def project_kotlin_build_steps(dto: Mapping[str, Any]) -> list[list[Any]]:
+    """Project real legacy DTO through Kotlin ``RouteLogic.buildSteps``.
+
+    The projection intentionally ignores ``done`` and display-only metadata.
+    It preserves step order and groups only adjacent pickups exactly as the
+    Kotlin code does, then normalizes group ids like the existing route-order
+    golden (sorted strings).
+    """
+    raw_orders = dto.get("orders")
+    raw_stops = dto.get("stop_sequence")
+    if not isinstance(raw_orders, list) or not isinstance(raw_stops, list):
+        raise ValueError("DTO requires list fields orders and stop_sequence")
+
+    by_id: dict[str, Mapping[str, Any]] = {}
+    for order in raw_orders:
+        if not isinstance(order, Mapping) or order.get("order_id") is None:
+            continue
+        by_id[str(order["order_id"])] = order
+
+    out: list[dict[str, Any]] = []
+    for ref in raw_stops:
+        if not isinstance(ref, Mapping) or ref.get("order_id") is None:
+            continue
+        order_id = str(ref["order_id"])
+        order = by_id.get(order_id)
+        if order is None:  # Kotlin: ``byId[ref.order_id] ?: continue``.
+            continue
+        is_pickup = ref.get("kind") == "pickup"
+        step = {
+            "kind": "pickup" if is_pickup else "dropoff",
+            "ids": [order_id],
+            "restaurant_key": _restaurant_key(order.get("restaurant")),
+            "pickup_time": order.get("pickup_time"),
+        }
+        last = out[-1] if out else None
+        if (
+            is_pickup
+            and last is not None
+            and last["kind"] == "pickup"
+            and last["restaurant_key"] == step["restaurant_key"]
+            and _pickup_together(last["pickup_time"], step["pickup_time"])
+        ):
+            last["ids"].append(order_id)
+        else:
+            out.append(step)
+
+    return [[step["kind"], sorted(step["ids"])] for step in out]
+
+
+def _safe_id(value: Any) -> str:
+    """Stable operator correlation without exposing courier/order identifiers."""
+    return hashlib.sha256(str(value).encode("utf-8")).hexdigest()[:12]
+
+
+def _redact_projection(projection: Sequence[Sequence[Any]]) -> list[list[Any]]:
+    return [
+        [step[0], [_safe_id(order_id) for order_id in step[1]]]
+        for step in projection
+    ]
+
+
+def _gate_line(verdict: str, coverage: Mapping[str, Any], reason: str) -> str:
+    alarm = "—"
+    if verdict == "BROKEN":
+        alarm = (
+            "ALARM: route parity BROKEN; "
+            f"coverage={coverage.get('checked_bags', 0)}/"
+            f"{coverage.get('qualifying_bags', 0)}; {reason}"
+        )
+    return (
+        f"| — | {GATE_ID} | WAIT_DATA | CTO | {GATE_DUE} | {alarm} |"
+    )
+
+
+def evaluate(
+    bags: Mapping[str, Sequence[Mapping[str, Any]]],
+    plans: Mapping[str, Any],
+    *,
+    canon_builder: Callable[[Sequence[Mapping[str, Any]], Any], Sequence[Any]],
+    dto_builder: Callable[[str], Mapping[str, Any]],
+    canon_projector: Callable[[Sequence[Any]], list[list[Any]]],
+    live_flags: Mapping[str, Any],
+    corpus_flags: Mapping[str, Any],
+    observed_at: str | None = None,
+) -> tuple[dict[str, Any], int]:
+    """Pure verdict engine; dependencies are injected for hermetic oracles."""
+    observed_at = observed_at or datetime.now(timezone.utc).isoformat()
+    qualifying = len(bags)
+    checked = 0
+    mismatches: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+
+    flag_drift = dict(live_flags) != dict(corpus_flags)
+    for courier_id, bag in sorted(bags.items()):
+        try:
+            canonical = canon_projector(
+                canon_builder(bag, plans.get(courier_id))
+            )
+            client = project_kotlin_build_steps(dto_builder(courier_id))
+        except Exception as exc:  # one bad courier must make coverage fail closed
+            errors.append(
+                {
+                    "courier_ref": _safe_id(courier_id),
+                    "error": f"{type(exc).__name__}: {exc}"[:240],
+                }
+            )
             continue
         checked += 1
-        if console != canon:
-            mismatches.append({"cid": cid, "canon": canon, "console": console})
+        if client != canonical:
+            mismatches.append(
+                {
+                    "courier_ref": _safe_id(courier_id),
+                    "canonical": _redact_projection(canonical),
+                    "client": _redact_projection(client),
+                }
+            )
 
-    ok = not mismatches and not flag_drift and not errors
-    verdict = {
-        "verdict": "OK" if ok else "FAIL",
+    coverage = {
+        "qualifying_bags": qualifying,
         "checked_bags": checked,
+        "coverage_ratio": (checked / qualifying) if qualifying else None,
+        "mismatch_bags": len(mismatches),
+        "error_bags": len(errors),
+    }
+    if flag_drift:
+        verdict, reason, exit_code = (
+            "BROKEN",
+            "effective route flags differ from the pinned corpus",
+            EXIT_PARITY_BROKEN,
+        )
+    elif errors or checked != qualifying:
+        verdict, reason, exit_code = (
+            "BROKEN",
+            "qualifying DTO coverage is incomplete",
+            EXIT_INFRA_BROKEN,
+        )
+    elif mismatches:
+        verdict, reason, exit_code = (
+            "BROKEN",
+            "canonical and Kotlin-projected routes differ",
+            EXIT_PARITY_BROKEN,
+        )
+    elif qualifying == 0:
+        verdict, reason, exit_code = (
+            "EXPECTED_NO_DATA",
+            "no qualifying active courier bags",
+            EXIT_EXPECTED_NO_DATA,
+        )
+    else:
+        verdict, reason, exit_code = "OK", "full parity", EXIT_OK
+
+    result = {
+        "schema_version": 1,
+        "monitor": GATE_ID,
+        "verdict": verdict,
+        "reason": reason,
+        "heartbeat": {
+            "observed_at_utc": observed_at,
+            "run_id": str(uuid.uuid4()),
+            "coverage": coverage,
+        },
         "mismatches": mismatches,
         "errors": errors,
         "flag_drift": flag_drift,
-        "live_flags": live_flags,
-        "corpus_flags": corpus_meta.get("flags"),
+        "live_flags": dict(live_flags),
+        "corpus_flags": dict(corpus_flags),
     }
+    result["open_gates_line"] = _gate_line(verdict, coverage, reason)
+    return result, exit_code
+
+
+def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
+    """Atomic 0600 write: temp -> fsync -> rename -> directory fsync."""
+    path = path.resolve()
+    if not path.parent.is_dir():
+        raise FileNotFoundError(f"result directory does not exist: {path.parent}")
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp")
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle, ensure_ascii=False, sort_keys=True)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+        dir_fd = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+
+
+def _infra_result(exc: Exception) -> tuple[dict[str, Any], int]:
+    now = datetime.now(timezone.utc).isoformat()
+    coverage = {
+        "qualifying_bags": 0,
+        "checked_bags": 0,
+        "coverage_ratio": None,
+        "mismatch_bags": 0,
+        "error_bags": 1,
+    }
+    reason = f"{type(exc).__name__}: {exc}"[:240]
+    result = {
+        "schema_version": 1,
+        "monitor": GATE_ID,
+        "verdict": "BROKEN",
+        "reason": "monitor infrastructure failure",
+        "heartbeat": {
+            "observed_at_utc": now,
+            "run_id": str(uuid.uuid4()),
+            "coverage": coverage,
+        },
+        "mismatches": [],
+        "errors": [{"error": reason}],
+        "flag_drift": False,
+        "live_flags": {},
+        "corpus_flags": {},
+    }
+    result["open_gates_line"] = _gate_line(
+        "BROKEN", coverage, "monitor infrastructure failure"
+    )
+    return result, EXIT_INFRA_BROKEN
+
+
+def _run_live() -> tuple[dict[str, Any], int]:
+    gen = _load_gen()
+    plan_aware = gen._dropin_on(
+        gen.PLAN_AWARE_DROPIN, "ENABLE_PLAN_AWARE_PODJAZDY"
+    )
+    trust_canon = gen._dropin_on(
+        gen.TRUST_CANON_DROPIN, "ENABLE_BUILD_VIEW_TRUST_CANON_ORDER"
+    )
+    panel_flags = gen._panel_prod_flags()
+    live_flags = {
+        "plan_aware": plan_aware,
+        "trust_canon": trust_canon,
+        "panel": panel_flags,
+    }
+
+    raw = json.loads(ORDERS_PATH.read_text(encoding="utf-8"))
+    orders = (
+        raw
+        if isinstance(raw, list)
+        else list((raw.get("orders", raw) or {}).values())
+        if isinstance(raw, dict)
+        else []
+    )
+    plans = json.loads(PLANS_PATH.read_text(encoding="utf-8"))
+    if not isinstance(plans, dict):
+        raise ValueError("courier_plans.json must contain an object")
+    corpus_flags = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))["meta"][
+        "flags"
+    ]
+    bags = gen._bag_dicts_live(orders)
+
+    from dispatch_v2 import route_podjazdy as route_canon  # noqa: PLC0415
+
+    def canon_builder(bag: Sequence[Mapping[str, Any]], plan: Any):
+        return route_canon.order_podjazdy(
+            bag,
+            plan,
+            plan_aware=plan_aware,
+            trust_canon=trust_canon,
+        )
+
+    return evaluate(
+        bags,
+        plans,
+        canon_builder=canon_builder,
+        dto_builder=_load_backend_dto_builder(),
+        canon_projector=gen._proj,
+        live_flags=live_flags,
+        corpus_flags=corpus_flags,
+    )
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--json", action="store_true", help="full JSON on stdout")
+    parser.add_argument(
+        "--result-path",
+        type=Path,
+        help="atomically persist the heartbeat/verdict (no write when omitted)",
+    )
+    args = parser.parse_args()
+
+    try:
+        result, exit_code = _run_live()
+    except Exception as exc:  # fail closed: no INFRA_ERROR fourth verdict
+        result, exit_code = _infra_result(exc)
+
+    if args.result_path is not None:
+        try:
+            _atomic_write_json(args.result_path, result)
+        except Exception as exc:
+            result, exit_code = _infra_result(exc)
+
     if args.json:
-        print(json.dumps(verdict, ensure_ascii=False, indent=1))
+        print(json.dumps(result, ensure_ascii=False, indent=1, sort_keys=True))
     else:
-        print(json.dumps({k: verdict[k] for k in
-                          ("verdict", "checked_bags", "flag_drift")},
-                         ensure_ascii=False)
-              + (f" mismatches={len(mismatches)} errors={len(errors)}" if not ok else ""))
-    return 0 if ok else 1
+        coverage = result["heartbeat"]["coverage"]
+        print(
+            f"[route_order_live_parity {result['heartbeat']['observed_at_utc']}] "
+            f"verdict={result['verdict']} "
+            f"checked={coverage['checked_bags']}/"
+            f"{coverage['qualifying_bags']} "
+            f"mismatches={coverage['mismatch_bags']} "
+            f"errors={coverage['error_bags']}"
+        )
+        print(result["open_gates_line"])
+    return exit_code
 
 
 if __name__ == "__main__":
