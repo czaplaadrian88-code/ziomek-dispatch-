@@ -47,7 +47,6 @@
   "ENABLE_OBJ_SPAN_COST",
   "ENABLE_PANEL_PACKS_BAG_RECONSTRUCTION",
   "ENABLE_PANEL_PACKS_EMPTY_WRITE_GUARD",
-  "ENABLE_PENDING_RESWEEP",
   "ENABLE_PICKUP_COORDS_FROM_PANEL",
   "ENABLE_PICKUP_DEBIAS_SHADOW",
   "ENABLE_PLN_QUALITY_AWARE",
@@ -73,5 +72,6 @@
  ],
  "_2026-06-30_note": "+1 swiadomie baseline: ENABLE_COORDINATOR_FORCE_TIME_RECHECK = kill-switch operacyjny przycisku konsoli Odswiez czas z rutcomu (NIE logika decyzyjna dispatchu -> nie nalezy do ZIOMEK_LOGIC_REFERENCE.md; klasa jak guard/alert).",
  "_2026-07-02_note_S1": "ENABLE_SLA_ANCHOR_UNIFIED (S1) NIE w baseline: flaga jeszcze NIE jest w flags.json (flip za ACK), a doc juz dopisany do ZIOMEK_LOGIC_REFERENCE (sekcja FALA-2) — przy flipie test_flag_doc_coverage zielony bez baseline.",
- "_2026-07-02_note_o2capz": "-2 baseline (kurczenie ratcheta): ENABLE_ETA_QUANTILE_R6_BAGCAP + ENABLE_PACZKA_R6_THERMAL_EXEMPT udokumentowane w ZIOMEK_LOGIC_REFERENCE przy co-design o2-capz."
+ "_2026-07-02_note_o2capz": "-2 baseline (kurczenie ratcheta): ENABLE_ETA_QUANTILE_R6_BAGCAP + ENABLE_PACZKA_R6_THERMAL_EXEMPT udokumentowane w ZIOMEK_LOGIC_REFERENCE przy co-design o2-capz.",
+ "_2026-07-28_note_r2": "-1 baseline (kurczenie ratcheta): ENABLE_PENDING_RESWEEP udokumentowany w ZIOMEK_LOGIC_REFERENCE.md. Ujawnione przez R2 — jego opis ENABLE_PROPOSAL_REFRESH referencjonuje te flage, a checker uznaje obecnosc nazwy w ref za udokumentowanie (dopasowanie podciagu), wiec wpis w baseline stal sie nieaktualny. Zamiast samego usuniecia z baseline flaga dostala PELNY opis (jest LIVE w flags.json, a byla bez zadnej dokumentacji) — dlug faktycznie splacony, nie tylko przepisany."
 }

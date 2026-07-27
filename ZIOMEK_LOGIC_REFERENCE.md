@@ -1153,3 +1153,24 @@ Wzorzec 1:1 jak `ENABLE_STAGE_TIMING_OBSERVATION` wyżej. Default kodu = `False`
   `pending_proposals`, `global_alloc`, konsoli ani Telegrama. Flaga może uruchomić
   solve niezależnie od legacy `ENABLE_PENDING_RESWEEP`, ale nie uruchamia jego
   writerów.
+
+- `ENABLE_PENDING_RESWEEP` — **legacy master on/off** co-minutowego globalnego
+  re-rankingu WISZĄCYCH propozycji (`tools/pending_global_resweep.py`), LIVE
+  (`flags.json=true`). Udokumentowany tutaj, bo od R2 jest wprost referencjonowany
+  przez `ENABLE_PROPOSAL_REFRESH` powyżej — bez własnego opisu czytelnik nie odróżnia
+  obu ścieżek. Problem, który rozwiązuje (diagnoza 2026-06-24, case 483138
+  Chinatown→Plażowa): Ziomek liczy propozycję JEDNORAZOWO przy `NEW_ORDER` i już jej
+  nie re-rankuje, więc (1) w oknie oczekiwania propozycja się starzeje, gdy świat się
+  zmieni, i (2) każde zlecenie oceniane niezależnie (greedy per-order) potrafi
+  zaproponować TEGO SAMEGO kuriera do wszystkich wiszących zleceń. Ten job bierze co
+  minutę wszystkie nieprzypisane zlecenia i alokuje je GLOBALNIE — sekwencyjny greedy
+  z aktualizacją stanu floty, na prawdziwym `assess_order` (zero dryftu scoringu).
+  **Domyślnie SHADOW:** loguje `would_repropose` do
+  `dispatch_state/pending_global_resweep.jsonl`, nie rusza Telegrama ani
+  `pending_proposals.json`. Żywa podmiana propozycji to OSOBNA flaga
+  `PENDING_RESWEEP_LIVE` (default OFF; K5 05.07 wpięła ścieżkę live dla konsoli/1-klik
+  za bramką `live_gate_open` — flip wyłącznie za rekomendacją i osobnym ACK Adriana,
+  wykonuje FLIPMASTER). Rollback: `false` w flags.json + restart `dispatch-shadow` za ACK.
+  Relacja do R2: `ENABLE_PROPOSAL_REFRESH` może uruchomić solve niezależnie od tej
+  flagi, ale NIE uruchamia jej writerów — to dwa rozłączne instrumenty tej samej
+  obserwacji, nie duplikaty.
