@@ -44,6 +44,23 @@ E = _load_worktree_executor()
 NOW = datetime(2026, 7, 2, 3, 0, tzinfo=timezone.utc)
 
 
+@pytest.fixture(autouse=True)
+def _owner_authorized(tmp_path, monkeypatch):
+    """AUTON-02/T2 (2026-07-28): sama flaga ON już NIE upoważnia — executor żąda
+    świeżego, PIN-owanego podniesienia w dzienniku audytu koordynatora (ODR-002,
+    `tests/test_auto_assign_owner_auth_gate.py`). Ten plik bada TOCTOU/dry-first/
+    idempotencję/sentinel, czyli warstwę PO autoryzacji — dostaje upoważnienie
+    ważne wobec `NOW` i zostaje odcięty od ŻYWEGO
+    `coordinator_assign_audit.jsonl` (hermetyczność Z-P2-07)."""
+    p = tmp_path / "coordinator_assign_audit.jsonl"
+    p.write_text(json.dumps({
+        "ts": (NOW - timedelta(minutes=5)).isoformat(),
+        "kind": "auto_assign_toggle", "actor": "ac@nadajesz.pl",
+        "requested": True, "ok": True, "rc": 0, "value": True,
+        "from": False, "pin_verified": True}) + "\n", encoding="utf-8")
+    monkeypatch.setattr(E, "COORDINATOR_AUDIT_PATH", str(p))
+
+
 def _record(oid="480300", cid="101", name="Kurier Testowy", target_min=12):
     tgt = (NOW + timedelta(minutes=target_min)).isoformat()
     return {"verdict": "PROPOSE", "order_id": oid,
