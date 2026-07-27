@@ -2,16 +2,16 @@
  "_meta": {
   "counts": {
    "apka": 27,
-   "engine": 404,
+   "engine": 421,
    "engine_1b_units": 12,
-   "etap4": 135,
+   "etap4": 147,
    "flags_json_keys": 247,
    "fp_extra": 35,
    "known_drift": 0,
    "numeric": 30,
    "panel": 86,
    "test_isolated": 6,
-   "total": 517,
+   "total": 534,
    "twins_concepts": 5
   },
   "generator": "tools/flag_lifecycle_seed.py",
@@ -3287,6 +3287,44 @@
    "twin_of": [],
    "worlds": [
     "apka"
+   ]
+  },
+  "ENABLE_ASSIGNMENT_EPISODE_LOG": {
+   "carriers": [
+    "common.py:ETAP4_DECISION_FLAGS",
+    "dispatch_v2/common.py-const"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/panel_watcher.py",
+    "dispatch_v2/proposal_freshness.py"
+   ],
+   "curated_at": "2026-07-28",
+   "current_snapshot": {
+    "default": false
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_ASSIGNMENT_EPISODE_LOG",
+   "notes": "R2 assignment-time truth: świeży kanoniczny solve przed assignment, append assignment_episode.v1 dopiero po commit-time CAS dokładnej generacji. Aktywacja wyłącznie po gate R2; kod default OFF.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-panel-watcher.service"
+   },
+   "removal_condition": "po ustaleniu stałego kontraktu pomiaru albo retire za ACK",
+   "review_date": "2026-08-10",
+   "rollback": "flags.json false/brak klucza (hot-reload, bez restartu)",
+   "source_of_truth": "flags.json",
+   "twin_of": [],
+   "worlds": [
+    "engine"
    ]
   },
   "ENABLE_AUTO_ASSIGN": {
@@ -11656,6 +11694,44 @@
    "removal_condition": "n/d dopóki live",
    "review_date": "2026-10-10",
    "rollback": "env OFF w flags.json + restart dispatch-shadow.service ZA ACK",
+   "source_of_truth": "flags.json",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
+  "ENABLE_PROPOSAL_REFRESH": {
+   "carriers": [
+    "common.py:ETAP4_DECISION_FLAGS",
+    "dispatch_v2/common.py-const"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/proposal_refresh.py",
+    "dispatch_v2/tools/pending_global_resweep.py"
+   ],
+   "curated_at": "2026-07-28",
+   "current_snapshot": {
+    "default": false
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_PROPOSAL_REFRESH",
+   "notes": "R2 shadow-first: po zmianie członkostwa dostępnej floty i realnej zmianie zwycięzcy zapisuje wyłącznie SHADOW_ONLY do shadow_decisions; bez pending/konsoli/Telegrama. Kod default OFF.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-pending-resweep-shadow.service"
+   },
+   "removal_condition": "po werdykcie gate R2 i ustaleniu stałego odświeżania albo retire za ACK",
+   "review_date": "2026-08-10",
+   "rollback": "flags.json false/brak klucza (hot-reload, bez restartu)",
    "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [

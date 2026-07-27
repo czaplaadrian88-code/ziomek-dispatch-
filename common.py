@@ -283,6 +283,12 @@ ETAP4_DECISION_FLAGS = (
     # selektor OFF/ON na pełnej puli przed top[:16]. Nie zmienia decyzji;
     # ETAP4 zapewnia hot-reload, fingerprint i izolację testów.
     "ENABLE_C7_NORMAL_PATH_LOG",
+    # R2 PROPOSAL FRESHNESS (2026-07-28): oba kanały są domyślnie OFF i
+    # shadow-only. Pierwszy mierzy świeżą decyzję dokładnie przy assignment;
+    # drugi loguje zmianę zwycięzcy po zmianie dostępnej floty. Rejestracja
+    # ETAP4 = hot-reload + fingerprint + conftest strip żywych flag.
+    "ENABLE_ASSIGNMENT_EPISODE_LOG",
+    "ENABLE_PROPOSAL_REFRESH",
     # ETAP4-GAP DOMKNIĘTY (2026-06-25): live-decyzyjna flaga selekcji best_effort
     # (carry-aware objm pick) była POZA rejestrem → poza zasięgiem flag_registry/
     # parytetu cross-proces/izolacji conftest (testy dziedziczyły żywy flags.json=ON).
@@ -651,6 +657,8 @@ ENABLE_FULL_CHOICE_SET_LOG = False
 ENABLE_DECISION_ETA_LOG = False
 ENABLE_LEARNING_LOG_DECISION_JOIN = False
 ENABLE_C7_NORMAL_PATH_LOG = False
+ENABLE_ASSIGNMENT_EPISODE_LOG = False
+ENABLE_PROPOSAL_REFRESH = False
 ETA_FABRICATION_FLOOR_MIN = 60.0     # T=60: E-1 łapie 100% fabrykacji (>90 gubi połowę)
 ETA_FABRICATION_RATIO = 2.5          # pred>2,5×robust_ref (komponent ratio Opusa vs FP kryzysu)
 ETA_ROBUST_SERVICE_MIN = 12.0        # service_time (odbiór+wydanie) w robust_ref
