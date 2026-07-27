@@ -22,6 +22,12 @@ from dispatch_v2 import effects_buffer as _EB  # K08 refaktoru: efekty PO decyzj
 from dispatch_v2.core import gates as _gates  # K10 refaktoru: bramki wejściowe (geokod-defense, early-bird)
 from dispatch_v2.core import candidates as _candidates  # K11 refaktoru: pętla per-kurier
 from dispatch_v2.core import selection as _selection  # K12 refaktoru: selekcja + werdykt
+# G5 (2026-07-27, CZASY 492): wspólne jądro EWMA + kanoniczny producent snapshotu
+# loadgov. `_loadgov_ewma_step` jest atrybutem modułu, żeby test parytetu mógł go
+# podmienić bez dotykania importu; `_loadgov_pub` publikuje TYLKO w procesie, który
+# zgłosił rolę producenta (i tylko przy ENABLE_LOADGOV_SNAPSHOT_PUBLISH).
+from dispatch_v2.core.loadgov_ewma import ewma_step as _loadgov_ewma_step
+from dispatch_v2.core import loadgov_publisher as _loadgov_pub
 from dispatch_v2.observability import stage_timing as _ST  # Z-P1-03: observation-only
 from dispatch_v2.common import (
     parse_panel_timestamp,
@@ -42,7 +48,6 @@ from dispatch_v2.fleet_context import build_fleet_context, FleetContext
 from dispatch_v2.pipeline_geometry import _point_to_segment_km, _min_dist_to_route_km  # noqa: F401 — B6: czysta geometria; kontrakt tożsamości (test_pipeline_geometry) + _dp._min_dist_to_route_km w core.candidates (K11)
 import importlib
 import json
-import math
 import os
 import threading  # V3.27.1 sesja 2: in-memory cache lock dla pre-proposal recheck
 
@@ -2864,6 +2869,16 @@ def _loadgov_compute(fleet_snapshot, now):
 
     load = aktywne zlecenia / aktywni kurierzy (dispatchable fleet przekazany
     do assess_order). EWMA: alpha = 1 - exp(-dt/tau), pierwsza próbka = load.
+
+    ⚠ Mianownik to `len(fleet_snapshot)`, czyli flota DISPATCHOWALNA — kurier na
+    zmianie bez pozycji jest z niej odrzucony (`courier_resolver`, powód
+    `no_position`), a jego zamówienia zostają w liczniku. Progi 2,7 / 3,5 / 3,0
+    tej serii były kalibrowane DOKŁADNIE na tym mianowniku, więc jego zmiana
+    wymaga rekalibracji i ACK ownera — dlatego seria zostaje tu nietknięta,
+    a mianownik EQUAL-TREATMENT ma osobnego właściciela (G5,
+    `core/loadgov_publisher`), który go MIERZY zamiast po cichu podmieniać.
+    Rachunek wygładzania jest wspólny (`core.loadgov_ewma.ewma_step`), żeby
+    dwie serie nie hodowały dwóch kopii tej samej polityki.
     """
     couriers = len(fleet_snapshot or {})
     orders = _loadgov_active_orders(now)
@@ -2871,15 +2886,9 @@ def _loadgov_compute(fleet_snapshot, now):
         return None, _LOADGOV_STATE["ewma"], orders, couriers
     load_now = round(orders / couriers, 3)
     try:
-        prev_ts = _LOADGOV_STATE["ts"]
-        prev = _LOADGOV_STATE["ewma"]
-        if prev is None or prev_ts is None:
-            ewma = load_now
-        else:
-            dt_min = max(0.0, (now - prev_ts).total_seconds() / 60.0)
-            tau = max(0.1, float(getattr(C, "LOADGOV_EWMA_TAU_MIN", 15.0)))
-            alpha = 1.0 - math.exp(-dt_min / tau)
-            ewma = round(alpha * load_now + (1.0 - alpha) * prev, 3)
+        ewma = _loadgov_ewma_step(
+            _LOADGOV_STATE["ewma"], _LOADGOV_STATE["ts"], load_now, now,
+            float(getattr(C, "LOADGOV_EWMA_TAU_MIN", 15.0)))
         _LOADGOV_STATE["ts"] = now
         _LOADGOV_STATE["ewma"] = ewma
     except Exception:
@@ -4790,6 +4799,25 @@ def _assess_order_impl(
             "loadgov", [loadgov_now, loadgov_ewma, loadgov_orders, loadgov_couriers])
     except Exception:
         pass
+    # G5 (2026-07-27, CZASY 492): kanoniczny PRODUCENT snapshotu loadgov.
+    # Wołany DOKŁADNIE tu, bo to jedyny moment, w którym licznik (aktywne
+    # zlecenia) i mianownik (flota tego ticku) pochodzą z tego samego stanu
+    # świata; publikacja z pętli między zleceniami stemplowałaby świeżym
+    # `observed_at` EWMA, która się nie ruszyła. Publikuje WYŁĄCZNIE proces ze
+    # zgłoszoną rolą producenta i przy ENABLE_LOADGOV_SNAPSHOT_PUBLISH; poza
+    # tym `observe` jest no-opem. Zapis idzie przez bufor efektów (K08) — plik
+    # snapshotu to efekt uboczny, nie wejście tej decyzji. Fail-soft: `observe`
+    # nie rzuca, a i tak łapiemy — publikacja NIGDY nie dotyka werdyktu.
+    try:
+        if _loadgov_pub.enabled():
+            _lg_pub_kw = dict(now=now, active_orders=loadgov_orders,
+                              couriers_dispatchable=loadgov_couriers,
+                              legacy_ewma=loadgov_ewma)
+            if not _EB.divert(_loadgov_pub.observe, **_lg_pub_kw):
+                _loadgov_pub.observe(**_lg_pub_kw)
+    except Exception as _lgp_e:
+        log.warning(f"loadgov snapshot publish skipped: "
+                    f"{type(_lgp_e).__name__}: {_lgp_e}")
     # N5 krok 2 (2026-06-17): tolerancja punktualności committed load-aware →
     # route_simulator (czyta ją w _ortools_plan). loadgov_ewma ≥ próg 4,5 (niedobór,
     # dni jak 16.05) → loose 10 min; inaczej strict 5. Gated; flaga OFF → bound się
