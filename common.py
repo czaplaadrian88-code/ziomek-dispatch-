@@ -49,6 +49,14 @@ ENABLE_PERF_LAZY_MEMBERS = os.environ.get("ENABLE_PERF_LAZY_MEMBERS", "0") == "1
 # zapisuje sidecara. Nie nalezy do ETAP4_DECISION_FLAGS, bo nie zmienia wyniku.
 ENABLE_STAGE_TIMING_OBSERVATION = False
 
+# WB1 faza 1 (2026-07-27, incydent CZASY 492): niedecyzyjny kill-switch ledgera
+# okna odbioru v2 (`core/lex_window_ledger.py`, spec `docs/WB1_LEDGER_V2_SCHEMA.md`).
+# OFF (default) = ledger v1 BAJT-W-BAJT jak przed WB1 -> deploy kodu nic nie zmienia.
+# ON = wylacznie schemat v2 z rozdzialem rol writer/observer, v1 zamrozony na dysku.
+# Kanon po aktywacji = flags.json (hot-reload, bez restartu); rollback = flip OFF.
+# Nie nalezy do ETAP4_DECISION_FLAGS, bo nie zmienia tresci decyzji (jak wyzej).
+ENABLE_LEX_WINDOW_LEDGER_V2 = False
+
 # ─── K05 refaktor (2026-07-06, ADR-R01): FlagSnapshot per tick ───
 # Problem: flagi czytane z dysku w TRAKCIE decyzji (nawet z perf-lazy TTL 0,25 s
 # odświeżenie może wypaść W ŚRODKU ticku) → zmiana flags.json mid-tick daje
