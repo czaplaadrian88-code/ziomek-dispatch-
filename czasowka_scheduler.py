@@ -242,6 +242,7 @@ def eval_czasowka(order_id: str, order_state: dict, now_utc: datetime) -> dict:
                 "minutes_to_pickup": result.get("minutes_to_pickup"),
                 "match_quality": result.get("match_quality"),
             },
+            prediction_context=order_state,
         )
     except Exception as exc:  # defense-in-depth: log-only path
         _log.warning("decision ETA czasowka hook fail-safe oid=%s: %s", order_id, exc)

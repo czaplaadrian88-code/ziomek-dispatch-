@@ -140,11 +140,16 @@ def _plan_legs(candidate: Any, order_id: str) -> list[dict[str, Any]]:
     return legs
 
 
-def _candidate_snapshot(candidate: Any, order_id: str, selected_cid: str | None) -> dict:
+def _candidate_snapshot(
+    candidate: Any,
+    order_id: str,
+    selected_cid: str | None,
+    prediction: Mapping[str, Any] | None = None,
+) -> dict:
     metrics = _as_map(getattr(candidate, "metrics", None))
     cid = _cid(candidate)
     plan = getattr(candidate, "plan", None)
-    return {
+    snapshot = {
         "cid": cid,
         "selected": cid is not None and cid == selected_cid,
         "feasibility": getattr(candidate, "feasibility_verdict", None),
@@ -159,6 +164,9 @@ def _candidate_snapshot(candidate: Any, order_id: str, selected_cid: str | None)
         "plan_strategy": getattr(plan, "strategy", None),
         "legs": _plan_legs(candidate, order_id),
     }
+    if prediction:
+        snapshot.update(prediction)
+    return snapshot
 
 
 def _ordered_candidates(
@@ -250,14 +258,35 @@ def record_candidate_decision(
     selected_cid: str | None = None,
     candidate_pool_scope: str = "top_n",
     context: Mapping[str, Any] | None = None,
+    prediction_context: Mapping[str, Any] | None = None,
 ) -> bool:
     """Record one final selection without names, addresses or coordinates."""
     def build() -> list[dict]:
         chosen_cid = selected_cid or _cid(selected)
         ordered = _ordered_candidates(candidates, selected)
+        predictions: list[Mapping[str, Any] | None] = [None] * len(ordered)
+        if prediction_context is not None:
+            try:
+                from dispatch_v2 import eta_calib_serving
+                predictions = [
+                    prediction
+                    for prediction, _reason
+                    in eta_calib_serving.predict_pickup_quantiles_batch(
+                        ordered, prediction_context
+                    )
+                ]
+                if len(predictions) != len(ordered):
+                    predictions = [None] * len(ordered)
+            except Exception:  # base snapshot remains mandatory and fail-safe
+                predictions = [None] * len(ordered)
         snapshots = [
-            _candidate_snapshot(candidate, str(order_id), chosen_cid)
-            for candidate in ordered
+            _candidate_snapshot(
+                candidate,
+                str(order_id),
+                chosen_cid,
+                prediction=prediction,
+            )
+            for candidate, prediction in zip(ordered, predictions)
         ]
         return [{
             "decision_id": str(decision_id),
@@ -288,6 +317,7 @@ def record_pipeline_decision(
     outcome: str | None = None,
     selected_cid: str | None = None,
     context: Mapping[str, Any] | None = None,
+    prediction_context: Mapping[str, Any] | None = None,
 ) -> bool:
     """Record a PipelineResult, preferring the full pre-top-N candidate pool."""
     full_pool = getattr(result, "full_pool_candidates", None)
@@ -310,6 +340,7 @@ def record_pipeline_decision(
         selected_cid=selected_cid,
         candidate_pool_scope=scope,
         context=context,
+        prediction_context=prediction_context,
     )
 
 
