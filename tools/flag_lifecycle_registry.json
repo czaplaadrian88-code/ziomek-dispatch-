@@ -2,16 +2,16 @@
  "_meta": {
   "counts": {
    "apka": 27,
-   "engine": 404,
+   "engine": 405,
    "engine_1b_units": 12,
-   "etap4": 135,
+   "etap4": 136,
    "flags_json_keys": 247,
    "fp_extra": 35,
    "known_drift": 0,
    "numeric": 30,
    "panel": 86,
    "test_isolated": 6,
-   "total": 517,
+   "total": 518,
    "twins_concepts": 5
   },
   "generator": "tools/flag_lifecycle_seed.py",
@@ -8461,7 +8461,44 @@
     "LIVE_ETA_FRESH_OVERRIDE_ONLY"
    ],
    "worlds": [
-    "apka"
+   "apka"
+   ]
+  },
+  "ENABLE_LIVE_ETA_WARM_SOURCE": {
+   "carriers": [
+    "common.py:ETAP4_DECISION_FLAGS",
+    "dispatch_v2/common.py-const"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py:ENABLE_LIVE_ETA_WARM_SOURCE",
+    "dispatch_v2/live_eta_daemon.py"
+   ],
+   "curated_at": "2026-07-28",
+   "current_snapshot": {
+    "default": false
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_LIVE_ETA_WARM_SOURCE",
+   "notes": "R3: OFF zachowuje legacy snapshot bajt-w-bajt; ON publikuje per-stop LIVE(gps<=120s)/WARM(last_event<=180s)/PLANNED. WARM nigdy jako LIVE. Flip dopiero po porannym ACK ownera i weryfikacji etykiet wszystkich powierzchni.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-live-eta.service"
+   },
+   "removal_condition": "po stabilizacji kontraktu źródeł i minimum 2 dniach obserwacji decyzja ownera: utrwalić albo retire",
+   "review_date": "2026-08-04",
+   "rollback": "flags.json ENABLE_LIVE_ETA_WARM_SOURCE=false hot-reload; revert commita R3",
+   "source_of_truth": "common.py-const",
+   "twin_of": [],
+   "worlds": [
+    "engine"
    ]
   },
   "ENABLE_LOADAWARE_SELECTION_SHADOW": {
