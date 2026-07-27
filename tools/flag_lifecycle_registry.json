@@ -8154,6 +8154,40 @@
     "engine"
    ]
   },
+  "ENABLE_LEX_WINDOW_LEDGER_V2": {
+   "carriers": [
+    "dispatch_v2/common.py-const"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py:ENABLE_LEX_WINDOW_LEDGER_V2",
+    "dispatch_v2/core/lex_window_ledger.py"
+   ],
+   "curated_at": "2026-07-27",
+   "current_snapshot": {},
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_LEX_WINDOW_LEDGER_V2",
+   "notes": "WB1 faza 1 (CZASY 492). Niedecyzyjny kill-switch ledgera okna odbioru v2 (spec docs/WB1_LEDGER_V2_SCHEMA.md). OFF = ledger v1 bajt-w-bajt jak przed WB1; ON = wylacznie schemat v2 z rozdzialem rol writer/observer, v1 zamrozony. Poza ETAP4_DECISION_FLAGS bo nie zmienia tresci decyzji (precedens ENABLE_STAGE_TIMING_OBSERVATION). Czytany decision_flag() przy kazdym wywolaniu -> hot-reload bez restartu.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-plan-recheck.service"
+   },
+   "removal_condition": "n/d dopoki zbieramy baseline WB2; po kalibracji progow -> przeglad",
+   "review_date": "2026-10-27",
+   "rollback": "flags.json OFF hot-reload (bez restartu); OFF = sciezka v1 jak przed WB1",
+   "source_of_truth": "flags.json",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
   "ENABLE_LGBM_METRICS_READ": {
    "carriers": [
     "dispatch_v2/common.py-const",
