@@ -835,6 +835,7 @@ def run_once(now: Optional[datetime] = None, margin: Optional[float] = None) -> 
                         if _row.get("new_cid") not in (None, "") else None
                     ),
                     context={"live_armed": bool(_live_armed)},
+                    prediction_context=_row,
                 )
         except Exception as exc:  # defense-in-depth: log-only path
             _log.warning("decision ETA resweep hook fail-safe: %s", exc)

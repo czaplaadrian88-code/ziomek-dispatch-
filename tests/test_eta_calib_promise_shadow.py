@@ -49,8 +49,11 @@ def test_on_attaches_new_metrics_only(monkeypatch):
     best.metrics["istniejace_pole"] = "nietykalne"
     S.attach_shadow_promise_metrics(_fake_result(best), dict(_EV))
     m = best.metrics
+    assert m["eta_calib_promise_pickup_p50_min"] == 4.5
     assert m["eta_calib_promise_pickup_p80_min"] == 6.5
     assert m["eta_calib_promise_delivery_p80_min"] == 9.5
+    assert m["eta_calib_promise_contract_version"] == "eta_pickup_quantiles.v1"
+    assert m["eta_calib_promise_pickup_model_version"] == "sha_pick"
     assert m["eta_calib_champion"] == "sha_pick/sha_deli"
     assert m["istniejace_pole"] == "nietykalne"
     assert "eta_calib_srv_skip" not in m
@@ -63,6 +66,22 @@ def test_fail_soft_missing_champion(monkeypatch):
     S.attach_shadow_promise_metrics(_fake_result(best), dict(_EV))
     assert "champion_missing" in best.metrics.get("eta_calib_srv_skip", "")
     assert "eta_calib_promise_pickup_p80_min" not in best.metrics
+
+
+def test_k6_pickup_pool_loads_model_once_and_labels_both_quantiles(monkeypatch):
+    loads = []
+    model = _FakeModel(8.0)
+    monkeypatch.setattr(
+        S,
+        "_load_model",
+        lambda leg: (loads.append(leg) or model, "pickup-sha12"),
+    )
+    candidates = [_fake_best("1"), _fake_best("2"), _fake_best("3")]
+    predictions = S.predict_pickup_quantiles_batch(candidates, dict(_EV))
+    assert loads == ["pickup"]
+    assert [item[0]["pred_op"] for item in predictions] == [6.0, 6.0, 6.0]
+    assert [item[0]["p80"] for item in predictions] == [8.0, 8.0, 8.0]
+    assert all(item[1] is None for item in predictions)
 
 
 def test_fail_soft_no_best():

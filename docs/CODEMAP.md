@@ -52,7 +52,7 @@ Pominięto szum: `.git`, `__pycache__`, `.pytest_cache`. ⚠ `.claude/skills/` t
 - `objm_lexr6.py` — selektor lex-helperów (bliźniak best-effort, canary `ENABLE_OBJM_LEXR6_SELECT`)
 - `sla_anchor.py` — kotwica SLA (bliźniak feasibility+route_sim)
 - `shadow_dispatcher.py` — **SILNIK**: pętla `_tick`/`run` (systemd `dispatch-shadow`); serializer `_serialize_result` → shadow log
-- `decision_eta_log.py` — wspólny, fail-safe writer snapshotów ETA dokładnie w chwili finalnej decyzji/commitu planu; flaga `ENABLE_DECISION_ETA_LOG` default OFF
+- `decision_eta_log.py` — wspólny, fail-safe writer snapshotów ETA dokładnie w chwili finalnej decyzji/commitu planu; addytywne, opcjonalne pickup `pred_op`=P50 + `p80` z provenance/version; flaga `ENABLE_DECISION_ETA_LOG` default OFF
 - `state_machine.py` — jedyne źródło prawdy o stanie zlecenia (upsert `orders_state`, 26 ścieżek); observer FSM Phase A log-only
 - `order_fsm.py` — formalny validator cyklu życia + jawne wyjątki reconcile; w Phase A nie blokuje writera
 - `plan_manager.py` — zapis/odczyt `courier_plans.json` (atomic); ładowanie planu
@@ -100,7 +100,7 @@ Pominięto szum: `.git`, `__pycache__`, `.pytest_cache`. ⚠ `.claude/skills/` t
 | Formalny FSM / obserwacja przejść | `order_fsm.py` + hook w `state_machine.py`; Phase A `observer=True`, `enforcement=False`, wyjątki reconcile wymagają jawnego source |
 | Pozycje kurierów / no-GPS / last-known-pos | `courier_resolver.py` → `courier_last_pos.json` (workspace) |
 | ETA / kalibracja | `live_eta.py` + `live_eta_daemon.py` (kanoniczne żywe ETA, jeden producer), `chain_eta.py`, `eta_calibration_logger.py`, `calib_maps.py` |
-| Decision-time ETA / dzienna coverage | `decision_eta_log.py` → `dispatch_state/decision_eta_log.jsonl`; bramka `tools/decision_eta_coverage.py` |
+| Decision-time ETA / dzienna coverage / D5 GPS | `decision_eta_log.py` → `dispatch_state/decision_eta_log.jsonl`; coverage `tools/decision_eta_coverage.py`; labelled P50/P80 + n≥200 `tools/gps_decision_eta_remeasure.py`; mapa `docs/K6_DECISION_ETA_MAP.md` |
 | Czasówki | `czasowka_scheduler.py` + `czasowka_proactive/` |
 | Paczki (parcel lane) | `parcel_assign.py` + `parcel_lane_merge.py` |
 | **Flagi silnika** | `flags.json` (`/root/.openclaw/workspace/scripts/flags.json`, hot-reload) + `common.flag()` |

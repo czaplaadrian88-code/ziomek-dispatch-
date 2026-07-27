@@ -412,6 +412,7 @@ def evaluate_order(rec: dict, holder_cid: str, fleet: Dict[str, Any],
                 "holder_cid": str(holder_cid),
                 "score_margin": round(delta, 2) if delta is not None else None,
             },
+            prediction_context=order_event,
         )
     except Exception as exc:  # defense-in-depth: log-only path
         _log.warning("decision ETA reassignment hook fail-safe oid=%s: %s", oid, exc)

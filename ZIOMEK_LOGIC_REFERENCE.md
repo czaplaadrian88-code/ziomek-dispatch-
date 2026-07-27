@@ -659,6 +659,16 @@ zwiększa procesowy licznik i nie zmienia werdyktu. Dzienna bramka:
 `tools/decision_eta_coverage.py` (100% unikalnych eventów shadow; brak denominatora
 = HOLD). Rotacja: daily/30/maxsize 100M. Flip nadal wymaga ACK ownera.
 
+**K6 P50/P80 (SOURCE-ONLY 2026-07-27):** kandydat może dodatkowo nieść
+`pred_op` (jawnie P50) i `p80` poślizgu pickup względem `czas_kuriera`, zawsze
+razem z `prediction_version=eta_pickup_quantiles.v1` i provenance modelu/cech.
+Jedyny producent pary to
+`eta_calib_serving.predict_pickup_quantiles_batch`; `decision_eta_log` pozostaje
+jedynym writerem JSONL. Brak modelu/inputu pomija całą opcjonalną parę i nie
+usuwa bazowego snapshotu. `tools/gps_decision_eta_remeasure.py` liczy D4/D5
+wyłącznie na labelled complete-cases, importuje `n>=200` i coverage z
+`KPI_BINDING_V1`, a rekordy legacy bez pól klasyfikuje jako jawne HOLD.
+
 - `_tick()` (`~:1040`) batches ≤50 events/cycle; `process_event()` (`~:1012`) is the pure wrapper.
 - **Record schema** (`_serialize_result`/`_serialize_candidate`, `~:254,476`): `ts, event_id,
   order_id, restaurant, verdict, reason, auto_route{AUTO|ACK|ALERT}, would_auto_assign,

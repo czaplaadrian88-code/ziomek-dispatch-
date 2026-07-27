@@ -1823,6 +1823,7 @@ def _tick(shadow_log_path: str, meta: Optional[dict], *,
                         "event_id": str(eid),
                         "claim_dropped": bool(_claim_dropped),
                     },
+                    prediction_context=payload,
                 )
             except Exception as _dtlog_e:  # defense-in-depth: log-only path
                 _log.warning(
