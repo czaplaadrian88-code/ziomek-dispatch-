@@ -607,6 +607,11 @@ ETAP4_DECISION_FLAGS = (
     # dostępności konsumowany wyłącznie przez dispatchable_fleet. OFF =
     # dotychczasowe składanie grafik + manual_overrides bajt-w-bajt.
     "ENABLE_CID_AVAILABILITY_CONTRACT",
+    # R4 (2026-07-28): wygasanie rekordu operatorskiego na granicy doby
+    # operacyjnej (06:00 Europe/Warsaw) — tej samej, na której bliźniaczy
+    # manual_overrides_daily_reset kasuje `excluded`/`working`. OFF = rekord
+    # bezterminowy bajt-w-bajt jak dziś. Mapa: docs/R4_OPERATOR_ON_MAP.md.
+    "ENABLE_OPERATOR_AVAILABILITY_EXPIRY",
 )
 
 # Stałe-fallback (module-level OFF) dla flag dodanych do ETAP4_DECISION_FLAGS
@@ -641,6 +646,13 @@ ENABLE_CZASOWKA_RECLAIM_LIVE = False
 # R-POOL-TRUTH: dark launch; flip dopiero po ACK, inicjalizacji stanu ON/OFF i
 # porównaniu puli. Rollback hot = false/brak klucza w flags.json.
 ENABLE_CID_AVAILABILITY_CONTRACT = False
+# R4 (2026-07-28, karta engine.operator-on-expiry-r4): rekord operatorski
+# w CID-keyed store dostępności (owner: courier_availability.py) przestaje być
+# prawdą o BIEŻĄCEJ dobie po granicy 06:00 Europe/Warsaw liczonej od
+# stempla zapisu. Domyślnie OFF = rekord żyje
+# bezterminowo, dokładnie jak przed R4. Kanon po aktywacji = flags.json
+# (hot-reload między wywołaniami dispatchable_fleet); rollback = klucz false.
+ENABLE_OPERATOR_AVAILABILITY_EXPIRY = False
 # W0.2 advisory (roadmapa 08, werdykt E-1 „GO hybryda"): bezpiecznik fabrykacji ETA.
 # Wykrycie: pred_carry > ETA_FABRICATION_FLOOR_MIN ∧ pred_carry > RATIO×robust_ref,
 # gdzie robust_ref = osrm_freeflow(pickup→deliv)·traffic_mult + service + slack
