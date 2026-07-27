@@ -2,16 +2,16 @@
  "_meta": {
   "counts": {
    "apka": 27,
-   "engine": 399,
+   "engine": 404,
    "engine_1b_units": 12,
-   "etap4": 134,
+   "etap4": 135,
    "flags_json_keys": 247,
    "fp_extra": 35,
    "known_drift": 0,
-   "numeric": 26,
+   "numeric": 30,
    "panel": 86,
    "test_isolated": 6,
-   "total": 512,
+   "total": 517,
    "twins_concepts": 5
   },
   "generator": "tools/flag_lifecycle_seed.py",
@@ -19381,6 +19381,188 @@
    "removal_condition": "n/d dopóki live",
    "review_date": "2026-10-10",
    "rollback": "env OFF w flags.json + restart dispatch-shadow.service ZA ACK",
+   "source_of_truth": "flags.json",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
+  "ENABLE_LEX_WINDOW_GUARDS_V2": {
+   "carriers": [
+    "common.py:ETAP4_DECISION_FLAGS",
+    "dispatch_v2/common.py-const"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py:ENABLE_LEX_WINDOW_GUARDS_V2",
+    "dispatch_v2/plan_recheck.py",
+    "dispatch_v2/core/lex_window_guards.py"
+   ],
+   "curated_at": "2026-07-27",
+   "current_snapshot": {},
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_LEX_WINDOW_GUARDS_V2",
+   "notes": "WB2 (CZASY 492, owner ACK D1+D2 z 27.07). Guardy WARUNKOWE warstwy P-1 okna odbioru: G1 opoznienie KAZDEJ dostawy (assigned i carried), G2 swiezosc per sztuka + cap trybu 35/40, G3 minimalny zysk jazdy, z wyjatkiem D1 przy SCISLEJ poprawie okna (dviol<bviol). G4 = wspolna granica commitu (transform -> strict retime -> final validator -> CAS). OFF = warstwa bajt-w-bajt jak przed WB2. Hierarchia klucza lex (okno->jazda->swiezosc) NIETKNIETA. Spec docs/WB2_CONDITIONAL_GUARDS.md.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-plan-recheck.service"
+   },
+   "removal_condition": "n/d — guard trwaly; przeglad progow po kalibracji z ledgera v2",
+   "review_date": "2026-10-27",
+   "rollback": "flags.json OFF (hot-reload przez _D3_FALA_A_FLAGS, bez restartu)",
+   "source_of_truth": "flags.json",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
+  "LEX_WINDOW_DELAY_TOL_MIN": {
+   "carriers": [
+    "flags.json",
+    "common.py:FLAGS_JSON_NUMERIC_OVERRIDES",
+    "dispatch_v2/common.py-const"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/plan_recheck.py",
+    "dispatch_v2/core/lex_window_guards.py"
+   ],
+   "curated_at": "2026-07-27",
+   "current_snapshot": {},
+   "default": "3.0",
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "LEX_WINDOW_DELAY_TOL_MIN",
+   "notes": "WB2: WSPOLNY budzet delty dla G1 (opoznienie dostawy) i G2-delta (swiezosc niesionego) — matematycznie ten sam predykat, bo kotwica possession jest stala miedzy permutacjami (dowod: Sol RUN3-b sekcja 3). Wartosc startowa 3 min = decyzja ownera D2. Kalibracja z ledgera v2 po >=48 h czystego baseline'u.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-plan-recheck.service"
+   },
+   "removal_condition": "n/d — prog decyzyjny",
+   "review_date": "2026-10-27",
+   "rollback": "flags.json na wartosc sprzed zmiany (hot-reload)",
+   "source_of_truth": "flags.json",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
+  "LEX_WINDOW_CARRY_CAP_MIN": {
+   "carriers": [
+    "flags.json",
+    "common.py:FLAGS_JSON_NUMERIC_OVERRIDES",
+    "dispatch_v2/common.py-const"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/plan_recheck.py",
+    "dispatch_v2/core/lex_window_guards.py"
+   ],
+   "curated_at": "2026-07-27",
+   "current_snapshot": {},
+   "default": "35.0",
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "LEX_WINDOW_CARRY_CAP_MIN",
+   "notes": "WB2 G2: ABSOLUTNY cap swiezosci niesionego w trybie normalnym (= R6 BAG_TIME_HARD_MAX_MIN). Zastepuje stary sufit `carry_cap = max(35.0, bcarry)`, ktory byl absolutny i przez to pozwalal pogorszyc swiezosc 8 -> 34,8 min. Nie jest zawieszany wyjatkiem D1. Gdy baseline sam jest nad capem — dopuszczalne jest wylacznie niepogorszenie.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-plan-recheck.service"
+   },
+   "removal_condition": "n/d — prog decyzyjny",
+   "review_date": "2026-10-27",
+   "rollback": "flags.json na wartosc sprzed zmiany (hot-reload)",
+   "source_of_truth": "flags.json",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
+  "LEX_WINDOW_CARRY_CAP_ALARM_MIN": {
+   "carriers": [
+    "flags.json",
+    "common.py:FLAGS_JSON_NUMERIC_OVERRIDES",
+    "dispatch_v2/common.py-const"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/core/lex_window_guards.py"
+   ],
+   "curated_at": "2026-07-27",
+   "current_snapshot": {},
+   "default": "40.0",
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "LEX_WINDOW_CARRY_CAP_ALARM_MIN",
+   "notes": "WB2 G2: cap swiezosci w KANONICZNYM Alarmie (poziom eskalacji 3). DZIS NIEOSIAGALNY: wymaga Alarm certificate (OD-04), ktorego nie produkuje zadna warstwa — `core/loadgov_snapshot.alarm_certified` zwraca False. Wpiecie producenta = OSOBNE zadanie i osobna decyzja.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-plan-recheck.service"
+   },
+   "removal_condition": "przeglad po wpieciu producenta Alarm certificate",
+   "review_date": "2026-10-27",
+   "rollback": "flags.json na wartosc sprzed zmiany (hot-reload)",
+   "source_of_truth": "flags.json",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
+  "LEX_WINDOW_MIN_GAIN_MIN": {
+   "carriers": [
+    "flags.json",
+    "common.py:FLAGS_JSON_NUMERIC_OVERRIDES",
+    "dispatch_v2/common.py-const"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/core/lex_window_guards.py"
+   ],
+   "curated_at": "2026-07-27",
+   "current_snapshot": {},
+   "default": "1.0",
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "LEX_WINDOW_MIN_GAIN_MIN",
+   "notes": "WB2 G3: minimalny MATERIALNY zysk jazdy (surowe minuty, inclusive — 1,0 przechodzi). Nie obowiazuje przy scislej poprawie okna (wyjatek D1): bezwarunkowe G3 wycinalo 102/313 obserwowanych ScISLYCH napraw okna (symulacja Sol RUN3-b na 561 wierszach z 27.07). Wartosc startowa = decyzja ownera D2.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-plan-recheck.service"
+   },
+   "removal_condition": "n/d — prog decyzyjny",
+   "review_date": "2026-10-27",
+   "rollback": "flags.json na wartosc sprzed zmiany (hot-reload)",
    "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [

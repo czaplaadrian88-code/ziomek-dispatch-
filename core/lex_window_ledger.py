@@ -324,6 +324,9 @@ def record_decision(
     shadow_flag: bool,
     decided: bool,
     identity: bool,
+    guards: Optional[Dict[str, Any]] = None,
+    loadgov: Optional[Dict[str, Any]] = None,
+    validator: Optional[Dict[str, Any]] = None,
 ) -> Optional[str]:
     """Zapisz rekord decyzji warstwy okna odbioru. Zwraca `attempt_id` albo `None`.
 
@@ -394,11 +397,18 @@ def record_decision(
                 "carry_baseline": baseline.get("max_carry_min"),
                 "carry_chosen": chosen.get("max_carry_min"),
             },
-            # Pola GOTOWE, wypełniane od WB2 (guardy G1-G5 + G5/loadgov + G4/validator).
-            "guards": {g: None for g in ("G1", "G2", "G3", "G4", "G5")},
-            "loadgov": {k: None for k in ("source", "age_s", "fingerprint", "ewma",
-                                          "observed_at", "valid_until", "generation")},
-            "validator": {"final": None},
+            # WB2 wypełnia te pola; brak argumentu = kształt jak w WB1 (same
+            # `null`), więc rekord ma ZAWSZE ten sam zestaw kluczy niezależnie
+            # od stanu flagi guardów — analiza nigdy nie musi zgadywać, czy pole
+            # jest nieobecne, bo guardy były OFF, czy dlatego, że zgubił je writer.
+            # Klucze są ZAMROŻONE schematem v2: nadmiarowe są odrzucane tutaj,
+            # zamiast po cichu rozszerzać kontrakt (nowe pole ⇒ schemat v3).
+            "guards": {g: (guards or {}).get(g)
+                       for g in ("G1", "G2", "G3", "G4", "G5")},
+            "loadgov": {k: (loadgov or {}).get(k)
+                        for k in ("source", "age_s", "fingerprint", "ewma",
+                                  "observed_at", "valid_until", "generation")},
+            "validator": {"final": (validator or {}).get("final")},
             "write": {"cas_expected": None, "cas_current": None,
                       "outcome": "not_attempted", "receipt": None},
             "served": {"outcome": None, "receipt": None},

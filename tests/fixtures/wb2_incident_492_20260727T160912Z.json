@@ -1,0 +1,181 @@
+{
+  "meta": {
+    "incydent": "CZASY 492 — 2026-07-27 18:09:12 lokalnie",
+    "zrodlo_wiersza": "freeze-20260727/lex_committed_window_shadow.jsonl",
+    "sha256_zrodla": "c9620bbb5f5d9695ffd071641ab74ab41b6d1c1c182bf7a299c9dc5f64f7d098",
+    "zrodlo_zlecen": "freeze-20260727/orders_state.copy-190900Z.json"
+  },
+  "now": "2026-07-27T16:09:12.663745+00:00",
+  "start_pos": [
+    53.134203,
+    23.148828
+  ],
+  "node_labels": [
+    "S",
+    "A",
+    "B",
+    "M",
+    "R"
+  ],
+  "leg_matrix_min": [
+    [
+      0.0,
+      7.16,
+      6.59,
+      2.6,
+      11.12
+    ],
+    [
+      7.16,
+      0.0,
+      1.3,
+      7.76,
+      12.26
+    ],
+    [
+      6.59,
+      1.3,
+      0.0,
+      7.25,
+      10.12
+    ],
+    [
+      2.6,
+      7.76,
+      7.25,
+      0.0,
+      8.77
+    ],
+    [
+      11.12,
+      12.26,
+      10.12,
+      8.77,
+      0.0
+    ]
+  ],
+  "orders_state": {
+    "490595": {
+      "order_id": "490595",
+      "status": "picked_up",
+      "courier_id": "492",
+      "pickup_coords": [
+        53.129405,
+        23.158005
+      ],
+      "delivery_coords": [
+        53.1560396,
+        23.1536129
+      ],
+      "czas_kuriera_warsaw": "2026-07-27T18:01:00+02:00",
+      "picked_up_at": "2026-07-27 17:52:04",
+      "effective_pickup_source": "available_from",
+      "delivery_address": "Al. 1000-lecia Panstwa Polskiego 58 Bialystok"
+    },
+    "490601": {
+      "order_id": "490601",
+      "status": "picked_up",
+      "courier_id": "492",
+      "pickup_coords": [
+        53.134203,
+        23.148828
+      ],
+      "delivery_coords": [
+        53.153557,
+        23.158818
+      ],
+      "czas_kuriera_warsaw": "2026-07-27T18:10:00+02:00",
+      "picked_up_at": "2026-07-27 18:08:29",
+      "effective_pickup_source": "available_from",
+      "delivery_address": "Wladyslawa Belzy 9 Bialystok"
+    },
+    "490612": {
+      "order_id": "490612",
+      "status": "assigned",
+      "courier_id": "492",
+      "pickup_coords": [
+        53.131298,
+        23.161298
+      ],
+      "delivery_coords": [
+        53.1350367,
+        23.2058247
+      ],
+      "czas_kuriera_warsaw": null,
+      "picked_up_at": null,
+      "effective_pickup_source": null,
+      "delivery_address": "Rolna 20 Bialystok"
+    }
+  },
+  "stops": [
+    {
+      "order_id": "490595",
+      "type": "dropoff",
+      "dwell_min": 3.5
+    },
+    {
+      "order_id": "490601",
+      "type": "dropoff",
+      "dwell_min": 3.5
+    },
+    {
+      "order_id": "490612",
+      "type": "pickup",
+      "dwell_min": 1.0
+    },
+    {
+      "order_id": "490612",
+      "type": "dropoff",
+      "dwell_min": 3.5
+    }
+  ],
+  "frozen_ledger_row": {
+    "ts": "2026-07-27T16:09:12.663745+00:00",
+    "carried": [
+      "490595",
+      "490601"
+    ],
+    "base_window_viol": 0,
+    "lex_window_viol": 0,
+    "d_drive_min": -2.7,
+    "base_max_carry": 24.3,
+    "lex_max_carry": 28.5,
+    "applied": true,
+    "base_seq": [
+      [
+        "490595",
+        "D"
+      ],
+      [
+        "490601",
+        "D"
+      ],
+      [
+        "490612",
+        "P"
+      ],
+      [
+        "490612",
+        "D"
+      ]
+    ],
+    "lex_seq": [
+      [
+        "490612",
+        "P"
+      ],
+      [
+        "490595",
+        "D"
+      ],
+      [
+        "490601",
+        "D"
+      ],
+      [
+        "490612",
+        "D"
+      ]
+    ]
+  }
+}
