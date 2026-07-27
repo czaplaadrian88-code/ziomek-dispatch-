@@ -1135,3 +1135,21 @@ Wzorzec 1:1 jak `ENABLE_STAGE_TIMING_OBSERVATION` wyżej. Default kodu = `False`
   w conftest) — wpis odziedziczony przy jej wprowadzeniu; z punktu widzenia strażnika
   strip-guarda jest to pokrycie wystarczające, więc nie ruszamy jej członkostwa, bo
   przeniesienie zmieniłoby odcisk flag bez korzyści dla obserwowalności.
+
+- `ENABLE_ASSIGNMENT_EPISODE_LOG` — R2, **default OFF**, hot-reload. Przy każdym
+  kanonicznym `COURIER_ASSIGNED` panel-watcher liczy pełną propozycję jeszcze raz
+  na aktualnej dispatchowalnej flocie, przed zmianą state. Po zapisie assignmentu
+  rekord `assignment_episode.v1` trafia do osobnego append-only
+  `dispatch_state/assignment_episode.jsonl` wyłącznie po CAS dokładnego
+  `assignment_event_id` pod `state_machine.lifecycle_apply_lock`. Instrument jest
+  fail-safe i nie zmienia przydziału. Zgodność jest liczona tylko po CID.
+
+- `ENABLE_PROPOSAL_REFRESH` — R2, **default OFF**, hot-reload, shadow-first.
+  Minutowy `pending_global_resweep` używa już policzonych wyników kanonicznej
+  alokacji i po zmianie zbioru dispatchowalnych CID zapisuje rekord
+  `proposal_refresh.v1` tylko wtedy, gdy zmienił się zwycięski CID i minęło 120 s
+  od poprzedniego wpisu orderu. Rekord ma top-level `verdict=SHADOW_ONLY`,
+  `record_type=proposal_refresh` i świadomie nie ma `best`; nie mutuje
+  `pending_proposals`, `global_alloc`, konsoli ani Telegrama. Flaga może uruchomić
+  solve niezależnie od legacy `ENABLE_PENDING_RESWEEP`, ale nie uruchamia jego
+  writerów.
