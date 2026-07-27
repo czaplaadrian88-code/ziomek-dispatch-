@@ -4388,6 +4388,46 @@
     "engine"
    ]
   },
+  "ENABLE_C7_NORMAL_PATH_LOG": {
+   "carriers": [
+    "common.py:ETAP4_DECISION_FLAGS",
+    "dispatch_v2/common.py-const",
+    "flags.json"
+   ],
+   "consumers": [
+    "dispatch_v2/c7_normal_path.py",
+    "dispatch_v2/common.py",
+    "dispatch_v2/dispatch_pipeline.py",
+    "dispatch_v2/shadow_dispatcher.py"
+   ],
+   "curated_at": "2026-07-27",
+   "current_snapshot": {
+    "default": false
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_C7_NORMAL_PATH_LOG",
+   "notes": "Log-only dualny selektor C7 OFF/ON na pełnej puli przed top[:16]; aktywacja dopiero po review benchmarku i ACK.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-shadow.service"
+   },
+   "removal_condition": "po zamknięciu decyzji o flipie C7 albo osobnym ACK retire",
+   "review_date": "2026-08-10",
+   "rollback": "flags.json false/brak klucza (hot-reload, bez restartu)",
+   "source_of_truth": "flags.json",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
   "ENABLE_CHECKPOINT_TS_WARSAW_PARSE": {
    "carriers": [
     "flags.json",
