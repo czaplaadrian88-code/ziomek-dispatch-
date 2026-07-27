@@ -143,7 +143,10 @@ def test_unlink_guard_blocks_live_allows_tmp(tmp_path):
 def test_quarantine_loader_parses_expected_entries():
     stems = {e["match"] for e in hs.load_quarantine()}
     assert "test_v325_pin_leak_defense" in stems
-    assert "test_route_order_live_parity" in stems
+    assert (
+        "test_route_order_live_parity.py::"
+        "test_live_route_order_parity_read_only_smoke"
+    ) in stems
     for e in hs.load_quarantine():
         assert e.get("reason"), f"kazdy wpis kwarantanny musi miec powod: {e}"
 
