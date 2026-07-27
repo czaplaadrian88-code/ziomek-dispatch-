@@ -1174,6 +1174,11 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
     _position_shadow = getattr(result, "position_model_shadow", None)
     if isinstance(_position_shadow, dict):
         out["position_model_shadow"] = _json_safe(_position_shadow)
+    # C7 normal-path: jeden addytywny consumer istniejącego decision recordu.
+    # OFF zachowuje legacy shape; moduł instrumentu gwarantuje allowlistę bez PII.
+    _c7_normal_path = getattr(result, "c7_normal_path", None)
+    if isinstance(_c7_normal_path, dict):
+        out["c7_normal_path"] = _json_safe(_c7_normal_path)
     # CHOICE-SET: OFF zachowuje legacy shape bajt-w-bajt (klucza nie ma).
     # ON zapisuje pełną pulę sprzed top-N, bez ciężkich planów/metrics.
     if C.decision_flag("ENABLE_FULL_CHOICE_SET_LOG"):

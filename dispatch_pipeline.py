@@ -5311,6 +5311,22 @@ def _assess_order_impl(
             plan_versions=_plan_versions_snapshot,
             position_model_mode=("explicit" if _explicit_unknown_effective else "legacy"),
         )
+    # C7 normal-path instrument: snapshot PEŁNEJ ocenionej puli dokładnie tutaj,
+    # przed kanonicznym select_and_emit i jego top[:16]. Kill-switch hot, default
+    # OFF. Przygotowanie/oba ramiona są fail-safe i nigdy nie zastępują _selected.
+    _c7_instrument_on = C.decision_flag("ENABLE_C7_NORMAL_PATH_LOG")
+    _c7_prepared = None
+    _c7_prepare_error = None
+    if _c7_instrument_on:
+        try:
+            from dispatch_v2 import c7_normal_path as _c7np
+            _c7_prepared = _c7np.prepare(candidates)
+        except Exception as _c7_prepare_exc:  # noqa: BLE001
+            _c7_prepare_error = type(_c7_prepare_exc).__name__
+            log.warning(
+                "c7_normal_path prepare fail-safe order=%s error_type=%s",
+                order_id, _c7_prepare_error,
+            )
     # Kontrfaktyk idzie przez PRAWDZIWY selektor (feasibility→score→tiering→
     # buckets→best_effort→OBJM/R29→final gates), nigdy przez max(score).
     _selected = _select_position_model(
@@ -5322,6 +5338,18 @@ def _assess_order_impl(
         flag_conflict=_position_flag_conflict,
         position_model_variants=_position_model_variants,
     )
+    if _c7_instrument_on:
+        if _c7_prepared is not None:
+            _selected = _c7np.attach_fail_safe(
+                _selection_ctx, _c7_prepared, _selected)
+        else:
+            # Nawet awaria deepcopy przed selekcją jest widoczna, ale nie wpływa
+            # na realny best/verdict/routing.
+            _selected.c7_normal_path = {
+                "schema": "c7_normal_path.v1",
+                "status": "INSTRUMENT_ERROR",
+                "error_type": _c7_prepare_error or "PrepareError",
+            }
     if _timing_trace is not None:
         _timing_trace.record_since("selection_wall_ms", _selection_started)
     return _selected

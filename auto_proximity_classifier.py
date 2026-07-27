@@ -557,6 +557,7 @@ def classify_auto_route(
     now: Optional[datetime] = None,
     flags: Optional[Dict[str, Any]] = None,
     order_event: Optional[Dict[str, Any]] = None,
+    emit_calibration_shadow: bool = True,
 ) -> Tuple[str, str]:
     """Main classifier — pure function.
 
@@ -594,8 +595,10 @@ def classify_auto_route(
     if getattr(result, "best", None) is None:
         return ROUTE_ACK, "no_best_candidate"
 
-    ctx = _build_context(result, fleet_snapshot, order_event, flags, now=now,
-                         emit_calibration_shadow=True)
+    ctx = _build_context(
+        result, fleet_snapshot, order_event, flags, now=now,
+        emit_calibration_shadow=emit_calibration_shadow,
+    )
 
     # F4 (2026-05-24): słaby pick (ujemny score) → ALERT zamiast "sensowny wybór".
     weak_pick_floor: Optional[float] = None
