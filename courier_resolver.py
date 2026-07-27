@@ -1808,6 +1808,9 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
             # bo pod DISPATCH_STATE_DIR rozjeżdżał się z writerem.
             overrides_path=_availability.effective_overrides_path(),
             grafik_names_path=GRAFIK_FULL_NAMES_PATH,
+            # R4: jedno „teraz" na CAŁĄ pętlę puli — inaczej kurierzy z tego samego
+            # wywołania mogliby wygasać na różnych znacznikach czasu.
+            now=_now_utc_fleet,
         )
     result = []
     # TASK 3: collect rejected dla observability logger (zero overhead gdy flag false)
@@ -1838,6 +1841,9 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
                     "reason": f"availability_{availability.state.value.lower()}",
                     "availability_provenance": availability.provenance.value,
                     "availability_detail": availability.detail,
+                    # R4: rekord operatorski istniał, ale minęła jego doba —
+                    # licznik wpływu flagi w logu puli.
+                    "availability_operator_expired": availability.operator_expired,
                 })
                 continue
 
