@@ -178,7 +178,7 @@ def test_bare_firstname_unique_match():
 # ---------------------------------------------------------------------------
 
 def test_panel_to_schedule_override_wins():
-    # "Jakub OL" → "Kuba Olchowik" jest w PANEL_TO_SCHEDULE (mapowanie ręczne)
+    # "Jakub OL" → "Jakub Olchowik" jest w PANEL_TO_SCHEDULE (mapowanie ręczne)
     if "Jakub OL" in su.PANEL_TO_SCHEDULE:
         target = su.PANEL_TO_SCHEDULE["Jakub OL"]
         sched = _sched(target, "Jakub Leoniuk")

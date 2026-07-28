@@ -102,8 +102,8 @@ def main():
     print("\n=== A.3 match_courier_strict ===")
     importlib.reload(su)
     schedule = su.load_schedule()
-    expect("match('Jakub OL') → 'Kuba Olchowik' (PANEL_TO_SCHEDULE)",
-           su.match_courier_strict('Jakub OL', schedule) == 'Kuba Olchowik')
+    expect("match('Jakub OL') → 'Jakub Olchowik' (PANEL_TO_SCHEDULE)",
+           su.match_courier_strict('Jakub OL', schedule) == 'Jakub Olchowik')
     expect("match('Szymon Sa') → 'Szymon Sadowski' (PANEL_TO_SCHEDULE)",
            su.match_courier_strict('Szymon Sa', schedule) == 'Szymon Sadowski')
     expect("match('Grzegorz') → 'Grzegorz Rogowski' (PANEL_TO_SCHEDULE update from None)",
@@ -122,9 +122,9 @@ def main():
     expect("is_on_shift('Mykyta K') → True (no schedule match — fall-through legacy)",
            on, f"reason={reason}")
     on, reason = su.is_on_shift('Jakub OL', schedule)
-    # Kuba Olchowik may or may not be working — just verify match worked (returned valid full name)
-    expect("is_on_shift('Jakub OL') → uses Kuba Olchowik schedule entry",
-           reason and ('Kuba Olchowik' in reason or 'jeszcze' in reason or 'zmiana' in reason
+    # Jakub Olchowik may or may not be working — just verify match worked (returned valid full name)
+    expect("is_on_shift('Jakub OL') → uses Jakub Olchowik schedule entry",
+           reason and ('Jakub Olchowik' in reason or 'jeszcze' in reason or 'zmiana' in reason
                       or 'pracuje' in reason or 'dziś' in reason),
            f"reason={reason!r}")
 
