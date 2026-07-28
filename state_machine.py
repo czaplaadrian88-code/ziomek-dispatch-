@@ -1108,6 +1108,59 @@ def upsert_order(
         state = _read_state_strict()        # Faza 1: raise StateReadError zamiast cichego {}
         old_count = len(state)
         existing = state.get(order_id, {})
+        if event == "NEW_ORDER":
+            incoming_marker = data.get(
+                "last_lifecycle_event_id_new_order"
+            )
+            existing_marker = existing.get(
+                "last_lifecycle_event_id_new_order"
+            )
+            if existing_marker:
+                # NEW_ORDER jest zdarzeniem tworzącym: pierwszy zastosowany
+                # event pozostaje źródłem predykatu authority_scope. Retry tego
+                # samego event_id nie dopisuje historii ani nie dotyka pliku;
+                # późniejszy NEW_ORDER nie może cofnąć już żywego zlecenia.
+                if incoming_marker != existing_marker:
+                    _log.warning(
+                        "NEW_ORDER duplicate marker refused "
+                        f"oid={order_id} first={existing_marker} "
+                        f"incoming={incoming_marker}"
+                    )
+                return dict(existing)
+            if existing:
+                # Rekord sprzed ery markerów jest już żywym agregatem. NEW_ORDER
+                # może tu wyłącznie uzupełnić brakujący dowód first-write; nie
+                # wolno mu ponownie zastosować create-payloadu, dopisać historii
+                # ani odświeżyć updated_at, bo cofnąłby assignment/lifecycle.
+                if not incoming_marker:
+                    _log.warning(
+                        "NEW_ORDER duplicate without marker refused "
+                        f"oid={order_id}"
+                    )
+                    return dict(existing)
+                marked_existing = dict(existing)
+                marked_existing[
+                    "last_lifecycle_event_id_new_order"
+                ] = str(incoming_marker)
+                state[order_id] = marked_existing
+                _guarded_write(
+                    path,
+                    state,
+                    old_count,
+                    op="new_order_marker_backfill",
+                )
+                _log.info(
+                    "NEW_ORDER marker backfilled without lifecycle merge "
+                    f"oid={order_id} marker={incoming_marker}"
+                )
+                return marked_existing
+            data = dict(data)
+            # Jawne None jest dowodem „nieprzypisany”; brak klucza nie może
+            # autoryzować AUTO. TYLKO setdefault przy pierwszym create:
+            # NEW_ORDER niosący już przypisanie (recanon/import) musi je
+            # ZACHOWAĆ — nadpisanie na None czyniłoby zlecenie fałszywie
+            # „nieprzypisanym” w dowodach scope (kierunek fail-open).
+            data.setdefault("courier_id", None)
         # A caller-side existence check is not authoritative: durable retry or
         # a concurrent prune can change state before apply. Keep this
         # precondition inside the single locked orders_state write funnel.

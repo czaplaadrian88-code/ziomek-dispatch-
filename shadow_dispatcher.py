@@ -1191,6 +1191,14 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
     _c7_normal_path = getattr(result, "c7_normal_path", None)
     if isinstance(_c7_normal_path, dict):
         out["c7_normal_path"] = _json_safe(_c7_normal_path)
+    # T5: jeden blok dowodów karty wprost na rekordzie. Ten sam obiekt jest
+    # także w best.metrics i przechodzi wspólny L1.1 helper do LOCATION A+B.
+    _authority_scope = getattr(result, "authority_scope", None)
+    if isinstance(_authority_scope, dict):
+        out["authority_scope"] = _json_safe(_authority_scope)
+    _commit_proposal = getattr(result, "commit_proposal", None)
+    if isinstance(_commit_proposal, dict):
+        out["commit_proposal"] = _json_safe(_commit_proposal)
     # CHOICE-SET: OFF zachowuje legacy shape bajt-w-bajt (klucza nie ma).
     # ON zapisuje pełną pulę sprzed top-N, bez ciężkich planów/metrics.
     if C.decision_flag("ENABLE_FULL_CHOICE_SET_LOG"):
@@ -1479,11 +1487,15 @@ def process_event(
     fleet: Dict,
     meta: Optional[dict],
     now: Optional[datetime] = None,
+    current_order_state: Optional[dict] = None,
 ) -> PipelineResult:
     """Pure: NEW_ORDER event + snapshot → PipelineResult. Safe to test."""
     payload = event.get("payload") or {}
     order_event = {
+        "event_id": event.get("event_id"),
+        "event_type": event.get("event_type"),
         "order_id": event.get("order_id"),
+        "status_id": payload.get("status_id"),
         "restaurant": payload.get("restaurant"),
         "delivery_address": payload.get("delivery_address"),
         "pickup_coords": payload.get("pickup_coords"),
@@ -1511,11 +1523,25 @@ def process_event(
     # dispatch_pipeline.assess_order — ten sam wrapper K08+observability co dotąd).
     _world = WorldState(fleet_snapshot=fleet, restaurant_meta=meta, now=now)
     if _wr is None:
-        return _decide(_world, order_event)
-    return _wr.around_assess(
-        lambda: _decide(_world, order_event),
-        order_event=order_event, fleet_snapshot=fleet, now=now,
+        result = _decide(_world, order_event)
+    else:
+        result = _wr.around_assess(
+            lambda: _decide(_world, order_event),
+            order_event=order_event, fleet_snapshot=fleet, now=now,
+        )
+    # T5: jedyny call-site producenta. Czysta projekcja finalnego wyniku i
+    # snapshotu state z chwili decyzji; brak danych jest jawny, nigdy zgadywany.
+    from dispatch_v2 import authority_scope as _authority_scope
+    _authority_scope.attach_authority_scope(
+        result, order_event, current_order_state
     )
+    # T1: proposal-computed-at + podpis decyzji są liczone przez ten sam rdzeń,
+    # którego R2 używa do świeżego assignment-time solve.
+    from dispatch_v2 import proposal_freshness as _proposal_freshness
+    _proposal_freshness.attach_commit_proposal(
+        result, order_event, current_order_state, fleet, now
+    )
+    return result
 
 
 def _sanitize_payload_coords(payload: dict, oid) -> bool:
@@ -1594,6 +1620,7 @@ def _assess_with_proposal_claim_relaxation(
     now: datetime,
     *,
     persistence_enabled: bool,
+    current_order_state: Optional[dict] = None,
 ):
     """Oceń z claimami, a przy fałszywym KOORD powtórz bez nich.
 
@@ -1602,7 +1629,10 @@ def _assess_with_proposal_claim_relaxation(
     shadow_decisions. Wracamy także ze światem faktycznie użytym do wyniku, aby
     metryka zwycięzcy nie przypisywała mu claimów, które zostały rozluźnione.
     """
-    result = process_event(event, fleet_with_claims, meta, now=now)
+    result = process_event(
+        event, fleet_with_claims, meta, now=now,
+        current_order_state=current_order_state,
+    )
     used_fleet = fleet_with_claims
     relaxed = False
     if (
@@ -1614,6 +1644,7 @@ def _assess_with_proposal_claim_relaxation(
             fleet_without_claims,
             meta,
             now=now,
+            current_order_state=current_order_state,
         )
         if int(getattr(without_claims, "pool_feasible_count", 0) or 0) > 0:
             result = without_claims
@@ -1873,6 +1904,7 @@ def _tick(shadow_log_path: str, meta: Optional[dict], *,
                 meta,
                 _decision_now,
                 persistence_enabled=_proposal_claim_persistence,
+                current_order_state=cur,
             )
             if _stage_timing_on:
                 _process_ended_ns = time.perf_counter_ns()

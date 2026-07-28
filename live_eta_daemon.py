@@ -76,7 +76,10 @@ def _source_start(
         gps_at = live_eta._as_utc(gps_row.get("timestamp"))
         if coord is not None and gps_at is not None:
             age_s = (now - gps_at).total_seconds()
-            if 0 <= age_s <= live_eta.LIVE_POSITION_MAX_AGE_SECONDS:
+            if (
+                live_eta.classify_position_contract("gps", age_s)
+                == live_eta.SOURCE_LIVE
+            ):
                 return coord, live_eta.SOURCE_LIVE
 
     # Reużywamy jedynego istniejącego parsera history[].at i mapowania eventu
@@ -93,7 +96,10 @@ def _source_start(
     if event is not None:
         coord, event_at = event
         age_s = (now - event_at).total_seconds()
-        if 0 <= age_s <= live_eta.WARM_EVENT_MAX_AGE_SECONDS:
+        if (
+            live_eta.classify_position_contract("last_event", age_s)
+            == live_eta.SOURCE_WARM
+        ):
             return coord, live_eta.SOURCE_WARM
     return None, live_eta.SOURCE_PLANNED
 

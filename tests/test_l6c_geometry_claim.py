@@ -154,7 +154,8 @@ def test_tick_claim_ledger_on_off(monkeypatch):
             self.verdict = "PROPOSE"
             self.best = _Best(cid)
 
-    def _fake_process_event(ev, fleet, meta, now=None):  # K06a: jawne now w kontrakcie
+    def _fake_process_event(ev, fleet, meta, now=None,
+                            current_order_state=None):  # K06a: jawne now; T5: +state
         seen_bag_sizes.append(len(fleet["447"].bag or []))
         return _Res("447")
 

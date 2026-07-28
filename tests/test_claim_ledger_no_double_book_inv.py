@@ -522,7 +522,8 @@ def _run_shadow_drop_case(
     monkeypatch.setattr(SD.state_machine, "get_all", lambda: {})
     monkeypatch.setattr(
         SD, "process_event",
-        lambda ev, fleet, meta, now=None: _Res(cid_by_oid[ev["order_id"]]))
+        lambda ev, fleet, meta, now=None, current_order_state=None:
+        _Res(cid_by_oid[ev["order_id"]]))
     monkeypatch.setattr(SD, "_probe_same_restaurant_race", lambda *a, **k: None)
     monkeypatch.setattr(
         SD, "_always_propose_would_redirect_shadow", lambda *a, **k: None)

@@ -34,12 +34,19 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import subprocess
 import time
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from dispatch_v2 import common as C
+from dispatch_v2 import authority_card as AC
+from dispatch_v2 import proposal_freshness as PF
+from dispatch_v2 import state_machine
+from dispatch_v2.identity import build_registry, canon_cid
+from dispatch_v2.tools import auto_assign_monitor as AAM
 
 log = logging.getLogger("auto_assign_executor")
 
@@ -47,6 +54,8 @@ GASTRO_ASSIGN_PATH = "/root/.openclaw/workspace/scripts/gastro_assign.py"
 STATE_PATH = "/root/.openclaw/workspace/dispatch_state/auto_assign_state.json"
 LEARNING_LOG_PATH = "/root/.openclaw/workspace/dispatch_state/learning_log.jsonl"
 LEARNING_LOG_TAIL_BYTES = 262144  # wzorzec _PANEL_AGREE_TAIL_BYTES
+MONITOR_HEARTBEAT_PATH = AAM.HEARTBEAT_PATH
+SHADOW_DECISIONS_PATH = AAM.SHADOW_PATH
 
 # AUDYT 2.0 Blocker-1: executor ufa sentinelowi z gastro_assign, NIE samemu
 # exit-code (exit 0 mimo niewykonanego przypisania = cichy drop bez człowieka).
@@ -82,6 +91,14 @@ AUTO_ASSIGN_OWNER_AUTH_TTL_SEC = 86400.0  # karta canary może zacieśnić (flag
 _OWNER_AUTH_CLOCK_SKEW_SEC = 120.0
 _OWNER_AUTH_WARN_THROTTLE_SEC = 300.0
 _last_owner_auth_warn: Dict[str, float] = {}
+
+# AUTON-02 / T5: podpisana karta ownera jest bezwarunkowym krokiem 1c wewnątrz
+# ścieżki AUTO. Nie jest flagą ani profilem jakościowym.
+AUTHORITY_CARD_PATH = AC.CARD_PATH
+AUTHORITY_CARD_STATE_PATH = AC.STATE_PATH
+AUTHORITY_BUILD_SHA_PATH = AC.BUILD_SHA_PATH
+_AUTHORITY_WARN_THROTTLE_SEC = 300.0
+_last_authority_warn: Dict[str, float] = {}
 
 # AUDYT 2.0 Blocker-2 — pokrętła operacyjne (env/flags-overridable W MODULE
 # executora; common.py poza tym pasem). Domyślne wartości = dokumentacja.
@@ -135,15 +152,22 @@ def _load_state(path: str) -> Dict[str, Any]:
 
 
 def _save_state(path: str, state: Dict[str, Any]) -> None:
-    """Atomic write (temp+rename). Odmawia pod pytest (ochrona prod state)."""
+    """Trwały atomic write (temp+fsync+rename+dir fsync)."""
     if _pytest_active() and not os.environ.get("ALLOW_AUTO_ASSIGN_STATE_IN_TEST"):
         return
+    parent = os.path.dirname(os.path.abspath(path))
+    os.makedirs(parent, mode=0o700, exist_ok=True)
     tmp = f"{path}.tmp.{os.getpid()}"
     with open(tmp, "w") as f:
         json.dump(state, f, ensure_ascii=False)
         f.flush()
         os.fsync(f.fileno())
     os.replace(tmp, path)
+    dir_fd = os.open(parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(dir_fd)
+    finally:
+        os.close(dir_fd)
 
 
 def _rate_cap_exceeded(state: Dict[str, Any], now_ts: float, max_per_hour: float) -> bool:
@@ -226,33 +250,40 @@ def _last_successful_toggle(audit_path: str) -> Optional[Dict[str, Any]]:
     """Ostatni UDANY wiersz `auto_assign_toggle` z dziennika audytu koordynatora
     (tail-scan, wzorzec `_recent_override_for_courier`). `ok=false` to PRÓBA
     zapisu flagi, nie upoważnienie — odfiltrowana. Zwraca None gdy pliku nie ma,
-    nie da się go odczytać albo nie zawiera ani jednego takiego wiersza."""
+    nie da się go odczytać albo nie zawiera ani jednego takiego wiersza.
+
+    Każdy niepusty, nieparsowalny lub niedictowy wiersz w skanowanym oknie
+    unieważnia CAŁE okno. Pierwszy ucięty wiersz po seeku jest świadomie
+    odcinany; wszystkie kolejne aż do EOF muszą być poprawnym JSONL."""
     try:
         size = os.path.getsize(audit_path)
     except OSError:
         return None
     try:
-        with open(audit_path, "r", encoding="utf-8", errors="replace") as f:
+        with open(audit_path, "r", encoding="utf-8", errors="strict") as f:
             if size > COORDINATOR_AUDIT_TAIL_BYTES:
                 f.seek(size - COORDINATOR_AUDIT_TAIL_BYTES)
                 f.readline()  # odetnij ucięty pierwszy wiersz
             lines = f.readlines()
-    except OSError:
-        return None
+    except (OSError, UnicodeError):
+        return {"_authorization_audit_corrupt": True}
     found = None
+    corrupt = False
     for ln in lines:
         ln = ln.strip()
         if not ln:
             continue
         try:
             row = json.loads(ln)
-        except Exception:  # noqa: BLE001 — pojedyncze śmieci nie mogą autoryzować ANI wywracać
+        except (TypeError, ValueError):
+            corrupt = True
             continue
         if not isinstance(row, dict):
+            corrupt = True
             continue
         if row.get("kind") == "auto_assign_toggle" and row.get("ok") is True:
             found = row
-    return found
+    return {"_authorization_audit_corrupt": True} if corrupt else found
 
 
 def _owner_authorization(now: datetime, audit_path: Optional[str] = None
@@ -271,6 +302,8 @@ def _owner_authorization(now: datetime, audit_path: Optional[str] = None
     if row is None:
         return False, ("audit_unreadable" if not os.path.exists(audit_path)
                        else "no_toggle_row")
+    if row.get("_authorization_audit_corrupt") is True:
+        return False, "authorization_audit_corrupt"
     if row.get("value") is not True:
         return False, "last_toggle_disabled"
     if row.get("pin_verified") is not True:
@@ -307,6 +340,145 @@ def _warn_owner_auth(reason: str, now_ts: float) -> None:
         f"albo wyłącz flagę.")
 
 
+def _warn_authority_card(reason: str, now_ts: float) -> None:
+    """Dławiony WARN kroku 1c — jeden komunikat per przyczyna na pięć minut."""
+    last = _last_authority_warn.get(reason, 0.0)
+    if now_ts - last < _AUTHORITY_WARN_THROTTLE_SEC:
+        return
+    _last_authority_warn[reason] = now_ts
+    log.warning(
+        f"AUTO_ASSIGN blocked authority_card reason={reason} class_id={AC.CLASS_ID} "
+        f"— podpisana karta execution authority nie potwierdza tego wykonania "
+        f"(ODR-002).")
+
+
+def _authority_card_gate(
+    record: Dict[str, Any],
+    result: Any,
+    payload: Optional[Dict[str, Any]],
+    now: datetime,
+    card_path: str,
+    audit_path: str,
+    state_path: str,
+    code_git_sha: Optional[str],
+    flag_fp: Optional[str],
+    latch_notifier: Optional[Callable[[str], None]] = None,
+) -> Tuple[bool, str, Dict[str, Any]]:
+    """Krok 1c: latch → podpis → scope → limity. Każdy błąd jest odmową."""
+    state_existed = os.path.exists(state_path)
+    state = AC.load_state(state_path)
+    if state.get("auto_off_latch") is True:
+        return False, "latch_on", {
+            "state": state,
+            "state_path": state_path,
+            "enforced": True,
+        }
+
+    verdict = AC.verify_card(
+        card_path=card_path,
+        audit_path=audit_path,
+        now=now,
+        code_git_sha=code_git_sha,
+        flag_fp=flag_fp,
+        expected_stop_contract_sha256=AC.EXPECTED_STOP_CONTRACT_SHA256,
+    )
+    if not verdict.valid:
+        try:
+            _latch_authority_auto_off(
+                state_path,
+                verdict.reason,
+                now,
+                latch_notifier,
+            )
+        except Exception as latch_error:
+            log.warning(
+                f"AUTO_ASSIGN authority latch write fail reason={verdict.reason}: "
+                f"{type(latch_error).__name__}: {latch_error}")
+        return False, verdict.reason, {
+            "state": state,
+            "state_path": state_path,
+            "enforced": True,
+        }
+
+    if not state_existed:
+        # Receipt podpisu już istnieje i przeszedł pełną walidację. Brak stanu
+        # nie jest nową kartą: to utrata historii budżetu. Tworzymy wyłącznie
+        # trwały, związany z kartą stan zatrzaśnięty; clear dla tej przyczyny
+        # wymaga osobnego ręcznego odzyskania historii.
+        try:
+            AC.initialize_state(
+                state_path,
+                str(verdict.card_sha256),
+                now,
+            )
+            _latch_authority_auto_off(
+                state_path,
+                "state_missing",
+                now,
+                latch_notifier,
+            )
+        except Exception as state_error:
+            log.warning(
+                "AUTO_ASSIGN missing authority state latch fail "
+                f"{type(state_error).__name__}: {state_error}"
+            )
+        return False, "state_missing", {
+            "state": AC.load_state(state_path),
+            "state_path": state_path,
+            "card_sha256": verdict.card_sha256,
+            "enforced": True,
+        }
+
+    if state.get("initialized_for_card") != verdict.card_sha256:
+        try:
+            _latch_authority_auto_off(
+                state_path,
+                "state_card_mismatch",
+                now,
+                latch_notifier,
+            )
+        except Exception as state_error:
+            log.warning(
+                "AUTO_ASSIGN authority state/card latch fail "
+                f"{type(state_error).__name__}: {state_error}"
+            )
+        return False, "state_card_mismatch", {
+            "state": state,
+            "state_path": state_path,
+            "card_sha256": verdict.card_sha256,
+            "enforced": True,
+        }
+
+    body = verdict.body or {}
+    scope_ok, scope_reason = AC.check_scope(
+        record, result, payload, body.get("scope") or {})
+    if not scope_ok:
+        return False, scope_reason, {
+            "state": state,
+            "state_path": state_path,
+            "card_sha256": verdict.card_sha256,
+            "enforced": True,
+        }
+    limits = body.get("limits") or {}
+    limits_ok, limits_reason = AC.check_limits(
+        state, now.timestamp(), limits)
+    if not limits_ok:
+        return False, limits_reason, {
+            "state": state,
+            "state_path": state_path,
+            "card_sha256": verdict.card_sha256,
+            "limits": limits,
+            "enforced": True,
+        }
+    return True, "ok", {
+        "state": state,
+        "state_path": state_path,
+        "card_sha256": verdict.card_sha256,
+        "limits": limits,
+        "enforced": True,
+    }
+
+
 def _recent_auto_assign(state: Dict[str, Any], oid: str, now_ts: float, ttl_sec: float) -> bool:
     """True gdy oid już auto-przypisany w ostatnich ttl_sec (idempotencja per-order:
     reconcile-lag panelu 15-90 s + 2. event z innym event_id = podwójny assign)."""
@@ -320,6 +492,84 @@ def _record_auto_assign(state: Dict[str, Any], oid: str, now_ts: float, ttl_sec:
           if isinstance(v, (int, float)) and (now_ts - v) < ttl_sec}
     ao[str(oid)] = now_ts
     state["assigned_orders"] = ao
+
+
+def _record_executor_outcome(
+    state_path: str,
+    state: Dict[str, Any],
+    oid: str,
+    now_ts: float,
+    idem_ttl: float,
+    *,
+    consume_budget: bool,
+) -> None:
+    """Trwale rezerwuj idempotencję i skorelowany budżet przed runnerem."""
+    del state
+    state = _load_state(state_path)
+    _record_auto_assign(state, oid, now_ts, idem_ttl)
+    if consume_budget:
+        state.setdefault("executed", []).append(now_ts)
+        state["executed_total"] = int(
+            state.get("executed_total", 0) or 0
+        ) + 1
+        order_ids = [
+            str(value)
+            for value in (state.get("executed_order_ids") or [])
+        ]
+        if oid not in order_ids:
+            order_ids.append(oid)
+        state["executed_order_ids"] = order_ids
+    _save_state(state_path, state)
+
+
+def _rollback_executor_reservation(
+    state_path: str,
+    oid: str,
+    reserved_ts: float,
+) -> Dict[str, Any]:
+    """Merge-not-overwrite: wycofaj tylko własną rezerwację pre-send."""
+    state = _load_state(state_path)
+    assigned = dict(state.get("assigned_orders") or {})
+    owns_idempotency = assigned.get(str(oid)) == reserved_ts
+    if owns_idempotency:
+        assigned.pop(str(oid), None)
+    state["assigned_orders"] = assigned
+
+    executed = list(state.get("executed") or [])
+    try:
+        index = len(executed) - 1 - executed[::-1].index(reserved_ts)
+    except ValueError:
+        index = None
+    order_ids_before = [
+        str(value) for value in (state.get("executed_order_ids") or [])
+    ]
+    owns_budget = (
+        owns_idempotency
+        and index is not None
+        and str(oid) in order_ids_before
+    )
+    if not owns_idempotency and not owns_budget:
+        return state
+    if owns_budget:
+        assert index is not None
+        executed.pop(index)
+    state["executed"] = executed
+
+    order_ids = [
+        str(value)
+        for value in order_ids_before
+        if not owns_budget or str(value) != str(oid)
+    ]
+    state["executed_order_ids"] = order_ids
+    if owns_budget and int(state.get("executed_total", 0) or 0) > 0:
+        state["executed_total"] = int(state["executed_total"]) - 1
+    _save_state(state_path, state)
+    return state
+
+
+def _fresh_execution_now() -> datetime:
+    """Świeży zegar tuż przed finalnym gate'em i rezerwacją."""
+    return datetime.now(timezone.utc)
 
 
 # ---------------- wykonanie ----------------
@@ -336,16 +586,36 @@ def _default_assign_runner(order_id: str, kurier_name: str, time_minutes: int) -
     cmd = ["python3", GASTRO_ASSIGN_PATH, "--id", str(order_id),
            "--kurier", str(kurier_name), "--time", str(int(time_minutes)), "--verify"]
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=GASTRO_ASSIGN_TIMEOUT_SEC)
-        out = (r.stdout or "")
-        if r.returncode == 0 and ASSIGN_OK_SENTINEL in out:
-            return True, out.strip()[-400:]
-        err = (r.stderr or "").strip() or out.strip()
-        return False, f"exit={r.returncode} no_confirm {err[-360:]}"
+        child = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except (FileNotFoundError, PermissionError, OSError) as error:
+        # Popen nie zwrócił procesu: jedyna udowodniona odmowa przed startem.
+        return False, f"pre_send_refusal:{type(error).__name__}"
+    except Exception as error:
+        return False, f"spawn_exception_unknown:{type(error).__name__}"
+
+    try:
+        stdout, stderr = child.communicate(timeout=GASTRO_ASSIGN_TIMEOUT_SEC)
     except subprocess.TimeoutExpired:
+        try:
+            child.kill()
+            child.communicate()
+        except Exception:
+            pass
         return False, f"timeout_{int(GASTRO_ASSIGN_TIMEOUT_SEC)}s"
-    except Exception as e:
-        return False, f"exc:{type(e).__name__}"
+    except Exception as error:
+        # Dziecko już istniało i mogło wykonać skutek przed błędem I/O.
+        return False, f"post_start_exception:{type(error).__name__}"
+
+    out = stdout or ""
+    if child.returncode == 0 and ASSIGN_OK_SENTINEL in out:
+        return True, out.strip()[-400:]
+    err = (stderr or "").strip() or out.strip()
+    return False, f"exit={child.returncode} no_confirm {err[-360:]}"
 
 
 def _default_notifier(text: str) -> None:
@@ -354,6 +624,62 @@ def _default_notifier(text: str) -> None:
         telegram_utils.send_admin_alert(text)
     except Exception as e:
         log.warning(f"auto_assign notifier fail: {e}")
+
+
+def _latch_authority_auto_off(
+    state_path: str,
+    reason: str,
+    now: datetime,
+    notifier: Optional[Callable[[str], None]],
+) -> Dict[str, Any]:
+    """Zatrzaśnij i wyślij dokładnie jeden niedławiony alert na OFF→ON."""
+    state, newly_latched = AC.latch_auto_off_with_status(
+        state_path, reason, now
+    )
+    if newly_latched:
+        notify = notifier or _default_notifier
+        try:
+            notify(
+                "🚨 AUTO-OFF ZATRZAŚNIĘTE\n"
+                f"Klasa {AC.CLASS_ID} | reason={reason}\n"
+                "AUTO pozostaje zablokowane do reconcile i jawnego ACK ownera."
+            )
+        except Exception as notify_error:
+            log.warning(
+                "AUTO_ASSIGN authority latch alert fail "
+                f"reason={reason}: {type(notify_error).__name__}: {notify_error}"
+            )
+    return state
+
+
+def _runner_failure_classification(message: Any) -> str:
+    """Uczciwa granica: tylko dowód braku startu procesu jest twardą odmową.
+
+    Exit bez sentinela, timeout i dowolny nieznany komunikat mogły nastąpić po
+    side-effekcie panelu, więc są traktowane jak wykonanie o stanie nieznanym.
+    """
+    msg = str(message or "")
+    definitive = (
+        msg == "blocked_pytest_context"
+        or msg.startswith("pre_send_refusal:")
+    )
+    return "definitive_pre_send_refusal" if definitive else "unknown"
+
+
+def _fresh_execution_flags() -> Tuple[bool, Optional[str]]:
+    """Odczyt źródłowy omijający per-tick FlagSnapshot, zawsze fail-closed."""
+    try:
+        enabled = C.decision_flag("ENABLE_AUTO_ASSIGN", source=True)
+        fingerprint = C.flag_fingerprint(source=True)
+    except Exception:
+        return False, None
+    return bool(enabled), fingerprint
+
+
+def _runner_readback_cid(message: Any) -> Optional[str]:
+    """CID z sentinela ``--verify``; brak pola oznacza brak dodatkowego dowodu."""
+    match = re.search(r"\bverify_ok_kid=([^\s\]|]+)", str(message or ""))
+    return canon_cid(match.group(1)) if match else None
 
 
 def _append_learning_log(rec: Dict[str, Any]) -> None:
@@ -389,6 +715,15 @@ def maybe_execute(
     assign_runner: Optional[Callable[[str, str, int], Tuple[bool, str]]] = None,
     notifier: Optional[Callable[[str], None]] = None,
     state_path: str = STATE_PATH,
+    authority_card_path: str = AUTHORITY_CARD_PATH,
+    authority_audit_path: str = COORDINATOR_AUDIT_PATH,
+    authority_state_path: str = AUTHORITY_CARD_STATE_PATH,
+    monitor_heartbeat_path: str = MONITOR_HEARTBEAT_PATH,
+    shadow_decisions_path: str = SHADOW_DECISIONS_PATH,
+    commit_recheck_provider: Optional[Callable[..., Dict[str, Any]]] = None,
+    identity_registry_provider: Optional[Callable[[], Any]] = None,
+    code_git_sha: Optional[str] = None,
+    flag_fp: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Punkt wejścia z shadow_dispatcher. Przy ENABLE_AUTO_ASSIGN=false → None.
 
@@ -408,6 +743,33 @@ def maybe_execute(
         if not _auth_ok:
             _warn_owner_auth(_auth_reason, now.timestamp())
             return {"blocked": "owner_auth_missing", "reason": _auth_reason}
+        # 1c. AUTON-02/T5: karta klasy per wykonanie. Git SHA pochodzi wyłącznie
+        # z BUILD_SHA wbitego przy deployu — hot-path nigdy nie uruchamia gita.
+        if code_git_sha is None:
+            code_git_sha = AC.read_code_git_sha(AUTHORITY_BUILD_SHA_PATH)
+        if flag_fp is None:
+            try:
+                flag_fp = C.flag_fingerprint()
+            except Exception:
+                flag_fp = None
+        _card_ok, _card_reason, _card_ctx = _authority_card_gate(
+            record=record,
+            result=result,
+            payload=payload,
+            now=now,
+            card_path=authority_card_path,
+            audit_path=authority_audit_path,
+            state_path=authority_state_path,
+            code_git_sha=code_git_sha,
+            flag_fp=flag_fp,
+            latch_notifier=notifier or _default_notifier,
+        )
+        if not _card_ok:
+            _warn_authority_card(_card_reason, now.timestamp())
+            return {
+                "blocked": f"authority_card_{_card_reason}",
+                "reason": _card_reason,
+            }
         # 2. Bramka jakościowa (czysta, policzona w dispatch_pipeline).
         if not getattr(result, "would_auto_assign", False):
             return None
@@ -443,7 +805,12 @@ def maybe_execute(
             log.warning(f"AUTO_ASSIGN blocked idempotent oid={oid} (już auto-przypisany <{idem_ttl:.0f}s)")
             return {"blocked": "idempotent_recent", "order_id": oid}
 
-        if _rate_cap_exceeded(state, now_ts, _numeric("AUTO_ASSIGN_MAX_PER_HOUR")):
+        # T5: na prawdziwej ścieżce karty limit godzinowy został już oceniony
+        # z podpisanego body. Stary flags.json rate-cap zostaje wyłącznie dla
+        # izolowanych testów starszych warstw, które jawnie bypassują krok 1c.
+        if (not _card_ctx.get("enforced")
+                and _rate_cap_exceeded(
+                    state, now_ts, _numeric("AUTO_ASSIGN_MAX_PER_HOUR"))):
             log.warning(f"AUTO_ASSIGN blocked rate_cap oid={oid}")
             return {"blocked": "rate_cap"}
 
@@ -453,45 +820,386 @@ def maybe_execute(
             log.warning(f"AUTO_ASSIGN blocked override_cooldown oid={oid} cid={cid}")
             return {"blocked": "override_cooldown", "courier_id": cid}
 
-        # 4b. ATOMOWY re-check flagi TUŻ przed wykonaniem (TOCTOU: flip→OFF w
-        # trakcie I/O rate-cap/cooldown/idempotencji MUSI anulować wykonanie).
-        if not C.decision_flag("ENABLE_AUTO_ASSIGN"):
-            log.info(f"AUTO_ASSIGN aborted flag_off_at_execution oid={oid}")
-            return {"blocked": "flag_off_at_execution", "order_id": oid}
+        # 4b/T1/T6. Jedna sekcja: limity karty + heartbeat + lifecycle CAS +
+        # świeży solve + runner + sprzężone zapisy. Card lock jest reentrant,
+        # lifecycle lock blokuje każdego writera materialnego orders_state.
+        authority_lock = (
+            AC.state_lock(authority_state_path)
+            if _card_ctx.get("enforced")
+            else nullcontext()
+        )
+        with authority_lock:
+            with state_machine.lifecycle_apply_lock():
+                # H4: jedyny zegar wszystkich kontroli świeżości jest pobierany
+                # dopiero po obu lockach. ``now`` wejściowe służy odtąd logom.
+                execution_now = (
+                    _fresh_execution_now()
+                    if _card_ctx.get("enforced")
+                    else now
+                )
+                if execution_now.tzinfo is None:
+                    execution_now = execution_now.replace(tzinfo=timezone.utc)
+                execution_now = execution_now.astimezone(timezone.utc)
+                execution_ts = execution_now.timestamp()
 
-        # 5. Wykonanie (ścieżka ASSIGN_DIRECT — subprocess gastro_assign).
-        time_minutes = _time_minutes_from_record(record, now)
-        runner = assign_runner or _default_assign_runner
-        ok, msg = runner(oid, str(name), time_minutes)
+                if not C.decision_flag("ENABLE_AUTO_ASSIGN"):
+                    log.info(f"AUTO_ASSIGN aborted flag_off_at_execution oid={oid}")
+                    return {"blocked": "flag_off_at_execution", "order_id": oid}
+                if _card_ctx.get("enforced"):
+                    _auth_ok, _auth_reason = _owner_authorization(execution_now)
+                    if not _auth_ok:
+                        _warn_owner_auth(_auth_reason, execution_ts)
+                        return {
+                            "blocked": "owner_auth_missing",
+                            "reason": _auth_reason,
+                        }
+                _card_ok, _card_reason, _card_ctx = _authority_card_gate(
+                    record=record,
+                    result=result,
+                    payload=payload,
+                    now=execution_now,
+                    card_path=authority_card_path,
+                    audit_path=authority_audit_path,
+                    state_path=authority_state_path,
+                    code_git_sha=code_git_sha,
+                    flag_fp=flag_fp,
+                    latch_notifier=notifier or _default_notifier,
+                )
+                if not _card_ok:
+                    _warn_authority_card(_card_reason, execution_ts)
+                    return {
+                        "blocked": f"authority_card_{_card_reason}",
+                        "reason": _card_reason,
+                    }
+                if _card_ctx.get("enforced"):
+                    heartbeat_ok, heartbeat_reason = AAM.heartbeat_fresh(
+                        monitor_heartbeat_path, execution_now
+                    )
+                    if not heartbeat_ok:
+                        _latch_authority_auto_off(
+                            authority_state_path,
+                            heartbeat_reason,
+                            execution_now,
+                            notifier,
+                        )
+                        return {
+                            "blocked": heartbeat_reason,
+                            "reason": heartbeat_reason,
+                        }
 
-        outcome = {
-            "executed": bool(ok),
-            "order_id": oid,
-            "courier_id": cid,
-            "courier_name": name,
-            "time_minutes": time_minutes,
-            "runner_msg": msg,
-        }
-        if ok:
-            state.setdefault("executed", []).append(now_ts)
-            _record_auto_assign(state, oid, now_ts, idem_ttl)  # idempotencja per-order
-            _save_state(state_path, state)
-            _append_learning_log({
-                "ts": now.isoformat(),
-                "order_id": oid,
-                "action": "AUTO_ASSIGN_EXECUTED",
-                "courier_id": cid,
-                "courier_name": name,
-                "time_minutes": time_minutes,
-                "score": best.get("score"),
-            })
-            log.info(f"AUTO_ASSIGN_EXECUTED oid={oid} cid={cid} time={time_minutes}min")
-        else:
-            log.warning(f"AUTO_ASSIGN runner fail oid={oid} cid={cid}: {msg}")
+                # Powtórz także idempotencję po wejściu pod wspólny lock.
+                state = _load_state(state_path)
+                if _recent_auto_assign(state, oid, execution_ts, idem_ttl):
+                    return {"blocked": "idempotent_recent", "order_id": oid}
+
+                if _card_ctx.get("enforced"):
+                    recheck = commit_recheck_provider or PF.prepare_commit_recheck
+                    fresh = recheck(oid, payload, now=execution_now)
+                    commit_ok, commit_reason = PF.compare_commit_snapshots(
+                        record.get("commit_proposal"), fresh, execution_now
+                    )
+                    if not commit_ok:
+                        # Staleness != tamper: celowo bez latcha.
+                        return {
+                            "blocked": commit_reason,
+                            "reason": commit_reason,
+                        }
+
+                    # H1: kanoniczny registry jest jedynym resolverem przed
+                    # bojowym runnerem nazwowym. Brak/tie/rozjazd to staleness
+                    # configu — odmowa bez latcha i bez rezerwacji.
+                    try:
+                        registry = (
+                            identity_registry_provider or build_registry
+                        )()
+                        resolved_cid = registry.resolve(
+                            str(name),
+                            "worker",
+                            bare_key_strict=True,
+                        )
+                    except Exception as identity_error:
+                        log.warning(
+                            "AUTO_ASSIGN identity registry fail "
+                            f"oid={oid}: {type(identity_error).__name__}: "
+                            f"{identity_error}"
+                        )
+                        resolved_cid = None
+                    if canon_cid(resolved_cid) != canon_cid(cid):
+                        return {
+                            "blocked": "runner_identity_ambiguous",
+                            "reason": "runner_identity_ambiguous",
+                            "order_id": oid,
+                            "courier_id": cid,
+                        }
+
+                reservation_active = False
+                if _card_ctx.get("enforced"):
+                    # I1/I2: solve i registry mogą zużyć okno ważności. Ostatni
+                    # gate oraz rezerwacja muszą użyć zegara pobranego PO solve,
+                    # nie próbki sprzed niego.
+                    execution_now = _fresh_execution_now()
+                    if execution_now.tzinfo is None:
+                        execution_now = execution_now.replace(
+                            tzinfo=timezone.utc
+                        )
+                    execution_now = execution_now.astimezone(timezone.utc)
+                    execution_ts = execution_now.timestamp()
+                    _auth_ok, _auth_reason = _owner_authorization(execution_now)
+                    if not _auth_ok:
+                        _warn_owner_auth(_auth_reason, execution_ts)
+                        return {
+                            "blocked": "owner_auth_missing",
+                            "reason": _auth_reason,
+                        }
+                    # J2/H5/G1: OSTATNI gate po fresh solve czyta źródło
+                    # flags.json poza FlagSnapshot, kartę i heartbeat. Między
+                    # finalnym heartbeat a rezerwacją nie ma innej pracy.
+                    fresh_flag_on, fresh_flag_fp = _fresh_execution_flags()
+                    if not fresh_flag_on:
+                        log.info(
+                            f"AUTO_ASSIGN aborted flag_off_at_execution oid={oid}"
+                        )
+                        return {
+                            "blocked": "flag_off_at_execution",
+                            "order_id": oid,
+                        }
+                    _card_ok, _card_reason, _card_ctx = _authority_card_gate(
+                        record=record,
+                        result=result,
+                        payload=payload,
+                        now=execution_now,
+                        card_path=authority_card_path,
+                        audit_path=authority_audit_path,
+                        state_path=authority_state_path,
+                        code_git_sha=code_git_sha,
+                        flag_fp=fresh_flag_fp,
+                        latch_notifier=notifier or _default_notifier,
+                    )
+                    if not _card_ok:
+                        _warn_authority_card(_card_reason, execution_ts)
+                        return {
+                            "blocked": f"authority_card_{_card_reason}",
+                            "reason": _card_reason,
+                        }
+                    heartbeat_ok, heartbeat_reason = AAM.heartbeat_fresh(
+                        monitor_heartbeat_path, execution_now
+                    )
+                    if not heartbeat_ok:
+                        _latch_authority_auto_off(
+                            authority_state_path,
+                            heartbeat_reason,
+                            execution_now,
+                            notifier,
+                        )
+                        return {
+                            "blocked": heartbeat_reason,
+                            "reason": heartbeat_reason,
+                        }
+                    try:
+                        reserved_state = AC.reserve_execution(
+                            str(_card_ctx["state_path"]),
+                            _card_ctx["state"],
+                            oid,
+                            execution_now,
+                        )
+                        reservation_active = True
+                        _record_executor_outcome(
+                            state_path,
+                            state,
+                            oid,
+                            execution_ts,
+                            idem_ttl,
+                            consume_budget=True,
+                        )
+                        _card_ctx["state"] = reserved_state
+                    except Exception as reservation_error:
+                        log.warning(
+                            "AUTO_ASSIGN reservation write fail "
+                            f"oid={oid}: {type(reservation_error).__name__}: "
+                            f"{reservation_error}"
+                        )
+                        if reservation_active:
+                            try:
+                                # Zapis executora mógł rzucić dopiero po rename
+                                # (np. fsync katalogu). Usuń więc również jego
+                                # ewentualną, już trwałą część rezerwacji.
+                                _rollback_executor_reservation(
+                                    state_path,
+                                    oid,
+                                    execution_ts,
+                                )
+                                # Karta jest blokującym źródłem prawdy: zwalniamy
+                                # ją na końcu, razem z audytem rollbacku.
+                                AC.rollback_execution_reservation(
+                                    str(_card_ctx["state_path"]),
+                                    oid,
+                                    execution_now,
+                                    "reservation_persist_failed_before_runner",
+                                    audit_path=authority_audit_path,
+                                )
+                            except Exception as rollback_error:
+                                log.warning(
+                                    "AUTO_ASSIGN failed reservation rollback "
+                                    f"oid={oid}: {type(rollback_error).__name__}: "
+                                    f"{rollback_error}"
+                                )
+                                _latch_authority_auto_off(
+                                    str(_card_ctx["state_path"]),
+                                    "reservation_persist_failed",
+                                    execution_now,
+                                    notifier,
+                                )
+                        return {
+                            "blocked": "reservation_persist_failed",
+                            "reason": "reservation_persist_failed",
+                        }
+
+                time_minutes = _time_minutes_from_record(
+                    record, execution_now
+                )
+                runner = assign_runner or _default_assign_runner
+                try:
+                    ok, msg = runner(oid, str(name), time_minutes)
+                except Exception as runner_error:
+                    if not _card_ctx.get("enforced"):
+                        raise
+                    ok = False
+                    msg = (
+                        "runner_exception_unknown:"
+                        f"{type(runner_error).__name__}"
+                    )
+                identity_mismatch = False
+                if ok and _card_ctx.get("enforced"):
+                    readback_cid = _runner_readback_cid(msg)
+                    if readback_cid is None:
+                        # Sukces procesu bez CID z read-back nie dowodzi skutku.
+                        # Rezerwacja zostaje, a wspólna ścieżka unknown poniżej
+                        # zatrzaskuje runner_outcome_unknown.
+                        ok = False
+                    elif readback_cid != canon_cid(cid):
+                        identity_mismatch = True
+                        ok = False
+                        _latch_authority_auto_off(
+                            str(_card_ctx["state_path"]),
+                            "runner_identity_mismatch",
+                            execution_now,
+                            notifier,
+                        )
+                runner_outcome = (
+                    "confirmed"
+                    if ok
+                    else _runner_failure_classification(msg)
+                )
+                outcome = {
+                    "executed": bool(ok),
+                    "order_id": oid,
+                    "courier_id": cid,
+                    "courier_name": name,
+                    "time_minutes": time_minutes,
+                    "runner_msg": msg,
+                    "runner_outcome": runner_outcome,
+                }
+                if ok:
+                    if _card_ctx.get("enforced"):
+                        outcome["authority_card_sha256"] = _card_ctx.get(
+                            "card_sha256"
+                        )
+                        from dispatch_v2.core.jsonl_appender import append_jsonl
+                        append_jsonl(shadow_decisions_path, {
+                            "ts": execution_now.isoformat(),
+                            "record_type": "auto_executed",
+                            "auto_executed": True,
+                            "order_id": oid,
+                            "courier_id": cid,
+                            "card_sha256": _card_ctx.get("card_sha256"),
+                        })
+                    else:
+                        _record_executor_outcome(
+                            state_path,
+                            state,
+                            oid,
+                            execution_ts,
+                            idem_ttl,
+                            consume_budget=True,
+                        )
+                    _append_learning_log({
+                        "ts": execution_now.isoformat(),
+                        "order_id": oid,
+                        "action": "AUTO_ASSIGN_EXECUTED",
+                        "courier_id": cid,
+                        "courier_name": name,
+                        "time_minutes": time_minutes,
+                        "score": best.get("score"),
+                    })
+                    log.info(
+                        f"AUTO_ASSIGN_EXECUTED oid={oid} cid={cid} "
+                        f"time={time_minutes}min")
+                else:
+                    log.warning(
+                        f"AUTO_ASSIGN runner fail oid={oid} cid={cid}: {msg}")
+                    if _card_ctx.get("enforced"):
+                        if runner_outcome == "unknown":
+                            outcome["authority_card_sha256"] = (
+                                _card_ctx.get("card_sha256")
+                            )
+                            _latch_authority_auto_off(
+                                str(_card_ctx["state_path"]),
+                                (
+                                    "runner_identity_mismatch"
+                                    if identity_mismatch
+                                    else "runner_outcome_unknown"
+                                ),
+                                execution_now,
+                                notifier,
+                            )
+                        else:
+                            try:
+                                _rollback_executor_reservation(
+                                    state_path,
+                                    oid,
+                                    execution_ts,
+                                )
+                                AC.rollback_execution_reservation(
+                                    str(_card_ctx["state_path"]),
+                                    oid,
+                                    execution_now,
+                                    "definitive_pre_send_refusal",
+                                    audit_path=authority_audit_path,
+                                )
+                                outcome["reservation_rolled_back"] = True
+                            except Exception as rollback_error:
+                                log.warning(
+                                    "AUTO_ASSIGN reservation rollback fail "
+                                    f"oid={oid}: "
+                                    f"{type(rollback_error).__name__}: "
+                                    f"{rollback_error}"
+                                )
+                                _latch_authority_auto_off(
+                                    str(_card_ctx["state_path"]),
+                                    "reservation_rollback_failed",
+                                    execution_now,
+                                    notifier,
+                                )
 
         # 6. Notyfikacja post-hoc (informacja, nie pytanie).
         notify = notifier or _default_notifier
-        status = "✅ wykonane" if ok else f"❌ nieudane ({msg[:120]})"
+        if ok:
+            status = "✅ wykonane"
+        elif (
+            _card_ctx.get("enforced")
+            and runner_outcome == "unknown"
+        ):
+            status = (
+                "⚠️ STAN NIEZNANY — wykonaj reconcile 5b karty "
+                f"({str(msg)[:120]})"
+            )
+        elif _card_ctx.get("enforced"):
+            status = (
+                "❌ twarda odmowa przed wysłaniem "
+                f"({str(msg)[:120]})"
+            )
+        else:
+            status = f"❌ nieudane ({str(msg)[:120]})"
         notify(
             f"🤖 AUTO-ASSIGN {status}\n"
             f"Zlecenie #{oid} → {name} (cid={cid})\n"

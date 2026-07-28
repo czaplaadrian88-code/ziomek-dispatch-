@@ -224,6 +224,15 @@ def eval_courier_inner(ctx: EvalContext, cid, cs):
     if courier_pos is None and origin_travel is None:
         return None
     bag_raw = getattr(cs, "bag", []) or []
+    # T5/G4: execution authority pyta o worek TERAZ, nie o syntetyczny worek
+    # przyszły po soon-free. Snapshot powstaje przed jakąkolwiek substytucją.
+    authority_bag_oids_now = [
+        str(item.get("order_id") or item.get("zid"))
+        for item in bag_raw
+        if isinstance(item, dict)
+        and (item.get("order_id") or item.get("zid")) not in (None, "")
+    ]
+    authority_bag_size_now = len(bag_raw)
     bag_sim = [_bag_dict_to_ordersim(b) for b in bag_raw]
 
     # === SP-B2-ZARAZWOLNY (2026-06-11): kurier "zaraz-wolny" ===
@@ -1958,6 +1967,9 @@ def eval_courier_inner(ctx: EvalContext, cid, cs):
         # Z-P0-04: optimistic-CAS token dla event-time save w panel_watcher.
         # Powstal PRZED pula kandydatow, nie tuz przed pozniejszym zapisem.
         "plan_expected_version": _plan_expected_version,
+        # T5/G4: surowy cs.bag z chwili pętli kandydatów, przed soon-free.
+        "authority_bag_size_now": authority_bag_size_now,
+        "authority_bag_oids_now": authority_bag_oids_now,
         "score": score_result,
         "km_to_pickup": (None if explicit_unknown else round(km_to_pickup_haversine, 2)),
         # NOGPS-NEUTRAL-SCORE (2026-07-19): road_km z pozycji-fikcji (centrum)?
@@ -1995,6 +2007,12 @@ def eval_courier_inner(ctx: EvalContext, cid, cs):
         # pozwala odróżnić świeży fix od repliki ze store w shadow_decisions.
         "pos_age_min": (
             round(getattr(cs, "pos_age_min"), 1)
+            if getattr(cs, "pos_age_min", None) is not None else None),
+        # T5 authority card: dokładny wiek w sekundach, zanim starsze pole
+        # display zostanie zaokrąglone do 0,1 min. Konsument R3 nie może
+        # kwalifikować granicy LIVE z przybliżenia.
+        "pos_age_sec": (
+            float(getattr(cs, "pos_age_min")) * 60.0
             if getattr(cs, "pos_age_min", None) is not None else None),
         "shift_start_min": getattr(cs, "shift_start_min", None),
         # L4 (2026-07-02, F1): available_from = max(now, shift_start) policzone RAZ

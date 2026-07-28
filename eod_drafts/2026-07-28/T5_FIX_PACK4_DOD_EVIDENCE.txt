@@ -1,0 +1,8 @@
+regresja: affected-path regression 404 passed, 0 failed; canonical full suite collection blocked by sandbox/host dependencies and remains pre-merge HOLD
+e2e: hermetic maybe_execute covers owner audit -> card -> heartbeat -> fresh solve -> second clock -> reservation -> runner read-back -> latch/outcome
+pozytywny-wplyw: RED 12 failed/3 passed became target 121 passed; I6 and I7 mutation controls prove the old merge/verdict bypass materially reopens the defects
+rollback: no live mutation; revert only this fix-pack, then py_compile/import/full canonical tests before any deploy
+N-D: authority_scope.py contract unchanged; state_machine.py is the single NEW_ORDER merge writer and has a real-flow oracle
+N-D: authority_card.py is the single card-state writer; authority_card_verify.py delegates to it and has CLI tests
+N-D: auto_assign_executor.py is the only execution consumer; auto_assign_monitor.py is the heartbeat producer/validator twin and both changed together
+N-D: no flags, metrics, timers, ledger jobs, serializers or live state were added or changed

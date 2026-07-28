@@ -129,6 +129,19 @@ def load_flags():
     return _flags_cache
 
 
+def load_flags_source():
+    """Odczytaj kanoniczny plik bez cache i bez per-tick ``FlagSnapshot``.
+
+    To wąska granica dla końcowych kill-switchy wykonawczych. Zwykłe decyzje
+    nadal muszą używać ``load_flags`` i jednego spójnego snapshotu ticku.
+    """
+    with open(FLAGS_PATH, encoding="utf-8", errors="strict") as stream:
+        value = json.load(stream)
+    if not isinstance(value, dict):
+        raise ValueError("flags source is not an object")
+    return value
+
+
 def flag(name: str, default=False) -> bool:
     """Szybki odczyt flagi z hot-reload."""
     return load_flags().get(name, default)
@@ -1024,7 +1037,7 @@ def post_shift_overrun_override(value):
         _POST_SHIFT_OVERRUN_TL.override = _prev
 
 
-def decision_flag(name: str) -> bool:
+def decision_flag(name: str, *, source: bool = False) -> bool:
     """Flaga decyzyjna wspólna cross-proces: flags.json → stała modułu → False.
 
     Stała modułu czytana przez globals() W CZASIE WYWOŁANIA (nie importu) —
@@ -1041,17 +1054,24 @@ def decision_flag(name: str) -> bool:
         _ov = getattr(_POST_SHIFT_OVERRUN_TL, "override", None)
         if _ov is not None:
             return bool(_ov)
-    return bool(load_flags().get(name, globals().get(name, False)))
+    values = load_flags_source() if source else load_flags()
+    return bool(values.get(name, globals().get(name, False)))
 
 
-def flag_fingerprint() -> str:
+def flag_fingerprint(*, source: bool = False) -> str:
     """Jedna linia z wartościami wszystkich flag decyzyjnych (ETAP 4 KROK 3).
 
     Logowana przy starcie każdego procesu silnika; po unifikacji fingerprinty
     shadow / czasowka / plan-recheck MUSZĄ być identyczne.
     """
     names = ETAP4_DECISION_FLAGS + _FINGERPRINT_EXTRA_FLAGS
-    return " ".join(f"{n}={int(decision_flag(n))}" for n in names)
+    if not source:
+        return " ".join(f"{n}={int(decision_flag(n))}" for n in names)
+    values = load_flags_source()
+    return " ".join(
+        f"{name}={int(bool(values.get(name, globals().get(name, False))))}"
+        for name in names
+    )
 
 
 _V326_PAIR_LOG = logging.getLogger("dispatch.v326_pair")

@@ -237,27 +237,42 @@ def test_record_auto_assign_prunes_expired():
 # ══════════════════════════════════════════════════════════════════════════
 # SENTINEL — runner ufa ASSIGN_OK:, nie samemu exit-code (Blocker-1 strona executora)
 # ══════════════════════════════════════════════════════════════════════════
-def _fake_run(returncode, stdout="", stderr=""):
-    return lambda *a, **k: SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
+def _fake_popen(returncode, stdout="", stderr="", captured=None):
+    class _Child:
+        def __init__(self, cmd):
+            self.returncode = returncode
+            if captured is not None:
+                captured["cmd"] = cmd
+
+        def communicate(self, timeout):
+            return stdout, stderr
+
+    return lambda cmd, **_kwargs: _Child(cmd)
 
 
 def test_runner_requires_sentinel_even_on_exit0(monkeypatch):
     monkeypatch.setenv("ALLOW_AUTO_ASSIGN_SUBPROCESS_IN_TEST", "1")
-    monkeypatch.setattr(E.subprocess, "run", _fake_run(0, stdout="[assign] Odpowiedź panelu: {'raw': ''}"))
+    monkeypatch.setattr(E.subprocess, "Popen", _fake_popen(
+        0, stdout="[assign] Odpowiedź panelu: {'raw': ''}"
+    ))
     ok, msg = E._default_assign_runner("1", "Kurier", 5)
     assert ok is False and "no_confirm" in msg     # exit 0 bez sentinela = PORAŻKA
 
 
 def test_runner_accepts_exit0_with_sentinel(monkeypatch):
     monkeypatch.setenv("ALLOW_AUTO_ASSIGN_SUBPROCESS_IN_TEST", "1")
-    monkeypatch.setattr(E.subprocess, "run", _fake_run(0, stdout="ASSIGN_OK: Bartek → 480300"))
+    monkeypatch.setattr(E.subprocess, "Popen", _fake_popen(
+        0, stdout="ASSIGN_OK: Bartek → 480300"
+    ))
     ok, msg = E._default_assign_runner("1", "Kurier", 5)
     assert ok is True and "ASSIGN_OK" in msg
 
 
 def test_runner_nonzero_exit_is_failure(monkeypatch):
     monkeypatch.setenv("ALLOW_AUTO_ASSIGN_SUBPROCESS_IN_TEST", "1")
-    monkeypatch.setattr(E.subprocess, "run", _fake_run(1, stderr="ASSIGN_ERROR: session_bounce"))
+    monkeypatch.setattr(E.subprocess, "Popen", _fake_popen(
+        1, stderr="ASSIGN_ERROR: session_bounce"
+    ))
     ok, msg = E._default_assign_runner("1", "Kurier", 5)
     assert ok is False and "exit=1" in msg
 
@@ -265,10 +280,9 @@ def test_runner_nonzero_exit_is_failure(monkeypatch):
 def test_runner_passes_verify_flag(monkeypatch):
     monkeypatch.setenv("ALLOW_AUTO_ASSIGN_SUBPROCESS_IN_TEST", "1")
     captured = {}
-    def _cap(cmd, **k):
-        captured["cmd"] = cmd
-        return SimpleNamespace(returncode=0, stdout="ASSIGN_OK: x", stderr="")
-    monkeypatch.setattr(E.subprocess, "run", _cap)
+    monkeypatch.setattr(E.subprocess, "Popen", _fake_popen(
+        0, stdout="ASSIGN_OK: x", captured=captured
+    ))
     E._default_assign_runner("1", "Kurier", 5)
     assert "--verify" in captured["cmd"]
 
@@ -295,7 +309,9 @@ def test_mutation_remove_idempotency_allows_double_assign(monkeypatch, flag_alwa
 
 def test_mutation_empty_sentinel_reintroduces_false_success(monkeypatch):
     monkeypatch.setenv("ALLOW_AUTO_ASSIGN_SUBPROCESS_IN_TEST", "1")
-    monkeypatch.setattr(E.subprocess, "run", _fake_run(0, stdout="jakiś śmieciowy output bez OK"))
+    monkeypatch.setattr(E.subprocess, "Popen", _fake_popen(
+        0, stdout="jakiś śmieciowy output bez OK"
+    ))
     # Prawda: brak sentinela → False.
     real_ok, _ = E._default_assign_runner("1", "Kurier", 5)
     assert real_ok is False
