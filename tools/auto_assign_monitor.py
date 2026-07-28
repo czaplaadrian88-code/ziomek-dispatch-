@@ -137,6 +137,8 @@ def run_cycle(
             and raw_auto_total >= 0
             else None
         )
+        # Oba liczniki znaczą „budżet skonsumowany": sukces potwierdzony LUB
+        # runner_outcome_unknown. Tylko twarda odmowa pre-send nie zwiększa obu.
         if card_total != auto_total:
             reasons.append("counter_divergence")
 

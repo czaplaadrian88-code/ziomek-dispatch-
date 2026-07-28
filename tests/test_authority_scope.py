@@ -6,6 +6,7 @@ nie może zostać zinterpretowany jako zgoda na AUTO.
 from __future__ import annotations
 
 import inspect
+import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -14,6 +15,7 @@ import pytest
 from dispatch_v2 import authority_card
 from dispatch_v2 import authority_scope
 from dispatch_v2 import shadow_dispatcher
+from dispatch_v2 import state_machine
 from dispatch_v2.tools import write_build_sha
 
 
@@ -376,6 +378,7 @@ def test_check_scope_refuses_each_unsatisfied_predicate(mutate, expected):
 
 
 def test_check_scope_happy_path():
+    """Kontrakt przyszłości: syntetyczne 7/7, nie dzisiejszy rekord produkcyjny."""
     ok, reason = authority_card.check_scope(
         {"authority_scope": _full_scope()},
         None,
@@ -383,6 +386,67 @@ def test_check_scope_happy_path():
         _scope_contract(),
     )
     assert (ok, reason) == (True, "ok")
+
+
+def test_real_state_machine_scope_reaches_gate_and_stops_at_scope_4(
+    tmp_path, monkeypatch
+):
+    """F4/F5: żywy producent po NEW_ORDER przechodzi predykat 1 i staje na 4."""
+    state_path = tmp_path / "orders-state.json"
+    state_path.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(state_machine, "_state_path", lambda: str(state_path))
+    event = {
+        **_order_event(),
+        "payload": {
+            "status_id": 2,
+            "pickup_at_warsaw": NOW.isoformat(),
+        },
+    }
+
+    first = state_machine.update_from_event(event)
+    first_bytes = state_path.read_bytes()
+    retransmitted = state_machine.update_from_event(event)
+    assert state_path.read_bytes() == first_bytes
+    assert retransmitted == first
+    assert first["last_lifecycle_event_id_new_order"] == EVENT_ID
+    assert first["courier_id"] is None
+    assert len(first["history"]) == 1
+
+    block = authority_scope.build_authority_scope(_result(), event, first)
+    assert "absent" not in block["predicates"]["1_new_unassigned"]
+    assert authority_card.check_scope(
+        {"authority_scope": block},
+        None,
+        None,
+        _scope_contract(),
+    ) == (False, "scope_4_absent")
+
+
+def test_new_order_marker_is_mutation_oracle_for_scope_1(
+    tmp_path, monkeypatch
+):
+    """Usunięcie writera markera musi ponownie zaczerwienić gate na scope_1."""
+    state_path = tmp_path / "orders-state.json"
+    state_path.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(state_machine, "_state_path", lambda: str(state_path))
+    event = {
+        **_order_event(),
+        "payload": {
+            "status_id": 2,
+            "pickup_at_warsaw": NOW.isoformat(),
+        },
+    }
+    current = state_machine.update_from_event(event)
+    mutant = json.loads(json.dumps(current))
+    mutant.pop("last_lifecycle_event_id_new_order")
+
+    block = authority_scope.build_authority_scope(_result(), event, mutant)
+    assert authority_card.check_scope(
+        {"authority_scope": block},
+        None,
+        None,
+        _scope_contract(),
+    ) == (False, "scope_1_absent")
 
 
 def test_mutation_oracle_absent_refusal_is_material():

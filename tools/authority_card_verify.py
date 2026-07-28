@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only CLI weryfikacji karty ``auto.canary.v1``."""
+"""CLI weryfikacji karty i dwóch wąskich writerów stanu koordynatora."""
 from __future__ import annotations
 
 import argparse
@@ -27,14 +27,27 @@ except ImportError:  # pragma: no cover - samodzielny odczyt z worktree
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Read-only weryfikator podpisanej karty execution authority")
+        description="Weryfikator i audytowane writery execution authority")
     parser.add_argument("--card", default=AC.CARD_PATH)
     parser.add_argument("--audit", default=AC.AUDIT_PATH)
     parser.add_argument("--build-sha", default=AC.BUILD_SHA_PATH)
+    parser.add_argument("--state", default=AC.STATE_PATH)
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("show", help="body, skrócony SHA i wynik weryfikacji")
     sub.add_parser("verify", help="weryfikacja; exit 0/1")
     sub.add_parser("template", help="szkielet body do uzupełnienia")
+    clear = sub.add_parser(
+        "latch-clear",
+        help="za ACK ownera zdejmij wyłącznie latch, zachowując budżet",
+    )
+    clear.add_argument("--reason", required=True)
+    clear.add_argument("--operator", required=True)
+    execution = sub.add_parser(
+        "verify-execution",
+        help="zapisz ręczne potwierdzenie wykonania wskazanego oid",
+    )
+    execution.add_argument("--oid", required=True)
+    execution.add_argument("--operator", required=True)
     return parser
 
 
@@ -71,6 +84,55 @@ def main(argv=None) -> int:
     if args.command == "template":
         print(json.dumps(
             AC.template_body(), ensure_ascii=False, indent=2, sort_keys=True))
+        return 0
+
+    if args.command == "latch-clear":
+        try:
+            state = AC.clear_latch(
+                args.state,
+                reason=args.reason,
+                operator=args.operator,
+                now=datetime.now(timezone.utc),
+                audit_path=args.audit,
+            )
+        except Exception as exc:
+            print(json.dumps({
+                "cleared": False,
+                "error": type(exc).__name__,
+                "reason": str(exc),
+            }, ensure_ascii=False, sort_keys=True))
+            return 1
+        print(json.dumps({
+            "class_id": AC.CLASS_ID,
+            "cleared": True,
+            "executed_total": state["executed_total"],
+            "pending_verification": state["pending_verification"],
+        }, ensure_ascii=False, sort_keys=True))
+        return 0
+
+    if args.command == "verify-execution":
+        try:
+            state = AC.record_verification(
+                args.state,
+                args.oid,
+                args.operator,
+                datetime.now(timezone.utc),
+                audit_path=args.audit,
+            )
+        except Exception as exc:
+            print(json.dumps({
+                "verified": False,
+                "error": type(exc).__name__,
+                "reason": str(exc),
+            }, ensure_ascii=False, sort_keys=True))
+            return 1
+        print(json.dumps({
+            "class_id": AC.CLASS_ID,
+            "oid": str(args.oid),
+            "verified": True,
+            "executed_total": state["executed_total"],
+            "pending_verification": state["pending_verification"],
+        }, ensure_ascii=False, sort_keys=True))
         return 0
 
     verdict = _verdict(args)

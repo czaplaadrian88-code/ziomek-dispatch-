@@ -167,6 +167,49 @@ def test_monitor_counter_divergence_latches_and_writes_atomic_heartbeat(tmp_path
     assert json.loads(heartbeat.read_text(encoding="utf-8")) == result
 
 
+def test_monitor_accepts_correlated_unknown_execution_budget(tmp_path):
+    """F7: unknown konsumuje oba liczniki, więc nie tworzy fałszywej dywergencji."""
+    card_state = tmp_path / "card-state.json"
+    auto_state = tmp_path / "auto-state.json"
+    heartbeat = tmp_path / "monitor-heartbeat.json"
+    shadow = tmp_path / "shadow.jsonl"
+    AC.save_state(
+        str(card_state),
+        {
+            **AC.empty_state(),
+            "executed_total": 1,
+            "executed_ts": [NOW.timestamp()],
+            "in_flight": "OID-U",
+            "pending_verification": ["OID-U"],
+            "auto_off_latch": True,
+            "auto_off_reason": "runner_outcome_unknown",
+            "auto_off_ts": NOW.isoformat(),
+        },
+    )
+    auto_state.write_text(
+        json.dumps({
+            "executed_total": 1,
+            "executed_order_ids": ["OID-U"],
+            "assigned_orders": {"OID-U": NOW.timestamp()},
+        }),
+        encoding="utf-8",
+    )
+    shadow.write_text("", encoding="utf-8")
+
+    result = M.run_cycle(
+        now=NOW,
+        heartbeat_path=str(heartbeat),
+        authority_state_path=str(card_state),
+        auto_state_path=str(auto_state),
+        shadow_path=str(shadow),
+    )
+
+    assert "counter_divergence" not in result["checks"]["reasons"]
+    assert result["checks"]["card_executed_total"] == 1
+    assert result["checks"]["executor_executed_total"] == 1
+    assert result["checks"]["reasons"] == ["latch_on"]
+
+
 def test_monitor_uncovered_auto_executed_receipt_latches(tmp_path):
     card_state = tmp_path / "card-state.json"
     auto_state = tmp_path / "auto-state.json"

@@ -344,6 +344,7 @@ def _authority_card_gate(
     state_path: str,
     code_git_sha: Optional[str],
     flag_fp: Optional[str],
+    latch_notifier: Optional[Callable[[str], None]] = None,
 ) -> Tuple[bool, str, Dict[str, Any]]:
     """Krok 1c: latch → podpis → scope → limity. Każdy błąd jest odmową."""
     state = AC.load_state(state_path)
@@ -363,7 +364,12 @@ def _authority_card_gate(
     )
     if not verdict.valid:
         try:
-            AC.latch_auto_off(state_path, verdict.reason, now)
+            _latch_authority_auto_off(
+                state_path,
+                verdict.reason,
+                now,
+                latch_notifier,
+            )
         except Exception as latch_error:
             log.warning(
                 f"AUTO_ASSIGN authority latch write fail reason={verdict.reason}: "
@@ -419,6 +425,32 @@ def _record_auto_assign(state: Dict[str, Any], oid: str, now_ts: float, ttl_sec:
     state["assigned_orders"] = ao
 
 
+def _record_executor_outcome(
+    state_path: str,
+    state: Dict[str, Any],
+    oid: str,
+    now_ts: float,
+    idem_ttl: float,
+    *,
+    consume_budget: bool,
+) -> None:
+    """Idempotencja zawsze; liczniki tylko dla sukcesu lub stanu nieznanego."""
+    _record_auto_assign(state, oid, now_ts, idem_ttl)
+    if consume_budget:
+        state.setdefault("executed", []).append(now_ts)
+        state["executed_total"] = int(
+            state.get("executed_total", 0) or 0
+        ) + 1
+        order_ids = [
+            str(value)
+            for value in (state.get("executed_order_ids") or [])
+        ]
+        if oid not in order_ids:
+            order_ids.append(oid)
+        state["executed_order_ids"] = order_ids
+    _save_state(state_path, state)
+
+
 # ---------------- wykonanie ----------------
 
 def _default_assign_runner(order_id: str, kurier_name: str, time_minutes: int) -> Tuple[bool, str]:
@@ -451,6 +483,49 @@ def _default_notifier(text: str) -> None:
         telegram_utils.send_admin_alert(text)
     except Exception as e:
         log.warning(f"auto_assign notifier fail: {e}")
+
+
+def _latch_authority_auto_off(
+    state_path: str,
+    reason: str,
+    now: datetime,
+    notifier: Optional[Callable[[str], None]],
+) -> Dict[str, Any]:
+    """Zatrzaśnij i wyślij dokładnie jeden niedławiony alert na OFF→ON."""
+    state, newly_latched = AC.latch_auto_off_with_status(
+        state_path, reason, now
+    )
+    if newly_latched:
+        notify = notifier or _default_notifier
+        try:
+            notify(
+                "🚨 AUTO-OFF ZATRZAŚNIĘTE\n"
+                f"Klasa {AC.CLASS_ID} | reason={reason}\n"
+                "AUTO pozostaje zablokowane do reconcile i jawnego ACK ownera."
+            )
+        except Exception as notify_error:
+            log.warning(
+                "AUTO_ASSIGN authority latch alert fail "
+                f"reason={reason}: {type(notify_error).__name__}: {notify_error}"
+            )
+    return state
+
+
+def _runner_failure_classification(message: Any) -> str:
+    """Uczciwa granica: tylko dowód braku startu procesu jest twardą odmową.
+
+    Exit bez sentinela, timeout i dowolny nieznany komunikat mogły nastąpić po
+    side-effekcie panelu, więc są traktowane jak wykonanie o stanie nieznanym.
+    """
+    msg = str(message or "")
+    definitive = (
+        msg == "blocked_pytest_context"
+        or msg.startswith("pre_send_refusal:")
+        or msg.startswith("exc:FileNotFoundError")
+        or msg.startswith("exc:PermissionError")
+        or msg.startswith("exc:OSError")
+    )
+    return "definitive_pre_send_refusal" if definitive else "unknown"
 
 
 def _append_learning_log(rec: Dict[str, Any]) -> None:
@@ -532,6 +607,7 @@ def maybe_execute(
             state_path=authority_state_path,
             code_git_sha=code_git_sha,
             flag_fp=flag_fp,
+            latch_notifier=notifier or _default_notifier,
         )
         if not _card_ok:
             _warn_authority_card(_card_reason, now.timestamp())
@@ -612,6 +688,7 @@ def maybe_execute(
                     state_path=authority_state_path,
                     code_git_sha=code_git_sha,
                     flag_fp=flag_fp,
+                    latch_notifier=notifier or _default_notifier,
                 )
                 if not _card_ok:
                     _warn_authority_card(_card_reason, now_ts)
@@ -624,8 +701,11 @@ def maybe_execute(
                         monitor_heartbeat_path, now
                     )
                     if not heartbeat_ok:
-                        AC.latch_auto_off(
-                            authority_state_path, heartbeat_reason, now
+                        _latch_authority_auto_off(
+                            authority_state_path,
+                            heartbeat_reason,
+                            now,
+                            notifier,
                         )
                         return {
                             "blocked": heartbeat_reason,
@@ -652,7 +732,21 @@ def maybe_execute(
 
                 time_minutes = _time_minutes_from_record(record, now)
                 runner = assign_runner or _default_assign_runner
-                ok, msg = runner(oid, str(name), time_minutes)
+                try:
+                    ok, msg = runner(oid, str(name), time_minutes)
+                except Exception as runner_error:
+                    if not _card_ctx.get("enforced"):
+                        raise
+                    ok = False
+                    msg = (
+                        "runner_exception_unknown:"
+                        f"{type(runner_error).__name__}"
+                    )
+                runner_outcome = (
+                    "confirmed"
+                    if ok
+                    else _runner_failure_classification(msg)
+                )
                 outcome = {
                     "executed": bool(ok),
                     "order_id": oid,
@@ -660,6 +754,7 @@ def maybe_execute(
                     "courier_name": name,
                     "time_minutes": time_minutes,
                     "runner_msg": msg,
+                    "runner_outcome": runner_outcome,
                 }
                 if ok:
                     if _card_ctx.get("state_path"):
@@ -677,24 +772,20 @@ def maybe_execute(
                             log.warning(
                                 f"AUTO_ASSIGN authority state write fail oid={oid}: "
                                 f"{type(card_state_error).__name__}: {card_state_error}")
-                            AC.latch_auto_off(
+                            _latch_authority_auto_off(
                                 str(_card_ctx["state_path"]),
                                 "state_write_failed_after_execution",
                                 now,
+                                notifier,
                             )
-                    state.setdefault("executed", []).append(now_ts)
-                    _record_auto_assign(state, oid, now_ts, idem_ttl)
-                    state["executed_total"] = int(
-                        state.get("executed_total", 0) or 0
-                    ) + 1
-                    order_ids = [
-                        str(value)
-                        for value in (state.get("executed_order_ids") or [])
-                    ]
-                    if oid not in order_ids:
-                        order_ids.append(oid)
-                    state["executed_order_ids"] = order_ids
-                    _save_state(state_path, state)
+                    _record_executor_outcome(
+                        state_path,
+                        state,
+                        oid,
+                        now_ts,
+                        idem_ttl,
+                        consume_budget=True,
+                    )
                     if _card_ctx.get("enforced"):
                         from dispatch_v2.core.jsonl_appender import append_jsonl
                         append_jsonl(shadow_decisions_path, {
@@ -720,10 +811,68 @@ def maybe_execute(
                 else:
                     log.warning(
                         f"AUTO_ASSIGN runner fail oid={oid} cid={cid}: {msg}")
+                    if _card_ctx.get("enforced"):
+                        if runner_outcome == "unknown":
+                            try:
+                                AC.record_success(
+                                    str(_card_ctx["state_path"]),
+                                    _card_ctx["state"],
+                                    oid,
+                                    now,
+                                )
+                                outcome["authority_card_sha256"] = (
+                                    _card_ctx.get("card_sha256")
+                                )
+                            except Exception as card_state_error:
+                                log.warning(
+                                    "AUTO_ASSIGN unknown authority budget write "
+                                    f"fail oid={oid}: "
+                                    f"{type(card_state_error).__name__}: "
+                                    f"{card_state_error}"
+                                )
+                            _latch_authority_auto_off(
+                                str(_card_ctx["state_path"]),
+                                "runner_outcome_unknown",
+                                now,
+                                notifier,
+                            )
+                            _record_executor_outcome(
+                                state_path,
+                                state,
+                                oid,
+                                now_ts,
+                                idem_ttl,
+                                consume_budget=True,
+                            )
+                        else:
+                            _record_executor_outcome(
+                                state_path,
+                                state,
+                                oid,
+                                now_ts,
+                                idem_ttl,
+                                consume_budget=False,
+                            )
 
         # 6. Notyfikacja post-hoc (informacja, nie pytanie).
         notify = notifier or _default_notifier
-        status = "✅ wykonane" if ok else f"❌ nieudane ({msg[:120]})"
+        if ok:
+            status = "✅ wykonane"
+        elif (
+            _card_ctx.get("enforced")
+            and runner_outcome == "unknown"
+        ):
+            status = (
+                "⚠️ STAN NIEZNANY — wykonaj reconcile 5b karty "
+                f"({str(msg)[:120]})"
+            )
+        elif _card_ctx.get("enforced"):
+            status = (
+                "❌ twarda odmowa przed wysłaniem "
+                f"({str(msg)[:120]})"
+            )
+        else:
+            status = f"❌ nieudane ({str(msg)[:120]})"
         notify(
             f"🤖 AUTO-ASSIGN {status}\n"
             f"Zlecenie #{oid} → {name} (cid={cid})\n"

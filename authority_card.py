@@ -525,6 +525,60 @@ def save_state(path: str, state: Dict[str, Any]) -> None:
         _save_state_unlocked(path, state)
 
 
+def _audit_value(value: Any, field: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        raise ValueError(f"{field} is required")
+    return normalized
+
+
+def _append_audit_row(path: str, row: Dict[str, Any]) -> None:
+    """Trwały append wspólnego audytu; błąd jest fail-loud dla writera CLI."""
+    if (
+        _pytest_active()
+        and _is_production_path(path)
+        and not os.environ.get("ALLOW_AUTHORITY_CARD_PROD_PATHS_IN_TEST")
+    ):
+        raise RuntimeError("authority card production audit blocked under pytest")
+    parent = os.path.dirname(os.path.abspath(path))
+    os.makedirs(parent, mode=0o700, exist_ok=True)
+    line = (
+        json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n"
+    ).encode("utf-8")
+    lock_fd = os.open(
+        os.path.abspath(path) + ".append.lock",
+        os.O_RDWR | os.O_CREAT,
+        0o600,
+    )
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        fd = os.open(path, os.O_RDWR | os.O_APPEND | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            if os.fstat(fd).st_size:
+                os.lseek(fd, -1, os.SEEK_END)
+                if os.read(fd, 1) != b"\n":
+                    line = b"\n" + line
+            view = memoryview(line)
+            while view:
+                written = os.write(fd, view)
+                if written <= 0:
+                    raise OSError("short authority audit write")
+                view = view[written:]
+            os.fsync(fd)
+        finally:
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
+        dir_fd = os.open(parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        os.close(lock_fd)
+
+
 def check_limits(
     state: Dict[str, Any],
     now_ts: float,
@@ -555,17 +609,17 @@ def check_limits(
     return True, "ok"
 
 
-def latch_auto_off(
+def latch_auto_off_with_status(
     state_path: str = STATE_PATH,
     reason: str = "unspecified",
     now: Optional[datetime] = None,
-) -> Dict[str, Any]:
-    """Zatrzask jest monotoniczny: kolejne wywołanie nie zmienia pierwszej przyczyny."""
+) -> Tuple[Dict[str, Any], bool]:
+    """Merge pod lockiem; bool mówi czy ten call wykonał przejście OFF→ON."""
     with state_lock(state_path):
         state = _load_state_unlocked(state_path)
         if state.get("auto_off_latch") is True:
             if os.path.exists(state_path) and _state_valid(state):
-                return state
+                return state, False
         now = now or datetime.now(timezone.utc)
         if now.tzinfo is None:
             now = now.replace(tzinfo=timezone.utc)
@@ -573,7 +627,53 @@ def latch_auto_off(
         state["auto_off_reason"] = str(reason)
         state["auto_off_ts"] = now.astimezone(timezone.utc).isoformat()
         _save_state_unlocked(state_path, state)
-        return state
+        return state, True
+
+
+def latch_auto_off(
+    state_path: str = STATE_PATH,
+    reason: str = "unspecified",
+    now: Optional[datetime] = None,
+) -> Dict[str, Any]:
+    """Zatrzask monotoniczny; modyfikuje tylko własne pola bieżącego stanu."""
+    return latch_auto_off_with_status(state_path, reason, now)[0]
+
+
+def clear_latch(
+    state_path: str = STATE_PATH,
+    reason: str = "",
+    operator: str = "",
+    now: Optional[datetime] = None,
+    *,
+    audit_path: str = AUDIT_PATH,
+) -> Dict[str, Any]:
+    """Za ACK ownera zdejmuje wyłącznie boolean latch; budżet zostaje nietknięty.
+
+    Audyt zapisujemy przed stanem. Crash pomiędzy plikami może więc zostawić
+    nadmiarowy wiersz audytu, ale nigdy cicho zdjęty latch — kierunek fail-safe.
+    """
+    reason = _audit_value(reason, "reason")
+    operator = _audit_value(operator, "operator")
+    now = now or datetime.now(timezone.utc)
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    with state_lock(state_path):
+        state = _load_state_unlocked(state_path)
+        if state.get("auto_off_latch") is not True:
+            raise ValueError("authority latch is not set")
+        _append_audit_row(audit_path, {
+            "ts": now.astimezone(timezone.utc).isoformat(),
+            "kind": "authority_latch_cleared",
+            "class_id": CLASS_ID,
+            "operator": operator,
+            "reason": reason,
+            "previous_auto_off_reason": state.get("auto_off_reason"),
+            "previous_auto_off_ts": state.get("auto_off_ts"),
+        })
+        updated = dict(state)
+        updated["auto_off_latch"] = False
+        _save_state_unlocked(state_path, updated)
+        return updated
 
 
 def check_scope(
@@ -737,9 +837,14 @@ def record_success(
     oid: str,
     now: datetime,
 ) -> Dict[str, Any]:
-    """Po potwierdzonym assignie zapisuje trzy sprzężone liczniki jednym rename."""
+    """Zużywa budżet wykonania, mergując bieżący stan pod tym samym lockiem.
+
+    ``state`` pozostaje w sygnaturze dla kompatybilności callerów, ale celowo nie
+    jest źródłem zapisu: może być snapshotem sprzed runnera.
+    """
     with state_lock(state_path):
-        updated = dict(state)
+        del state
+        updated = _load_state_unlocked(state_path)
         updated["executed_total"] = int(updated.get("executed_total", 0)) + 1
         timestamps = list(updated.get("executed_ts") or [])
         timestamps.append(now.timestamp())
@@ -749,5 +854,40 @@ def record_success(
         if str(oid) not in pending:
             pending.append(str(oid))
         updated["pending_verification"] = pending
+        _save_state_unlocked(state_path, updated)
+        return updated
+
+
+def record_verification(
+    state_path: str,
+    oid: str,
+    operator: str,
+    now: datetime,
+    *,
+    audit_path: str = AUDIT_PATH,
+) -> Dict[str, Any]:
+    """Zapis koordynatora: zwalnia dokładnie wskazane wykonanie i dopisuje audyt."""
+    oid = _audit_value(oid, "oid")
+    operator = _audit_value(operator, "operator")
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    with state_lock(state_path):
+        state = _load_state_unlocked(state_path)
+        pending = list(state.get("pending_verification") or [])
+        if oid not in pending and state.get("in_flight") != oid:
+            raise ValueError(f"execution {oid} is not pending verification")
+        _append_audit_row(audit_path, {
+            "ts": now.astimezone(timezone.utc).isoformat(),
+            "kind": "authority_execution_verified",
+            "class_id": CLASS_ID,
+            "oid": oid,
+            "operator": operator,
+        })
+        updated = dict(state)
+        updated["pending_verification"] = [
+            pending_oid for pending_oid in pending if pending_oid != oid
+        ]
+        if updated.get("in_flight") == oid:
+            updated["in_flight"] = None
         _save_state_unlocked(state_path, updated)
         return updated

@@ -604,6 +604,221 @@ def test_success_updates_card_counters_atomically(tmp_path, monkeypatch):
     assert state["executed_ts"] == [NOW.timestamp()]
 
 
+def test_runner_unknown_mutation_oracle_consumes_budget_latch_and_idempotency(
+    tmp_path, monkeypatch
+):
+    """RED-first F1: brak sentinela po starcie runnera to wykonanie NIEZNANE."""
+    paths = _executor_paths(tmp_path)
+    _grant_owner_auth(monkeypatch, Path(paths["authority_audit_path"]))
+    monkeypatch.setattr(C, "ENABLE_AUTO_ASSIGN", True)
+    monkeypatch.setenv("ALLOW_AUTO_ASSIGN_STATE_IN_TEST", "1")
+    messages = []
+
+    out = E.maybe_execute(
+        _record(),
+        SimpleNamespace(would_auto_assign=True),
+        {"status_id": 2},
+        now=NOW,
+        assign_runner=lambda *_args: (False, "timeout_45s"),
+        notifier=messages.append,
+        **paths,
+    )
+
+    assert out["executed"] is False
+    assert out["runner_outcome"] == "unknown"
+    card_state = AC.load_state(paths["authority_state_path"])
+    assert card_state["executed_total"] == 1
+    assert card_state["in_flight"] == "480300"
+    assert card_state["pending_verification"] == ["480300"]
+    assert card_state["auto_off_latch"] is True
+    assert card_state["auto_off_reason"] == "runner_outcome_unknown"
+    auto_state = json.loads(
+        Path(paths["state_path"]).read_text(encoding="utf-8")
+    )
+    assert "480300" in auto_state["assigned_orders"]
+    assert auto_state["executed_total"] == 1
+    assert auto_state["executed_order_ids"] == ["480300"]
+    assert any(
+        "STAN NIEZNANY" in message and "reconcile 5b karty" in message
+        for message in messages
+    )
+
+
+def test_runner_definitive_pre_send_refusal_only_records_idempotency(
+    tmp_path, monkeypatch
+):
+    """Jawna odmowa przed utworzeniem procesu nie konsumuje budżetu i nie latchuje."""
+    paths = _executor_paths(tmp_path)
+    _grant_owner_auth(monkeypatch, Path(paths["authority_audit_path"]))
+    monkeypatch.setattr(C, "ENABLE_AUTO_ASSIGN", True)
+    monkeypatch.setenv("ALLOW_AUTO_ASSIGN_STATE_IN_TEST", "1")
+    messages = []
+
+    out = E.maybe_execute(
+        _record(),
+        SimpleNamespace(would_auto_assign=True),
+        {"status_id": 2},
+        now=NOW,
+        assign_runner=lambda *_args: (False, "blocked_pytest_context"),
+        notifier=messages.append,
+        **paths,
+    )
+
+    assert out["runner_outcome"] == "definitive_pre_send_refusal"
+    card_state = AC.load_state(paths["authority_state_path"])
+    assert card_state == AC.empty_state()
+    auto_state = json.loads(
+        Path(paths["state_path"]).read_text(encoding="utf-8")
+    )
+    assert "480300" in auto_state["assigned_orders"]
+    assert auto_state.get("executed_total", 0) == 0
+    assert not any("STAN NIEZNANY" in message for message in messages)
+
+
+def test_record_success_rereads_state_and_latch_preserves_counters(tmp_path):
+    """F6: oba writery mergują bieżący stan pod lockiem, nie martwy snapshot."""
+    state_path = str(tmp_path / "card-state.json")
+    stale = AC.empty_state()
+    AC.save_state(
+        state_path,
+        _state(
+            auto_off_latch=True,
+            auto_off_reason="other_writer",
+            auto_off_ts=NOW.isoformat(),
+        ),
+    )
+
+    AC.record_success(state_path, stale, "480300", NOW)
+    after_success = AC.load_state(state_path)
+    assert after_success["auto_off_latch"] is True
+    assert after_success["auto_off_reason"] == "other_writer"
+    assert after_success["executed_total"] == 1
+
+    AC.latch_auto_off(state_path, "must_not_replace_first_reason", NOW)
+    after_latch = AC.load_state(state_path)
+    assert after_latch["executed_total"] == 1
+    assert after_latch["pending_verification"] == ["480300"]
+    assert after_latch["auto_off_reason"] == "other_writer"
+
+
+def test_verification_writer_releases_only_oid_until_max_total(tmp_path):
+    """F3: weryfikacja zwalnia in-flight, ale zachowuje zużyty budżet."""
+    state_path = str(tmp_path / "card-state.json")
+    audit_path = str(tmp_path / "audit.jsonl")
+    limits = {
+        "max_per_hour": 3,
+        "max_in_flight": 1,
+        "max_total": 3,
+        "require_verification": True,
+    }
+    state = AC.empty_state()
+
+    for index in range(1, 4):
+        oid = f"OID-{index}"
+        state = AC.record_success(state_path, state, oid, NOW)
+        expected_block = "in_flight" if index < 3 else "max_total"
+        assert AC.check_limits(state, NOW.timestamp(), limits)[1] == (
+            expected_block
+        )
+        state = AC.record_verification(
+            state_path,
+            oid,
+            "operator-test",
+            NOW,
+            audit_path=audit_path,
+        )
+        if index < 3:
+            assert AC.check_limits(state, NOW.timestamp(), limits) == (True, "ok")
+        else:
+            assert AC.check_limits(state, NOW.timestamp(), limits) == (
+                False,
+                "max_total",
+            )
+
+    rows = [
+        json.loads(line)
+        for line in Path(audit_path).read_text(encoding="utf-8").splitlines()
+    ]
+    assert [row["kind"] for row in rows] == [
+        "authority_execution_verified",
+        "authority_execution_verified",
+        "authority_execution_verified",
+    ]
+    assert state["executed_total"] == 3
+    assert state["pending_verification"] == []
+    assert state["in_flight"] is None
+
+
+def test_latch_clear_changes_only_latch_and_is_audited(tmp_path):
+    """F2: odzatrzaśnięcie zachowuje liczniki, pending i pierwszą przyczynę."""
+    state_path = str(tmp_path / "card-state.json")
+    audit_path = str(tmp_path / "audit.jsonl")
+    before = _state(
+        executed_total=2,
+        executed_ts=[NOW.timestamp() - 60, NOW.timestamp()],
+        in_flight="OID-2",
+        pending_verification=["OID-1", "OID-2"],
+        auto_off_latch=True,
+        auto_off_reason="runner_outcome_unknown",
+        auto_off_ts=NOW.isoformat(),
+    )
+    AC.save_state(state_path, before)
+
+    after = AC.clear_latch(
+        state_path,
+        reason="owner ACK po reconcile 5b",
+        operator="operator-test",
+        now=NOW,
+        audit_path=audit_path,
+    )
+
+    assert after == {**before, "auto_off_latch": False}
+    row = json.loads(
+        Path(audit_path).read_text(encoding="utf-8").strip()
+    )
+    assert row["kind"] == "authority_latch_cleared"
+    assert row["reason"] == "owner ACK po reconcile 5b"
+    assert row["operator"] == "operator-test"
+
+
+def test_new_latch_sends_one_unthrottled_alert(tmp_path, monkeypatch):
+    """F2: alert idzie wyłącznie na przejściu latch OFF→ON."""
+    paths = _executor_paths(tmp_path)
+    audit = Path(paths["authority_audit_path"])
+    card = Path(paths["authority_card_path"])
+    _grant_owner_auth(monkeypatch, audit)
+    monkeypatch.setattr(C, "ENABLE_AUTO_ASSIGN", True)
+    body = json.loads(card.read_text(encoding="utf-8"))
+    body["owner_ack"]["phrase"] += " TAMPER"
+    _write_card(card, body)
+    messages = []
+
+    first = E.maybe_execute(
+        _record(),
+        SimpleNamespace(would_auto_assign=True),
+        {"status_id": 2},
+        now=NOW,
+        notifier=messages.append,
+        **paths,
+    )
+    second = E.maybe_execute(
+        _record(),
+        SimpleNamespace(would_auto_assign=True),
+        {"status_id": 2},
+        now=NOW,
+        notifier=messages.append,
+        **paths,
+    )
+
+    assert first["blocked"] == "authority_card_sha_mismatch"
+    assert second["blocked"] == "authority_card_latch_on"
+    latch_alerts = [
+        message for message in messages if "AUTO-OFF ZATRZAŚNIĘTE" in message
+    ]
+    assert len(latch_alerts) == 1
+    assert "sha_mismatch" in latch_alerts[0]
+
+
 def test_executor_missing_heartbeat_denies_and_latches(tmp_path, monkeypatch):
     paths = _executor_paths(tmp_path)
     Path(paths["monitor_heartbeat_path"]).unlink()
