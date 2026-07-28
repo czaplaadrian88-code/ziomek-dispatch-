@@ -384,7 +384,9 @@ def test_courier_assigned_downstream_removes_pending_after_consumers(
     path = tmp_path / "pending_proposals.json"
     PPS.locked_set("o1", _pending_entry("o1", "A", NOW), str(path))
     PPS.locked_set("other", _pending_entry("other", "B", NOW), str(path))
-    monkeypatch.setattr(PW, "_PENDING_PROPOSALS_PATH", str(path))
+    # Kanoniczny wzorzec hermetyczny: ścieżka pending resolwowana w call-time
+    # z DISPATCH_STATE_DIR (jak state_machine) — monkeypatch env, nie stałej.
+    monkeypatch.setenv("DISPATCH_STATE_DIR", str(tmp_path))
     monkeypatch.setattr(
         LD.state_machine,
         "get_order_strict",

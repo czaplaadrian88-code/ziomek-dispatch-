@@ -166,10 +166,7 @@ def apply(event: dict) -> None:
         and etype != "PICKUP_TIME_UPDATED"
     ):
         if etype == "COURIER_ASSIGNED":
-            pw._remove_pending_on_assign(  # type: ignore[attr-defined]
-                oid,
-                _raise_on_error=True,
-            )
+            pw._remove_pending_on_assign(oid)  # type: ignore[attr-defined]
         return
     # Durable callback nie moze pomylic uszkodzonego/brakujacego pliku z
     # prawdziwym brakiem zlecenia. Wyjatek zostawia receipt do retry.
@@ -410,10 +407,7 @@ def apply(event: dict) -> None:
         )
         # Proposal jest potrzebny powyżej do learningu i planu. Usuwamy go
         # dopiero na końcu kanonicznego, retryowalnego callbacku ASSIGNED.
-        pw._remove_pending_on_assign(
-            oid,
-            _raise_on_error=True,
-        )
+        pw._remove_pending_on_assign(oid)
         return
 
     if etype == "COURIER_DELIVERED":

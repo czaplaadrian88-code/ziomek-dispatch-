@@ -862,6 +862,9 @@ FLAGS_JSON_NUMERIC_OVERRIDES = (
     "PICKUP_COORDS_DRIFT_WARN_M",
     # L6.C2 (2026-07-04): kwantyzacja termów czasowych lex_qual (patrz stała ~2910)
     "LEXQUAL_TIME_QUANT_MIN",
+    # ETAP 1 proposal-claims (2026-07-28): TTL trwałego claimu propozycji;
+    # kalibracja hot przez flags.json (p90 reakcji koordynatora ~4,3 min).
+    "PROPOSAL_CLAIM_TTL_SEC",
     # WB2 (2026-07-27, CZASY 492): progi guardów warunkowych warstwy P-1.
     # Kalibracja z ledgera v2 po ≥48 h czystego baseline'u ma iść flags.json
     # (hot-reload), nie restartem procesu i nie env-em w drop-inie.
