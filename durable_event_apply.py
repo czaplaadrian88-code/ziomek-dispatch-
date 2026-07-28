@@ -22,6 +22,12 @@ from dispatch_v2 import event_bus, state_machine
 _log = logging.getLogger("durable_event_apply")
 _UNKNOWN_STATE_VERSION = "__STATE_READ_UNAVAILABLE__"
 _UNKNOWN_STATE_MARKER = "__STATE_MARKER_UNAVAILABLE__"
+# Ten event jest świadomie fill-missing-only i nie ma downstream skutków.
+# Zgodny postcondition może więc zamknąć receipt bez lifecycle markera: zarówno
+# własny commit, jak i ortogonalny writer, który wcześniej uzupełnił te same
+# detale, dają identyczny bezpieczny wynik. Inne eventy zachowują fail-closed
+# wymóg exact markera.
+_MARKERLESS_MERGE_EVENT_TYPES = frozenset({"ORDER_DETAILS_ENRICHED"})
 
 
 @dataclass(frozen=True)
@@ -159,6 +165,10 @@ def _has_exact_marker(event: dict, current: Optional[dict]) -> bool:
         and event.get("event_id")
         and str(current.get(marker_field) or "") == str(event.get("event_id"))
     )
+
+
+def _effect_can_ack_without_marker(event: dict) -> bool:
+    return str(event.get("event_type") or "") in _MARKERLESS_MERGE_EVENT_TYPES
 
 
 def _ensure_recovered_marker_durable(event_id: str) -> bool:
@@ -451,9 +461,26 @@ def _process_state_row(
                 and expected == actual
                 and expected_marker == actual_marker
             )
-            if baseline_unchanged or (unknown_expected and token_unchanged):
+            if (
+                baseline_unchanged
+                or (unknown_expected and token_unchanged)
+                or _effect_can_ack_without_marker(state_event)
+            ):
                 # Exact marker dowodzi crashu po commicie state. Rowna wersja
                 # obsluguje stan, ktory juz spelnial efekt przed ta generacja.
+                if (
+                    _effect_can_ack_without_marker(state_event)
+                    and not _ensure_recovered_marker_durable(event_id)
+                ):
+                    row = event_bus.get_state_apply_outbox(event_id) or row
+                    return _outcome_from_row(
+                        row,
+                        event_created=event_created,
+                        state_ready=False,
+                        state_transitioned=False,
+                        downstream_executed=False,
+                        failure_stage="state_durability",
+                    )
                 event_bus.mark_state_apply_applied(event_id)
             else:
                 # Sam zgodny status nie dowodzi, ze zastosowano TEN event;
@@ -593,6 +620,19 @@ def _process_state_row(
                             f"oid={oid} event_id={event_id}: "
                             f"{type(exc).__name__}: {exc}"
                         )
+                    elif _effect_can_ack_without_marker(state_event):
+                        if not _ensure_recovered_marker_durable(event_id):
+                            row = event_bus.get_state_apply_outbox(event_id) or row
+                            return _outcome_from_row(
+                                row,
+                                event_created=event_created,
+                                state_ready=False,
+                                state_transitioned=False,
+                                downstream_executed=False,
+                                failure_stage="state_durability",
+                            )
+                        event_bus.mark_state_apply_applied(event_id)
+                        transitioned = True
                     elif post_changed is True:
                         event_bus.mark_state_apply_superseded(
                             event_id,
@@ -695,6 +735,9 @@ def _process_state_row(
                 )
                 if post == "applied":
                     if _has_exact_marker(state_event, current_after):
+                        event_bus.mark_state_apply_applied(event_id)
+                        transitioned = True
+                    elif _effect_can_ack_without_marker(state_event):
                         event_bus.mark_state_apply_applied(event_id)
                         transitioned = True
                     elif post_changed is True:

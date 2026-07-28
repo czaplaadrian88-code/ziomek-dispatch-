@@ -76,7 +76,7 @@ def test_audit_queue_sets_disjoint_and_complete():
     assert audit == {
         "COURIER_ASSIGNED", "CZAS_KURIERA_UPDATED", "PICKUP_TIME_UPDATED",
         "PANEL_UNREACHABLE", "ORDER_RETURNED_TO_POOL", "ORDER_RESURRECTED",
-        "ORDER_RECLAIMED_TO_CZASOWKA",
+        "ORDER_RECLAIMED_TO_CZASOWKA", "ORDER_DETAILS_ENRICHED",
     }
     # Sanity: A4 broadcast types
     assert broadcast == {"CONFIG_RELOAD"}

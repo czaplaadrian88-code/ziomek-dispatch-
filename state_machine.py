@@ -41,6 +41,38 @@ from dispatch_v2.order_fsm import FsmOutcome, FsmVerdict, validate_order_event
 
 _WARSAW_TZ = ZoneInfo("Europe/Warsaw")
 
+# Kanoniczna allowlista merge-only eventu naprawiającego rekord utworzony przez
+# cold-start COURIER_ASSIGNED zanim NEW_ORDER zdążył utrwalić detale.  Pola
+# lifecycle/identity (status, courier_id, first_seen, markery) są świadomie poza
+# kontraktem i żaden caller nie utrzymuje drugiej kopii tej listy.
+ORDER_DETAILS_ENRICHMENT_FIELDS = (
+    "restaurant",
+    "pickup_address",
+    "pickup_city",
+    "delivery_address",
+    "delivery_city",
+    "pickup_at_warsaw",
+    "prep_minutes",
+    "order_type",
+    "address_id",
+    "pickup_coords",
+    "delivery_coords",
+    "uwagi",
+    "uwagi_pickup_parsed",
+    "decision_deadline",
+    "zmiana_czasu_odbioru",
+    "created_at_utc",
+)
+ORDER_DETAILS_ENRICHMENT_REQUIRED_FIELDS = (
+    "restaurant",
+    "pickup_address",
+    "delivery_address",
+)
+
+_TERMINAL_ORDER_STATUSES = frozenset(
+    {"delivered", "returned_to_pool", "cancelled"}
+)
+
 
 class CorruptedTimestampError(ValueError):
     """V3.19f: HH:MM string nie zgadza się z ISO datetime po parse.
@@ -787,6 +819,8 @@ def event_effect_status(
     if current is _FSM_CURRENT_UNSET:
         current = get_order(str(oid))
     if not current:
+        if event.get("event_type") == "ORDER_DETAILS_ENRICHED":
+            return "superseded"
         return "pending"
 
     etype = event.get("event_type")
@@ -795,6 +829,23 @@ def event_effect_status(
     if etype == "NEW_ORDER":
         # Późniejsze lifecycle states także dowodzą, że NEW_ORDER był zastosowany.
         return "applied"
+    if etype == "ORDER_DETAILS_ENRICHED":
+        # Merge-only event nie tworzy rekordu i nie dotyka terminalnego lifecycle.
+        # Dla każdego pola pre-existing truth wygrywa; jeśli było puste, handler
+        # dokleja wartość z payloadu. Sam brak pustek jest więc postcondition.
+        if status in _TERMINAL_ORDER_STATUSES:
+            return "superseded"
+        if not all(
+            payload.get(key) not in (None, "", [], {})
+            for key in ORDER_DETAILS_ENRICHMENT_REQUIRED_FIELDS
+        ):
+            return "superseded"
+        if all(
+            current.get(key) not in (None, "", [], {})
+            for key in ORDER_DETAILS_ENRICHMENT_REQUIRED_FIELDS
+        ):
+            return "applied"
+        return "pending"
     if etype == "COURIER_ASSIGNED":
         # Nie odtwarzaj starego assignment po zamknięciu lub pickupie innego
         # kuriera. Legalny nowy reassign dostaje osobną generację outbox.
@@ -1247,6 +1298,32 @@ def update_from_event(event: dict) -> Optional[dict]:
             "reclaim_exempt": payload.get("reclaim_exempt") is True,
             "reclaim_exempt_reason": payload.get("reclaim_exempt_reason"),
         }), event="NEW_ORDER")
+
+    if etype == "ORDER_DETAILS_ENRICHED":
+        # Fill-missing-only pod lifecycle_apply_lock (update_from_event i
+        # upsert_order są reentrant). Dzięki temu równoległy lifecycle writer nie
+        # może wejść między odczyt a merge, a replay nie zmienia updated_at/history.
+        existing = get_order_strict(oid)
+        if not existing:
+            raise MissingOrderPreconditionError(
+                f"ORDER_DETAILS_ENRICHED refused for absent order {oid}"
+            )
+        if existing.get("status") in _TERMINAL_ORDER_STATUSES:
+            return existing
+        missing_details = {
+            key: payload.get(key)
+            for key in ORDER_DETAILS_ENRICHMENT_FIELDS
+            if existing.get(key) in (None, "", [], {})
+            and payload.get(key) not in (None, "", [], {})
+        }
+        if not missing_details:
+            return existing
+        return upsert_order(
+            oid,
+            missing_details,
+            event="ORDER_DETAILS_ENRICHED",
+            require_existing=True,
+        )
 
     if etype == "COURIER_ASSIGNED":
         def _persist_assignment_and_availability(fields: dict) -> dict:

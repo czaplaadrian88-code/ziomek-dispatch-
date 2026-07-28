@@ -44,6 +44,9 @@ EVENT_TYPES = {
     "COURIER_REJECTED_PROPOSAL",
     "ORDER_RETURNED_TO_POOL",
     "ORDER_RESURRECTED",
+    # Merge-only naprawa brakujących detali rekordu utworzonego wcześniej przez
+    # cold-start assignment. Audit-only: nie może udawać nowej propozycji.
+    "ORDER_DETAILS_ENRICHED",
     # Czasowka reclaim: w etapie 21.07 tylko ciemny kontrakt eventu. Brak
     # producenta LIVE; bezposredni state handler wymaga osobnej flagi OFF.
     "ORDER_RECLAIMED_TO_CZASOWKA",
@@ -90,6 +93,7 @@ AUDIT_EVENT_TYPES = {
     "PANEL_UNREACHABLE",
     "ORDER_RETURNED_TO_POOL",
     "ORDER_RESURRECTED",
+    "ORDER_DETAILS_ENRICHED",
     "ORDER_RECLAIMED_TO_CZASOWKA",
 }
 
