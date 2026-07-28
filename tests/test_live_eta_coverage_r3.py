@@ -54,10 +54,18 @@ def _order(
 
 
 def _deterministic_sequence(monkeypatch, sequence) -> None:
+    route_stops = [
+        {
+            "stop_id": live_eta_daemon.route_order.stop_id_for(kind, order_ids),
+            "kind": kind,
+            "order_ids": list(order_ids),
+        }
+        for kind, order_ids in sequence
+    ]
     monkeypatch.setattr(
         live_eta_daemon.route_order,
-        "order_podjazdy",
-        lambda *_args, **_kwargs: sequence,
+        "build_route_stops",
+        lambda *_args, **_kwargs: route_stops,
     )
     monkeypatch.setattr(live_eta_daemon, "_available_floor", lambda *_args: None)
 
@@ -201,8 +209,8 @@ def test_future_last_event_is_not_warm(monkeypatch):
     assert route["start_source"] == "planned"
 
 
-def test_flag_off_keeps_legacy_snapshot_byte_identical(monkeypatch):
-    """Hermetyczny pin OFF: nawet stary/no-ts GPS zachowuje snapshot sprzed R3."""
+def test_flag_off_keeps_legacy_eta_with_additive_stop_identity(monkeypatch):
+    """OFF zachowuje ETA, a ADR-010 addytywnie dopina stop_id."""
     _deterministic_sequence(
         monkeypatch, [("pickup", ["101"]), ("dropoff", ["101"])]
     )
@@ -227,9 +235,9 @@ def test_flag_off_keeps_legacy_snapshot_byte_identical(monkeypatch):
         '"orders":{"101":{"delivery_at":"2026-07-28T01:05:00Z",'
         '"pickup_at":"2026-07-28T01:01:00Z"}},"schema_version":1,'
         '"stops":[{"eta_at":"2026-07-28T01:01:00Z","eta_hhmm":"03:01",'
-        '"kind":"pickup","order_ids":["101"],"position":0},'
+        '"kind":"pickup","order_ids":["101"],"position":0,"stop_id":"pickup:101"},'
         '{"eta_at":"2026-07-28T01:05:00Z","eta_hhmm":"03:05",'
-        '"kind":"dropoff","order_ids":["101"],"position":1}]}'
+        '"kind":"dropoff","order_ids":["101"],"position":1,"stop_id":"dropoff:101"}]}'
     )
 
 
@@ -245,6 +253,7 @@ def test_write_cycle_publishes_additive_source_without_breaking_old_reader(
         "source_contract": True,
         "stops": [
             {
+                "stop_id": "pickup:101",
                 "kind": "pickup",
                 "order_ids": ["101"],
                 "coord": [53.13, 23.16],

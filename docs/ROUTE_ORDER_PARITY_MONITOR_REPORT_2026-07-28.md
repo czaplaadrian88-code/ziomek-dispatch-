@@ -7,6 +7,11 @@
 > `COURIER_ORDERS_SNAPSHOT_CONFIG.patch`. Historyczne dowody tri-state/Kotlin
 > poniżej pozostają użyteczne, lecz opis configu, buildera i exitów nie jest
 > aktualnym kontraktem.
+>
+> **SUPERSEDED (stop contract):** ADR-010 zastąpił rekonstrukcję legacy
+> `restaurantKey` kontraktem backendowego `stop_id` + `order_ids` oraz dokładnym
+> committed per zlecenie. Aktualny monitor nie grupuje po koordynatach, nazwie
+> restauracji ani własnym progu.
 
 ## Wynik
 

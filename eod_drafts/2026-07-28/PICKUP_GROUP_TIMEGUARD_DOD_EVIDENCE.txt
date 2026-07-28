@@ -1,0 +1,30 @@
+gate: engine.pickup-group-time-spread-guard
+regresja: focused HERMETIC_STRICT 77 passed, 1 skipped, 0 failed; full canonical suite N-D for CTO
+e2e: golden canon -> live_eta + injected DTO projection PASS; real cross-repo/live run N-D until patches applied
+pozytywny-wplyw: 26-minute plan cluster splits and preserves 21:26/21:52; legal 8-minute group preserves both exact committed values
+rollback: atomic source reverts in three repos, then ACKed single restart of each affected service; no migration/flag/data
+N-D: panel/courier patch application, full venv suite, live replay, deploy/restarts and Android WB3-F1
+owner-contract: 2026-07-28; PICKUP_MERGE_MIN=10; committed presentation per order byte-for-byte
+negative-oracle-before: bag 492 plan-aware grouped 490836@21:26 + 490832@21:52 into one pickup
+positive-oracle-after: pickup:490836 and pickup:490832; exact source committed retained
+legal-group: 21:26 + 21:34 => one stop_id, two per-order committed values
+mutation-guard-removal: RED (far pair merges)
+mutation-group-min: RED (490832 committed corrupted)
+mutation-group-max: RED (490836 committed corrupted)
+mutation-coordinate-merge: RED (same coord with distinct stop_id must remain two stops)
+ratchet: full internal spread <=10; no coord membership; no time aggregation in build_route_stops
+parity: canon stop contract -> DTO projection; committed/membership drift => BROKEN
+regresja-focused-hermetic: 77 passed, 1 skipped, 0 failed
+skip: live backend smoke unavailable in sandbox; not treated as production OK
+py_compile: PASS
+json-corpus: PASS
+patch-dry-run: panel and courier-api patches apply cleanly to CURRENT snapshots; patched files py_compile PASS
+ziomek-cto-dod: mechanical PASS separately for both cross-repo patch artifacts; full dispatch diff unavailable
+flag-lifecycle: PASS, 0 errors; cross-repo panel/app checks skipped by sandbox
+entropy-dashboard: exit 0; structural only (0 live files visible)
+full-canonical-suite: N-D; CTO-owned per task and dispatch venv unavailable
+cross-repo-runtime-tests: N-D until CTO applies PATCH artifacts
+git-diff-check: N-D; worktree gitdir outside sandbox
+deploy: NOT EXECUTED; requires owner ACK and off-peak
+rollback: atomic source reverts + one ACKed restart per affected service; no migration/flag/data
+android: N-D, WB3-F1 separate; backend stop_id contract ready

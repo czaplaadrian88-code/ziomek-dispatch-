@@ -58,6 +58,31 @@ class FakeRouteConfig:
 ROUTE_CONFIG = FakeRouteConfig(**FLAGS)
 
 
+def _stop_id(kind, order_ids):
+    return f"{kind}:{','.join(sorted(order_ids))}"
+
+
+def _contract_step(kind, order_ids, committed_by=None):
+    members = sorted(order_ids)
+    return [
+        kind,
+        _stop_id(kind, members),
+        members,
+        (
+            [
+                [
+                    order_id,
+                    committed_by[order_id],
+                    committed_by[order_id],
+                ]
+                for order_id in members
+            ]
+            if kind == "pickup"
+            else []
+        ),
+    ]
+
+
 def _dto(order_ids=("1",), stops=None, *, restaurant="Rukola", coords=None):
     place = {"name": restaurant, "address": "Lipowa 5"}
     if coords is not None:
@@ -67,6 +92,7 @@ def _dto(order_ids=("1",), stops=None, *, restaurant="Rukola", coords=None):
             "order_id": oid,
             "restaurant": dict(place),
             "pickup_time": f"12:0{index}",
+            "pickup_committed_at": f"2026-07-28T12:0{index}:00+02:00",
         }
         for index, oid in enumerate(order_ids)
     ]
@@ -74,11 +100,27 @@ def _dto(order_ids=("1",), stops=None, *, restaurant="Rukola", coords=None):
         "orders": orders,
         "stop_sequence": stops
         if stops is not None
-        else [
-            {"order_id": oid, "kind": kind}
-            for kind in ("pickup", "dropoff")
-            for oid in order_ids
-        ],
+        else (
+            [
+                {
+                    "order_id": oid,
+                    "kind": "pickup",
+                    "stop_id": _stop_id("pickup", order_ids),
+                    "order_ids": list(order_ids),
+                    "committed_at": orders[index]["pickup_committed_at"],
+                }
+                for index, oid in enumerate(order_ids)
+            ]
+            + [
+                {
+                    "order_id": oid,
+                    "kind": "dropoff",
+                    "stop_id": _stop_id("dropoff", [oid]),
+                    "order_ids": [oid],
+                }
+                for oid in order_ids
+            ]
+        ),
     }
 
 
@@ -102,7 +144,7 @@ def _evaluate(bags, dto_builder, canonical):
 
 
 def test_tristate_ok_oracle():
-    canonical = [["pickup", ["1"]], ["dropoff", ["1"]]]
+    canonical = MON.project_kotlin_build_steps(_dto())
     result, exit_code = _evaluate(
         {"501": [{"order_id": "1"}]},
         lambda _cid, _orders, _plans, _config: _dto(),
@@ -112,37 +154,23 @@ def test_tristate_ok_oracle():
     assert result["heartbeat"]["coverage"]["coverage_ratio"] == 1.0
 
     order_ids = ("A", "B")
-    canonical = [
-        ["pickup", ["A", "B"]],
-        ["dropoff", ["A"]],
-        ["dropoff", ["B"]],
-    ]
+    canonical = MON.project_kotlin_build_steps(_dto(order_ids))
     dto = _dto(order_ids, coords=(53.121879, 23.146168))
-    # Same pickup point, but the app projection keeps two pickup steps because
-    # its legacy ten-minute grouping window is exceeded.
-    dto["orders"][1]["pickup_time"] = "12:11"
+    # Mutation: backend splits membership despite the canonical shared stop.
+    for step in dto["stop_sequence"][:2]:
+        step["stop_id"] = _stop_id("pickup", [step["order_id"]])
+        step["order_ids"] = [step["order_id"]]
     result, exit_code = _evaluate(
         {"501": [{"order_id": order_id} for order_id in order_ids]},
         lambda _cid, _orders, _plans, _config: dto,
         canonical,
     )
-    client_raw = [
-        ["pickup", ["A"]],
-        ["pickup", ["B"]],
-        ["dropoff", ["A"]],
-        ["dropoff", ["B"]],
-    ]
-    assert (result["verdict"], exit_code) == ("OK", MON.EXIT_OK)
-    assert result["heartbeat"]["coverage"]["mismatch_bags"] == 0
-    assert result["heartbeat"]["coverage"]["grouping_only_difference_bags"] == 1
-    assert result["mismatches"] == [
-        {
-            "courier_ref": MON._safe_id("501"),
-            "canonical": MON._redact_projection(canonical),
-            "client": MON._redact_projection(client_raw),
-            "grouping_only_difference": True,
-        }
-    ]
+    assert (result["verdict"], exit_code) == (
+        "BROKEN",
+        MON.EXIT_PARITY_BROKEN,
+    )
+    assert result["heartbeat"]["coverage"]["mismatch_bags"] == 1
+    assert result["heartbeat"]["coverage"]["grouping_only_difference_bags"] == 0
 
 
 def test_mutation_probe_zero_work_to_ok_is_rejected():
@@ -159,10 +187,17 @@ def test_mutation_probe_zero_work_to_ok_is_rejected():
 
 def test_mutation_probe_bypassed_kotlin_projection_is_broken():
     order_id = "900001"
-    canonical = [["pickup", [order_id]], ["dropoff", [order_id]]]
+    canonical = MON.project_kotlin_build_steps(_dto((order_id,)))
     divergent = _dto(
         (order_id,),
-        stops=[{"order_id": order_id, "kind": "dropoff"}],
+        stops=[
+            {
+                "order_id": order_id,
+                "kind": "dropoff",
+                "stop_id": _stop_id("dropoff", [order_id]),
+                "order_ids": [order_id],
+            }
+        ],
     )
     result, exit_code = _evaluate(
         {"501": [{"order_id": order_id}]},
@@ -180,22 +215,39 @@ def test_mutation_probe_bypassed_kotlin_projection_is_broken():
     assert order_id not in serialized  # identifiers are hashed in artifacts
 
     order_ids = ("A", "B")
-    canonical = [
-        ["pickup", ["A", "B"]],
-        ["dropoff", ["A"]],
-        ["dropoff", ["B"]],
-    ]
+    canonical = MON.project_kotlin_build_steps(_dto(order_ids))
     dto = _dto(
         order_ids,
         stops=[
-            {"order_id": "B", "kind": "pickup"},
-            {"order_id": "A", "kind": "pickup"},
-            {"order_id": "A", "kind": "dropoff"},
-            {"order_id": "B", "kind": "dropoff"},
+            {
+                "order_id": "B",
+                "kind": "pickup",
+                "stop_id": _stop_id("pickup", ["B"]),
+                "order_ids": ["B"],
+                "committed_at": "2026-07-28T12:01:00+02:00",
+            },
+            {
+                "order_id": "A",
+                "kind": "pickup",
+                "stop_id": _stop_id("pickup", ["A"]),
+                "order_ids": ["A"],
+                "committed_at": "2026-07-28T12:00:00+02:00",
+            },
+            {
+                "order_id": "A",
+                "kind": "dropoff",
+                "stop_id": _stop_id("dropoff", ["A"]),
+                "order_ids": ["A"],
+            },
+            {
+                "order_id": "B",
+                "kind": "dropoff",
+                "stop_id": _stop_id("dropoff", ["B"]),
+                "order_ids": ["B"],
+            },
         ],
         coords=(53.121879, 23.146168),
     )
-    dto["orders"][1]["pickup_time"] = "12:11"
 
     result, exit_code = _evaluate(
         {"501": [{"order_id": order_id} for order_id in order_ids]},
@@ -210,6 +262,28 @@ def test_mutation_probe_bypassed_kotlin_projection_is_broken():
     assert result["heartbeat"]["coverage"]["mismatch_bags"] == 1
     assert result["heartbeat"]["coverage"]["grouping_only_difference_bags"] == 0
     assert result["mismatches"][0]["grouping_only_difference"] is False
+
+
+def test_mutation_group_min_or_max_committed_is_broken():
+    order_ids = ("A", "B")
+    dto = _dto(order_ids)
+    canonical = MON.project_kotlin_build_steps(dto)
+    for synthetic in (
+        "2026-07-28T12:00:00+02:00",
+        "2026-07-28T12:01:00+02:00",
+    ):
+        mutated = json.loads(json.dumps(dto))
+        for step in mutated["stop_sequence"][:2]:
+            step["committed_at"] = synthetic
+        result, exit_code = _evaluate(
+            {"501": [{"order_id": order_id} for order_id in order_ids]},
+            lambda _cid, _orders, _plans, _config, value=mutated: value,
+            canonical,
+        )
+        assert (result["verdict"], exit_code) == (
+            "BROKEN",
+            MON.EXIT_PARITY_BROKEN,
+        )
 
 
 def test_qualifying_bag_backend_error_is_broken_not_no_data():
@@ -337,7 +411,7 @@ def test_one_snapshot_is_passed_to_both_sides_despite_file_mutation(tmp_path):
         seen.append((orders_arg, plans_arg, route_config_arg))
         return _dto()
 
-    canonical = [["pickup", ["1"]], ["dropoff", ["1"]]]
+    canonical = MON.project_kotlin_build_steps(_dto())
     result, exit_code = MON.evaluate(
         {"501": [original_order]},
         plans_snapshot,
@@ -346,7 +420,7 @@ def test_one_snapshot_is_passed_to_both_sides_despite_file_mutation(tmp_path):
         canon_builder=lambda bag, plan: (
             canonical
             if bag[0]["order_id"] == "1" and plan == {"stops": []}
-            else [["dropoff", ["mutated"]]]
+            else [_contract_step("dropoff", ["mutated"])]
         ),
         dto_builder=dto_builder,
         canon_projector=lambda value: value,
@@ -359,42 +433,26 @@ def test_one_snapshot_is_passed_to_both_sides_despite_file_mutation(tmp_path):
 
 
 def test_kotlin_projection_real_dto_structures():
-    # Same restaurant/close time: one pickup tile, then separate deliveries.
+    # Membership comes directly from stop_id/order_ids.
     dto = _dto(("1", "2"))
     assert MON.project_kotlin_build_steps(dto) == [
-        ["pickup", ["1", "2"]],
-        ["dropoff", ["1"]],
-        ["dropoff", ["2"]],
+        _contract_step(
+            "pickup",
+            ["1", "2"],
+            {
+                "1": "2026-07-28T12:00:00+02:00",
+                "2": "2026-07-28T12:01:00+02:00",
+            },
+        ),
+        _contract_step("dropoff", ["1"]),
+        _contract_step("dropoff", ["2"]),
     ]
 
-    # Same coordinates win over different names exactly like restaurantKey.kt.
-    dto = _dto(("1", "2"), coords=(53.121879, 23.146168))
-    dto["orders"][1]["restaurant"]["name"] = "Mama Thai"
-    assert MON.project_kotlin_build_steps(dto)[0] == ["pickup", ["1", "2"]]
-
-    # More than ten minutes: two pickup steps.
-    dto["orders"][1]["pickup_time"] = "12:11"
-    assert MON.project_kotlin_build_steps(dto)[:2] == [
-        ["pickup", ["1"]],
-        ["pickup", ["2"]],
-    ]
-
-    grouped = [["pickup", ["B", "A"]], ["dropoff", ["B"]]]
-    split_same_order = [
-        ["pickup", ["B"]],
-        ["pickup", ["A"]],
-        ["dropoff", ["B"]],
-    ]
-    split_other_order = [
-        ["pickup", ["A"]],
-        ["pickup", ["B"]],
-        ["dropoff", ["B"]],
-    ]
-    assert MON._flatten_projection(grouped) == MON._flatten_projection(
-        split_same_order
-    )
-    assert MON._flatten_projection(grouped) != MON._flatten_projection(
-        split_other_order
+    # Same coordinates or names cannot change membership.
+    changed = _dto(("1", "2"), coords=(53.121879, 23.146168))
+    changed["orders"][1]["restaurant"]["name"] = "Mama Thai"
+    assert MON.project_kotlin_build_steps(changed) == (
+        MON.project_kotlin_build_steps(dto)
     )
 
 
@@ -416,13 +474,24 @@ def _dto_from_corpus_case(case):
                 "order_id": oid,
                 "restaurant": restaurant,
                 "pickup_time": pickup_time,
+                "pickup_committed_at": pickup_iso,
             }
         )
-    stops = [
-        {"order_id": oid, "kind": kind}
-        for kind, ids in case["expected_proj"]
-        for oid in ids
-    ]
+    stops = []
+    for kind, ids in case["expected_proj"]:
+        stop_id = _stop_id(kind, ids)
+        for oid in ids:
+            step = {
+                "order_id": oid,
+                "kind": kind,
+                "stop_id": stop_id,
+                "order_ids": list(ids),
+            }
+            if kind == "pickup":
+                step["committed_at"] = bag_by_id[oid].get(
+                    "czas_kuriera_warsaw"
+                )
+            stops.append(step)
     return {"orders": orders, "stop_sequence": stops}
 
 
@@ -436,9 +505,26 @@ def test_kotlin_projection_reuses_existing_route_order_golden_min_three_cases():
     cases = [case for case in corpus["cases"] if case["id"] in selected]
     assert len(cases) == 3
     for case in cases:
-        assert MON.project_kotlin_build_steps(_dto_from_corpus_case(case)) == (
-            case["expected_proj"]
-        ), case["id"]
+        actual = MON.project_kotlin_build_steps(_dto_from_corpus_case(case))
+        expected = MON.project_canonical_stops(
+            [
+                {
+                    "kind": kind,
+                    "stop_id": _stop_id(kind, ids),
+                    "order_ids": ids,
+                    "committed_by_order": {
+                        oid: next(
+                            item.get("czas_kuriera_warsaw")
+                            for item in case["bag"]
+                            if str(item["order_id"]) == str(oid)
+                        )
+                        for oid in ids
+                    },
+                }
+                for kind, ids in case["expected_proj"]
+            ]
+        )
+        assert actual == expected, case["id"]
 
 
 def test_result_file_is_atomic_0600_and_contains_heartbeat(tmp_path):
@@ -469,6 +555,10 @@ def test_structural_ratchet_uses_backend_dto_and_not_panel_twin():
     assert "os.environ.get(\"ENABLE_" not in source
     assert "fleet_state" not in source
     assert "_build_route" not in source
+    assert "_pickup_together" not in source
+    assert "_restaurant_key" not in source
+    assert "PICKUP_MERGE_MIN" not in source
+    assert "stop_id" in source and "order_ids" in source
 
 
 def test_backend_contract_requires_snapshot_builder_and_explicit_config():

@@ -2716,6 +2716,105 @@
     ]
    ],
    "console_parity": true
+  },
+  {
+   "id": "golden_490836_490832_timeguard",
+   "source": "owner-golden-2026-07-28",
+   "note": "plan cluster, ta sama restauracja, spread 26 min > T => dwa stopy i dwa exact committed",
+   "bag": [
+    {
+     "order_id": "490836",
+     "status": "assigned",
+     "restaurant": "Grill Kebab",
+     "delivery_address": "Adres 490836",
+     "czas_kuriera_warsaw": "2026-07-28T21:26:00+02:00",
+     "pickup_address": "Grill Kebab",
+     "pickup_coords": null,
+     "delivery_coords": null,
+     "picked_up_at": null,
+     "assigned_at": null,
+     "created_at_utc": null,
+     "pickup_at_warsaw": null
+    },
+    {
+     "order_id": "490832",
+     "status": "assigned",
+     "restaurant": "Grill Kebab",
+     "delivery_address": "Adres 490832",
+     "czas_kuriera_warsaw": "2026-07-28T21:52:00+02:00",
+     "pickup_address": "Grill Kebab",
+     "pickup_coords": null,
+     "delivery_coords": null,
+     "picked_up_at": null,
+     "assigned_at": null,
+     "created_at_utc": null,
+     "pickup_at_warsaw": null
+    }
+   ],
+   "plan_doc": {
+    "stops": [
+     {"type": "pickup", "order_id": "490836"},
+     {"type": "pickup", "order_id": "490832"},
+     {"type": "dropoff", "order_id": "490836"},
+     {"type": "dropoff", "order_id": "490832"}
+    ]
+   },
+   "expected_proj": [
+    ["pickup", ["490836"]],
+    ["pickup", ["490832"]],
+    ["dropoff", ["490836"]],
+    ["dropoff", ["490832"]]
+   ],
+   "console_parity": true
+  },
+  {
+   "id": "golden_close_group_exact_per_order",
+   "source": "owner-golden-2026-07-28",
+   "note": "legalna grupa <=T zachowuje dwa exact committed per order",
+   "bag": [
+    {
+     "order_id": "490836",
+     "status": "assigned",
+     "restaurant": "Grill Kebab",
+     "delivery_address": "Adres 490836",
+     "czas_kuriera_warsaw": "2026-07-28T21:26:00+02:00",
+     "pickup_address": "Grill Kebab",
+     "pickup_coords": null,
+     "delivery_coords": null,
+     "picked_up_at": null,
+     "assigned_at": null,
+     "created_at_utc": null,
+     "pickup_at_warsaw": null
+    },
+    {
+     "order_id": "490832",
+     "status": "assigned",
+     "restaurant": "Grill Kebab",
+     "delivery_address": "Adres 490832",
+     "czas_kuriera_warsaw": "2026-07-28T21:34:00+02:00",
+     "pickup_address": "Grill Kebab",
+     "pickup_coords": null,
+     "delivery_coords": null,
+     "picked_up_at": null,
+     "assigned_at": null,
+     "created_at_utc": null,
+     "pickup_at_warsaw": null
+    }
+   ],
+   "plan_doc": {
+    "stops": [
+     {"type": "pickup", "order_id": "490836"},
+     {"type": "pickup", "order_id": "490832"},
+     {"type": "dropoff", "order_id": "490836"},
+     {"type": "dropoff", "order_id": "490832"}
+    ]
+   },
+   "expected_proj": [
+    ["pickup", ["490832", "490836"]],
+    ["dropoff", ["490836"]],
+    ["dropoff", ["490832"]]
+   ],
+   "console_parity": true
   }
  ]
 }

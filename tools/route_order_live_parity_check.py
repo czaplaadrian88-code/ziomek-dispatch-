@@ -6,11 +6,11 @@ qualifying live courier bag it compares:
 
     one orders/plans snapshot -> route_order canon
     -> real courier-api ``build_view_from_snapshots`` DTO
-    -> a faithful legacy-field projection of Kotlin ``RouteLogic.buildSteps``.
+    -> the DTO stop contract consumed by Kotlin ``RouteLogic.buildSteps``.
 
-WB3 v3 will add stop identity fields later.  Until then this monitor projects
-only the legacy fields and reuses ``tests/golden/route_order_corpus.json``;
-it is not a second cross-language golden.
+WB3 stop identity is authoritative: the monitor consumes ``stop_id`` and
+``order_ids`` emitted by the backend.  It never reconstructs grouping from
+coordinates, restaurant labels or its own time threshold.
 
 Verdicts and exits:
   0 OK                  qualifying bags were checked and all matched
@@ -68,7 +68,6 @@ EXIT_PARITY_BROKEN = 1
 EXIT_INFRA_BROKEN = 2
 EXIT_EXPECTED_NO_DATA = 3
 EXIT_CONFIG_DRIFT = 4
-PICKUP_MERGE_MIN = 10  # Kotlin RouteLogic.kt contract, pinned by golden tests.
 GATE_ID = "obs.route-parity-telemetry"
 GATE_DUE = "2026-08-01"
 COURIER_API_SERVICE = "courier-api.service"
@@ -228,85 +227,106 @@ def _load_state_snapshots(
     return orders, plans
 
 
-def _pickup_min(value: Any) -> int | None:
-    """Faithful port of Kotlin ``pickupMin`` (including equality fallback)."""
-    if not isinstance(value, str):
-        return None
-    parts = value.split(":")
-    if len(parts) != 2:
-        return None
-    try:
-        return int(parts[0].strip()) * 60 + int(parts[1].strip())
-    except ValueError:
-        return None
-
-
-def _pickup_together(left: Any, right: Any) -> bool:
-    left_min = _pickup_min(left)
-    right_min = _pickup_min(right)
-    if left_min is not None and right_min is not None:
-        return abs(left_min - right_min) <= PICKUP_MERGE_MIN
-    return left == right
-
-
-def _restaurant_key(place: Any) -> str:
-    """Faithful projection of Kotlin ``restaurantKey(PlaceDto)``."""
-    doc = place if isinstance(place, Mapping) else {}
-    lat, lon = doc.get("lat"), doc.get("lon")
-    if lat is not None and lon is not None:
-        return f"{float(lat):.4f},{float(lon):.4f}"
-    name = str(doc.get("name") or "").strip().lower()
-    address = str(doc.get("address") or "").strip().lower()
-    return f"{name}|{address}"
-
-
 def project_kotlin_build_steps(dto: Mapping[str, Any]) -> list[list[Any]]:
-    """Project real legacy DTO through Kotlin ``RouteLogic.buildSteps``.
-
-    The projection intentionally ignores ``done`` and display-only metadata.
-    It preserves step order and groups only adjacent pickups exactly as the
-    Kotlin code does, then normalizes group ids like the existing route-order
-    golden (sorted strings).
-    """
+    """Project the server-owned stop contract without rebuilding membership."""
     raw_orders = dto.get("orders")
     raw_stops = dto.get("stop_sequence")
     if not isinstance(raw_orders, list) or not isinstance(raw_stops, list):
         raise ValueError("DTO requires list fields orders and stop_sequence")
 
-    by_id: dict[str, Mapping[str, Any]] = {}
+    committed_by_id: dict[str, Any] = {}
     for order in raw_orders:
         if not isinstance(order, Mapping) or order.get("order_id") is None:
             continue
-        by_id[str(order["order_id"])] = order
+        committed_by_id[str(order["order_id"])] = order.get(
+            "pickup_committed_at"
+        )
 
-    out: list[dict[str, Any]] = []
+    grouped: list[dict[str, Any]] = []
+    seen_stop_ids: set[str] = set()
     for ref in raw_stops:
         if not isinstance(ref, Mapping) or ref.get("order_id") is None:
-            continue
+            raise ValueError("every stop_sequence ref requires order_id")
         order_id = str(ref["order_id"])
-        order = by_id.get(order_id)
-        if order is None:  # Kotlin: ``byId[ref.order_id] ?: continue``.
-            continue
-        is_pickup = ref.get("kind") == "pickup"
-        step = {
-            "kind": "pickup" if is_pickup else "dropoff",
-            "ids": [order_id],
-            "restaurant_key": _restaurant_key(order.get("restaurant")),
-            "pickup_time": order.get("pickup_time"),
-        }
-        last = out[-1] if out else None
+        kind = ref.get("kind")
+        stop_id = ref.get("stop_id")
+        raw_members = ref.get("order_ids")
+        if kind not in {"pickup", "dropoff"}:
+            raise ValueError(f"invalid kind for order {order_id}")
+        if not isinstance(stop_id, str) or not stop_id:
+            raise ValueError(f"missing stop_id for order {order_id}")
         if (
-            is_pickup
-            and last is not None
-            and last["kind"] == "pickup"
-            and last["restaurant_key"] == step["restaurant_key"]
-            and _pickup_together(last["pickup_time"], step["pickup_time"])
+            not isinstance(raw_members, Sequence)
+            or isinstance(raw_members, (str, bytes))
         ):
-            last["ids"].append(order_id)
+            raise ValueError(f"missing order_ids membership for stop {stop_id}")
+        members = sorted(dict.fromkeys(str(value) for value in raw_members))
+        if order_id not in members:
+            raise ValueError(f"order {order_id} absent from stop {stop_id}")
+        if stop_id in seen_stop_ids:
+            if (
+                not grouped
+                or grouped[-1]["stop_id"] != stop_id
+                or grouped[-1]["kind"] != kind
+                or grouped[-1]["members"] != members
+            ):
+                raise ValueError(f"non-contiguous or divergent stop_id {stop_id}")
+            current = grouped[-1]
         else:
-            out.append(step)
+            seen_stop_ids.add(stop_id)
+            current = {
+                "kind": kind,
+                "stop_id": stop_id,
+                "members": members,
+                "step_committed": {},
+            }
+            grouped.append(current)
+        if kind == "pickup":
+            current["step_committed"][order_id] = ref.get("committed_at")
+    return [
+        [
+            item["kind"],
+            item["stop_id"],
+            item["members"],
+            (
+                [
+                    [
+                        member,
+                        item["step_committed"].get(member),
+                        committed_by_id.get(member),
+                    ]
+                    for member in item["members"]
+                ]
+                if item["kind"] == "pickup"
+                else []
+            ),
+        ]
+        for item in grouped
+    ]
 
-    return [[step["kind"], sorted(step["ids"])] for step in out]
+
+def project_canonical_stops(stops: Sequence[Mapping[str, Any]]) -> list[list[Any]]:
+    """Normalize canonical route stops to the exact DTO parity shape."""
+    out = []
+    for stop in stops:
+        kind = stop.get("kind")
+        stop_id = stop.get("stop_id")
+        members = sorted(str(value) for value in stop.get("order_ids", []))
+        committed_by_order = stop.get("committed_by_order")
+        committed = (
+            [
+                [
+                    member,
+                    committed_by_order.get(member),
+                    committed_by_order.get(member),
+                ]
+                for member in members
+            ]
+            if kind == "pickup" and isinstance(committed_by_order, Mapping)
+            else []
+        )
+        out.append([kind, stop_id, members, committed])
+    return out
 
 
 def _safe_id(value: Any) -> str:
@@ -316,44 +336,17 @@ def _safe_id(value: Any) -> str:
 
 def _redact_projection(projection: Sequence[Sequence[Any]]) -> list[list[Any]]:
     return [
-        [step[0], [_safe_id(order_id) for order_id in step[1]]]
+        [
+            step[0],
+            _safe_id(step[1]),
+            [_safe_id(order_id) for order_id in step[2]],
+            [
+                [_safe_id(order_id), step_value, order_value]
+                for order_id, step_value, order_value in step[3]
+            ],
+        ]
         for step in projection
     ]
-
-
-def _flatten_projection(
-    projection: Sequence[Sequence[Any]],
-) -> list[tuple[str, str]]:
-    """Normalize stop grouping without changing the route sequence.
-
-    A grouped pickup ``["pickup", ["A", "B"]]`` and two adjacent pickup
-    groups ``["pickup", ["A"]], ["pickup", ["B"]]`` describe the same
-    route.  Flattening both sides to ``(kind, order_id)`` pairs preserves the
-    order within every group and across groups while removing only that
-    representational boundary.
-    """
-    flattened: list[tuple[str, str]] = []
-    for index, step in enumerate(projection):
-        if (
-            not isinstance(step, Sequence)
-            or isinstance(step, (str, bytes))
-            or len(step) != 2
-        ):
-            raise ValueError(f"projection step {index} must be [kind, order_ids]")
-        kind, raw_order_ids = step
-        if not isinstance(kind, str):
-            raise ValueError(f"projection step {index} kind must be a string")
-        if (
-            not isinstance(raw_order_ids, Sequence)
-            or isinstance(raw_order_ids, (str, bytes))
-        ):
-            raise ValueError(
-                f"projection step {index} order_ids must be a sequence"
-            )
-        flattened.extend(
-            (kind, str(order_id)) for order_id in raw_order_ids
-        )
-    return flattened
 
 
 def _gate_line(verdict: str, coverage: Mapping[str, Any], reason: str) -> str:
@@ -404,8 +397,6 @@ def evaluate(
                     courier_id, orders_snapshot, plans, route_config
                 )
                 client = project_kotlin_build_steps(dto)
-                canonical_flat = _flatten_projection(canonical)
-                client_flat = _flatten_projection(client)
             except Exception as exc:
                 # One bad courier must make coverage fail closed.
                 errors.append(
@@ -417,11 +408,8 @@ def evaluate(
                 continue
             checked += 1
             if client != canonical:
-                grouping_only_difference = client_flat == canonical_flat
-                if grouping_only_difference:
-                    grouping_only_difference_bags += 1
-                else:
-                    parity_mismatch_bags += 1
+                grouping_only_difference = False
+                parity_mismatch_bags += 1
                 mismatches.append(
                     {
                         "courier_ref": _safe_id(courier_id),
@@ -476,7 +464,7 @@ def evaluate(
         )
 
     result = {
-        "schema_version": 3,
+        "schema_version": 4,
         "monitor": GATE_ID,
         "verdict": verdict,
         "verdict_class": verdict_class,
@@ -536,7 +524,7 @@ def _infra_result(exc: Exception) -> tuple[dict[str, Any], int]:
     }
     reason = f"{type(exc).__name__}: {exc}"[:240]
     result = {
-        "schema_version": 3,
+        "schema_version": 4,
         "monitor": GATE_ID,
         "verdict": "BROKEN",
         "verdict_class": "INFRA_BROKEN",
@@ -587,7 +575,7 @@ def _run_live() -> tuple[dict[str, Any], int]:
     from dispatch_v2 import route_podjazdy as route_canon  # noqa: PLC0415
 
     def canon_builder(bag: Sequence[Mapping[str, Any]], plan: Any):
-        return route_canon.order_podjazdy(
+        return route_canon.build_route_stops(
             bag,
             plan,
             plan_aware=route_config.plan_aware_podjazdy,
@@ -601,7 +589,7 @@ def _run_live() -> tuple[dict[str, Any], int]:
         route_config=route_config,
         canon_builder=canon_builder,
         dto_builder=dto_builder,
-        canon_projector=gen._proj,
+        canon_projector=project_canonical_stops,
         live_flags=live_flags,
         corpus_flags=corpus_flags,
     )

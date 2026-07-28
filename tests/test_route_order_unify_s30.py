@@ -29,6 +29,8 @@ def test_reexport_is_same_object():
     """route_podjazdy NIE ma własnej kopii reguły — re-eksportuje route_order."""
     assert RP.order_podjazdy is RO.order_podjazdy
     assert RP.order_route is RO.order_route
+    assert RP.build_route_stops is RO.build_route_stops
+    assert RP.stop_id_for is RO.stop_id_for
     assert RP.repair_dropoffs_after_pickups is RO.repair_dropoffs_after_pickups
     assert RP.build_stop_sequence is RO.build_stop_sequence
     assert RP.PICKUP_MERGE_MIN == RO.PICKUP_MERGE_MIN == 10  # kontrakt cross-język Kotlin
@@ -37,7 +39,8 @@ def test_reexport_is_same_object():
 def test_all_public_symbols_reexported():
     for name in ("order_podjazdy", "pickup_runs", "plan_drop_rank",
                  "_canon_order_from_plan", "_plan_pickup_clusters",
-                 "PICKUP_MERGE_MIN", "_iso", "_attr", "_pickup_dt"):
+                 "PICKUP_MERGE_MIN", "stop_id_for", "build_route_stops",
+                 "_iso", "_attr", "_pickup_dt"):
         assert getattr(RP, name) is getattr(RO, name), name
 
 
@@ -53,17 +56,31 @@ def test_order_matches_golden_corpus():
         assert got == c["expected_proj"], f"{c['id']}: {got} != {c['expected_proj']}"
 
 
-def test_build_stop_sequence_equals_branch1_transform():
-    """build_stop_sequence = dokładnie transformacja gałęzi console_podjazdy apki
-    (courier_orders:1145): rozwinięcie [(typ,[ids])] na kroki per-zlecenie."""
+def test_build_stop_sequence_carries_identity_membership_and_exact_committed():
+    """Rozwinięcie per-order zachowuje stop identity i committed bez syntezy."""
     corpus = json.loads(CORPUS.read_text(encoding="utf-8"))
     flags = corpus["meta"]["flags"]
     pa, tc = flags["plan_aware"], flags["trust_canon"]
     for c in corpus["cases"]:
         bag = [SimpleNamespace(**d) for d in c["bag"]]
-        order = RO.order_podjazdy(bag, c["plan_doc"], plan_aware=pa, trust_canon=tc)
-        branch1 = [{"order_id": str(oid), "kind": typ} for (typ, oids) in order for oid in oids]
-        assert RO.build_stop_sequence(bag, c["plan_doc"], plan_aware=pa, trust_canon=tc) == branch1
+        stops = RO.build_route_stops(
+            bag, c["plan_doc"], plan_aware=pa, trust_canon=tc
+        )
+        expected = []
+        for stop in stops:
+            for oid in stop["order_ids"]:
+                step = {
+                    "order_id": oid,
+                    "kind": stop["kind"],
+                    "stop_id": stop["stop_id"],
+                    "order_ids": stop["order_ids"],
+                }
+                if stop["kind"] == "pickup":
+                    step["committed_at"] = stop["committed_by_order"][oid]
+                expected.append(step)
+        assert RO.build_stop_sequence(
+            bag, c["plan_doc"], plan_aware=pa, trust_canon=tc
+        ) == expected
 
 
 # ---------- 3. repair: behawioralny parytet vs OBIE kopie legacy + kills ----------

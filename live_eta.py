@@ -109,10 +109,10 @@ def _coord(value: object) -> tuple[float, float] | None:
 def _normalize_stops(
     stops: Iterable[Mapping[str, object]], *, source_contract: bool = False
 ) -> list[dict]:
-    """Ujednolić stop i scalić kolejne pozycje pod tym samym adresem.
+    """Ujednolić stopy już zgrupowane przez kanoniczny ``route_order``.
 
-    ``order_ids`` pozwala jednemu fizycznemu odbiorowi/dostawie nadać jeden ETA
-    wszystkim zleceniom na tej pozycji.
+    ``stop_id`` + ``order_ids`` są jedyną tożsamością fizycznego stopu.
+    Współrzędne służą wyłącznie routingowi i NIGDY nie scalają membershipu.
     """
     out: list[dict] = []
     for raw in stops:
@@ -126,8 +126,14 @@ def _normalize_stops(
             order_ids = [str(raw.get("order_id"))]
         else:
             order_ids = []
+        stop_id = raw.get("stop_id")
         point = _coord(raw.get("coord"))
-        if not order_ids or (point is None and not source_contract):
+        if (
+            not isinstance(stop_id, str)
+            or not stop_id
+            or not order_ids
+            or (point is None and not source_contract)
+        ):
             continue
         floor_raw = raw.get("floor_at")
         floor_values = (
@@ -145,6 +151,7 @@ def _normalize_stops(
         )
         dwell_s = float(raw.get("dwell_s") or (120 if kind == "pickup" else 60))
         normalized = {
+            "stop_id": stop_id,
             "kind": kind,
             "order_ids": sorted(dict.fromkeys(order_ids)),
             "coord": [point[0], point[1]] if point is not None else None,
@@ -161,26 +168,6 @@ def _normalize_stops(
                 if point is None
                 else None
             )
-        if (
-            out
-            and point is not None
-            and out[-1]["kind"] == normalized["kind"]
-            and out[-1]["coord"] == normalized["coord"]
-        ):
-            out[-1]["order_ids"] = sorted(
-                dict.fromkeys(out[-1]["order_ids"] + normalized["order_ids"])
-            )
-            old_floor = _as_utc(out[-1]["floor_at"])
-            if floor is not None and (old_floor is None or floor > old_floor):
-                out[-1]["floor_at"] = _iso_utc(floor)
-            out[-1]["dwell_s"] = max(out[-1]["dwell_s"], normalized["dwell_s"])
-            if source_contract:
-                old_planned = _as_utc(out[-1].get("planned_at"))
-                if planned is not None and (
-                    old_planned is None or planned > old_planned
-                ):
-                    out[-1]["planned_at"] = _iso_utc(planned)
-            continue
         out.append(normalized)
     return out
 
@@ -240,6 +227,7 @@ def calculate_live_eta(
         eta_hhmm = arrival.astimezone(WARSAW).strftime("%H:%M")
         projected = {
             "position": index,
+            "stop_id": stop["stop_id"],
             "kind": stop["kind"],
             "order_ids": stop["order_ids"],
             "eta_at": eta_at,
@@ -335,6 +323,7 @@ def _calculate_source_eta(
 
         projected = {
             "position": index,
+            "stop_id": stop["stop_id"],
             "kind": stop["kind"],
             "order_ids": stop["order_ids"],
             "eta_at": eta_at,
