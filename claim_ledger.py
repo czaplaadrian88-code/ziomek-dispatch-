@@ -133,3 +133,59 @@ def check_feral_claim(accepted_trace, claim, log=None, context=""):
             context or "?", viol[0],
         )
     return viol
+
+
+def check_feral_claim_guarded(
+    accepted_trace,
+    claim,
+    *,
+    hard,
+    log=None,
+    context="",
+):
+    """Uruchom per-claim oracle z jedną polityką awarii dla obu konsumentów.
+
+    Zwraca ``(violations, checker_error_type)``. Błąd checkera w trybie HARD
+    jest syntetycznym naruszeniem ``checker_error`` i dlatego caller odrzuca
+    bieżący claim. W trybie log-only pozostaje fail-soft (pusta lista naruszeń),
+    ale typ błędu jest zwracany do metryki ``claim_checker_error``. Oba tryby
+    logują awarię na poziomie ERROR wraz z typem wyjątku.
+    """
+    try:
+        violations = check_feral_claim(
+            accepted_trace,
+            claim,
+            log=log if hard else None,
+            context=context,
+        )
+    except Exception as exc:  # noqa: BLE001 — jawna granica fail-policy
+        error_type = type(exc).__name__
+        if log is not None:
+            log.error(
+                "CLAIM_LEDGER_CHECKER_ERROR [%s]: exception_type=%s hard=%s",
+                context or "?",
+                error_type,
+                bool(hard),
+            )
+        if not hard:
+            return [], error_type
+        return [{
+            "cid": claim[0],
+            "oid_prev": None,
+            "oid": claim[1],
+            "seen_prev": None,
+            "seen": claim[2],
+            "expected": None,
+            "kind": "checker_error",
+            "exception_type": error_type,
+        }], error_type
+
+    if violations and not hard and log is not None:
+        log.error(
+            "CLAIM_LEDGER_INVARIANT breach [%s]: "
+            "%d naruszen(ia) INV-FEAS-NO-DOUBLE-BOOK: %r",
+            context or "?",
+            len(violations),
+            violations[:8],
+        )
+    return violations, None

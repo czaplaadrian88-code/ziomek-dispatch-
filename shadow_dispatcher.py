@@ -1639,6 +1639,7 @@ def _tick(shadow_log_path: str, meta: Optional[dict], *,
     _accepted_claim_trace: list = []
     _tick_breaches: list = []
     _tick_feral_drops: list = []
+    _tick_checker_errors = 0
     _claim_hard_seen = False
 
     for _batch_index, ev in enumerate(events):
@@ -1743,6 +1744,8 @@ def _tick(shadow_log_path: str, meta: Optional[dict], *,
             _claim_applied = False
             _claim_dropped = False
             _claim_drop_viol: list = []
+            _claim_checker_error = 0
+            _claim_check_for_event = False
             _claim_hard_for_event = False
             if C.decision_flag("ENABLE_ENGINE_CLAIM_LEDGER"):
                 try:
@@ -1759,27 +1762,33 @@ def _tick(shadow_log_path: str, meta: Optional[dict], *,
                             _cl_bag_seen = len(getattr(fleet.get(_cl_cid), "bag", None) or [])
                             _cl_claim = (_cl_cid, oid, _cl_bag_seen)
                             _claim_trace.append(_cl_claim)
+                            _claim_check_for_event = C.decision_flag(
+                                "ENABLE_CLAIM_LEDGER_INVARIANT_CHECK")
                             _claim_hard_for_event = (
-                                C.decision_flag(
-                                    "ENABLE_CLAIM_LEDGER_INVARIANT_CHECK")
+                                _claim_check_for_event
                                 and C.decision_flag(
                                     "ENABLE_CLAIM_LEDGER_INVARIANT_HARD")
                             )
-                            if _claim_hard_for_event:
-                                _claim_hard_seen = True
-                                try:
-                                    _claim_drop_viol = _cl.check_feral_claim(
-                                        _accepted_claim_trace, _cl_claim,
-                                        log=_log, context="shadow_tick")
-                                except Exception as _cl_check_e:  # noqa: BLE001
-                                    _log.warning(
-                                        "claim_ledger HARD checker fail-soft "
-                                        f"order={oid}: {_cl_check_e}")
-                                    _claim_drop_viol = []
-
-                            if _claim_drop_viol:
-                                _claim_dropped = True
+                            if _claim_check_for_event:
+                                if _claim_hard_for_event:
+                                    _claim_hard_seen = True
+                                (
+                                    _claim_drop_viol,
+                                    _claim_checker_error_type,
+                                ) = _cl.check_feral_claim_guarded(
+                                    _accepted_claim_trace,
+                                    _cl_claim,
+                                    hard=_claim_hard_for_event,
+                                    log=_log,
+                                    context="shadow_tick",
+                                )
                                 _tick_breaches.extend(_claim_drop_viol)
+                                if _claim_checker_error_type is not None:
+                                    _claim_checker_error = 1
+                                    _tick_checker_errors += 1
+
+                            if _claim_hard_for_event and _claim_drop_viol:
+                                _claim_dropped = True
                                 _tick_feral_drops.append({
                                     "cid": _cl_cid,
                                     "oid": oid,
@@ -1896,6 +1905,9 @@ def _tick(shadow_log_path: str, meta: Optional[dict], *,
                 # proposal/live. Rekord zostaje w jsonl jako log-loud evidence.
                 record["g_claim_ledger_feral_drops"] = int(_claim_dropped)
                 record["g_claim_ledger_breaches"] = len(_claim_drop_viol)
+            if _claim_checker_error:
+                # L1.1: addytywna metryka błędu oracle w finalnym rekordzie decyzji.
+                record["claim_checker_error"] = 1
             if _claim_dropped:
                 record["verdict"] = "DROP_FERAL_CLAIM"
                 record["reason"] = (
@@ -2095,20 +2107,13 @@ def _tick(shadow_log_path: str, meta: Optional[dict], *,
         except Exception as _pp_e:
             _log.warning(f"pending_proposals write fail: {_pp_e}")
 
-    # INV-FEAS-NO-DOUBLE-BOOK bliźniak global_allocate. CHECK-only pozostaje
-    # obserwatorem post-tick; HARD sprawdzał każdy claim przed przyjęciem i dropił
-    # wyłącznie feralne wejście. Żadna ścieżka produkcyjna nie rzuca z tego guarda.
-    if _claim_trace and C.decision_flag("ENABLE_CLAIM_LEDGER_INVARIANT_CHECK"):
-        try:
-            if not _claim_hard_seen:
-                from dispatch_v2 import claim_ledger as _cl_chk
-                _tick_breaches = _cl_chk.check_sweep_trace(
-                    _claim_trace, log=_log, context="shadow_tick")
-        except Exception as _cti_e:  # noqa: BLE001 — obserwator nie wywala ticku
-            _log.warning(f"claim_ledger tick invariant fail-soft: {_cti_e}")
+    # Oba tryby sprawdzają każdy claim wspólnym fail-policy przed przyjęciem.
+    # HARD dropi wyłącznie naruszenie; log-only zachowuje decyzję i loguje/metrykuje.
     if _claim_hard_seen:
         stats["claim_ledger_breaches"] = len(_tick_breaches)
         stats["claim_ledger_feral_drops"] = len(_tick_feral_drops)
+    if _tick_checker_errors:
+        stats["claim_checker_error"] = _tick_checker_errors
 
     # Faza C: globalna re-alokacja → konsola realizowana POZA gorącą ścieżką
     # (resweep co 1 min pisze dispatch_state/global_alloc.json, feed.py overlay).

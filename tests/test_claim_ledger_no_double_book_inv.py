@@ -18,9 +18,11 @@ NARUSZENIE. Ten plik pina:
 
 Reużywa fixtures z `test_pending_global_resweep` (jedno źródło fake'ów, protokół #0 ETAP 3).
 """
+import ast
 import inspect
 import json
 import sys
+import textwrap
 import types
 
 import pytest
@@ -120,6 +122,50 @@ def test_check_feral_claim_uses_same_oracle_and_logs_drop():
         accepted, ("A", "o3", 0), log=lg, context="test")
     assert len(viol) == 1 and viol[0]["kind"] == "stale"
     assert lg.errors and "DROP_FERAL_CLAIM" in lg.errors[0][0][0]
+
+
+def test_guarded_checker_error_hard_is_violation_and_logs_type(monkeypatch):
+    """RED 28.07: awaria oracle w HARD jest naruszeniem, nie pustą listą."""
+    def _raise(*args, **kwargs):
+        raise RuntimeError("checker-boom")
+
+    monkeypatch.setattr(CL, "check_feral_claim", _raise)
+    lg = _RecLog()
+    viol, error_type = CL.check_feral_claim_guarded(
+        [("A", "o1", 0)],
+        ("A", "o2", 1),
+        hard=True,
+        log=lg,
+        context="test",
+    )
+
+    assert error_type == "RuntimeError"
+    assert len(viol) == 1
+    assert viol[0]["kind"] == "checker_error"
+    assert viol[0]["cid"] == "A" and viol[0]["oid"] == "o2"
+    assert lg.errors
+    assert "RuntimeError" in " ".join(str(value) for value in lg.errors[0][0])
+
+
+def test_guarded_checker_error_log_only_is_visible_fail_soft(monkeypatch):
+    """CHECK ON/HARD OFF: brak dropu, lecz błąd checkera nie może być niemy."""
+    def _raise(*args, **kwargs):
+        raise ValueError("checker-boom")
+
+    monkeypatch.setattr(CL, "check_feral_claim", _raise)
+    lg = _RecLog()
+    viol, error_type = CL.check_feral_claim_guarded(
+        [("A", "o1", 0)],
+        ("A", "o2", 1),
+        hard=False,
+        log=lg,
+        context="test",
+    )
+
+    assert viol == []
+    assert error_type == "ValueError"
+    assert lg.errors
+    assert "ValueError" in " ".join(str(value) for value in lg.errors[0][0])
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -242,12 +288,73 @@ def test_global_allocate_hard_drops_feral_and_continues(monkeypatch):
     assert set(results) == {"o1", "o3"}  # feral nie wycieka do konsoli/live
 
 
+def test_global_allocate_checker_error_hard_drops_and_continues(monkeypatch):
+    """Błąd wspólnego checkera w HARD dropi tylko bieżący claim; sweep trwa."""
+    monkeypatch.setattr(PGR, "_assess", _assess_drop_continue)
+    monkeypatch.setattr(C, "decision_flag", _flags(_CHECK, _HARD))
+    original = CL.check_feral_claim
+
+    def _raise_for_o2(accepted_trace, claim, **kwargs):
+        if claim[1] == "o2":
+            raise RuntimeError("checker-boom")
+        return original(accepted_trace, claim, **kwargs)
+
+    monkeypatch.setattr(CL, "check_feral_claim", _raise_for_o2)
+    diag = {}
+    results = {}
+    alloc = PGR.global_allocate(
+        [(oid, _rec(oid)) for oid in ("o1", "o2", "o3")],
+        {c: _cs(c) for c in ("A", "B")},
+        _N,
+        _results_out=results,
+        _diag_out=diag,
+    )
+
+    assert alloc["o2"]["feral_claim_dropped"] is True
+    assert alloc["o2"]["claim_checker_error"] == 1
+    assert alloc["o3"]["cid"] == "B"
+    assert set(results) == {"o1", "o3"}
+    assert diag["claim_checker_error"] == 1
+    assert len(diag["claim_ledger_feral_drops"]) == 1
+
+
+def test_global_allocate_checker_error_log_only_keeps_decision_visible(monkeypatch):
+    """Log-only zachowuje alokację, ale eksportuje licznik błędu checkera."""
+    monkeypatch.setattr(PGR, "_assess", _assess_drop_continue)
+    monkeypatch.setattr(C, "decision_flag", _flags(_CHECK))
+    original = CL.check_feral_claim
+
+    def _raise_for_o2(accepted_trace, claim, **kwargs):
+        if claim[1] == "o2":
+            raise LookupError("checker-boom")
+        return original(accepted_trace, claim, **kwargs)
+
+    monkeypatch.setattr(CL, "check_feral_claim", _raise_for_o2)
+    diag = {}
+    alloc = PGR.global_allocate(
+        [(oid, _rec(oid)) for oid in ("o1", "o2", "o3")],
+        {c: _cs(c) for c in ("A", "B")},
+        _N,
+        _diag_out=diag,
+    )
+
+    assert alloc["o2"]["cid"] == "A"
+    assert alloc["o2"]["claim_checker_error"] == 1
+    assert alloc["o3"]["cid"] == "B"
+    assert diag["claim_checker_error"] == 1
+    assert "claim_ledger_feral_drops" not in diag
+
+
 def test_global_allocate_drop_mutation_probe_turns_oracle_red(monkeypatch):
     """MUTATION-PROBE: neutralizacja wspólnej bramki dropu zabija asercję ochronną."""
     monkeypatch.setattr(PGR, "_assess", _assess_bundle)
     monkeypatch.setattr(C, "decision_flag", _flags(_CHECK, _HARD))
     monkeypatch.setattr(PGR, "_tentative_assign", lambda fleet, cid, rec: dict(fleet))
-    monkeypatch.setattr(PGR, "_check_feral_claim", lambda *a, **k: [])
+    monkeypatch.setattr(
+        PGR,
+        "_check_feral_claim_guarded",
+        lambda *args, **kwargs: ([], None),
+    )
     alloc = PGR.global_allocate(
         [("o1", _rec("o1")), ("o2", _rec("o2"))],
         {c: _cs(c) for c in ("A", "B")}, _N)
@@ -329,10 +436,44 @@ def test_run_once_hard_off_has_byte_compatible_metric_shape(tmp_path, monkeypatc
     assert all("g_claim_ledger_feral_drops" not in row for row in rows)
 
 
+def test_run_once_checker_error_metric_reaches_jsonl_and_summary(tmp_path, monkeypatch):
+    """Log-only: błąd checkera widoczny w rekordzie resweep i summary bez dropu."""
+    out = _setup(tmp_path, monkeypatch, {"o1": "A", "o2": "A", "o3": "B"})
+    monkeypatch.setattr(PGR, "_assess", _assess_drop_continue)
+    monkeypatch.setattr(C, "decision_flag", _flags(_CHECK))
+    original = CL.check_feral_claim
+
+    def _raise_for_o2(accepted_trace, claim, **kwargs):
+        if claim[1] == "o2":
+            raise RuntimeError("checker-boom")
+        return original(accepted_trace, claim, **kwargs)
+
+    monkeypatch.setattr(CL, "check_feral_claim", _raise_for_o2)
+    summary = PGR.run_once(now=_N)
+    rows = [json.loads(line) for line in out.read_text().splitlines()]
+    by_oid = {row["order_id"]: row for row in rows}
+
+    assert summary["claim_checker_error"] == 1
+    assert by_oid["o2"]["claim_checker_error"] == 1
+    assert by_oid["o2"]["new_cid"] == "A"
+    assert all(
+        "claim_checker_error" not in row
+        for oid, row in by_oid.items()
+        if oid != "o2"
+    )
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 4. Bliźniak shadow._tick: ten sam drop, tick kontynuuje
 # ═══════════════════════════════════════════════════════════════════════════
-def _run_shadow_drop_case(tmp_path, monkeypatch, *, hard):
+def _run_shadow_drop_case(
+    tmp_path,
+    monkeypatch,
+    *,
+    hard,
+    checker_error_oid=None,
+    stale_mutation=True,
+):
     from dispatch_v2 import auto_assign_executor as AAE
     from dispatch_v2 import pending_proposals_store as PPS
 
@@ -417,8 +558,18 @@ def _run_shadow_drop_case(tmp_path, monkeypatch, *, hard):
     monkeypatch.setattr(
         AAE, "maybe_execute",
         lambda record, result, payload: auto_verdicts.append(record["verdict"]))
-    # Wymuszony mutant źródła: drugi A widzi ten sam worek co pierwszy.
-    monkeypatch.setattr(CL, "tentative_assign", lambda fleet, cid, rec: dict(fleet))
+    if checker_error_oid is not None:
+        original = CL.check_feral_claim
+
+        def _raise_for_oid(accepted_trace, claim, **kwargs):
+            if claim[1] == checker_error_oid:
+                raise RuntimeError("checker-boom")
+            return original(accepted_trace, claim, **kwargs)
+
+        monkeypatch.setattr(CL, "check_feral_claim", _raise_for_oid)
+    if stale_mutation:
+        # Wymuszony mutant źródła: drugi A widzi ten sam worek co pierwszy.
+        monkeypatch.setattr(CL, "tentative_assign", lambda fleet, cid, rec: dict(fleet))
 
     stats = SD._tick(str(tmp_path / "shadow.jsonl"), None)
     effects = {
@@ -461,6 +612,79 @@ def test_shadow_tick_hard_drops_feral_and_continues(tmp_path, monkeypatch):
     assert totals["claim_ledger_breaches"] == 2
 
 
+def test_shadow_checker_error_hard_drops_and_serializes_metric(
+        tmp_path, monkeypatch, caplog):
+    """RED 28.07: HARD awaria checkera = drop + ERROR(type) + L1.1 record metric."""
+    stats, records, processed, effects = _run_shadow_drop_case(
+        tmp_path,
+        monkeypatch,
+        hard=True,
+        checker_error_oid="o2",
+        stale_mutation=False,
+    )
+
+    assert [record["verdict"] for record in records] == [
+        "PROPOSE", "DROP_FERAL_CLAIM", "PROPOSE", "PROPOSE"]
+    assert records[1]["claim_checker_error"] == 1
+    assert all(
+        "claim_checker_error" not in record
+        for index, record in enumerate(records)
+        if index != 1
+    )
+    assert stats["claim_checker_error"] == 1
+    assert stats["claim_ledger_feral_drops"] == 1
+    assert processed == ["e1", "e2", "e3", "e4"]
+    assert effects["pending_oids"] == ["o1", "o3", "o4"]
+    assert effects["auto_verdicts"] == ["PROPOSE", "PROPOSE", "PROPOSE"]
+    assert "RuntimeError" in caplog.text
+
+
+def test_shadow_checker_error_log_only_keeps_decision_and_serializes_metric(
+        tmp_path, monkeypatch, caplog):
+    """CHECK ON/HARD OFF: decyzja bez zmian, błąd widoczny w L1.1 record."""
+    stats, records, processed, effects = _run_shadow_drop_case(
+        tmp_path,
+        monkeypatch,
+        hard=False,
+        checker_error_oid="o2",
+        stale_mutation=False,
+    )
+
+    assert [record["verdict"] for record in records] == [
+        "PROPOSE", "PROPOSE", "PROPOSE", "PROPOSE"]
+    assert records[1]["claim_checker_error"] == 1
+    assert stats["claim_checker_error"] == 1
+    assert processed == ["e1", "e2", "e3", "e4"]
+    assert effects["pending_oids"] == ["o1", "o2", "o3", "o4"]
+    assert effects["auto_verdicts"] == [
+        "PROPOSE", "PROPOSE", "PROPOSE", "PROPOSE"]
+    assert "RuntimeError" in caplog.text
+
+
+def test_shadow_checker_error_swallow_mutation_turns_oracle_red(
+        tmp_path, monkeypatch):
+    """MUTATION: dawny `except: _claim_drop_viol = []` znów czerwieni HARD oracle."""
+    real_guard = CL.check_feral_claim_guarded
+
+    def _swallow_to_empty(accepted_trace, claim, **kwargs):
+        if claim[1] == "o2":
+            return [], "RuntimeError"
+        return real_guard(accepted_trace, claim, **kwargs)
+
+    monkeypatch.setattr(CL, "check_feral_claim_guarded", _swallow_to_empty)
+    _, records, _, _ = _run_shadow_drop_case(
+        tmp_path,
+        monkeypatch,
+        hard=True,
+        checker_error_oid="o2",
+        stale_mutation=False,
+    )
+
+    with pytest.raises(AssertionError, match="swallow mutation survived"):
+        assert records[1]["verdict"] == "DROP_FERAL_CLAIM", (
+            "swallow mutation survived")
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # 5. Parytet bliźniaków (single-source claim_ledger)
 # ═══════════════════════════════════════════════════════════════════════════
@@ -474,13 +698,34 @@ def test_twin_single_source_claim_ledger():
 
 
 def test_twin_both_call_invariant_checker():
-    """Oba bliźniaki wołają TEN SAM per-claim drop i nie mają produkcyjnego raise."""
+    """Oba bliźniaki wołają TEN SAM fail-policy i nie mają produkcyjnego raise."""
     ga_src = inspect.getsource(PGR.global_allocate)
     tick_src = inspect.getsource(SD._tick)
-    assert "check_feral_claim" in ga_src, "global_allocate bez wspólnego drop gate"
-    assert "check_feral_claim" in tick_src, "_tick bez wspólnego drop gate"
+    assert "check_feral_claim_guarded" in ga_src, "global_allocate bez wspólnego fail-policy"
+    assert "check_feral_claim_guarded" in tick_src, "_tick bez wspólnego fail-policy"
     assert "raise AssertionError" not in ga_src
     assert "raise AssertionError" not in tick_src
+
+
+def test_twin_checker_excepts_cannot_reset_claim_violations_to_empty():
+    """Ratchet: zakazuje dokładnego regresu finding 7 (`except` → claim `=[]`)."""
+    offenders = []
+    for twin in (PGR.global_allocate, SD._tick):
+        tree = ast.parse(textwrap.dedent(inspect.getsource(twin)))
+        for handler in (
+                node for node in ast.walk(tree)
+                if isinstance(node, ast.ExceptHandler)):
+            for node in ast.walk(handler):
+                if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                    continue
+                value = node.value
+                if not isinstance(value, ast.List) or value.elts:
+                    continue
+                targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+                for target in targets:
+                    if isinstance(target, ast.Name) and "claim" in target.id:
+                        offenders.append((twin.__name__, target.id))
+    assert offenders == [], f"checker exception znowu połyka naruszenie: {offenders}"
 
 
 def test_flags_registered_in_etap4():

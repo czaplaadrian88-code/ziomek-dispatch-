@@ -298,8 +298,7 @@ def _record_proposal_refresh_fail_safe(
 from dispatch_v2.claim_ledger import (  # noqa: E402
     bag_entry_from_order as _bag_entry_from_order,
     tentative_assign as _tentative_assign,
-    check_sweep_trace as _check_claim_sweep_trace,
-    check_feral_claim as _check_feral_claim,
+    check_feral_claim_guarded as _check_feral_claim_guarded,
 )
 
 
@@ -355,6 +354,7 @@ def global_allocate(hanging: List[Tuple[str, dict]], fleet0: Dict[str, Any],
     _accepted_claim_trace: List[Tuple[str, str, int]] = []
     _breaches: List[dict] = []
     _feral_drops: List[dict] = []
+    _checker_error_count = 0
     _claim_check_on = C.decision_flag("ENABLE_CLAIM_LEDGER_INVARIANT_CHECK")
     _claim_hard_on = (
         _claim_check_on
@@ -414,18 +414,21 @@ def global_allocate(hanging: List[Tuple[str, dict]], fleet0: Dict[str, Any],
         _cs_now = fleet.get(cid)
         _claim = (cid, oid, len(getattr(_cs_now, "bag", None) or []))
         _claim_trace.append(_claim)
-        if _claim_hard_on:
-            try:
-                _claim_viol = _check_feral_claim(
-                    _accepted_claim_trace, _claim,
-                    log=_log, context="global_allocate")
-            except Exception as _ce:  # noqa: BLE001 — checker nie zatrzymuje sweepu
-                _log.warning(
-                    "claim_ledger HARD checker fail-soft: "
-                    f"{type(_ce).__name__}: {_ce}")
-                _claim_viol = []
-            if _claim_viol:
-                _breaches.extend(_claim_viol)
+        _claim_viol: List[dict] = []
+        _checker_error_type = None
+        if _claim_check_on:
+            _claim_viol, _checker_error_type = _check_feral_claim_guarded(
+                _accepted_claim_trace,
+                _claim,
+                hard=_claim_hard_on,
+                log=_log,
+                context="global_allocate",
+            )
+            _breaches.extend(_claim_viol)
+            if _checker_error_type is not None:
+                _checker_error_count += 1
+                allocation[oid]["claim_checker_error"] = 1
+            if _claim_hard_on and _claim_viol:
                 _feral_drops.append({
                     "cid": cid,
                     "oid": oid,
@@ -446,6 +449,8 @@ def global_allocate(hanging: List[Tuple[str, dict]], fleet0: Dict[str, Any],
                     "pool_feasible": int(getattr(res, "pool_feasible_count", 0) or 0),
                     "no_courier": False,
                 }
+                if _checker_error_type is not None:
+                    allocation[oid]["claim_checker_error"] = 1
                 remaining.discard(oid)
                 continue
 
@@ -461,17 +466,11 @@ def global_allocate(hanging: List[Tuple[str, dict]], fleet0: Dict[str, Any],
             if ocid == cid:
                 assessed[other] = _assess(events[other], fleet, now)
 
-    # CHECK-only pozostaje obserwatorem post-sweep. HARD działał per claim powyżej,
-    # więc odrzucił wyłącznie feralne wejścia i nigdy nie zatrzymał de-konflikcji.
-    try:
-        if _claim_check_on and not _claim_hard_on:
-            _breaches = _check_claim_sweep_trace(
-                _claim_trace, log=_log, context="global_allocate")
-    except Exception as _ce:  # noqa: BLE001 — obserwator nie wywala sweepu
-        _log.warning(f"claim_ledger invariant check fail-soft: {type(_ce).__name__}: {_ce}")
     if _diag_out is not None:
         _diag_out["claim_trace"] = _claim_trace
         _diag_out["claim_ledger_breaches"] = _breaches
+        if _checker_error_count:
+            _diag_out["claim_checker_error"] = _checker_error_count
         if _claim_hard_on:
             _diag_out["claim_ledger_feral_drops"] = _feral_drops
     return allocation
@@ -692,6 +691,7 @@ def run_once(now: Optional[datetime] = None, margin: Optional[float] = None) -> 
     # liczba naruszeń spójności claim-ledger w tym sweepie (0 przy flagi OFF = brak weryfikacji)
     claim_breaches = _ga_diag.get("claim_ledger_breaches") or []
     n_claim_breaches = len(claim_breaches)
+    n_claim_checker_errors = int(_ga_diag.get("claim_checker_error") or 0)
     _feral_drop_metric_on = "claim_ledger_feral_drops" in _ga_diag
     claim_feral_drops = _ga_diag.get("claim_ledger_feral_drops") or []
     n_claim_feral_drops = len(claim_feral_drops)
@@ -805,6 +805,8 @@ def run_once(now: Optional[datetime] = None, margin: Optional[float] = None) -> 
                 bool(a.get("feral_claim_dropped")))
             row["feral_claim_dropped"] = bool(a.get("feral_claim_dropped"))
             row["dropped_cid"] = a.get("dropped_cid")
+        if a.get("claim_checker_error"):
+            row["claim_checker_error"] = 1
         rows.append(row)
 
     # G6: shadow zachowuje osobny kontrfaktyczny stan; LIVE ufa wyłącznie
@@ -922,6 +924,8 @@ def run_once(now: Optional[datetime] = None, margin: Optional[float] = None) -> 
     }
     if _feral_drop_metric_on:
         summary["claim_ledger_feral_drops"] = n_claim_feral_drops
+    if n_claim_checker_errors:
+        summary["claim_checker_error"] = n_claim_checker_errors
     _log.info(f"PENDING_RESWEEP sweep {summary}")
     return summary
 
