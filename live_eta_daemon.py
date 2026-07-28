@@ -150,7 +150,7 @@ def build_routes(
             and raw_plan.get("invalidated_at") is None
             else None
         )
-        sequence = route_order.order_podjazdy(
+        sequence = route_order.build_route_stops(
             bag,
             plan_doc=plan,
             plan_aware=True,
@@ -165,12 +165,15 @@ def build_routes(
         stops: list[dict] = []
         route_complete = True
         by_id = {str(order["order_id"]): order for order in bag}
-        for kind, order_ids in sequence:
+        for route_stop in sequence:
+            kind = route_stop["kind"]
+            order_ids = route_stop["order_ids"]
             first = by_id.get(str(order_ids[0]))
             if first is None:
                 if source_contract:
                     stops.append(
                         {
+                            "stop_id": route_stop["stop_id"],
                             "kind": kind,
                             "order_ids": [str(order_id) for order_id in order_ids],
                             "coord": None,
@@ -221,6 +224,7 @@ def build_routes(
                     planned_values.append(planned)
             stops.append(
                 {
+                    "stop_id": route_stop["stop_id"],
                     "kind": kind,
                     "order_ids": [str(order_id) for order_id in order_ids],
                     "coord": coord,

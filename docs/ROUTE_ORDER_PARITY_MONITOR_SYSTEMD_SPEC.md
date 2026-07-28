@@ -10,10 +10,13 @@ not authorize them.
 
 `one orders/plans snapshot -> route_order canon ->
 courier_orders.build_view_from_snapshots (explicit RouteConfig) -> faithful
-legacy-field projection of Kotlin RouteLogic.restaurantKey/buildSteps`.
+projection of the stop contract consumed by Kotlin RouteLogic.buildSteps`.
 
 It reuses `tests/golden/route_order_corpus.json`; it does not introduce a
-second WB3 golden and does not implement future `stop_id`.
+second WB3 golden. Since ADR-010, `stop_id` plus `order_ids` are authoritative
+and per-order committed must match the source order byte-for-byte. The monitor
+must not reconstruct membership from coordinates, restaurant names or a local
+time threshold.
 
 | verdict | exit | meaning |
 |---|---:|---|

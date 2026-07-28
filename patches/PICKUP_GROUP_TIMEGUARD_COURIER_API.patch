@@ -1,0 +1,86 @@
+--- a/courier_api/courier_orders.py
++++ b/courier_api/courier_orders.py
+@@ -658,11 +658,23 @@
+             type(e).__name__, e)
+         return seq, False
+     rank = {(str(s["order_id"]), s["kind"]): i for i, s in enumerate(canon)}
++    contract = {
++        (str(s["order_id"]), s["kind"]): s
++        for s in canon
++    }
+     reordered = sorted(
+         seq, key=lambda st: rank.get((str(st.get("order_id")), st.get("kind")), len(rank)))
++    for step in reordered:
++        meta = contract.get((str(step.get("order_id")), step.get("kind")))
++        if meta is None:
++            continue
++        step["stop_id"] = meta["stop_id"]
++        step["order_ids"] = list(meta["order_ids"])
++        if step.get("kind") == "pickup":
++            step["committed_at"] = meta["committed_at"]
+     keyseq = lambda s: [(str(x.get("order_id")), x.get("kind")) for x in s]
+     if keyseq(reordered) == keyseq(seq):
+-        return seq, False
++        return reordered, False
+     return reordered, True
+ 
+ 
+@@ -697,6 +709,8 @@
+         "pickup_time": (o.get("czas_kuriera_hhmm")
+                         or (_hhmm(o.get("pickup_at_warsaw"))
+                             if config.PICKUP_TIME_READY_FALLBACK else None)),
++        # ADR-010: dokładny committed zlecenia. Nigdy czas min/max fizycznego stopu.
++        "pickup_committed_at": o.get("czas_kuriera_warsaw"),
+         "pickup_ready_at": o.get("pickup_at_warsaw"),
+         "delivery_by": _hhmm(o.get("expected_delivery_by")),
+         "delivered_at": _hhmm(o.get("delivered_at")),
+@@ -1128,11 +1142,12 @@
+     _console_done = False
+     if route_config.app_route_from_console and _route_podjazdy is not None and mine:
+         try:
+-            _order = _route_podjazdy.order_podjazdy(list(mine.values()), plan,
+-                                                    plan_aware=route_config.plan_aware_podjazdy,
+-                                                    trust_canon=route_config.build_view_trust_canon_order)
+-            stop_sequence = [{"order_id": str(oid), "kind": typ}
+-                             for (typ, oids) in _order for oid in oids]
++            stop_sequence = _route_podjazdy.build_stop_sequence(
++                list(mine.values()),
++                plan,
++                plan_aware=route_config.plan_aware_podjazdy,
++                trust_canon=route_config.build_view_trust_canon_order,
++            )
+             ordered_ids = []
+             for _st in stop_sequence:
+                 if _st["order_id"] not in ordered_ids:
+@@ -1277,6 +1292,31 @@
+             logger.warning("[committed_pickup] fail cid=%s: %s: %s",
+                            courier_id, type(e).__name__, e)
+ 
++    # ADR-010: stop identity i per-order committed pochodzą wyłącznie z
++    # route_order. Dotyczy także legacy plan/fallback — koordynaty nie są
++    # membershipem, a brak flagi kolejności nie może usuwać kontraktu DTO.
++    if _route_podjazdy is None:
++        raise RuntimeError("route_order stop contract unavailable")
++    canonical_contract = _route_podjazdy.build_stop_sequence(
++        list(mine.values()),
++        plan,
++        plan_aware=route_config.plan_aware_podjazdy,
++        trust_canon=route_config.build_view_trust_canon_order,
++    )
++    contract_by_ref = {
++        (str(step["order_id"]), step["kind"]): step
++        for step in canonical_contract
++    }
++    for step in stop_sequence:
++        key = (str(step.get("order_id")), step.get("kind"))
++        contract = contract_by_ref.get(key)
++        if contract is None:
++            raise RuntimeError(f"route_order stop contract missing for {key!r}")
++        step["stop_id"] = contract["stop_id"]
++        step["order_ids"] = list(contract["order_ids"])
++        if step.get("kind") == "pickup":
++            step["committed_at"] = contract["committed_at"]
++
+     # JEDYNE oficjalne ETA: read-only snapshot z jedynego producenta dispatch.
+     eta_snapshot = _live_eta.read_latest(courier_id) if _live_eta is not None else None
+     _overlay_canonical_eta(stop_sequence, eta_snapshot, plan)

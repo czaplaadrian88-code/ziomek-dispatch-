@@ -19,6 +19,7 @@ zmianą + wpisem dlaczego. Czerwony test bez re-generacji = regres kanonu.
 """
 import json
 import sys
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -93,6 +94,8 @@ def test_corpus_covers_canon_edge_cases():
     required = {
         "syn_empty_bag", "syn_single_order", "syn_carried_first",
         "syn_same_restaurant_bundle", "syn_committed_ascending",
+        "golden_490836_490832_timeguard",
+        "golden_close_group_exact_per_order",
         "syn_plan_covers_bag_trust_canon", "syn_plan_partial_fallback",
         "syn_poisoned_zero_coords", "syn_no_ck_no_plan",
         # SPRINT0 05.07 — klasy z handoffu A0-ROUTEORDER (czasowki/paczki/carried):
@@ -112,11 +115,12 @@ def test_corpus_covers_canon_edge_cases():
 # RENDERERÓW. Ta sekcja pilnuje, że golden jest wierny SILNIKOWI: dla case'ów,
 # gdzie plan Ziomka (courier_plans) pokrywa cały worek, golden MUSI być
 # czystą projekcją planu (skip węzła pickup dla niesionych + merge kolejnych
-# odbiorów tej samej restauracji + dedup dostaw) — bez re-sortu, bez ETA.
+# odbiorów tej samej restauracji tylko w oknie committed <=10 min + dedup
+# dostaw) — bez re-sortu, bez ETA.
 # Razem: SILNIK(plan) == APKA(order_podjazdy) == KONSOLA(_build_route).
 
 def _proj_from_plan_reference(case) -> list | None:
-    """Niezależna (testowa) projekcja porządku WPROST z planu silnika.
+    """Niezależna projekcja planu z obowiązkowym guardem rozrzutu committed.
     Zwraca None gdy plan nie pokrywa całego worka (wtedy golden = fallback,
     nie kanon silnika — poza zakresem tej nogi)."""
     pd = case.get("plan_doc")
@@ -137,7 +141,20 @@ def _proj_from_plan_reference(case) -> list | None:
                 continue  # niesione = bez odbioru
             if out and out[-1][0] == "pickup" and \
                     by_oid[out[-1][1][-1]].get("restaurant") == o.get("restaurant"):
-                out[-1][1].append(oid)
+                candidate_ids = [*out[-1][1], oid]
+                committed = [
+                    datetime.fromisoformat(
+                        str(by_oid[candidate_id]["czas_kuriera_warsaw"])
+                    )
+                    for candidate_id in candidate_ids
+                ]
+                spread_min = (
+                    max(committed) - min(committed)
+                ).total_seconds() / 60.0
+                if spread_min <= _corpus()["meta"]["pickup_merge_min"]:
+                    out[-1][1].append(oid)
+                else:
+                    out.append(["pickup", [oid]])
             else:
                 out.append(["pickup", [oid]])
         else:

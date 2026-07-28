@@ -155,6 +155,33 @@ def _synthetic_cases() -> list[dict]:
          "bag": [o("900021", ck="12:10", pc=P1, dc=P2),
                  o("900022", ck="12:15", pc=P1, dc=[53.15, 23.18])],
          "plan_doc": None, "note": "2x ta sama restauracja, ck w progu sklejania"},
+        {"id": "golden_490836_490832_timeguard",
+         "bag": [
+             o("490836", rest="Grill Kebab", ck="21:26", pc=P1, dc=P2),
+             o("490832", rest="Grill Kebab", ck="21:52", pc=P1,
+               dc=[53.15, 23.18]),
+         ],
+         "plan_doc": {"stops": [
+             {"type": "pickup", "order_id": "490836"},
+             {"type": "pickup", "order_id": "490832"},
+             {"type": "dropoff", "order_id": "490836"},
+             {"type": "dropoff", "order_id": "490832"},
+         ]},
+         "note": "owner golden 28.07: plan cluster, ta sama restauracja, spread "
+                 "26 min > T => dwa stop_id i dwa exact committed"},
+        {"id": "golden_close_group_exact_per_order",
+         "bag": [
+             o("490836", rest="Grill Kebab", ck="21:26", pc=P1, dc=P2),
+             o("490832", rest="Grill Kebab", ck="21:34", pc=P1,
+               dc=[53.15, 23.18]),
+         ],
+         "plan_doc": {"stops": [
+             {"type": "pickup", "order_id": "490836"},
+             {"type": "pickup", "order_id": "490832"},
+             {"type": "dropoff", "order_id": "490836"},
+             {"type": "dropoff", "order_id": "490832"},
+         ]},
+         "note": "legalna grupa <=T zachowuje dwa exact committed per order"},
         {"id": "syn_committed_ascending",
          "bag": [o("900031", rest="R3", ck="13:00", pc=P2, dc=P1),
                  o("900032", rest="R1", ck="12:00", pc=P1, dc=P2),

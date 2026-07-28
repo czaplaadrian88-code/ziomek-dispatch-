@@ -1,9 +1,4 @@
-"""Podjazdy WG PLANU (2026-06-22, case Halva+Eat Point / Patryk).
-
-Ziomek bundluje 2 odbiory (odbierz A, odbierz B, dowieź A, dowieź B) mimo że ich
-umówione czasy są >PICKUP_MERGE_MIN od siebie. Stary podział czasowy rozbijał to na
-backtrack (odbierz A → dowieź A → wróć po B). plan_aware grupuje wg klastrów planu.
-"""
+"""Podjazdy wg planu z bezwarunkowym guardem spreadu committed."""
 from dispatch_v2 import route_podjazdy as rp
 
 
@@ -26,13 +21,13 @@ _PLAN = {"stops": [
 ]}
 
 
-def test_plan_aware_keeps_ziomek_bundle():
+def test_plan_aware_splits_plan_cluster_above_time_guard():
     order = rp.order_podjazdy(_bag(), _PLAN, plan_aware=True)
     assert order == [
         ("dropoff", ["660"]),
         ("pickup", ["665"]),
-        ("pickup", ["673"]),
         ("dropoff", ["665"]),
+        ("pickup", ["673"]),
         ("dropoff", ["673"]),
     ]
 
@@ -70,8 +65,7 @@ def test_no_plan_is_time_split():
     ]
 
 
-def test_same_restaurant_pickups_one_stop_under_plan():
-    # dwa odbiory z TEJ SAMEJ restauracji w jednym klastrze planu = jeden stop (jedna liczba)
+def test_same_restaurant_pickups_above_guard_are_separate_stops():
     bag = [
         {"order_id": "701", "status": "assigned", "restaurant": "Halva", "czas_kuriera_warsaw": "2026-06-22T19:33:00+02:00"},
         {"order_id": "702", "status": "assigned", "restaurant": "Halva", "czas_kuriera_warsaw": "2026-06-22T20:10:00+02:00"},
@@ -83,4 +77,9 @@ def test_same_restaurant_pickups_one_stop_under_plan():
         {"type": "dropoff", "order_id": "702"},
     ]}
     order = rp.order_podjazdy(bag, plan, plan_aware=True)
-    assert order[0] == ("pickup", ["701", "702"])  # scalony odbiór jednej restauracji
+    assert order == [
+        ("pickup", ["701"]),
+        ("dropoff", ["701"]),
+        ("pickup", ["702"]),
+        ("dropoff", ["702"]),
+    ]

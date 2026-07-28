@@ -1,0 +1,171 @@
+--- a/panel/backend/app/integrations/ziomek/fleet_state.py
++++ b/panel/backend/app/integrations/ziomek/fleet_state.py
+@@ -16,7 +16,7 @@
+ import json
+ import os
+ from dataclasses import asdict, dataclass, field
+-from datetime import datetime, timedelta, timezone
++from datetime import datetime, timezone
+ from zoneinfo import ZoneInfo
+ 
+ import httpx
+@@ -120,11 +120,6 @@
+     return not blocked
+ _ACTIVE_BAG = {"assigned", "picked_up"}
+ _CLOSED = {"delivered", "cancelled", "returned_to_pool"}
+-# Odbiory KOLEJNE (wg czasu) w tym oknie = jeden PODJAZD (kurier zbiera kilka restauracji za
+-# jednym wyjazdem). Większa przerwa = osobny kurs (np. 2× Chicago o 18:47 i 19:20). Zgodne z
+-# progiem PICKUP_MERGE_MIN we froncie (Ops13Console.tsx).
+-PICKUP_MERGE_MIN = 10
+-
+ def _iso(s) -> datetime | None:
+     try:
+         dt = datetime.fromisoformat(str(s))
+@@ -165,6 +160,7 @@
+     """Jeden stop trasy ułożonej przez Ziomka (z courier_plans.json). Odbiory i dostawy
+     przeplatane w kolejności przejazdu, z czasem proponowanym (`predicted_at`)."""
+     seq: int
++    stop_id: str                  # tożsamość fizycznego stopu z route_order
+     type: str                      # pickup | dropoff
+     order_id: str                  # reprezentant (przy scalonym odbiorze = pierwszy)
+     predicted_at: str | None       # kanoniczne żywe ETA (ISO UTC)
+@@ -173,6 +169,7 @@
+     delivery_address: str | None
+     done: bool                     # order już poza aktywnym workiem (prawdopodobnie dowiezione)
+     order_ids: list[str] = field(default_factory=list)  # wszystkie zlecenia tego stopu (odbiór kilku z 1 restauracji = 1 stop)
++    committed_by_order: dict[str, str | None] = field(default_factory=dict)
+     pred_source: str = ""          # PRED_SOURCES — powierzchnia niczego nie przelicza, tylko NAZYWA źródło
+ 
+ 
+@@ -270,102 +267,6 @@
+     return _parse_ts(order.get("first_seen"))
+ 
+ 
+-def _pickup_dt(b: BagOrder) -> datetime | None:
+-    return _iso(b.czas_kuriera_warsaw)
+-
+-
+-def _plan_pickup_clusters(plan_doc) -> dict:
+-    """{oid: (cluster_idx, pickup_rank)} dla ODBIORÓW z planu Ziomka. KOLEJNE odbiory (bez
+-    dostawy między nimi) = ten sam podjazd; pickup_rank = pozycja odbioru w planie. Pusty
+-    gdy brak planu. Lustro `route_podjazdy._plan_pickup_clusters` (apka) — jedno zachowanie
+-    na obu powierzchniach. Sedno „podjazdów wg planu": gdy Ziomek świadomie bundluje 2 odbiory
+-    (odbierz A, odbierz B, dowieź A, dowieź B) mimo umówionych czasów >PICKUP_MERGE_MIN od
+-    siebie, czysto-czasowe sklejanie rozbiłoby to na backtrack. Czytamy intencję planu."""
+-    out: dict = {}
+-    if not isinstance(plan_doc, dict):
+-        return out
+-    cidx = -1
+-    rnk = 0
+-    prev_pickup = False
+-    for s in (plan_doc.get("stops") or []):
+-        if not isinstance(s, dict):
+-            continue
+-        is_pickup = s.get("type") == "pickup"
+-        if is_pickup:
+-            oid = str(s.get("order_id"))
+-            if not prev_pickup:
+-                cidx += 1
+-            if oid not in out:
+-                out[oid] = (cidx, rnk)
+-                rnk += 1
+-        prev_pickup = is_pickup
+-    return out
+-
+-
+-def _pickup_runs(to_pick: list[BagOrder], plan_doc=None, plan_aware: bool = False) -> list[list[BagOrder]]:
+-    """Dziel odbiory na PODJAZDY: KOLEJNE (wg czasu odbioru) zlecenia w oknie ≤PICKUP_MERGE_MIN
+-    = jeden podjazd (kurier zbiera kilka restauracji za jednym wyjazdem). Przerwa większa niż
+-    okno = osobny kurs (np. 2× Chicago o 18:47 i 19:20 → dwa podjazdy). WEWNĄTRZ podjazdu
+-    odbiory grupowane po restauracji (ta sama restauracja „po sobie"), bloki wg najwcześniejszego
+-    odbioru — żeby kilka pozycji jednej restauracji nie było rozbite inną wciśniętą czasowo.
+-
+-    plan_aware + plan pokrywa WSZYSTKIE odbiory worka → podjazdy wg klastrów planu Ziomka
+-    (odbiory które skleja = jeden podjazd, niezależnie od progu czasowego; kolejność w podjeździe
+-    = kolejność odbiorów w planie). Inaczej → stary podział czasowy ≤PICKUP_MERGE_MIN."""
+-    SENTINEL = datetime.max.replace(tzinfo=WARSAW)
+-    clusters = _plan_pickup_clusters(plan_doc) if plan_aware else {}
+-    if clusters and all(b.order_id in clusters for b in to_pick):
+-        groups: dict = {}
+-        for b in to_pick:
+-            groups.setdefault(clusters[b.order_id][0], []).append(b)
+-        return [sorted(groups[c], key=lambda b: clusters[b.order_id][1]) for c in sorted(groups)]
+-    ordered = sorted(to_pick, key=lambda b: (_pickup_dt(b) or SENTINEL, b.order_id))
+-    runs: list[list[BagOrder]] = []
+-    prev: datetime | None = None
+-    for b in ordered:
+-        dt = _pickup_dt(b)
+-        if runs and prev is not None and dt is not None and (dt - prev) <= timedelta(minutes=PICKUP_MERGE_MIN):
+-            runs[-1].append(b)
+-        else:
+-            runs.append([b])
+-        if dt is not None:
+-            prev = dt
+-    out: list[list[BagOrder]] = []
+-    for run in runs:
+-        first_seen: dict[str, int] = {}
+-        for i, b in enumerate(run):
+-            first_seen.setdefault(b.restaurant or "", i)
+-        out.append(sorted(run, key=lambda b: (first_seen[b.restaurant or ""], _pickup_dt(b) or SENTINEL)))
+-    return out
+-
+-
+-def _order_from_plan_seq(plan_seq, by_oid):
+-    """Kolejność stopów WPROST z kanonu Ziomka (courier_plans) — gdy TRUST_CANON_ORDER ON.
+-    Niesione (picked_up) = tylko dostawa (brak węzła odbioru). Kolejne odbiory tej samej
+-    restauracji scalone w JEDEN stop (jedna liczba). Zwraca [(typ, [order_ids])] w kolejności
+-    planu (zawiera carried-first relax silnika: „odbierz po drodze zanim dowieziesz niesione")."""
+-    out: list[tuple[str, list[str]]] = []
+-    seen_drop: set[str] = set()
+-    for (typ, oid) in plan_seq:
+-        b = by_oid.get(oid)
+-        if b is None:
+-            continue
+-        if typ == "pickup":
+-            if b.status == "picked_up":          # carried = brak odbioru
+-                continue
+-            if out and out[-1][0] == "pickup" and \
+-                    by_oid[out[-1][1][-1]].restaurant == b.restaurant:
+-                out[-1][1].append(oid)           # scal odbiory tej samej restauracji (jedna wizyta)
+-            else:
+-                out.append(("pickup", [oid]))
+-        else:
+-            if oid in seen_drop:
+-                continue
+-            seen_drop.add(oid)
+-            out.append(("dropoff", [oid]))
+-    return out
+-
+-
+ def _resolve_invalidated_plan(plan, *, skip_invalidated: bool,
+                               trust_canon_when_covers: bool,
+                               drop_geometry: bool):
+@@ -407,20 +308,24 @@
+     if not bag:
+         return [], ""
+     try:
+-        order = _route_order.order_podjazdy(
++        route_stops = _route_order.build_route_stops(
+             bag, plan_doc,
+             plan_aware=flag("PLAN_AWARE_PODJAZDY"),
+             trust_canon=(trust_canon_ok and flag("TRUST_CANON_ORDER")))
+-        if not order:
++        if not route_stops:
+             return [], ""
+         out: list[PlanStop] = []
+-        for i, (t, oids) in enumerate(order):
++        for i, route_stop in enumerate(route_stops):
++            t = route_stop["kind"]
++            oids = route_stop["order_ids"]
+             m = meta_by_oid.get(oids[0], {})
+             out.append(PlanStop(
+-                seq=i + 1, type=t, order_id=oids[0], order_ids=list(oids),
++                seq=i + 1, stop_id=route_stop["stop_id"], type=t,
++                order_id=oids[0], order_ids=list(oids),
+                 predicted_at=None,
+                 restaurant=m.get("restaurant"), pickup_address=m.get("pickup_address"),
+                 delivery_address=m.get("delivery_address"), done=False,
++                committed_by_order=dict(route_stop.get("committed_by_order") or {}),
+                 pred_source=""))
+         return out, "route_order"
+     except Exception:

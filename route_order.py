@@ -8,14 +8,19 @@ VERBATIM z `route_podjazdy` (2026-06-18/28) — bajt-identyczna projekcja
 (patrz `eod_drafts/2026-07-07/S30A_routeorder_0diff.md`).
 
 Cel: zamknąć INV-SRC-ROUTE-ORDER konstrukcyjnie zamiast 4 kopii trzymanych flagami.
-Konsumenci migrują NA ten moduł (apka `courier_orders`, konsola `fleet_state`) za
-flagą `ENABLE_ROUTE_ORDER_UNIFIED` (OFF default). Panel = osobne repo/venv →
-importuje przez `sys.path` (jak dziś `route_podjazdy` w narzędziach parytetu);
-apka Kotlin NIE dzieli kodu — kontrakt cross-język = pin `PICKUP_MERGE_MIN=10`
-+ „konsumuj `stop_sequence` wprost".
+Konsumenci delegują do tego modułu (apka `courier_orders`, konsola
+`fleet_state`; zmiany w osobnych repo są atomowym elementem ADR-010).
+Panel importuje przez `sys.path`; apka Kotlin NIE dzieli kodu — kontrakt
+cross-język = `stop_id` + `order_ids` + committed per zlecenie.
 
 PURE — bez I/O, bez OSRM, bez datetime.now → deterministyczne. ETA / wrapping /
 floory / monotonic zostają PER-POWIERZCHNIA (prezentacja, nie kolejność).
+
+Kontrakt czasu odbioru (OWNER_CONFIRMED 2026-07-28): grupa fizycznego stopu
+NIE ma jednego czasu prezentowanego. Każde zlecenie zachowuje bajt-w-bajt własne
+``czas_kuriera_warsaw``. ``stop_id`` i ``order_ids`` opisują wyłącznie tożsamość
+i membership stopu. Downstream może osobno liczyć wyjazd ze stopu od
+``latest_ready``; nie wolno z tego syntetyzować committed pokazywanego zlecenia.
 
 Reguła PODJAZDÓW: odbiory dzielone na kursy (kolejne zlecenia w oknie
 ≤PICKUP_MERGE_MIN min = jeden podjazd), w kursie odbiory grupowane po
@@ -24,16 +29,16 @@ WSZYSTKIE dostawy (kolejność dostaw wg rangi planu Ziomka, inaczej wg czasu
 odbioru). Minimalizuje powroty po jedzenie (R-NO-RETURN) i przeplot.
 
 trust_canon (2026-06-28): gdy ON i plan Ziomka pokrywa CAŁY worek → renderuj
-kanon (courier_plans) VERBATIM przez `_canon_order_from_plan` = dokładnie to co
-konsola (zawiera carried-first relax silnika „odbierz po drodze zanim dowieziesz
-niesione"). Inaczej (flaga OFF / plan niepełny) → lokalne podjazdy carried-first.
+porządek kanonu przez `_canon_order_from_plan`, ale nigdy kosztem guardu
+rozrzutu committed. Inaczej (flaga OFF / plan niepełny) → lokalne podjazdy
+carried-first.
 """
 from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 WARSAW = ZoneInfo("Europe/Warsaw")
-PICKUP_MERGE_MIN = 10          # próg sklejania odbiorów w jeden podjazd (= fleet_state)
+PICKUP_MERGE_MIN = 10          # jedyny próg sklejania odbiorów w jeden podjazd
 _SENTINEL = datetime.max.replace(tzinfo=WARSAW)
 _BIG = 1 << 30
 
@@ -65,10 +70,9 @@ def _plan_pickup_clusters(plan_doc) -> dict:
     (bez dostawy między nimi) = ten sam podjazd (cluster_idx). pickup_rank = pozycja
     odbioru w planie (do wiernej kolejności wewnątrz podjazdu). Pusty gdy brak planu.
 
-    To jest sedno „podjazdów wg planu": Ziomek może świadomie zbundlować dwa odbiory
-    (odbierz A, odbierz B, dowieź A, dowieź B) mimo że ich umówione czasy są >PICKUP_MERGE_MIN
-    od siebie. Czysto-czasowe sklejanie rozbiłoby ten bundle na dwa kursy i wymusiło
-    powrót po jedzenie. Tu czytamy intencję planu zamiast zgadywać z czasu."""
+    Membership planu jest pierwszym warunkiem grupowania. Drugim, zawsze
+    egzekwowanym warunkiem jest rozrzut committed <= PICKUP_MERGE_MIN; sam klaster
+    planu nigdy nie omija guardu czasu."""
     out = {}
     if not isinstance(plan_doc, dict):
         return out
@@ -90,14 +94,39 @@ def _plan_pickup_clusters(plan_doc) -> dict:
     return out
 
 
+def stop_id_for(kind, order_ids) -> str:
+    """Deterministyczna tożsamość stopu z typu i membershipu, nigdy z koordynatów."""
+    normalized = sorted(dict.fromkeys(str(oid) for oid in order_ids))
+    return f"{kind}:{','.join(normalized)}"
+
+
+def _pickup_spread_ok(orders) -> bool:
+    """Czy wszystkie committed w grupie istnieją i mieszczą się w oknie 10 min."""
+    values = [_pickup_dt(order) for order in orders]
+    if not values or any(value is None for value in values):
+        return len(values) <= 1
+    return max(values) - min(values) <= timedelta(minutes=PICKUP_MERGE_MIN)
+
+
+def _split_by_pickup_spread(ordered):
+    """Podziel odbiory tak, by wewnętrzny spread każdej grupy był <= próg."""
+    runs = []
+    for order in ordered:
+        if runs and _pickup_spread_ok([*runs[-1], order]):
+            runs[-1].append(order)
+        else:
+            runs.append([order])
+    return runs
+
+
 def pickup_runs(to_pick, plan_doc=None, plan_aware=False):
     """Podziel odbiory na PODJAZDY (kursy) + grupuj po restauracji wewnątrz kursu.
     Wejście/wyjście: listy zleceń (obiekty BagOrder-podobne albo dict-y).
 
-    plan_aware + plan Ziomka pokrywa WSZYSTKIE odbiory worka → grupuj wg klastrów planu
-    (odbiory które Ziomek skleja = jeden podjazd, niezależnie od progu czasowego), a w
-    podjeździe kolejność = kolejność odbiorów w planie. Inaczej (brak/niepełny plan lub
-    flaga OFF) → stary podział wg okna ≤PICKUP_MERGE_MIN."""
+    plan_aware + plan Ziomka pokrywa WSZYSTKIE odbiory worka → zachowaj membership
+    i kolejność klastra planu, a następnie ZAWSZE podziel go tak, by wewnętrzny
+    rozrzut committed był <=PICKUP_MERGE_MIN. Inaczej (brak/niepełny plan lub
+    flaga OFF) → podział wg tego samego okna."""
     clusters = _plan_pickup_clusters(plan_doc) if plan_aware else {}
     use_plan = bool(clusters) and all(str(_attr(o, "order_id")) in clusters for o in to_pick)
     if use_plan:
@@ -105,20 +134,19 @@ def pickup_runs(to_pick, plan_doc=None, plan_aware=False):
         for o in to_pick:
             cidx = clusters[str(_attr(o, "order_id"))][0]
             groups.setdefault(cidx, []).append(o)
-        # podjazdy wg kolejności planu; w podjeździe odbiory wg pozycji odbioru w planie
-        return [sorted(groups[c], key=lambda o: clusters[str(_attr(o, "order_id"))][1])
-                for c in sorted(groups)]
+        # podjazdy wg kolejności planu; guard rozrzutu obowiązuje także tutaj
+        return [
+            split
+            for c in sorted(groups)
+            for split in _split_by_pickup_spread(
+                sorted(
+                    groups[c],
+                    key=lambda o: clusters[str(_attr(o, "order_id"))][1],
+                )
+            )
+        ]
     ordered = sorted(to_pick, key=lambda o: (_pickup_dt(o) or _SENTINEL, str(_attr(o, "order_id"))))
-    runs = []
-    prev = None
-    for o in ordered:
-        dt = _pickup_dt(o)
-        if runs and prev is not None and dt is not None and (dt - prev) <= timedelta(minutes=PICKUP_MERGE_MIN):
-            runs[-1].append(o)
-        else:
-            runs.append([o])
-        if dt is not None:
-            prev = dt
+    runs = _split_by_pickup_spread(ordered)
     out = []
     for run in runs:
         first_seen = {}
@@ -146,7 +174,7 @@ def plan_drop_rank(plan_doc) -> dict:
 
 def _canon_order_from_plan(bag, plan_doc):
     """Kolejność stopów WPROST z kanonu Ziomka (courier_plans) — LUSTRO konsoli
-    `fleet_state._order_from_plan_seq`. Renderuje sekwencję planu verbatim:
+    `fleet_state` (który deleguje do tego modułu). Renderuje porządek planu:
     niesione (picked_up) = tylko dostawa (pomiń węzeł odbioru), kolejne odbiory tej
     samej restauracji scalone w JEDEN stop (jedna liczba), dostawy dedup.
     Zawiera carried-first relax silnika („odbierz po drodze zanim dowieziesz niesione").
@@ -173,7 +201,8 @@ def _canon_order_from_plan(bag, plan_doc):
             if _attr(o, "status") == "picked_up":      # carried = brak odbioru
                 continue
             if out and out[-1][0] == "pickup" and \
-                    _attr(by_oid[out[-1][1][-1]], "restaurant") == _attr(o, "restaurant"):
+                    _attr(by_oid[out[-1][1][-1]], "restaurant") == _attr(o, "restaurant") and \
+                    _pickup_spread_ok([by_oid[item] for item in out[-1][1]] + [o]):
                 out[-1][1].append(oid)                  # scal odbiory tej samej restauracji
             else:
                 out.append(("pickup", [oid]))
@@ -203,9 +232,9 @@ def order_podjazdy(bag, plan_doc=None, plan_aware=False,
          czas_kuriera_warsaw. plan_doc: dict planu Ziomka (opcjonalny).
     plan_aware: gdy True i plan pokrywa worek, podjazdy idą wg klastrów planu
          (patrz pickup_runs) — koordynator/kurier widzą bundle Ziomka, nie podział czasowy.
-    trust_canon: gdy True i plan Ziomka pokrywa CAŁY worek → renderuj kanon
-         (courier_plans) VERBATIM (lustro konsoli `_order_from_plan_seq`), z carried-first
-         relaxem silnika. Inaczej → lokalne podjazdy carried-first (niżej). Flaga = rollback.
+    trust_canon: gdy True i plan Ziomka pokrywa CAŁY worek → zachowaj porządek
+         courier_plans z carried-first relaxem silnika, lecz zawsze zastosuj
+         time-spread guard. Inaczej → lokalne podjazdy carried-first.
     """
     if not bag:
         return []
@@ -242,6 +271,37 @@ def order_podjazdy(bag, plan_doc=None, plan_aware=False,
 # symbolem (apka/golden/narzędzia importują go przez route_podjazdy) — `order_route`
 # to czytelniejsza nazwa dla nowych konsumentów. Ta sama funkcja, zero kopii.
 order_route = order_podjazdy
+
+
+def build_route_stops(bag, plan_doc=None, *, plan_aware=False,
+                      trust_canon=False) -> list[dict]:
+    """Kanoniczne stopy z tożsamością, membershipem i committed per zlecenie.
+
+    Nie istnieje ``committed_at`` stopu. Dla pickupów jedynym kontraktem
+    prezentacyjnym jest ``committed_by_order`` skopiowane bez transformacji
+    z każdego zlecenia. Dropoff nie niesie czasu odbioru.
+    """
+    by_oid = {str(_attr(order, "order_id")): order for order in bag}
+    stops = []
+    for kind, raw_order_ids in order_podjazdy(
+        bag,
+        plan_doc,
+        plan_aware=plan_aware,
+        trust_canon=trust_canon,
+    ):
+        order_ids = [str(order_id) for order_id in raw_order_ids]
+        stop = {
+            "stop_id": stop_id_for(kind, order_ids),
+            "kind": kind,
+            "order_ids": order_ids,
+        }
+        if kind == "pickup":
+            stop["committed_by_order"] = {
+                order_id: _attr(by_oid[order_id], "czas_kuriera_warsaw")
+                for order_id in order_ids
+            }
+        stops.append(stop)
+    return stops
 
 
 def repair_dropoffs_after_pickups(seq, *, kind_key="kind", id_key="order_id"):
@@ -285,5 +345,21 @@ def build_stop_sequence(bag, plan_doc=None, *, plan_aware=False,
     Rozwija zgrupowane odbiory (jeden stop = kilka order_ids) na kroki per-zlecenie,
     dokładnie jak dziś gałąź `console_podjazdy` w apce (courier_orders:1145). ETA /
     dwell / coords dokleja caller osobno (prezentacja per-powierzchnia)."""
-    order = order_podjazdy(bag, plan_doc, plan_aware=plan_aware, trust_canon=trust_canon)
-    return [{"order_id": str(oid), "kind": typ} for (typ, oids) in order for oid in oids]
+    sequence = []
+    for stop in build_route_stops(
+        bag,
+        plan_doc,
+        plan_aware=plan_aware,
+        trust_canon=trust_canon,
+    ):
+        for order_id in stop["order_ids"]:
+            step = {
+                "order_id": order_id,
+                "kind": stop["kind"],
+                "stop_id": stop["stop_id"],
+                "order_ids": list(stop["order_ids"]),
+            }
+            if stop["kind"] == "pickup":
+                step["committed_at"] = stop["committed_by_order"][order_id]
+            sequence.append(step)
+    return sequence

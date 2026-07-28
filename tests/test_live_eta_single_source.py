@@ -13,12 +13,14 @@ ROUTE = {
     "start": [53.12, 23.15],
     "stops": [
         {
+            "stop_id": "pickup:101",
             "kind": "pickup",
             "order_ids": ["101"],
             "coord": [53.13, 23.16],
             "floor_at": ["2026-07-23T12:04:00Z"],
         },
         {
+            "stop_id": "dropoff:101",
             "kind": "dropoff",
             "order_ids": ["101"],
             "coord": [53.14, 23.17],
@@ -86,6 +88,7 @@ def test_one_physical_stop_gives_same_eta_to_every_order_at_address():
         start=[53.12, 23.15],
         stops=[
             {
+                "stop_id": "dropoff:101,102",
                 "kind": "dropoff",
                 "order_ids": ["101", "102"],
                 "coord": [53.14, 23.17],
@@ -190,6 +193,10 @@ def test_authoritative_builder_uses_plan_order_state_floors_and_gps(monkeypatch)
     )
     assert routes[0]["start"] == (53.12, 23.15)
     assert [stop["kind"] for stop in routes[0]["stops"]] == ["pickup", "dropoff"]
+    assert [stop["stop_id"] for stop in routes[0]["stops"]] == [
+        "pickup:101",
+        "dropoff:101",
+    ]
     assert routes[0]["stops"][0]["floor_at"] == [
         "2026-07-23T12:04:00Z",
         "2026-07-23T12:02:00Z",
