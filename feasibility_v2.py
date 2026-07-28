@@ -461,6 +461,7 @@ def check_feasibility_v2(
     schedule_source_stale: bool = False,  # D2 (audyt 2026-05-28) — grafik STALE → soft-degrade Gate 1
     pos_from_store: bool = False,  # Z-06 (audyt 2026-06-10) — pozycja odtworzona z last-known-pos store (≤25 min), NIE świeży fix tego ticku
     origin_travel: Optional[OriginTravelEstimate] = None,
+    shadow_probe: bool = False,  # S2: pełna feasibility bez pobocznych writerów shadow
 ) -> Tuple[str, str, Dict, Optional[RoutePlanV2]]:
     if now is None:
         now = datetime.now(timezone.utc)
@@ -986,7 +987,7 @@ def check_feasibility_v2(
         log.warning(f"OBJ_METRICS_FAIL {type(_objm_e).__name__}: {_objm_e}")
     try:
         from dispatch_v2 import obj_replay_capture as _orc
-        if origin_travel is None:
+        if origin_travel is None and not shadow_probe:
             _orc.capture(courier_pos, bag, new_order, now, _dwell_pickup,
                      _dwell_dropoff, courier_tier,
                      getattr(new_order, "order_id", None))
@@ -1080,6 +1081,22 @@ def check_feasibility_v2(
             "address_id": getattr(o, "address_id", None),
             "order_type": getattr(o, "order_type", None),
         })
+    # A (noc 28.07): JEDEN evaluator physical-possession→handoff. Flaga OFF
+    # nie tworzy pola i nie uruchamia dodatkowej arytmetyki (parytet rekordu).
+    # S2 i Alarm konsumują dokładnie ten obiekt; nie re-derywują proxy.
+    if C.decision_flag("ENABLE_CARRY_CANON_V2"):
+        from dispatch_v2.core import carry_freshness as _carry
+        _paczka_exempt_on = C.flag(
+            "ENABLE_PACZKA_R6_THERMAL_EXEMPT",
+            getattr(C, "ENABLE_PACZKA_R6_THERMAL_EXEMPT", False),
+        )
+        metrics["carry_eval"] = _carry.evaluate_plan(
+            plan,
+            list(bag) + [new_order],
+            include_order=lambda order: not (
+                _paczka_exempt_on and _is_paczka_sim(order)
+            ),
+        )
     _paczki_only_mix = (
         (C.ENABLE_R_PACZKI_FLEX or C.flag("ENABLE_R_PACZKI_FLEX", False))
         and _is_paczka_sim(new_order)
@@ -1304,7 +1321,8 @@ def check_feasibility_v2(
     # Picked_up orders są tracked ale NIE rejected (kurier kończy w drodze).
     if r6_per_order_violations:
         worst_oid, worst_bt = max(r6_per_order_violations, key=lambda v: v[1])
-        if C.flag("ENABLE_R6_BREACH_SHADOW_LOG", False):
+        if (not shadow_probe
+                and C.flag("ENABLE_R6_BREACH_SHADOW_LOG", False)):
             _emit_r6_breach_shadow(new_order, worst_oid, worst_bt, r6_per_order_violations, metrics,
                                    bag_total=len(bag) + 1, now=now, tier=courier_tier)
         return (
@@ -1380,7 +1398,7 @@ def check_feasibility_v2(
     metrics["c2_violations_count"] = len(c2_details["violations"])
     metrics["c2_per_order_data_available"] = c2_details["per_order_data_available"]
 
-    if ENABLE_C2_SHADOW_LOG and not c2_passes:
+    if ENABLE_C2_SHADOW_LOG and not shadow_probe and not c2_passes:
         _emit_c2_shadow_diff_event(
             current_verdict="MAYBE",
             c2_passes=c2_passes,

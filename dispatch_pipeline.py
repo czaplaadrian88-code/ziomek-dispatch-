@@ -9,7 +9,8 @@ Verdicts:
     SKIP    — no candidate with any plan (fleet empty / all fast-filter rejections).
               R29 says never hang; SKIP always alerts Adrian.
 """
-from dataclasses import dataclass, field
+import copy
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional, Tuple, Any
 
@@ -3549,6 +3550,13 @@ class PipelineResult:
     # T5: fail-closed dowody siedmiu predykatów karty AUTO. Producent żyje
     # wyłącznie w shadow_dispatcher.process_event i dopina blok po decyzji.
     authority_scope: Optional[Dict[str, Any]] = None
+    # Noc 28.07: addytywne artefakty drabiny. None przy flagach OFF, więc
+    # serializer nie dodaje kluczy i zachowuje baseline rekordu.
+    carry_eval: Optional[Dict[str, Any]] = None
+    alarm_certificate: Optional[Dict[str, Any]] = None
+    strategy2_probe: Optional[Dict[str, Any]] = None
+    order_created_at: Optional[str] = None
+    hard35_enforcement: Optional[Dict[str, Any]] = None
 
 
 # ─── FAIL-04: prep-variance anomaly (A1 anomaly block, shadow-first) ───
@@ -4081,6 +4089,11 @@ def _bag_dict_to_ordersim(d: dict) -> OrderSim:
     sim.address_id = d.get("address_id")
     sim.order_type = d.get("order_type")
     sim.created_at_utc = d.get("created_at_utc") or d.get("created_at")
+    # Carry canon v2: fizyczne eventy są przyszłym kontraktem. Dzisiejszy
+    # picked_up_at pozostaje jawnym proxy; pola przenosimy addytywnie, aby
+    # podpięcie prawdziwego sensora nie wymagało nowego evaluatora.
+    sim.physical_possession_at = d.get("physical_possession_at")
+    sim.physical_possession_source = d.get("physical_possession_source")
     return sim
 
 
@@ -4934,6 +4947,9 @@ def _assess_order_impl(
     new_order.address_id = order_event.get("address_id")
     new_order.order_type = order_event.get("order_type")
     new_order.created_at_utc = order_event.get("created_at_utc") or order_event.get("created_at")
+    new_order.physical_possession_at = order_event.get("physical_possession_at")
+    new_order.physical_possession_source = order_event.get(
+        "physical_possession_source")
 
     # Traffic-aware fallback speed dla estymat ETA (zgodne z P0.5 common.py)
     fleet_speed_kmh = get_fallback_speed_kmh(now)
@@ -5323,6 +5339,118 @@ def _assess_order_impl(
         if _af_single_source_on:
             _l4_floor_candidate_eta(c)
 
+    # B — kontrfaktyczny certyfikat bieżącej puli. Czysty rachunek powstaje
+    # przed selekcją z PEŁNEJ puli, nie z samego zwycięzcy ani z EWMA.
+    _alarm_certificate = None
+    if C.decision_flag("ENABLE_ALARM_CERTIFICATE_SHADOW"):
+        try:
+            from dispatch_v2.core import alarm_certificate as _alarm
+            _alarm_certificate = _alarm.build(
+                candidates, decision_order_id=order_id, now=now)
+        except Exception as _alarm_exc:
+            log.warning(
+                "ALARM_CERTIFICATE build fail-safe order=%s: %s: %s",
+                order_id, type(_alarm_exc).__name__, _alarm_exc,
+            )
+
+    # C — sonda S2 wyłącznie po zerze feasible S1. Każdy slot przechodzi przez
+    # TEN SAM core.candidates/check_feasibility_v2 na CAŁEJ flocie. Context
+    # `shadow_probe` wycina pomocnicze writery/capture; wynik nie mutuje decyzji.
+    _strategy2_probe = None
+    if (C.decision_flag("ENABLE_STRATEGY2_PROBE_SHADOW")
+            and not any(c.feasibility_verdict == "MAYBE" for c in candidates)):
+        try:
+            from dispatch_v2.core import strategy2_probe as _s2
+            _created = parse_panel_timestamp(
+                getattr(new_order, "created_at_utc", None))
+            if not C.decision_flag("ENABLE_CARRY_CANON_V2"):
+                _strategy2_probe = {
+                    "schema": _s2.SCHEMA,
+                    "status": "HOLD",
+                    "order_id": order_id,
+                    "found": False,
+                    "reason": "carry_canon_v2_disabled",
+                }
+            elif _created is None or pickup_ready_at is None:
+                _strategy2_probe = {
+                    "schema": _s2.SCHEMA,
+                    "status": "UNEVALUABLE",
+                    "order_id": order_id,
+                    "found": False,
+                    "reason": "missing_created_or_declared_ready",
+                }
+            else:
+                _s2_fleet_index = {
+                    str(cid): (cid, cs) for cid, cs in fleet_snapshot.items()
+                }
+                def _evaluate_s2_slot(_slot, _fleet_ids):
+                    _future_order = copy.copy(new_order)
+                    _future_order.pickup_ready_at = _slot
+                    _future_event = dict(order_event)
+                    _future_event["pickup_at_warsaw"] = _slot.isoformat()
+                    _future_event["czas_kuriera_warsaw"] = _slot.isoformat()
+                    _future_ctx = replace(
+                        _eval_ctx,
+                        order_event=_future_event,
+                        pickup_at=_slot,
+                        pickup_ready_at=_slot,
+                        new_order=_future_order,
+                        k07_prefetched_ck={},
+                        timing_trace=None,
+                        position_model_variants=None,
+                        position_model_variants_lock=None,
+                        shadow_probe=True,
+                    )
+                    _feasible_cids = []
+                    for _cid in _fleet_ids:
+                        _entry = _s2_fleet_index.get(str(_cid))
+                        if _entry is None:
+                            continue
+                        _raw_cid, _cs = _entry
+                        try:
+                            _candidate = _candidates.eval_courier(
+                                _future_ctx, _raw_cid, _cs)
+                        except Exception as _s2_candidate_exc:
+                            log.warning(
+                                "STRATEGY2 candidate fail-safe order=%s cid=%s "
+                                "slot=%s: %s",
+                                order_id, _cid, _slot.isoformat(),
+                                type(_s2_candidate_exc).__name__,
+                            )
+                            continue
+                        if (_candidate is None
+                                or _candidate.feasibility_verdict != "MAYBE"):
+                            continue
+                        _carry_eval = (
+                            getattr(_candidate, "metrics", None) or {}
+                        ).get("carry_eval")
+                        if (isinstance(_carry_eval, dict)
+                                and _carry_eval.get("status") == "EVALUATED"
+                                and _carry_eval.get("all_le_35") is True):
+                            _feasible_cids.append(str(_cid))
+                    return _feasible_cids
+
+                _strategy2_probe = _s2.probe(
+                    order_id=order_id,
+                    created_at=_created,
+                    declared_ready_at=pickup_ready_at,
+                    now=now,
+                    fleet_ids=list(_s2_fleet_index),
+                    evaluate_slot=_evaluate_s2_slot,
+                )
+        except Exception as _s2_exc:
+            _strategy2_probe = {
+                "schema": "strategy2_probe.v1",
+                "status": "INSTRUMENT_ERROR",
+                "order_id": order_id,
+                "found": False,
+                "reason": type(_s2_exc).__name__,
+            }
+            log.warning(
+                "STRATEGY2 probe fail-safe order=%s: %s: %s",
+                order_id, type(_s2_exc).__name__, _s2_exc,
+            )
+
     # Feasible (MAYBE) → rank by score.
     # R2 Bartek Gold Standard tie-breaker: przy równym score, preferuj
     # kandydata o niższej corridor deviation (bundle_level3_dev).
@@ -5341,6 +5469,7 @@ def _assess_order_impl(
             v328_fail_causes=_v328_fail_causes,
             plan_versions=_plan_versions_snapshot,
             position_model_mode=("explicit" if _explicit_unknown_effective else "legacy"),
+            alarm_certificate=_alarm_certificate,
         )
     # C7 normal-path instrument: snapshot PEŁNEJ ocenionej puli dokładnie tutaj,
     # przed kanonicznym select_and_emit i jego top[:16]. Kill-switch hot, default
@@ -5383,4 +5512,25 @@ def _assess_order_impl(
             }
     if _timing_trace is not None:
         _timing_trace.record_since("selection_wall_ms", _selection_started)
+    # Scope certyfikatu wiąże go z dokładnym workiem wybranego planu. Bez
+    # scope plan-recheck odrzuci snapshot i pozostanie strict 35.
+    if _alarm_certificate is not None:
+        try:
+            from dispatch_v2.core import alarm_certificate as _alarm
+            _scope = [order_id]
+            if _selected.best is not None and _selected.best.plan is not None:
+                _scope.extend(list(_selected.best.plan.sequence or []))
+            _alarm_certificate = _alarm.bind_scope(
+                _alarm_certificate, _scope)
+        except Exception:
+            _alarm_certificate = None
+    _selected.alarm_certificate = _alarm_certificate
+    _selected.strategy2_probe = _strategy2_probe
+    if C.decision_flag("ENABLE_STRATEGY2_PROBE_SHADOW"):
+        _selected.order_created_at = getattr(
+            new_order, "created_at_utc", None)
+    if _selected.best is not None:
+        _selected.carry_eval = (
+            getattr(_selected.best, "metrics", None) or {}
+        ).get("carry_eval")
     return _selected

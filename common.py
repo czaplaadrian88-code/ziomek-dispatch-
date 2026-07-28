@@ -69,6 +69,14 @@ ENABLE_LEX_WINDOW_LEDGER_V2 = False
 # i MUSI zostac przeniesiona do ETAP4_DECISION_FLAGS.
 ENABLE_LOADGOV_SNAPSHOT_PUBLISH = False
 
+# Noc 2026-07-28 — drabina eskalacji S1→S2→S3. Wszystkie cztery przełączniki
+# startują OFF i są w ETAP4_DECISION_FLAGS, bo nawet shadow producer stanie się
+# wejściem decyzji po odczycie certyfikatu przez plan-recheck/selection.
+ENABLE_CARRY_CANON_V2 = False
+ENABLE_ALARM_CERTIFICATE_SHADOW = False
+ENABLE_STRATEGY2_PROBE_SHADOW = False
+ENABLE_HARD35_ENFORCE = False
+
 # ─── K05 refaktor (2026-07-06, ADR-R01): FlagSnapshot per tick ───
 # Problem: flagi czytane z dysku w TRAKCIE decyzji (nawet z perf-lazy TTL 0,25 s
 # odświeżenie może wypaść W ŚRODKU ticku) → zmiana flags.json mid-tick daje
@@ -270,6 +278,13 @@ ETAP4_DECISION_FLAGS = (
     # wybranego kuriera i puli w chwili decyzji/commitu planu. Log-only,
     # wszystkie wyjątki fail-safe; brak klucza flags.json = OFF.
     "ENABLE_DECISION_ETA_LOG",
+    # Drabina S1→S2→S3 (noc 28.07): jeden carry, kontrfaktyczny Alarm,
+    # pełnoflotowa sonda slotów i ostatni hak egzekucji. Default OFF; flippy
+    # wyłącznie sekwencyjnie po danych i ACK ownera.
+    "ENABLE_CARRY_CANON_V2",
+    "ENABLE_ALARM_CERTIFICATE_SHADOW",
+    "ENABLE_STRATEGY2_PROBE_SHADOW",
+    "ENABLE_HARD35_ENFORCE",
     # R3 LIVE-ETA SOURCES (2026-07-28): addytywny kontrakt per-stop
     # LIVE(gps<=120s)/WARM(last_event<=180s)/PLANNED + izolacja bad-coords.
     # OFF = legacy snapshot bajt-w-bajt. Flip dopiero po porannym ACK ownera

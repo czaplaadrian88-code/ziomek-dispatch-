@@ -22,6 +22,7 @@ import json
 import math
 import os
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -33,6 +34,7 @@ from dispatch_v2.core import carry_freshness as CF
 from dispatch_v2.core import lex_window_guards as G
 from dispatch_v2.core import lex_window_ledger as LWL
 from dispatch_v2.core import loadgov_snapshot as LG
+from dispatch_v2.core import alarm_certificate as AC
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures",
                        "wb2_incident_492_20260727T160912Z.json")
@@ -475,7 +477,22 @@ def test_G5_ratchet_bez_certyfikatu_alarmu_nigdy_loose(tmp_path):
 
 def test_cap_alarmowy_40_tylko_z_certyfikatem():
     assert G.load_thresholds().carry_cap_min == 35.0
-    assert G.load_thresholds(alarm_certificate={"id": "x"}).carry_cap_min == 40.0
+    candidate = SimpleNamespace(
+        courier_id="c37",
+        feasibility_verdict="NO",
+        feasibility_reason="R6_per_order_>35min",
+        metrics={"carry_eval": {
+            "schema": "carry_eval.v1",
+            "status": "EVALUATED",
+            "max_carry_min": 37.0,
+            "unknown_count": 0,
+        }},
+    )
+    cert = AC.build(
+        [candidate], decision_order_id="o", now=datetime.now(timezone.utc))
+    assert G.load_thresholds(alarm_certificate=cert).carry_cap_min == 40.0
+    # Mutation/forgery ratchet: dowolny dict już nie otwiera capa.
+    assert G.load_thresholds(alarm_certificate={"id": "x"}).carry_cap_min == 35.0
 
 
 # ─────────────────────── 9. G4 — jedna granica commitu ────────────────────────

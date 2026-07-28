@@ -110,8 +110,9 @@ def window_tol_min(now: datetime, *, snapshot: Optional[Dict[str, Any]] = None,
     threshold = float(getattr(_C, "OBJ_COMMITTED_PICKUP_LOAD_THRESHOLD", 4.5))
     if snapshot is None:
         return strict, "strict_no_snapshot"
-    if alarm_certificate is None:
-        # EWMA sama NIE uprawnia do poluzowania (OD-04) — to jest ta zapora.
+    if not alarm_certified(alarm_certificate):
+        # EWMA ani dowolny dict NIE uprawniają do poluzowania (OD-04).
+        # Ta sama walidacja kontrfaktu otwiera carry-cap i tolerancję okna.
         return strict, "strict_no_alarm_certificate"
     try:
         ewma = float(snapshot.get("ewma"))
@@ -128,4 +129,10 @@ def alarm_certified(alarm_certificate: Optional[Dict[str, Any]] = None) -> bool:
     Osobna funkcja, bo cap świeżości i tolerancja okna to DWIE różne polityki
     o WSPÓLNEJ przesłance — a przesłanka ma mieć jedno miejsce w kodzie.
     """
-    return alarm_certificate is not None
+    if alarm_certificate is None:
+        return False
+    try:
+        from dispatch_v2.core import alarm_certificate as _alarm
+        return _alarm.is_alarm(alarm_certificate)
+    except Exception:
+        return False

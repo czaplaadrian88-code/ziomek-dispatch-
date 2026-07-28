@@ -77,6 +77,9 @@ class EvalContext:
     # explicit odrzucony przez legacy BEZ wkładania go do głównej puli.
     position_model_variants: Optional[Dict[str, Dict[str, Any]]] = None
     position_model_variants_lock: Any = None
+    # S2: kontrfaktyczna pełnoflotowa ewaluacja nie może pisać pomocniczych
+    # ledgerów/capture ani invalidować zapisanego planu.
+    shadow_probe: bool = False
 
 
 def _origin_shadow(candidate, position, *, explicit: bool) -> dict:
@@ -177,6 +180,7 @@ def eval_courier_inner(ctx: EvalContext, cid, cs):
     loadgov_orders = ctx.loadgov_orders
     loadgov_couriers = ctx.loadgov_couriers
     _plan_versions = ctx.plan_versions
+    shadow_probe = ctx.shadow_probe
     _plan_expected_version = (
         _plan_versions.get(str(cid), 0) if _plan_versions is not None else None
     )
@@ -397,7 +401,7 @@ def eval_courier_inner(ctx: EvalContext, cid, cs):
     if bag_sim:
         try:
             from dispatch_v2.common import ENABLE_SAVED_PLANS_READ
-            if ENABLE_SAVED_PLANS_READ:
+            if ENABLE_SAVED_PLANS_READ and not shadow_probe:
                 from dispatch_v2 import plan_manager as _pm_read
                 _bag_oids = {str(o.order_id) for o in bag_sim}
                 _saved = _pm_read.load_plan(
@@ -475,6 +479,7 @@ def eval_courier_inner(ctx: EvalContext, cid, cs):
         schedule_source_stale=getattr(cs, "schedule_source_stale", False),  # D2 (audyt 2026-05-28)
         pos_from_store=getattr(cs, "pos_from_store", False),  # Z-06 (audyt 2026-06-10) — store-rescue to nie świeży fix
         origin_travel=origin_travel,
+        shadow_probe=shadow_probe,
     )
 
     # F1.8f hard guard: kurier którego zmiana kończy się PRZED pickup_ready_at
@@ -494,7 +499,7 @@ def eval_courier_inner(ctx: EvalContext, cid, cs):
     # V3.19c sub B: observational read-shadow diff log. Zero wpływu na
     # scoring path — tylko zapisuje różnicę saved vs fresh plan sequence
     # dla orderów w bagu. Flag ENABLE_SAVED_PLANS_READ_SHADOW default True.
-    if plan is not None and plan.sequence and bag_sim:
+    if plan is not None and plan.sequence and bag_sim and not shadow_probe:
         try:
             from dispatch_v2 import plan_manager as _pm_shadow
             _active_bag = {str(o.order_id) for o in bag_sim}

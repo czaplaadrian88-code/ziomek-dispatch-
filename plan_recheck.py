@@ -596,6 +596,7 @@ from dispatch_v2.core import lex_window_ledger as _lex_ledger  # noqa: E402
 from dispatch_v2.core import carry_freshness as _cfresh  # noqa: E402
 from dispatch_v2.core import lex_window_guards as _lex_guards  # noqa: E402
 from dispatch_v2.core import loadgov_snapshot as _loadgov_snap  # noqa: E402
+from dispatch_v2.core import alarm_certificate as _alarm_cert  # noqa: E402
 
 
 def _lex_pending_attempt(ledger_ctx, attempt_id) -> None:
@@ -1419,7 +1420,14 @@ def _g4_final_validator(stops, envelope_stops, orders_state, now):
 
         # Cap z TEGO SAMEGO źródła co G2 — walidator i guard nie mogą mieć
         # własnych sufitów tej samej prawdy.
-        cap = _lex_guards.load_thresholds().carry_cap_min
+        _scope = {
+            str(s.get("order_id")) for s in stops
+            if s.get("order_id") not in (None, "")
+        }
+        _certificate = _alarm_cert.read(
+            now, scope_order_ids=_scope)
+        cap = _lex_guards.load_thresholds(
+            alarm_certificate=_certificate).carry_cap_min
         env = _g4_carry_map(envelope_stops, orders_state, now)
         fin = _g4_carry_map(stops, orders_state, now)
         for oid, carry in fin.items():
@@ -2157,14 +2165,23 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
     _win_tol, _g5_src = LEX_WINDOW_TOL_MIN, "module_const"
     if ENABLE_LEX_WINDOW_GUARDS_V2:
         try:
+            _alarm_scope = set(dpos)
+            _alarm_certificate = _alarm_cert.read(
+                now, scope_order_ids=_alarm_scope)
             _snap, _lg_meta = _loadgov_snap.read_snapshot(now)
-            _win_tol, _g5_src = _loadgov_snap.window_tol_min(now, snapshot=_snap)
+            _win_tol, _g5_src = _loadgov_snap.window_tol_min(
+                now, snapshot=_snap,
+                alarm_certificate=_alarm_certificate)
         except Exception as e:
             _log.warning("loadgov snapshot fail: %s: %s", type(e).__name__, e)
             _lg_meta = {"source": "error"}
+            _alarm_certificate = None
     else:
+        _alarm_certificate = None
         _lg_meta = {k: None for k in ("source", "age_s", "fingerprint", "ewma",
                                       "observed_at", "valid_until", "generation")}
+    _alarm_cap = _lex_guards.load_thresholds(
+        alarm_certificate=_alarm_certificate).carry_cap_min
 
     def _metrics(perm):
         t = 0.0; drive = 0.0; prev = 0
@@ -2201,7 +2218,7 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
                 bp = pick[ppos[oid]] if oid in ppos else None
                 bag = _r6_thermal_bag_min(dt, bp,
                                           committed_rel[ppos[oid]] if oid in ppos else None, _ra_on)
-            if bag is not None and bag > 35.0:
+            if bag is not None and bag > _alarm_cap:
                 breaches += 1
         return drive, deliv, pick, n_viol, breaches, maxcarry, legs
 
@@ -2209,14 +2226,15 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
     if base is None:
         return seq
     bdrive, bdeliv, bpick, bviol, bbreach, bcarry, blegs = base
-    carry_cap = max(35.0, bcarry)
+    carry_cap = max(_alarm_cap, bcarry)
     # ── WB2: guardy warunkowe (spec docs/WB2_CONDITIONAL_GUARDS.md) ──
     # OFF ⇒ ani jedna linia niżej nie zmienia zachowania (legacy carry_cap +
     # delay_tol na samych `assigned`). ON ⇒ te dwa filtry ZASTĘPUJE jeden
     # spójny zestaw G1/G2/G3 z wyjątkiem D1 — nie dokładamy trzeciego
     # równoległego progu do tej samej prawdy.
     _guards_on = bool(ENABLE_LEX_WINDOW_GUARDS_V2)
-    _thr = _lex_guards.load_thresholds() if _guards_on else None
+    _thr = (_lex_guards.load_thresholds(
+        alarm_certificate=_alarm_certificate) if _guards_on else None)
     _bfacts = _facts_of(bdeliv, dwell, kind_pick, oid_of, carried,
                         carried_age, bviol, bdrive) if _guards_on else None
     _guard_rej = _lex_guards.empty_rejection_counters() if _guards_on else {}

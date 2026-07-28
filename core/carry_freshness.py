@@ -38,11 +38,13 @@ sam predykat (Sol RUN3-b: „nie implementować dwóch niezależnych checkerów"
 """
 from __future__ import annotations
 
-from typing import Dict, Iterable, Optional
+from datetime import datetime, timezone
+from typing import Any, Callable, Dict, Iterable, Optional
 
 #: Handoff = przyjazd + dwell dostawy. Ratchet: test WB2 czerwienieje, jeśli
 #: którakolwiek warstwa wróci do liczenia świeżości na czasie przyjazdu.
 HANDOFF_INCLUDES_DROPOFF_DWELL = True
+CARRY_EVAL_SCHEMA = "carry_eval.v1"
 
 
 def handoff_min(arrival_min: Optional[float],
@@ -109,3 +111,102 @@ def worst_delta(baseline_by_order: Dict[str, Optional[float]],
         if worst is None or d > worst:
             worst_oid, worst = oid, d
     return worst_oid, worst
+
+
+def _as_utc(value: Any) -> Optional[datetime]:
+    """Datetime/ISO -> aware UTC. Brak lub zły format pozostaje niewiedzą."""
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    else:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _possession(order: Any, plan: Any) -> tuple[Optional[datetime], str, str]:
+    """Jedyny resolver possession dla carry v2.
+
+    `bound` wymaga jawnego fizycznego eventu. Klik `picked_up_at` oraz
+    projektowany pickup są zawsze nazwane `proxy`; nigdy nie awansują do
+    ground-truth przez samą nazwę pola.
+    """
+    physical = _as_utc(getattr(order, "physical_possession_at", None))
+    physical_source = str(
+        getattr(order, "physical_possession_source", "") or ""
+    ).strip()
+    if physical is not None and physical_source:
+        return physical, "bound", physical_source
+
+    picked = _as_utc(getattr(order, "picked_up_at", None))
+    if picked is not None:
+        return picked, "proxy", "picked_up_at_click"
+
+    oid = str(getattr(order, "order_id", "") or "")
+    planned = _as_utc((getattr(plan, "pickup_at", None) or {}).get(oid))
+    if planned is not None:
+        return planned, "proxy", "planned_pickup_at"
+    return None, "proxy", "missing_possession"
+
+
+def evaluate_plan(
+    plan: Any,
+    orders: Iterable[Any],
+    *,
+    include_order: Optional[Callable[[Any], bool]] = None,
+) -> Dict[str, Any]:
+    """Wersjonowany, per-order pomiar ``handoff - possession``.
+
+    `plan.predicted_delivered_at` jest kanonicznym handoffem symulatora: czas
+    zapisuje się dopiero PO dwellu dostawy. Funkcja nie zna progów polityki
+    poza dwoma wymaganymi klasyfikatorami 35/40 i niczego nie zapisuje.
+    """
+    rows = []
+    unknown = 0
+    evaluated = []
+    drops = getattr(plan, "predicted_delivered_at", None) or {}
+    for order in orders:
+        if include_order is not None and not include_order(order):
+            continue
+        oid = str(getattr(order, "order_id", "") or "")
+        handoff = _as_utc(drops.get(oid))
+        possession, binding, possession_source = _possession(order, plan)
+        value = None
+        if handoff is not None and possession is not None:
+            value = round(
+                (handoff - possession).total_seconds() / 60.0, 2
+            )
+            evaluated.append(value)
+        else:
+            unknown += 1
+        rows.append({
+            "order_id": oid,
+            "carry_min": value,
+            "le_35": None if value is None else value <= 35.0,
+            "le_40": None if value is None else value <= 40.0,
+            "source": binding,
+            "possession_source": possession_source,
+            "handoff_source": "predicted_delivery_with_dropoff_dwell",
+        })
+
+    max_carry = max(evaluated) if evaluated else None
+    status = "EVALUATED" if rows and unknown == 0 else "UNEVALUABLE"
+    return {
+        "schema": CARRY_EVAL_SCHEMA,
+        "status": status,
+        "orders": rows,
+        "evaluated_count": len(evaluated),
+        "unknown_count": unknown,
+        "max_carry_min": max_carry,
+        "all_le_35": (
+            None if status != "EVALUATED" else all(v <= 35.0 for v in evaluated)
+        ),
+        "all_le_40": (
+            None if status != "EVALUATED" else all(v <= 40.0 for v in evaluated)
+        ),
+    }

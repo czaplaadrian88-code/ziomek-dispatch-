@@ -47,6 +47,10 @@ EXPECTED_GATES = {
     "best_effort_r6_breach":        "quality",
     "best_effort_low_score":        "quality",
     "no_solo_candidates":           "operational",
+    # D (noc 28.07): hak HARD35 — least-damage widoczny jako ALERT/KOORD gdy
+    # 0 planów w capie. Operacyjny (bez guardu _always_propose_on): eskalacja
+    # nie może przepaść do PROPOSE. Flaga ENABLE_HARD35_ENFORCE OFF.
+    "hard35_least_damage_alert":    "operational",
 }
 
 

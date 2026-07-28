@@ -1199,6 +1199,23 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
     _commit_proposal = getattr(result, "commit_proposal", None)
     if isinstance(_commit_proposal, dict):
         out["commit_proposal"] = _json_safe(_commit_proposal)
+    # Noc 28.07: pola istnieją wyłącznie przy aktywnych nowych flagach.
+    # OFF nie emituje nawet `null`, więc kształt i kolejność baseline zostają.
+    _carry_eval = getattr(result, "carry_eval", None)
+    if isinstance(_carry_eval, dict):
+        out["carry_eval"] = _json_safe(_carry_eval)
+    _alarm_certificate = getattr(result, "alarm_certificate", None)
+    if isinstance(_alarm_certificate, dict):
+        out["alarm_certificate"] = _json_safe(_alarm_certificate)
+    _strategy2_probe = getattr(result, "strategy2_probe", None)
+    if isinstance(_strategy2_probe, dict):
+        out["strategy2_probe"] = _json_safe(_strategy2_probe)
+    _order_created_at = getattr(result, "order_created_at", None)
+    if _order_created_at is not None:
+        out["order_created_at"] = str(_order_created_at)
+    _hard35 = getattr(result, "hard35_enforcement", None)
+    if isinstance(_hard35, dict):
+        out["hard35_enforcement"] = _json_safe(_hard35)
     # CHOICE-SET: OFF zachowuje legacy shape bajt-w-bajt (klucza nie ma).
     # ON zapisuje pełną pulę sprzed top-N, bez ciężkich planów/metrics.
     if C.decision_flag("ENABLE_FULL_CHOICE_SET_LOG"):
@@ -1510,6 +1527,8 @@ def process_event(
         "address_id": payload.get("address_id"),
         "order_type": payload.get("order_type"),
         "created_at_utc": payload.get("created_at_utc") or payload.get("created_at"),
+        "physical_possession_at": payload.get("physical_possession_at"),
+        "physical_possession_source": payload.get("physical_possession_source"),
     }
     # K04 refaktor (2026-07-06, ADR-R04): nagrywanie wejść decyzji za flagą
     # ENABLE_WORLD_RECORD (OFF/brak klucza = czysta delegacja 1:1; wrapper jest
@@ -2045,6 +2064,24 @@ def _tick(shadow_log_path: str, meta: Optional[dict], *,
                     "decision ETA hook fail-safe order=%s: %s",
                     oid,
                     _dtlog_e,
+                )
+            # B (noc 28.07): JEDYNY writer certyfikatu Alarmu żyje w
+            # dispatch-shadow, po finalnym wyborze/claim-relaxation. Zapis jest
+            # atomowy i wersjonowany; process_event pozostaje funkcją czystą.
+            try:
+                _alarm_cert = getattr(result, "alarm_certificate", None)
+                if isinstance(_alarm_cert, dict):
+                    from dispatch_v2.core import alarm_certificate as _alarm
+                    _alarm_status = _alarm.publish(_alarm_cert)
+                    if _alarm_status not in ("published", "flag_off"):
+                        _log.warning(
+                            "alarm certificate not published order=%s status=%s",
+                            oid, _alarm_status,
+                        )
+            except Exception as _alarm_pub_exc:
+                _log.warning(
+                    "alarm certificate publish fail-safe order=%s: %s: %s",
+                    oid, type(_alarm_pub_exc).__name__, _alarm_pub_exc,
                 )
             if _stage_timing_on:
                 _legacy_ended_ns = time.perf_counter_ns()

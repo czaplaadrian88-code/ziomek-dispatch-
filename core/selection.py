@@ -42,6 +42,7 @@ class SelectionContext:
     # Log-only instruments may request stage winners. None on the production
     # path, therefore zero behavior/serialization change for ordinary calls.
     selection_trace: Optional[Dict[str, Optional[str]]] = None
+    alarm_certificate: Optional[Dict[str, Any]] = None
 
 
 def select_and_emit(ctx: SelectionContext, candidates: list):
@@ -996,6 +997,45 @@ def select_and_emit(ctx: SelectionContext, candidates: list):
         with_plan.sort(key=_best_effort_sort_key)
     else:
         with_plan.sort(key=lambda c: (_r6_pov_count(c), c.plan.sla_violations, c.plan.total_duration_min))
+    # D (noc 28.07): ostatni hak HARD35. Dotychczas ALWAYS_PROPOSE omijał
+    # redirect i ponownie wybierał plan >35. ON filtruje pełny best-effort pool
+    # wspólnym carry_eval; jeśli nie istnieje plan w capie, zachowuje least-
+    # damage jako widoczny ALERT/KOORD, nigdy jako feasible PROPOSE.
+    if with_plan and C.decision_flag("ENABLE_HARD35_ENFORCE"):
+        from dispatch_v2.core import alarm_certificate as _alarm
+        _within_cap, _least_damage, _hard35_meta = (
+            _alarm.hard35_best_effort_choice(
+                with_plan, alarm_certificate=ctx.alarm_certificate))
+        if _within_cap:
+            with_plan = _within_cap
+            if isinstance(getattr(with_plan[0], "metrics", None), dict):
+                with_plan[0].metrics["hard35_enforcement"] = _hard35_meta
+        else:
+            _alert_best = _least_damage
+            if _alert_best is not None:
+                _alert_best.best_effort = True
+            _result_h35 = PipelineResult(
+                order_id=order_id,
+                verdict="KOORD",
+                reason=(
+                    f"hard35_least_damage_alert "
+                    f"(cap={_hard35_meta['cap_min']:.0f}; 0 within cap; "
+                    f"visible_cid={getattr(_alert_best, 'courier_id', None)})"
+                ),
+                best=_alert_best,
+                candidates=with_plan[:TOP_N_CANDIDATES],
+                full_pool_candidates=candidates,
+                pickup_ready_at=pickup_ready_at,
+                restaurant=restaurant,
+                delivery_address=delivery_address,
+                pool_total_count=len(candidates),
+                pool_feasible_count=0,
+            )
+            _result_h35.hard35_enforcement = _hard35_meta
+            _classify_and_set_auto_route(
+                _result_h35, fleet_snapshot, order_event, now=now,
+                v328_fail_causes=_v328_fail_causes)
+            return _result_h35
     if with_plan:
         best = with_plan[0]
         best.best_effort = True

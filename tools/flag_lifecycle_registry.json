@@ -4388,6 +4388,167 @@
     "engine"
    ]
   },
+  "ENABLE_ALARM_CERTIFICATE_SHADOW": {
+   "carriers": [
+    "common.py:ETAP4_DECISION_FLAGS",
+    "dispatch_v2/common.py-const"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/core/alarm_certificate.py",
+    "dispatch_v2/core/lex_window_guards.py",
+    "dispatch_v2/core/loadgov_snapshot.py",
+    "dispatch_v2/dispatch_pipeline.py",
+    "dispatch_v2/plan_recheck.py",
+    "dispatch_v2/shadow_dispatcher.py"
+   ],
+   "curated_at": "2026-07-28",
+   "current_snapshot": {
+    "default": false
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "shadow",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_ALARM_CERTIFICATE_SHADOW",
+   "notes": "B noc 28.07: kontrfaktyczny certyfikat per decyzja. Alarm tylko gdy zero kandydatów <=35 po pozostałych HARD-ach i co najmniej jeden w (35,40]. Atomowy single-writer dispatch-shadow; scope worka+TTL. Ta sama flaga gate'uje producer i konsumentów; OFF=strict 35 i brak snapshotu.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-shadow.service"
+   },
+   "removal_condition": "po minimum 2 dniach shadow owner wybiera promocję albo retire; certyfikat pozostaje wersjonowany",
+   "review_date": "2026-08-04",
+   "rollback": "flags.json ENABLE_ALARM_CERTIFICATE_SHADOW=false hot-reload; plan-recheck i selection wracają strict 35",
+   "source_of_truth": "flags.json",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
+  "ENABLE_CARRY_CANON_V2": {
+   "carriers": [
+    "common.py:ETAP4_DECISION_FLAGS",
+    "dispatch_v2/common.py-const"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/core/carry_freshness.py",
+    "dispatch_v2/dispatch_pipeline.py",
+    "dispatch_v2/feasibility_v2.py",
+    "dispatch_v2/shadow_dispatcher.py"
+   ],
+   "curated_at": "2026-07-28",
+   "current_snapshot": {
+    "default": false
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_CARRY_CANON_V2",
+   "notes": "A noc 28.07: jeden evaluator carry=handoff-possession; handoff to predicted delivery po dwellu. Physical event=bound, picked_up click lub plan pickup=proxy. OFF nie tworzy carry_eval.v1 i nie zmienia rekordu/decyzji.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-shadow.service"
+   },
+   "removal_condition": "po związaniu physical possession i zatwierdzeniu migracji wszystkich konsumentów owner może utrwalić evaluator bez flagi",
+   "review_date": "2026-08-04",
+   "rollback": "flags.json ENABLE_CARRY_CANON_V2=false hot-reload; brak carry_eval.v1, legacy R6 bez zmian",
+   "source_of_truth": "flags.json",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
+  "ENABLE_HARD35_ENFORCE": {
+   "carriers": [
+    "common.py:ETAP4_DECISION_FLAGS",
+    "dispatch_v2/common.py-const"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/core/alarm_certificate.py",
+    "dispatch_v2/core/selection.py"
+   ],
+   "curated_at": "2026-07-28",
+   "current_snapshot": {
+    "default": false
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_HARD35_ENFORCE",
+   "notes": "D noc 28.07: domyka obejście best-effort/ALWAYS_PROPOSE. ON filtruje carry>35 poza ważnym Alarmem; gdy brak planu w capie pokazuje least-damage jako KOORD/ALERT, nigdy jako feasible PROPOSE. Flip wyłącznie jako ostatni krok po S2+Alarm i ACK ownera.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-shadow.service"
+   },
+   "removal_condition": "po trwałym zatwierdzeniu HARD35 owner może usunąć flagę i zachować enforcement",
+   "review_date": "2026-08-04",
+   "rollback": "flags.json ENABLE_HARD35_ENFORCE=false hot-reload; wraca legacy best-effort/ALWAYS_PROPOSE",
+   "source_of_truth": "flags.json",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
+  "ENABLE_STRATEGY2_PROBE_SHADOW": {
+   "carriers": [
+    "common.py:ETAP4_DECISION_FLAGS",
+    "dispatch_v2/common.py-const"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/core/candidates.py",
+    "dispatch_v2/core/strategy2_probe.py",
+    "dispatch_v2/dispatch_pipeline.py",
+    "dispatch_v2/feasibility_v2.py",
+    "dispatch_v2/shadow_dispatcher.py"
+   ],
+   "curated_at": "2026-07-28",
+   "current_snapshot": {
+    "default": false
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "shadow",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_STRATEGY2_PROBE_SHADOW",
+   "notes": "C noc 28.07: po zero feasible S1 skanuje sloty +5 do created_at+90 na całej flocie przez ten sam candidate evaluator i pełne HARD-y. Tylko strategy2_probe.v1 w shadow; zero propozycji/writera restauracji.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-shadow.service"
+   },
+   "removal_condition": "po minimum 2 dniach shadow i decyzji ownera: zbudować osobną flagę pełnego S2 albo retire",
+   "review_date": "2026-08-04",
+   "rollback": "flags.json ENABLE_STRATEGY2_PROBE_SHADOW=false hot-reload; brak dodatkowych solve i pola strategy2_probe.v1",
+   "source_of_truth": "flags.json",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
   "ENABLE_CARRY_CHAIN_PENALTY": {
    "carriers": [
     "flags.json",
