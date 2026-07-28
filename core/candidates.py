@@ -1996,6 +1996,12 @@ def eval_courier_inner(ctx: EvalContext, cid, cs):
         "pos_age_min": (
             round(getattr(cs, "pos_age_min"), 1)
             if getattr(cs, "pos_age_min", None) is not None else None),
+        # T5 authority card: dokładny wiek w sekundach, zanim starsze pole
+        # display zostanie zaokrąglone do 0,1 min. Konsument R3 nie może
+        # kwalifikować granicy LIVE z przybliżenia.
+        "pos_age_sec": (
+            float(getattr(cs, "pos_age_min")) * 60.0
+            if getattr(cs, "pos_age_min", None) is not None else None),
         "shift_start_min": getattr(cs, "shift_start_min", None),
         # L4 (2026-07-02, F1): available_from = max(now, shift_start) policzone RAZ
         # w courier_resolver (None + "unset" gdy flaga OFF). Post-loop #1 clamp czyta

@@ -3546,6 +3546,9 @@ class PipelineResult:
     # Z-P1-03 Faza A: addytywna telemetria czasu. Dolaczana dopiero w ogonie
     # assess_order (po selection i firewallu), nigdy nie jest wejsciem decyzji.
     stage_timing: Optional[Dict[str, Any]] = None
+    # T5: fail-closed dowody siedmiu predykatów karty AUTO. Producent żyje
+    # wyłącznie w shadow_dispatcher.process_event i dopina blok po decyzji.
+    authority_scope: Optional[Dict[str, Any]] = None
 
 
 # ─── FAIL-04: prep-variance anomaly (A1 anomaly block, shadow-first) ───

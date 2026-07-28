@@ -52,17 +52,37 @@ temp jest traktowany jak latch ON. Po sukcesie jednym zapisem aktualizowane są:
 
 ## Uczciwa granica danych scope
 
-Executor akceptuje wyłącznie pełny snapshot `authority_scope` w rekordzie,
-payloadzie albo wyniku. Snapshot musi jawnie dowodzić wszystkich siedmiu
-predykatów. Obecny serializer nie produkuje pełnego snapshotu: w szczególności
-brakuje wiarygodnego dowodu historii wcześniejszych przypisań, normal/Alarm,
-multi-brand/shared-pickup/override, wieku źródła LIVE GPS oraz kontrfaktycznego
-parytetu no-GPS. Dopóki osobny producer tych dowodów nie zostanie zbudowany i
-zwalidowany, nawet podpisana karta kończy się `scope_evidence_missing`.
+Executor akceptuje wyłącznie `authority_scope.v1` z top-level rekordu decyzji.
+`authority_scope.py` jest jedynym producentem; liczy blok raz z finalnego
+`PipelineResult`, wejścia eventu i decision-time wiersza `orders_state`. Ten sam
+blok przechodzi przez wspólny serializer L1.1 do LOCATION A+B. Każdy brak
+źródła ma jawne `{"absent": "powód"}`; `check_scope` odmawia wtedy jako
+`scope_<1..7>_absent`.
 
-Kod nie uruchamia `git` w hot-path. Odczytuje SHA z `BUILD_SHA`. Obecny deploy
-nie tworzy tego pliku; bez dobudowania atomowego, hash-bound kroku deployu wynik
-to `code_git_sha_unavailable` i latch.
+Dzisiejsze dane pozwalają uczciwie udowodnić: event/status/historię przypisania,
+snapshot worka z generacją, plan, `best_effort`, klasyfikację paczki oraz
+pozycję z wiekiem w sekundach i wspólną klasyfikacją R3. Nadal jawnie `absent`
+są: autorytatywny normal/Alarm, multi-brand, shared-pickup, pełny kontekst
+override koordynatora i per-rekordowy parytet no-GPS. Ten ostatni jest własnością
+polityki i wymaga osobnej, hash-bound atestacji testu strukturalnego. Dopóki te
+źródła nie istnieją, odmowa AUTO jest poprawnym wynikiem.
+
+Kod nie uruchamia `git` w hot-path. Odczytuje SHA wyłącznie z `BUILD_SHA`.
+
+## Deploy BUILD_SHA (ręcznie, po autoryzowanym restarcie)
+
+Po wdrożeniu i restarcie właściwej usługi, ale przed jakąkolwiek próbą AUTO:
+
+1. z katalogu wdrożonego `dispatch_v2` uruchom
+   `python3 tools/write_build_sha.py`;
+2. natychmiast sprawdź
+   `python3 tools/write_build_sha.py --verify` — wymagany exit `0`;
+3. dopiero zgodny plik może zostać wpisany do `code_fingerprint.git_sha`
+   podpisywanej karty.
+
+Writer jest idempotentny i zapisuje `temp → fsync → rename → fsync katalogu`.
+Nie ma timera ani importu w silniku. Okno między restartem a zapisem pozostaje
+fail-closed (`code_git_sha_unavailable`).
 
 ## CLI
 
@@ -73,7 +93,9 @@ Podpis pozostaje w torze panelu z PIN-em.
 ## Rollback
 
 Przed wydaniem `ENABLE_AUTO_ASSIGN` pozostaje false. Rollback kodu to revert
-T5 bez migracji danych. Operacyjny stop przyszłych wykonań to flaga false oraz
-latch w stanie karty. Usunięcie/wygaszenie karty również zamyka gate, lecz nie
-cofa już wykonanego przypisania; order w toku wymaga ręcznego reconcile zgodnie
-z kartą klasy.
+T5 bez migracji danych. Po rollbacku i autoryzowanym restarcie uruchom ponownie
+`write_build_sha.py` oraz `--verify`, aby plik opisywał faktycznie uruchomiony
+HEAD; stara karta z poprzednim SHA ma nadal odmówić. Operacyjny stop przyszłych
+wykonań to flaga false oraz latch w stanie karty. Usunięcie/wygaszenie karty
+również zamyka gate, lecz nie cofa już wykonanego przypisania; order w toku
+wymaga ręcznego reconcile zgodnie z kartą klasy.

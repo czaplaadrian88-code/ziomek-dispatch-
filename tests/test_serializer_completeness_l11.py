@@ -65,6 +65,13 @@ _AUDIT_VANISHED_KEYS = {
     # SOFT — telemetria
     "wave_bonus": 2.0,
     "r1_violation_km": 0.4,
+    # AUTHORITY — dowody karty muszą dotrzeć tą samą ścieżką do A+B.
+    "authority_scope": {
+        "schema": "authority_scope.v1",
+        "predicates": {
+            "1_new_unassigned": {"absent": "synthetic completeness probe"}
+        },
+    },
 }
 
 

@@ -34,6 +34,25 @@ SOURCE_LIVE = "live"
 SOURCE_WARM = "warm"
 SOURCE_PLANNED = "planned"
 ETA_SOURCES = frozenset({SOURCE_LIVE, SOURCE_WARM, SOURCE_PLANNED})
+
+
+def classify_position_contract(source: object, age_seconds: object) -> str:
+    """R3: jeden klasyfikator źródła LIVE/WARM/PLANNED.
+
+    ``gps`` kwalifikuje się jako LIVE wyłącznie w domkniętym oknie 0..120 s,
+    a ``last_event`` jako WARM wyłącznie w oknie 0..180 s. Każdy brak, przyszły
+    timestamp, nieznane źródło lub przekroczenie progu jest PLANOWE.
+    """
+    if isinstance(age_seconds, bool) or not isinstance(
+        age_seconds, (int, float)
+    ):
+        return SOURCE_PLANNED
+    age = float(age_seconds)
+    if source == "gps" and 0.0 <= age <= LIVE_POSITION_MAX_AGE_SECONDS:
+        return SOURCE_LIVE
+    if source == "last_event" and 0.0 <= age <= WARM_EVENT_MAX_AGE_SECONDS:
+        return SOURCE_WARM
+    return SOURCE_PLANNED
 # Snapshot starszy niż tyle = martwy/zawieszony daemon → NIE serwuj (konsument fallback).
 # 6 pominiętych cykli; bez tego panel/kafel/mapa/apka pokazują starą godzinę bez końca.
 STALE_AFTER_SECONDS = 6 * CYCLE_SECONDS

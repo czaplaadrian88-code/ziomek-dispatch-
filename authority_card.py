@@ -536,78 +536,151 @@ def check_scope(
     payload: Optional[Dict[str, Any]],
     scope: Dict[str, Any],
 ) -> Tuple[bool, str]:
-    """Sprawdza jawny snapshot siedmiu predykatów, bez heurystyk i fallbacków."""
-    payload = payload or {}
+    """Sprawdza ``authority_scope.v1`` 1:1, bez heurystyk i fallbacków."""
     context = record.get("authority_scope")
-    if context is None:
-        context = payload.get("authority_scope")
-    if context is None:
-        context = getattr(result, "authority_scope", None)
-    if not isinstance(context, dict):
+    if (
+        not isinstance(context, dict)
+        or context.get("schema") != "authority_scope.v1"
+        or not isinstance(context.get("predicates"), dict)
+    ):
         return False, "scope_evidence_missing"
 
-    required = {
-        "new_unassigned",
-        "prior_assignment_count",
-        "courier_bag_size",
-        "route_pickups",
-        "route_deliveries",
-        "mode",
-        "is_reassign",
-        "is_alarm",
-        "is_least_damage",
-        "is_parcel",
-        "is_multi_brand",
-        "is_shared_pickup",
-        "has_coordinator_override",
-        "gps_source",
-        "gps_age_sec",
-        "no_gps_recommend_only_parity",
+    predicates = context["predicates"]
+    names = {
+        1: "1_new_unassigned",
+        2: "2_empty_bag",
+        3: "3_solo_plan",
+        4: "4_mode",
+        5: "5_exclusions",
+        6: "6_winner_position",
+        7: "7_no_gps_parity",
     }
-    if not required.issubset(context):
-        return False, "scope_evidence_missing"
+
+    def _predicate(number: int) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+        evidence = predicates.get(names[number])
+        if (
+            not isinstance(evidence, dict)
+            or isinstance(evidence.get("absent"), str)
+        ):
+            return None, f"scope_{number}_absent"
+        return evidence, None
+
+    def _sources_present(evidence: Dict[str, Any], required: set[str]) -> bool:
+        sources = evidence.get("sources")
+        return (
+            isinstance(sources, dict)
+            and required.issubset(sources)
+            and all(
+                isinstance(sources.get(key), str) and sources[key].strip()
+                for key in required
+            )
+        )
+
+    p1, error = _predicate(1)
+    if error:
+        return False, error
+    assert p1 is not None
+    if not _sources_present(
+        p1,
+        {"event_type", "status_id", "assignment_history", "current_assignment"},
+    ):
+        return False, "scope_1_absent"
     if (
-        record.get("event_id") is None
-        or "_NEW_ORDER_" not in str(record.get("event_id"))
-        or payload.get("status_id") != 2
-        or context.get("new_unassigned") is not True
-        or context.get("prior_assignment_count") != 0
+        p1.get("event_type") != "NEW_ORDER"
+        or p1.get("status_id") != 2
+        or p1.get("state_status") != "planned"
+        or p1.get("prior_assignment_count") != 0
+        or p1.get("currently_assigned") is not False
     ):
         return False, "scope_not_new_unassigned"
-    if context.get("courier_bag_size") != 0:
-        return False, "scope_bag_not_empty"
+
+    p2, error = _predicate(2)
+    if error:
+        return False, error
+    assert p2 is not None
+    if not _sources_present(p2, {"bag", "generation"}):
+        return False, "scope_2_absent"
+    generation = p2.get("generation")
     if (
-        context.get("route_pickups") != 1
-        or context.get("route_deliveries") != 1
+        p2.get("bag_size") != 0
+        or p2.get("active_order_ids") != []
+        or isinstance(generation, bool)
+        or not isinstance(generation, int)
+        or generation < 0
+    ):
+        return False, "scope_bag_not_empty"
+
+    p3, error = _predicate(3)
+    if error:
+        return False, error
+    assert p3 is not None
+    if not _sources_present(p3, {"pickups", "deliveries"}):
+        return False, "scope_3_absent"
+    if (
+        p3.get("n_pickups") != 1
+        or p3.get("n_deliveries") != 1
     ):
         return False, "scope_not_solo_route"
-    if context.get("mode") != "normal":
+
+    p4, error = _predicate(4)
+    if error:
+        return False, error
+    assert p4 is not None
+    if not isinstance(p4.get("source"), str) or not p4["source"].strip():
+        return False, "scope_4_absent"
+    if p4.get("mode") != "normal":
         return False, "scope_not_normal_mode"
 
+    p5, error = _predicate(5)
+    if error:
+        return False, error
+    assert p5 is not None
     excluded_evidence = {
-        "reassign": "is_reassign",
-        "alarm": "is_alarm",
-        "least_damage": "is_least_damage",
-        "parcel": "is_parcel",
-        "multi_brand": "is_multi_brand",
-        "shared_pickup": "is_shared_pickup",
-        "coordinator_override": "has_coordinator_override",
+        "reassign": "reassign",
+        "alarm": "alarm",
+        "least_damage": "least_damage",
+        "parcel": "parcel",
+        "multi_brand": "multi_brand",
+        "shared_pickup": "shared_pickup",
+        "coordinator_override": "coordinator_override",
     }
     for excluded in scope["excluded_contexts"]:
-        if context.get(excluded_evidence[excluded]) is not False:
+        evidence = p5.get(excluded_evidence[excluded])
+        if (
+            not isinstance(evidence, dict)
+            or isinstance(evidence.get("absent"), str)
+            or not isinstance(evidence.get("source"), str)
+            or not evidence["source"].strip()
+        ):
+            return False, "scope_5_absent"
+        if evidence.get("value") is not False:
             return False, f"scope_excluded_{excluded}"
 
+    p6, error = _predicate(6)
+    if error:
+        return False, error
+    assert p6 is not None
+    if not _sources_present(p6, {"position", "age", "contract"}):
+        return False, "scope_6_absent"
     gps = scope["gps"]
-    age = context.get("gps_age_sec")
+    age = p6.get("age_seconds")
     if (
-        context.get("gps_source") != gps["required_source"]
+        not isinstance(p6.get("pos_source"), str)
+        or p6.get("contract") != gps["required_source"]
         or isinstance(age, bool)
         or not isinstance(age, (int, float))
         or float(age) < 0.0
         or float(age) > float(gps["max_age_sec"])
     ):
         return False, "scope_gps_not_live"
-    if context.get("no_gps_recommend_only_parity") is not True:
+
+    p7, error = _predicate(7)
+    if error:
+        return False, error
+    assert p7 is not None
+    if not isinstance(p7.get("source"), str) or not p7["source"].strip():
+        return False, "scope_7_absent"
+    if p7.get("verified") is not True:
         return False, "scope_no_gps_parity_unproven"
     return True, "ok"
 

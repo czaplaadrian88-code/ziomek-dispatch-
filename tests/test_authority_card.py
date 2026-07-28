@@ -263,22 +263,61 @@ def test_atomic_state_save_round_trip(tmp_path):
 
 def _scope_ok():
     return {
-        "new_unassigned": True,
-        "prior_assignment_count": 0,
-        "courier_bag_size": 0,
-        "route_pickups": 1,
-        "route_deliveries": 1,
-        "mode": "normal",
-        "is_reassign": False,
-        "is_alarm": False,
-        "is_least_damage": False,
-        "is_parcel": False,
-        "is_multi_brand": False,
-        "is_shared_pickup": False,
-        "has_coordinator_override": False,
-        "gps_source": "LIVE",
-        "gps_age_sec": 30,
-        "no_gps_recommend_only_parity": True,
+        "schema": "authority_scope.v1",
+        "predicates": {
+            "1_new_unassigned": {
+                "event_type": "NEW_ORDER",
+                "status_id": 2,
+                "state_status": "planned",
+                "prior_assignment_count": 0,
+                "currently_assigned": False,
+                "sources": {
+                    "event_type": "event_bus.event_type",
+                    "status_id": "event_bus.payload.status_id",
+                    "assignment_history": "orders_state.history",
+                    "current_assignment": "orders_state.courier_id",
+                },
+            },
+            "2_empty_bag": {
+                "bag_size": 0,
+                "active_order_ids": [],
+                "generation": 1,
+                "sources": {
+                    "bag": "Candidate.metrics.bag_context",
+                    "generation": "Candidate.metrics.plan_expected_version",
+                },
+            },
+            "3_solo_plan": {
+                "n_pickups": 1,
+                "n_deliveries": 1,
+                "sources": {
+                    "pickups": "RoutePlanV2.pickup_at",
+                    "deliveries": "RoutePlanV2.sequence",
+                },
+            },
+            "4_mode": {"mode": "normal", "source": "fixture.mode"},
+            "5_exclusions": {
+                key: {"value": False, "source": f"fixture.{key}"}
+                for key in (
+                    "reassign", "alarm", "least_damage", "parcel",
+                    "multi_brand", "shared_pickup", "coordinator_override",
+                )
+            },
+            "6_winner_position": {
+                "pos_source": "gps",
+                "age_seconds": 30,
+                "contract": "LIVE",
+                "sources": {
+                    "position": "CourierState.pos_source",
+                    "age": "CourierState.pos_age_sec",
+                    "contract": "live_eta.classify_position_contract",
+                },
+            },
+            "7_no_gps_parity": {
+                "verified": True,
+                "source": "fixture.structural_parity",
+            },
+        },
     }
 
 
