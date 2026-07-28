@@ -284,6 +284,41 @@ def test_monitor_uncovered_auto_executed_receipt_latches(tmp_path):
     assert AC.load_state(str(card_state))["auto_off_latch"] is True
 
 
+def test_monitor_receipt_with_missing_authority_state_is_alarm(tmp_path):
+    """H3 parity: utrata state przy receipt nie może dać monitora OK."""
+    card_state = tmp_path / "missing-card-state.json"
+    auto_state = tmp_path / "auto-state.json"
+    heartbeat = tmp_path / "heartbeat.json"
+    shadow = tmp_path / "shadow.jsonl"
+    auto_state.write_text(
+        json.dumps({
+            "executed_total": 1,
+            "executed_order_ids": ["OID-X"],
+        }),
+        encoding="utf-8",
+    )
+    shadow.write_text(
+        json.dumps({
+            "ts": NOW.isoformat(),
+            "record_type": "auto_executed",
+            "order_id": "OID-X",
+        }) + "\n",
+        encoding="utf-8",
+    )
+
+    result = M.run_cycle(
+        now=NOW,
+        heartbeat_path=str(heartbeat),
+        authority_state_path=str(card_state),
+        auto_state_path=str(auto_state),
+        shadow_path=str(shadow),
+    )
+
+    assert result["checks"]["verdict"] == "ALARM"
+    assert "counter_divergence" in result["checks"]["reasons"]
+    assert AC.load_state(str(card_state))["auto_off_latch"] is True
+
+
 def test_lock_and_atomic_write_ratchet():
     lock_source = inspect.getsource(AC.state_lock)
     save_source = inspect.getsource(AC._save_state_unlocked)

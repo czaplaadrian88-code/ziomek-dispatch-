@@ -27,6 +27,19 @@ AUDIT_PATH = (
 )
 BUILD_SHA_PATH = "/root/.openclaw/workspace/scripts/BUILD_SHA"
 AUDIT_TAIL_BYTES = 262144
+# SHA-256 kanonicznego tekstu sekcji 3+4 karty
+# /root/handover/KARTA_KLASY_AUTO_CANARY_2026-07-29.md.
+#
+# Algorytm 1:1:
+# 1. wybierz od wiersza zaczynającego się ``## 3.`` (włącznie) do ostatniego
+#    niepustego wiersza sekcji 4, przed separatorem ``---`` poprzedzającym
+#    ``## 5.``;
+# 2. usuń spacje i tabulatory z prawego końca każdego wybranego wiersza;
+# 3. połącz wiersze pojedynczym ``\n``, bez końcowego ``\n``;
+# 4. zakoduj UTF-8 i policz SHA-256.
+EXPECTED_STOP_CONTRACT_SHA256 = (
+    "91997392295092fd6cd3bc0d54926261d2074e94e74f67731cf4cd50c2aff42d"
+)
 
 _BODY_KEYS = frozenset({
     "class_id",
@@ -73,6 +86,10 @@ _STATE_KEYS = frozenset({
     "auto_off_reason",
     "auto_off_ts",
 })
+_INITIALIZED_STATE_KEYS = _STATE_KEYS | {
+    "initialized_for_card",
+    "initialized_at",
+}
 _SYNTHETIC_STATE_KEYS = _STATE_KEYS | {"synthetic"}
 _STATE_THREAD_LOCK = threading.RLock()
 _STATE_LOCAL = threading.local()
@@ -153,7 +170,7 @@ def template_body() -> Dict[str, Any]:
             "max_total": 3,
             "require_verification": True,
         },
-        "stop_contract_sha256": "",
+        "stop_contract_sha256": EXPECTED_STOP_CONTRACT_SHA256,
         "code_fingerprint": {
             "git_sha": "",
             "flag_fingerprint": "",
@@ -322,6 +339,7 @@ def verify_card(
     now: Optional[datetime] = None,
     code_git_sha: Optional[str] = None,
     flag_fp: Optional[str] = None,
+    expected_stop_contract_sha256: str = EXPECTED_STOP_CONTRACT_SHA256,
 ) -> CardVerdict:
     """Weryfikuje body, ostatni podpis PIN, czas i fingerprint; nigdy nie rzuca."""
     try:
@@ -350,6 +368,8 @@ def verify_card(
         if schema_reason:
             return CardVerdict(False, schema_reason)
         digest = card_sha256(body)
+        if body["stop_contract_sha256"] != expected_stop_contract_sha256:
+            return CardVerdict(False, "stop_contract_mismatch", digest, body)
         signed, audit_error = _last_card_signature(audit_path, CLASS_ID)
         if audit_error:
             return CardVerdict(False, audit_error, digest, body)
@@ -420,8 +440,14 @@ def _state_valid(state: Any) -> bool:
             or state.get("auto_off_latch") is not True
         ):
             return False
-    elif keys != _STATE_KEYS:
+    elif keys not in {_STATE_KEYS, _INITIALIZED_STATE_KEYS}:
         return False
+    if keys == _INITIALIZED_STATE_KEYS:
+        if (
+            not _is_sha256(state.get("initialized_for_card"))
+            or _parse_ts(state.get("initialized_at")) is None
+        ):
+            return False
     total = state.get("executed_total")
     timestamps = state.get("executed_ts")
     pending = state.get("pending_verification")
@@ -534,6 +560,42 @@ def _save_state_unlocked(path: str, state: Dict[str, Any]) -> None:
 def save_state(path: str, state: Dict[str, Any]) -> None:
     with state_lock(path):
         _save_state_unlocked(path, state)
+
+
+def initialize_state(
+    state_path: str,
+    card_sha256: str,
+    now: datetime,
+) -> Dict[str, Any]:
+    """Atomowo utwórz pusty budżet związany z podpisaną kartą.
+
+    Funkcja jest idempotentna wyłącznie dla tego samego SHA. Nigdy nie nadpisuje
+    stanu innej karty, bo takie nadpisanie mogłoby wyzerować wykorzystany budżet.
+    Tor podpisu wywołuje ją po trwałym receipt ``authority_card_signed`` i przed
+    uznaniem podpisu za gotowy do użycia przez executor.
+    """
+    if not _is_sha256(card_sha256):
+        raise ValueError("invalid card_sha256 for authority state")
+    if now.tzinfo is None:
+        now = now.replace(tzinfo=timezone.utc)
+    initialized = {
+        **empty_state(),
+        "initialized_for_card": card_sha256.lower(),
+        "initialized_at": now.astimezone(timezone.utc).isoformat(),
+    }
+    with state_lock(state_path):
+        if os.path.exists(state_path):
+            current = _load_state_unlocked(state_path)
+            if (
+                current.get("synthetic") is not True
+                and current.get("initialized_for_card") == card_sha256.lower()
+            ):
+                return current
+            raise FileExistsError(
+                "authority state already exists for another or unknown card"
+            )
+        _save_state_unlocked(state_path, initialized)
+        return initialized
 
 
 def _audit_value(value: Any, field: str) -> str:
@@ -673,6 +735,11 @@ def clear_latch(
         if state.get("synthetic") is True:
             raise ValueError(
                 "stan uszkodzony — wymagany ręczny reconcile, nie clear"
+            )
+        if state.get("auto_off_reason") == "state_missing":
+            raise ValueError(
+                "utracona historia budżetu — wymagany ręczny reconcile stanu, "
+                "nie clear"
             )
         if state.get("auto_off_latch") is not True:
             raise ValueError("authority latch is not set")

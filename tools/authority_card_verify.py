@@ -36,6 +36,10 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("show", help="body, skrócony SHA i wynik weryfikacji")
     sub.add_parser("verify", help="weryfikacja; exit 0/1")
     sub.add_parser("template", help="szkielet body do uzupełnienia")
+    sub.add_parser(
+        "initialize-state",
+        help="po podpisie utwórz atomowo stan związany z SHA karty",
+    )
     clear = sub.add_parser(
         "latch-clear",
         help="za ACK ownera zdejmij wyłącznie latch, zachowując budżet",
@@ -67,6 +71,7 @@ def _verdict(args):
         now=datetime.now(timezone.utc),
         code_git_sha=AC.read_code_git_sha(args.build_sha),
         flag_fp=_flag_fingerprint(),
+        expected_stop_contract_sha256=AC.EXPECTED_STOP_CONTRACT_SHA256,
     )
 
 
@@ -136,6 +141,34 @@ def main(argv=None) -> int:
         return 0
 
     verdict = _verdict(args)
+    if args.command == "initialize-state":
+        if not verdict.valid or not verdict.card_sha256:
+            print(json.dumps({
+                "initialized": False,
+                "reason": verdict.reason,
+            }, ensure_ascii=False, sort_keys=True))
+            return 1
+        try:
+            state = AC.initialize_state(
+                args.state,
+                verdict.card_sha256,
+                datetime.now(timezone.utc),
+            )
+        except Exception as exc:
+            print(json.dumps({
+                "initialized": False,
+                "error": type(exc).__name__,
+                "reason": str(exc),
+            }, ensure_ascii=False, sort_keys=True))
+            return 1
+        print(json.dumps({
+            "class_id": AC.CLASS_ID,
+            "initialized": True,
+            "initialized_for_card": state["initialized_for_card"],
+            "executed_total": state["executed_total"],
+        }, ensure_ascii=False, sort_keys=True))
+        return 0
+
     if args.command == "verify":
         print(json.dumps({
             "class_id": AC.CLASS_ID,

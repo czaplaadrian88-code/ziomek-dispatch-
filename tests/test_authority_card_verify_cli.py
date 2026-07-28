@@ -109,3 +109,35 @@ def test_cli_verify_execution_only_releases_requested_oid(tmp_path, capsys):
         "authority_execution_verified"
     )
     assert json.loads(capsys.readouterr().out)["verified"] is True
+
+
+def test_cli_initialize_state_requires_verified_receipt_and_binds_sha(
+    tmp_path,
+    monkeypatch,
+    capsys,
+):
+    state_path = tmp_path / "state.json"
+    digest = "c" * 64
+    monkeypatch.setattr(
+        CLI,
+        "_verdict",
+        lambda _args: AC.CardVerdict(True, "ok", digest, {}),
+    )
+
+    rc = CLI.main([
+        "--state",
+        str(state_path),
+        "initialize-state",
+    ])
+
+    assert rc == 0
+    state = AC.load_state(str(state_path))
+    assert state["initialized_for_card"] == digest
+    assert state["executed_total"] == 0
+    assert json.loads(capsys.readouterr().out)["initialized"] is True
+
+
+def test_cli_template_prints_canonical_stop_contract(capsys):
+    assert CLI.main(["template"]) == 0
+    body = json.loads(capsys.readouterr().out)
+    assert body["stop_contract_sha256"] == AC.EXPECTED_STOP_CONTRACT_SHA256

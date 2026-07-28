@@ -19,6 +19,10 @@ Body karty jest hashowane jako JSON UTF-8 z `sort_keys=True` i
 `separators=(",", ":")`. Liczy się ostatni wiersz
 `kind=authority_card_signed` dla `class_id=auto.canary.v1`; musi mieć identyczny
 `card_sha256` i `pin_verified=true`. Brak lub błąd dowodu zamyka bramkę.
+`stop_contract_sha256` jest porównywany ze stałą
+`authority_card.EXPECTED_STOP_CONTRACT_SHA256`, która wiąże kanoniczny tekst
+sekcji 3+4 karty launchowej. Odtwarzalny algorytm normalizacji jest opisany 1:1
+przy stałej w kodzie.
 
 Gate nie ma osobnej flagi. Przy `ENABLE_AUTO_ASSIGN=false` executor nadal kończy
 przed jakimkolwiek I/O karty, więc wdrożenie T5 nie zmienia zachowania live.
@@ -41,18 +45,39 @@ temp jest traktowany jak latch ON. Po sukcesie jednym zapisem aktualizowane są:
 Writery rezerwacji, rollbacku pre-send, stanu nieznanego, weryfikacji
 koordynatora i latcha zawsze
 re-czytają stan pod tym samym `state_lock` i mergują wyłącznie własne pola.
+Podpis nie jest kompletny bez atomowego `initialize_state`: plik stanu zawiera
+`initialized_for_card=<card_sha256>` i `initialized_at`. Istniejący receipt
+podpisu przy brakującym stanie daje `state_missing` i trwały latch, nigdy świeży
+budżet.
 
 `ok=false` po uruchomieniu runnera nie oznacza automatycznie porażki. Timeout,
 exit bez sentinela, wyjątek runnera i każdy nierozpoznany wynik mogły nastąpić
 po commicie w panelu, więc są stanem **NIEZNANYM**: pozostawiają wcześniejszą
 rezerwację, zatrzaskują `runner_outcome_unknown` oraz każą wykonać reconcile 5b
-karty. Wyłącznie dowód, że proces nie został utworzony
-(`blocked_pytest_context`, błąd launch `FileNotFoundError`/`PermissionError`/
-`OSError` albo jawny kontrakt `pre_send_refusal:`), jest twardą odmową przed
+karty. Wyłącznie dowód z samego `Popen`, że proces nie został utworzony
+(`blocked_pytest_context` albo błąd spawn `FileNotFoundError`/`PermissionError`/
+`OSError` zapisany jako `pre_send_refusal:`), jest twardą odmową przed
 wysłaniem: wycofuje oba skorelowane liczniki i idempotencję pod lockami, dopisuje
 fsyncowany audyt `reservation_rolled_back` i nie latchuje.
-Sam `exit != 0` nigdy nie jest takim dowodem, bo child mógł wcześniej wykonać
-side-effect.
+Po zwróceniu dziecka przez `Popen` timeout, `OSError`, błąd `communicate` i
+`exit != 0` są stanem nieznanym, bo child mógł wcześniej wykonać side-effect.
+
+Przed uruchomieniem nazwowego runnera executor rozwiązuje nazwę przez kanoniczny
+`dispatch_v2.identity.Registry` z profilem `worker` i wymaga dokładnie zamierzonego
+`canon_cid`. Brak, tie albo rozjazd daje `runner_identity_ambiguous` bez rezerwacji
+i bez latcha (staleness konfiguracji). Obecny `gastro_assign.py` nie przyjmuje CID
+jako argumentu; pozostaje więc niezmieniony w tej karcie. Jego `--verify` niesie
+jednak `verify_ok_kid=...`: rozjazd read-back z intencją executora pozostawia
+rezerwację, zatrzaskuje `runner_identity_mismatch` i wymaga reconcile. Osobna karta
+powinna dodać do współdzielonego runnera jawny argument CID i jego walidację
+end-to-end.
+
+Po wejściu pod lock stanu karty i lifecycle executor pobiera jeden świeży zegar.
+Ten sam punkt czasu zasila finalny TTL autoryzacji ownera, okno ważności karty,
+60-sekundowy heartbeat i 15-sekundową świeżość proposal. Po fresh solve ostatni
+gate czyta `ENABLE_AUTO_ASSIGN` i fingerprint bezpośrednio ze źródłowego
+`flags.json`, z pominięciem cache i per-tick `FlagSnapshot`; OFF albo błąd odczytu
+odmawia przed rezerwacją.
 
 ## Fail-closed matrix
 
@@ -62,12 +87,18 @@ side-effect.
 | schema/klasa/wersja/kontrakt scope lub limitów niezgodny | odpowiedni `*_mismatch` / `*_schema_error` | tak |
 | brak/nieczytelny/uszkodzony audyt lub brak wiersza klasy | `audit_*` | tak |
 | PIN niepotwierdzony albo SHA różny | `pin_not_verified` / `sha_mismatch` | tak |
+| hash sekcji stop różny od kanonu | `stop_contract_mismatch` | tak |
 | karta jeszcze nieważna lub wygasła | `card_not_yet_valid` / `card_expired` | tak |
 | SHA buildu lub fingerprint flag niedostępny/różny | `*_unavailable` / `*_mismatch` | tak |
 | stan uszkodzony lub niedokończony zapis atomowy | `state_corrupt` / `state_atomic_write_incomplete` | stan traktowany jak latch |
+| receipt podpisu istnieje, ale brak stanu | `state_missing` | tak; brak świeżego budżetu |
+| stan związany z inną/nieznaną kartą | `state_card_mismatch` | tak |
 | latch już włączony | `latch_on` | pozostaje |
 | brak albo negatywny dowód predykatu 1–7 | `scope_*` | nie; order jest `recommend-only` |
 | limit 1/h, 1 in-flight, 3 total lub pending verification | `max_per_hour`, `in_flight`, `max_total`, `pending_verification` | nie |
+| nazwa nie rozwiązuje się jednoznacznie do zamierzonego CID | `runner_identity_ambiguous` | nie; brak rezerwacji |
+| read-back runnera wskazuje inny CID | `runner_identity_mismatch` | tak + rezerwacja zostaje |
+| końcowy źródłowy killswitch jest OFF/nieczytelny | `flag_off_at_execution` | nie; brak rezerwacji |
 | runner nie potwierdził wyniku po możliwym wysłaniu | `runner_outcome_unknown` | tak + budżet jak wykonanie |
 | jawny brak startu procesu | `definitive_pre_send_refusal` | rezerwacja wycofana w obu stanach; audyt `reservation_rolled_back` |
 
@@ -119,9 +150,11 @@ Każdy krok live wymaga właściwego ACK ownera. Kolejność jest niezamienna:
    `python3 tools/write_build_sha.py --verify` — wymagany exit `0`;
 3. wykonaj jeden autoryzowany restart właściwej usługi i zweryfikuj health/PID;
 4. owner podpisuje kartę w torze z PIN-em, dopiero po zgodnym BUILD_SHA;
-5. jeżeli stan jest zatrzaśnięty, po ręcznym reconcile użyj za osobnym ACK
+5. ten sam tor, zanim potwierdzi gotowość podpisu, wykonuje
+   `authority_card_verify.py initialize-state`; brak tego kroku = podpis niegotowy;
+6. jeżeli stan jest zatrzaśnięty, po ręcznym reconcile użyj za osobnym ACK
    `latch-clear` opisanym niżej;
-6. dopiero na końcu owner może flipnąć `ENABLE_AUTO_ASSIGN=true`.
+7. dopiero na końcu owner może flipnąć `ENABLE_AUTO_ASSIGN=true`.
 
 Writer jest idempotentny i zapisuje `temp → fsync → rename → fsync katalogu`.
 Nie ma timera ani importu w silniku.
@@ -129,17 +162,28 @@ Nie ma timera ani importu w silniku.
 ### Pułapka poranna
 
 Zakazana kolejność to: **flip ON → pierwszy event → brak karty/BUILD_SHA →
-latch → podpis karty**. Podpis nie zdejmuje istniejącego latcha, a skasowanie
-pliku stanu resetowałoby również budżet wykonań. Dokładna bezpieczna sekwencja:
+latch → podpis karty**. Podpis nie zdejmuje istniejącego latcha. Skasowanie
+pliku stanu nie resetuje już budżetu: przy istniejącym receipt executor zatrzaskuje
+`state_missing`, ale nadal wymaga to ręcznego odzyskania historii. Dokładna
+bezpieczna sekwencja:
 
 `write_build_sha + --verify` → `restart + health` → `podpis karty z PIN-em` →
+`initialize-state` →
 `reconcile 5b i latch-clear, tylko jeśli latch był ON` → `flip flagi`.
 
 ## CLI
 
 `tools/authority_card_verify.py` ma read-only `show`, `verify` (exit 0/1) i
-`template`, a także dwa wąskie, audytowane writery. Nie podpisuje karty; podpis
-pozostaje w torze panelu z PIN-em.
+`template`, a także trzy wąskie writery. Nie podpisuje karty; podpis pozostaje w
+torze panelu z PIN-em. Po trwałym receipt tor podpisu musi wykonać:
+
+```bash
+python3 tools/authority_card_verify.py initialize-state
+```
+
+Komenda najpierw weryfikuje podpis, SHA buildu, fingerprint flag i kontrakt
+stopu, potem atomowo tworzy stan związany z SHA karty. Jest idempotentna dla tej
+samej karty i odmawia nadpisania stanu innej/nieznanej karty.
 
 Po ręcznym sprawdzeniu wykonania:
 

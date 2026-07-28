@@ -32,16 +32,25 @@ def _load_local(name: str, path: Path):
 
 AC = _load_local("dispatch_v2.authority_card", REPO / "authority_card.py")
 E = _load_local("auto_assign_executor_authority_wt", REPO / "auto_assign_executor.py")
+REAL_FRESH_EXECUTION_FLAGS = E._fresh_execution_flags
 
 NOW = datetime(2026, 7, 29, 9, 0, tzinfo=timezone.utc)
 GIT_SHA = "7a63f8008abcdef0123456789abcdef012345678"
 FLAG_FP = "ENABLE_AUTO_ASSIGN=True|fixture=v1"
+STOP_CONTRACT_SHA256 = (
+    "91997392295092fd6cd3bc0d54926261d2074e94e74f67731cf4cd50c2aff42d"
+)
 
 
 @pytest.fixture(autouse=True)
 def _pin_execution_clock(monkeypatch):
     """Executor używa świeżego zegara; fixture utrzymuje deterministyczne karty."""
     monkeypatch.setattr(E, "_fresh_execution_now", lambda: NOW)
+    monkeypatch.setattr(
+        E,
+        "_fresh_execution_flags",
+        lambda: (True, FLAG_FP),
+    )
 
 
 def _body(**changes):
@@ -69,7 +78,7 @@ def _body(**changes):
             "max_total": 3,
             "require_verification": True,
         },
-        "stop_contract_sha256": "a" * 64,
+        "stop_contract_sha256": STOP_CONTRACT_SHA256,
         "code_fingerprint": {
             "git_sha": GIT_SHA,
             "flag_fingerprint": FLAG_FP,
@@ -208,7 +217,11 @@ def test_latest_signature_for_class_wins(tmp_path):
 
 
 def _state(**changes):
-    state = AC.empty_state()
+    state = {
+        **AC.empty_state(),
+        "initialized_for_card": AC.card_sha256(_body()),
+        "initialized_at": NOW.isoformat(),
+    }
     state.update(changes)
     return state
 
@@ -401,7 +414,13 @@ def _grant_owner_auth(monkeypatch, audit):
 
 
 def _executor_paths(tmp_path):
-    card, audit, _ = _valid_files(tmp_path)
+    card, audit, body = _valid_files(tmp_path)
+    authority_state_path = tmp_path / "card-state.json"
+    AC.initialize_state(
+        str(authority_state_path),
+        AC.card_sha256(body),
+        NOW,
+    )
     heartbeat = tmp_path / "monitor-heartbeat.json"
     heartbeat.write_text(
         json.dumps({"ts": NOW.isoformat(), "pid": 123, "checks": {}}),
@@ -410,7 +429,7 @@ def _executor_paths(tmp_path):
     return {
         "authority_card_path": str(card),
         "authority_audit_path": str(audit),
-        "authority_state_path": str(tmp_path / "card-state.json"),
+        "authority_state_path": str(authority_state_path),
         "code_git_sha": GIT_SHA,
         "flag_fp": FLAG_FP,
         "state_path": str(tmp_path / "auto-state.json"),
@@ -419,6 +438,7 @@ def _executor_paths(tmp_path):
         "commit_recheck_provider": (
             lambda _oid, _payload, now=None: _commit_snapshot()
         ),
+        "identity_registry_provider": lambda: _IdentityRegistry("101"),
     }
 
 
@@ -718,6 +738,12 @@ def test_card_is_revalidated_with_fresh_time_after_solve_before_reservation(
         "".join(json.dumps(row) + "\n" for row in rows),
         encoding="utf-8",
     )
+    Path(paths["authority_state_path"]).unlink()
+    AC.initialize_state(
+        paths["authority_state_path"],
+        AC.card_sha256(body),
+        NOW,
+    )
     _grant_owner_auth(monkeypatch, audit)
     monkeypatch.setattr(C, "ENABLE_AUTO_ASSIGN", True)
     monkeypatch.setattr(
@@ -804,7 +830,11 @@ def test_runner_definitive_pre_send_refusal_rolls_back_reservation_with_audit(
 
     assert out["runner_outcome"] == "definitive_pre_send_refusal"
     card_state = AC.load_state(paths["authority_state_path"])
-    assert card_state == AC.empty_state()
+    assert {
+        key: card_state[key]
+        for key in AC.empty_state()
+    } == AC.empty_state()
+    assert card_state["initialized_for_card"] == AC.card_sha256(_body())
     auto_state = json.loads(
         Path(paths["state_path"]).read_text(encoding="utf-8")
     )
@@ -1055,3 +1085,329 @@ def test_pytest_guard_refuses_default_production_paths():
     )
     assert verdict.valid is False
     assert verdict.reason == "pytest_prod_path_blocked"
+
+
+class _IdentityRegistry:
+    def __init__(self, resolved):
+        self.resolved = resolved
+
+    def resolve(self, _name, profile="worker", *, bare_key_strict=False):
+        assert profile == "worker"
+        assert bare_key_strict is True
+        return self.resolved
+
+
+def test_h1_ambiguous_runner_identity_is_denied_without_latch(
+    tmp_path,
+    monkeypatch,
+):
+    """RED H1: nazwa musi jednoznacznie wskazywać zamierzony canon_cid."""
+    paths = _executor_paths(tmp_path)
+    paths["identity_registry_provider"] = lambda: _IdentityRegistry(None)
+    _grant_owner_auth(monkeypatch, Path(paths["authority_audit_path"]))
+    monkeypatch.setattr(C, "ENABLE_AUTO_ASSIGN", True)
+    calls = []
+
+    out = E.maybe_execute(
+        _record(),
+        SimpleNamespace(would_auto_assign=True),
+        {"status_id": 2},
+        now=NOW,
+        assign_runner=lambda *args: (calls.append(args) or (True, "ok")),
+        notifier=lambda _text: None,
+        **paths,
+    )
+
+    assert out["blocked"] == "runner_identity_ambiguous"
+    assert calls == []
+    assert AC.load_state(paths["authority_state_path"])["auto_off_latch"] is False
+
+
+def test_h1_runner_readback_mismatch_latches_and_keeps_reservation(
+    tmp_path,
+    monkeypatch,
+):
+    """RED H1: potwierdzenie innego CID jest unknown + reconcile, nie sukcesem."""
+    paths = _executor_paths(tmp_path)
+    _grant_owner_auth(monkeypatch, Path(paths["authority_audit_path"]))
+    monkeypatch.setattr(C, "ENABLE_AUTO_ASSIGN", True)
+    monkeypatch.setenv("ALLOW_AUTO_ASSIGN_STATE_IN_TEST", "1")
+
+    out = E.maybe_execute(
+        _record(),
+        SimpleNamespace(would_auto_assign=True),
+        {"status_id": 2},
+        now=NOW,
+        assign_runner=lambda *_args: (
+            True,
+            "ASSIGN_OK: fixture [verify_ok_kid=999]",
+        ),
+        notifier=lambda _text: None,
+        **paths,
+    )
+
+    assert out["executed"] is False
+    assert out["runner_outcome"] == "unknown"
+    assert out["runner_msg"].endswith("verify_ok_kid=999]")
+    state = AC.load_state(paths["authority_state_path"])
+    assert state["executed_total"] == 1
+    assert state["in_flight"] == "480300"
+    assert state["auto_off_latch"] is True
+    assert state["auto_off_reason"] == "runner_identity_mismatch"
+
+
+def test_h2_oserror_after_child_start_is_unknown_and_never_rolls_back(
+    tmp_path,
+    monkeypatch,
+):
+    """RED H2: skutek, potem OSError z communicate => rezerwacja zostaje."""
+    paths = _executor_paths(tmp_path)
+    _grant_owner_auth(monkeypatch, Path(paths["authority_audit_path"]))
+    monkeypatch.setattr(C, "ENABLE_AUTO_ASSIGN", True)
+    monkeypatch.setenv("ALLOW_AUTO_ASSIGN_STATE_IN_TEST", "1")
+    monkeypatch.setattr(E, "_pytest_active", lambda: False)
+    effect = tmp_path / "panel-effect"
+
+    class StartedChild:
+        returncode = 0
+
+        def communicate(self, timeout=None):
+            assert timeout == E.GASTRO_ASSIGN_TIMEOUT_SEC
+            effect.write_text("assigned", encoding="utf-8")
+            raise OSError("post-start read failure")
+
+        def kill(self):
+            pass
+
+    def legacy_run(*_args, **_kwargs):
+        effect.write_text("assigned", encoding="utf-8")
+        raise OSError("post-start legacy run failure")
+
+    monkeypatch.setattr(E.subprocess, "Popen", lambda *_a, **_k: StartedChild())
+    monkeypatch.setattr(E.subprocess, "run", legacy_run)
+
+    out = E.maybe_execute(
+        _record(),
+        SimpleNamespace(would_auto_assign=True),
+        {"status_id": 2},
+        now=NOW,
+        notifier=lambda _text: None,
+        **paths,
+    )
+
+    assert effect.read_text(encoding="utf-8") == "assigned"
+    assert out["runner_outcome"] == "unknown"
+    state = AC.load_state(paths["authority_state_path"])
+    assert state["executed_total"] == 1
+    assert state["in_flight"] == "480300"
+    assert state["auto_off_reason"] == "runner_outcome_unknown"
+
+
+def test_h3_initialize_state_binds_card_atomically_and_is_idempotent(tmp_path):
+    """RED H3: tor podpisu tworzy trwały marker konkretnej karty."""
+    path = tmp_path / "card-state.json"
+    first = AC.initialize_state(str(path), "b" * 64, NOW)
+    second = AC.initialize_state(str(path), "b" * 64, NOW + timedelta(seconds=1))
+
+    assert first == second
+    assert first["initialized_for_card"] == "b" * 64
+    assert first["initialized_at"] == NOW.isoformat()
+    assert AC.load_state(str(path)) == first
+    assert path.stat().st_mode & 0o777 == 0o600
+    assert not list(tmp_path.glob("card-state.json.tmp.*"))
+
+
+def test_h3_missing_signed_state_is_latched_not_a_fresh_budget(
+    tmp_path,
+    monkeypatch,
+):
+    """RED/mutation H3: usunięcie state_missing gate znów uruchomi runner."""
+    paths = _executor_paths(tmp_path)
+    Path(paths["authority_state_path"]).unlink()
+    _grant_owner_auth(monkeypatch, Path(paths["authority_audit_path"]))
+    monkeypatch.setattr(C, "ENABLE_AUTO_ASSIGN", True)
+    calls = []
+
+    out = E.maybe_execute(
+        _record(),
+        SimpleNamespace(would_auto_assign=True),
+        {"status_id": 2},
+        now=NOW,
+        assign_runner=lambda *args: (calls.append(args) or (True, "ok")),
+        notifier=lambda _text: None,
+        **paths,
+    )
+
+    assert out["blocked"] == "authority_card_state_missing"
+    assert calls == []
+    state = AC.load_state(paths["authority_state_path"])
+    assert state["auto_off_latch"] is True
+    assert state["auto_off_reason"] == "state_missing"
+    with pytest.raises(ValueError, match="utracona historia budżetu"):
+        AC.clear_latch(
+            paths["authority_state_path"],
+            reason="mutation probe",
+            operator="test",
+            now=NOW,
+            audit_path=paths["authority_audit_path"],
+        )
+
+    # Mutation control: usuń oba guardy wiążące receipt ze stanem, odtwarzając
+    # poprzedni empty_state-on-missing — ten sam przypadek znów dochodzi do runnera.
+    mutated_root = tmp_path / "mutation"
+    mutated_root.mkdir()
+    mutated_paths = _executor_paths(mutated_root)
+    Path(mutated_paths["authority_state_path"]).unlink()
+    _grant_owner_auth(
+        monkeypatch,
+        Path(mutated_paths["authority_audit_path"]),
+    )
+    body = json.loads(
+        Path(mutated_paths["authority_card_path"]).read_text(encoding="utf-8")
+    )
+
+    def missing_state_as_fresh_budget(**kwargs):
+        return True, "ok", {
+            "enforced": True,
+            "state": AC.empty_state(),
+            "state_path": kwargs["state_path"],
+            "card_sha256": AC.card_sha256(body),
+        }
+
+    monkeypatch.setattr(E, "_authority_card_gate", missing_state_as_fresh_budget)
+    mutated_calls = []
+    mutated = E.maybe_execute(
+        _record(),
+        SimpleNamespace(would_auto_assign=True),
+        {"status_id": 2},
+        now=NOW,
+        assign_runner=lambda *args: (
+            mutated_calls.append(args) or (True, "ASSIGN_OK: fixture")
+        ),
+        notifier=lambda _text: None,
+        **mutated_paths,
+    )
+    assert mutated["executed"] is True
+    assert len(mutated_calls) == 1
+
+
+def test_h4_clock_is_sampled_after_locks_for_heartbeat_and_proposal(
+    tmp_path,
+    monkeypatch,
+):
+    """RED H4: 61 s czekania na lock unieważnia wejściowy heartbeat."""
+    paths = _executor_paths(tmp_path)
+    body = json.loads(Path(paths["authority_card_path"]).read_text(encoding="utf-8"))
+    AC.initialize_state(paths["authority_state_path"], AC.card_sha256(body), NOW)
+    _grant_owner_auth(monkeypatch, Path(paths["authority_audit_path"]))
+    monkeypatch.setattr(C, "ENABLE_AUTO_ASSIGN", True)
+    monkeypatch.setattr(
+        E,
+        "_fresh_execution_now",
+        lambda: NOW + timedelta(seconds=61),
+    )
+    calls = []
+
+    out = E.maybe_execute(
+        _record(),
+        SimpleNamespace(would_auto_assign=True),
+        {"status_id": 2},
+        now=NOW,
+        assign_runner=lambda *args: (calls.append(args) or (True, "ok")),
+        notifier=lambda _text: None,
+        **paths,
+    )
+
+    assert out["blocked"] == "monitor_heartbeat_stale"
+    assert calls == []
+
+
+def test_h5_hot_flip_off_between_recheck_and_final_gate_stops_execution(
+    tmp_path,
+    monkeypatch,
+):
+    """RED/mutation H5: finalny odczyt źródłowy musi pokonać snapshot ticku."""
+    paths = _executor_paths(tmp_path)
+    body = json.loads(Path(paths["authority_card_path"]).read_text(encoding="utf-8"))
+    AC.initialize_state(paths["authority_state_path"], AC.card_sha256(body), NOW)
+    _grant_owner_auth(monkeypatch, Path(paths["authority_audit_path"]))
+    monkeypatch.setattr(C, "ENABLE_AUTO_ASSIGN", True)
+    hot = {"enabled": True}
+
+    def flip_during_recheck(_oid, _payload, now=None):
+        hot["enabled"] = False
+        return _commit_snapshot()
+
+    paths["commit_recheck_provider"] = flip_during_recheck
+    monkeypatch.setattr(
+        E,
+        "_fresh_execution_flags",
+        lambda: (hot["enabled"], FLAG_FP),
+    )
+    calls = []
+    out = E.maybe_execute(
+        _record(),
+        SimpleNamespace(would_auto_assign=True),
+        {"status_id": 2},
+        now=NOW,
+        assign_runner=lambda *args: (calls.append(args) or (True, "ok")),
+        notifier=lambda _text: None,
+        **paths,
+    )
+    assert out["blocked"] == "flag_off_at_execution"
+    assert calls == []
+
+    # Mutation control: zamrożenie starego ON usuwa sygnał oracle i odpala runner.
+    hot["enabled"] = True
+    paths["commit_recheck_provider"] = lambda *_a, **_k: _commit_snapshot()
+    monkeypatch.setattr(E, "_fresh_execution_flags", lambda: (True, FLAG_FP))
+    mutated_calls = []
+    mutated = E.maybe_execute(
+        _record(),
+        SimpleNamespace(would_auto_assign=True),
+        {"status_id": 2},
+        now=NOW,
+        assign_runner=lambda *args: (
+            mutated_calls.append(args) or (True, "ASSIGN_OK: fixture")
+        ),
+        notifier=lambda _text: None,
+        **paths,
+    )
+    assert mutated["executed"] is True
+    assert len(mutated_calls) == 1
+
+
+def test_h5_source_read_bypasses_active_flag_snapshot(tmp_path, monkeypatch):
+    """Ratchet H5: snapshot ON nie może zasłonić źródłowego killswitcha OFF."""
+    flags_path = tmp_path / "flags.json"
+    flags_path.write_text(
+        json.dumps({"ENABLE_AUTO_ASSIGN": False}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(C, "FLAGS_PATH", flags_path)
+    monkeypatch.setattr(
+        C,
+        "_FLAGS_SNAPSHOT_OVERRIDE",
+        {"ENABLE_AUTO_ASSIGN": True},
+    )
+    monkeypatch.setattr(E, "_fresh_execution_flags", REAL_FRESH_EXECUTION_FLAGS)
+
+    assert C.decision_flag("ENABLE_AUTO_ASSIGN") is True
+    enabled, fingerprint = E._fresh_execution_flags()
+    assert enabled is False
+    assert "ENABLE_AUTO_ASSIGN=0" in fingerprint
+
+
+def test_h6_stop_contract_hash_is_bound_and_template_uses_canonical_value(tmp_path):
+    """RED H6: dowolne 64 hex nie może udawać podpisanego kontraktu stopu."""
+    card, audit, body = _valid_files(tmp_path)
+    assert AC.template_body()["stop_contract_sha256"] == STOP_CONTRACT_SHA256
+    assert AC.EXPECTED_STOP_CONTRACT_SHA256 == STOP_CONTRACT_SHA256
+    assert _verify(card, audit).valid is True
+
+    body["stop_contract_sha256"] = "0" * 64
+    _write_card(card, body)
+    _write_audit(audit, body)
+    verdict = _verify(card, audit)
+    assert verdict.valid is False
+    assert verdict.reason == "stop_contract_mismatch"

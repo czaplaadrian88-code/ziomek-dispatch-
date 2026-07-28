@@ -34,6 +34,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import subprocess
 import time
 from contextlib import nullcontext
@@ -44,6 +45,7 @@ from dispatch_v2 import common as C
 from dispatch_v2 import authority_card as AC
 from dispatch_v2 import proposal_freshness as PF
 from dispatch_v2 import state_machine
+from dispatch_v2.identity import build_registry, canon_cid
 from dispatch_v2.tools import auto_assign_monitor as AAM
 
 log = logging.getLogger("auto_assign_executor")
@@ -354,6 +356,7 @@ def _authority_card_gate(
     latch_notifier: Optional[Callable[[str], None]] = None,
 ) -> Tuple[bool, str, Dict[str, Any]]:
     """Krok 1c: latch → podpis → scope → limity. Każdy błąd jest odmową."""
+    state_existed = os.path.exists(state_path)
     state = AC.load_state(state_path)
     if state.get("auto_off_latch") is True:
         return False, "latch_on", {
@@ -368,6 +371,7 @@ def _authority_card_gate(
         now=now,
         code_git_sha=code_git_sha,
         flag_fp=flag_fp,
+        expected_stop_contract_sha256=AC.EXPECTED_STOP_CONTRACT_SHA256,
     )
     if not verdict.valid:
         try:
@@ -384,6 +388,55 @@ def _authority_card_gate(
         return False, verdict.reason, {
             "state": state,
             "state_path": state_path,
+            "enforced": True,
+        }
+
+    if not state_existed:
+        # Receipt podpisu już istnieje i przeszedł pełną walidację. Brak stanu
+        # nie jest nową kartą: to utrata historii budżetu. Tworzymy wyłącznie
+        # trwały, związany z kartą stan zatrzaśnięty; clear dla tej przyczyny
+        # wymaga osobnego ręcznego odzyskania historii.
+        try:
+            AC.initialize_state(
+                state_path,
+                str(verdict.card_sha256),
+                now,
+            )
+            _latch_authority_auto_off(
+                state_path,
+                "state_missing",
+                now,
+                latch_notifier,
+            )
+        except Exception as state_error:
+            log.warning(
+                "AUTO_ASSIGN missing authority state latch fail "
+                f"{type(state_error).__name__}: {state_error}"
+            )
+        return False, "state_missing", {
+            "state": AC.load_state(state_path),
+            "state_path": state_path,
+            "card_sha256": verdict.card_sha256,
+            "enforced": True,
+        }
+
+    if state.get("initialized_for_card") != verdict.card_sha256:
+        try:
+            _latch_authority_auto_off(
+                state_path,
+                "state_card_mismatch",
+                now,
+                latch_notifier,
+            )
+        except Exception as state_error:
+            log.warning(
+                "AUTO_ASSIGN authority state/card latch fail "
+                f"{type(state_error).__name__}: {state_error}"
+            )
+        return False, "state_card_mismatch", {
+            "state": state,
+            "state_path": state_path,
+            "card_sha256": verdict.card_sha256,
             "enforced": True,
         }
 
@@ -524,16 +577,36 @@ def _default_assign_runner(order_id: str, kurier_name: str, time_minutes: int) -
     cmd = ["python3", GASTRO_ASSIGN_PATH, "--id", str(order_id),
            "--kurier", str(kurier_name), "--time", str(int(time_minutes)), "--verify"]
     try:
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=GASTRO_ASSIGN_TIMEOUT_SEC)
-        out = (r.stdout or "")
-        if r.returncode == 0 and ASSIGN_OK_SENTINEL in out:
-            return True, out.strip()[-400:]
-        err = (r.stderr or "").strip() or out.strip()
-        return False, f"exit={r.returncode} no_confirm {err[-360:]}"
+        child = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except (FileNotFoundError, PermissionError, OSError) as error:
+        # Popen nie zwrócił procesu: jedyna udowodniona odmowa przed startem.
+        return False, f"pre_send_refusal:{type(error).__name__}"
+    except Exception as error:
+        return False, f"spawn_exception_unknown:{type(error).__name__}"
+
+    try:
+        stdout, stderr = child.communicate(timeout=GASTRO_ASSIGN_TIMEOUT_SEC)
     except subprocess.TimeoutExpired:
+        try:
+            child.kill()
+            child.communicate()
+        except Exception:
+            pass
         return False, f"timeout_{int(GASTRO_ASSIGN_TIMEOUT_SEC)}s"
-    except Exception as e:
-        return False, f"exc:{type(e).__name__}"
+    except Exception as error:
+        # Dziecko już istniało i mogło wykonać skutek przed błędem I/O.
+        return False, f"post_start_exception:{type(error).__name__}"
+
+    out = stdout or ""
+    if child.returncode == 0 and ASSIGN_OK_SENTINEL in out:
+        return True, out.strip()[-400:]
+    err = (stderr or "").strip() or out.strip()
+    return False, f"exit={child.returncode} no_confirm {err[-360:]}"
 
 
 def _default_notifier(text: str) -> None:
@@ -580,11 +653,24 @@ def _runner_failure_classification(message: Any) -> str:
     definitive = (
         msg == "blocked_pytest_context"
         or msg.startswith("pre_send_refusal:")
-        or msg.startswith("exc:FileNotFoundError")
-        or msg.startswith("exc:PermissionError")
-        or msg.startswith("exc:OSError")
     )
     return "definitive_pre_send_refusal" if definitive else "unknown"
+
+
+def _fresh_execution_flags() -> Tuple[bool, Optional[str]]:
+    """Odczyt źródłowy omijający per-tick FlagSnapshot, zawsze fail-closed."""
+    try:
+        enabled = C.decision_flag("ENABLE_AUTO_ASSIGN", source=True)
+        fingerprint = C.flag_fingerprint(source=True)
+    except Exception:
+        return False, None
+    return bool(enabled), fingerprint
+
+
+def _runner_readback_cid(message: Any) -> Optional[str]:
+    """CID z sentinela ``--verify``; brak pola oznacza brak dodatkowego dowodu."""
+    match = re.search(r"\bverify_ok_kid=([^\s\]|]+)", str(message or ""))
+    return canon_cid(match.group(1)) if match else None
 
 
 def _append_learning_log(rec: Dict[str, Any]) -> None:
@@ -626,6 +712,7 @@ def maybe_execute(
     monitor_heartbeat_path: str = MONITOR_HEARTBEAT_PATH,
     shadow_decisions_path: str = SHADOW_DECISIONS_PATH,
     commit_recheck_provider: Optional[Callable[..., Dict[str, Any]]] = None,
+    identity_registry_provider: Optional[Callable[[], Any]] = None,
     code_git_sha: Optional[str] = None,
     flag_fp: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
@@ -734,14 +821,34 @@ def maybe_execute(
         )
         with authority_lock:
             with state_machine.lifecycle_apply_lock():
+                # H4: jedyny zegar wszystkich kontroli świeżości jest pobierany
+                # dopiero po obu lockach. ``now`` wejściowe służy odtąd logom.
+                execution_now = (
+                    _fresh_execution_now()
+                    if _card_ctx.get("enforced")
+                    else now
+                )
+                if execution_now.tzinfo is None:
+                    execution_now = execution_now.replace(tzinfo=timezone.utc)
+                execution_now = execution_now.astimezone(timezone.utc)
+                execution_ts = execution_now.timestamp()
+
                 if not C.decision_flag("ENABLE_AUTO_ASSIGN"):
                     log.info(f"AUTO_ASSIGN aborted flag_off_at_execution oid={oid}")
                     return {"blocked": "flag_off_at_execution", "order_id": oid}
+                if _card_ctx.get("enforced"):
+                    _auth_ok, _auth_reason = _owner_authorization(execution_now)
+                    if not _auth_ok:
+                        _warn_owner_auth(_auth_reason, execution_ts)
+                        return {
+                            "blocked": "owner_auth_missing",
+                            "reason": _auth_reason,
+                        }
                 _card_ok, _card_reason, _card_ctx = _authority_card_gate(
                     record=record,
                     result=result,
                     payload=payload,
-                    now=now,
+                    now=execution_now,
                     card_path=authority_card_path,
                     audit_path=authority_audit_path,
                     state_path=authority_state_path,
@@ -750,20 +857,20 @@ def maybe_execute(
                     latch_notifier=notifier or _default_notifier,
                 )
                 if not _card_ok:
-                    _warn_authority_card(_card_reason, now_ts)
+                    _warn_authority_card(_card_reason, execution_ts)
                     return {
                         "blocked": f"authority_card_{_card_reason}",
                         "reason": _card_reason,
                     }
                 if _card_ctx.get("enforced"):
                     heartbeat_ok, heartbeat_reason = AAM.heartbeat_fresh(
-                        monitor_heartbeat_path, now
+                        monitor_heartbeat_path, execution_now
                     )
                     if not heartbeat_ok:
                         _latch_authority_auto_off(
                             authority_state_path,
                             heartbeat_reason,
-                            now,
+                            execution_now,
                             notifier,
                         )
                         return {
@@ -773,14 +880,14 @@ def maybe_execute(
 
                 # Powtórz także idempotencję po wejściu pod wspólny lock.
                 state = _load_state(state_path)
-                if _recent_auto_assign(state, oid, now_ts, idem_ttl):
+                if _recent_auto_assign(state, oid, execution_ts, idem_ttl):
                     return {"blocked": "idempotent_recent", "order_id": oid}
 
                 if _card_ctx.get("enforced"):
                     recheck = commit_recheck_provider or PF.prepare_commit_recheck
-                    fresh = recheck(oid, payload, now=now)
+                    fresh = recheck(oid, payload, now=execution_now)
                     commit_ok, commit_reason = PF.compare_commit_snapshots(
-                        record.get("commit_proposal"), fresh, now
+                        record.get("commit_proposal"), fresh, execution_now
                     )
                     if not commit_ok:
                         # Staleness != tamper: celowo bez latcha.
@@ -789,18 +896,46 @@ def maybe_execute(
                             "reason": commit_reason,
                         }
 
-                execution_now = now
-                execution_ts = now_ts
+                    # H1: kanoniczny registry jest jedynym resolverem przed
+                    # bojowym runnerem nazwowym. Brak/tie/rozjazd to staleness
+                    # configu — odmowa bez latcha i bez rezerwacji.
+                    try:
+                        registry = (
+                            identity_registry_provider or build_registry
+                        )()
+                        resolved_cid = registry.resolve(
+                            str(name),
+                            "worker",
+                            bare_key_strict=True,
+                        )
+                    except Exception as identity_error:
+                        log.warning(
+                            "AUTO_ASSIGN identity registry fail "
+                            f"oid={oid}: {type(identity_error).__name__}: "
+                            f"{identity_error}"
+                        )
+                        resolved_cid = None
+                    if canon_cid(resolved_cid) != canon_cid(cid):
+                        return {
+                            "blocked": "runner_identity_ambiguous",
+                            "reason": "runner_identity_ambiguous",
+                            "order_id": oid,
+                            "courier_id": cid,
+                        }
+
                 reservation_active = False
                 if _card_ctx.get("enforced"):
-                    # G1: OSTATNI gate jest PO fresh solve, ze świeżym zegarem,
-                    # bez żadnej pracy pomiędzy nim a trwałą rezerwacją.
-                    execution_now = _fresh_execution_now()
-                    if execution_now.tzinfo is None:
-                        execution_now = execution_now.replace(
-                            tzinfo=timezone.utc
+                    # H5/G1: OSTATNI gate po fresh solve czyta źródło flags.json
+                    # poza FlagSnapshot. Między nim a rezerwacją nie ma pracy.
+                    fresh_flag_on, fresh_flag_fp = _fresh_execution_flags()
+                    if not fresh_flag_on:
+                        log.info(
+                            f"AUTO_ASSIGN aborted flag_off_at_execution oid={oid}"
                         )
-                    execution_ts = execution_now.timestamp()
+                        return {
+                            "blocked": "flag_off_at_execution",
+                            "order_id": oid,
+                        }
                     _card_ok, _card_reason, _card_ctx = _authority_card_gate(
                         record=record,
                         result=result,
@@ -810,7 +945,7 @@ def maybe_execute(
                         audit_path=authority_audit_path,
                         state_path=authority_state_path,
                         code_git_sha=code_git_sha,
-                        flag_fp=flag_fp,
+                        flag_fp=fresh_flag_fp,
                         latch_notifier=notifier or _default_notifier,
                     )
                     if not _card_ok:
@@ -892,6 +1027,21 @@ def maybe_execute(
                         "runner_exception_unknown:"
                         f"{type(runner_error).__name__}"
                     )
+                identity_mismatch = False
+                if ok and _card_ctx.get("enforced"):
+                    readback_cid = _runner_readback_cid(msg)
+                    if (
+                        readback_cid is not None
+                        and readback_cid != canon_cid(cid)
+                    ):
+                        identity_mismatch = True
+                        ok = False
+                        _latch_authority_auto_off(
+                            str(_card_ctx["state_path"]),
+                            "runner_identity_mismatch",
+                            execution_now,
+                            notifier,
+                        )
                 runner_outcome = (
                     "confirmed"
                     if ok
@@ -951,7 +1101,11 @@ def maybe_execute(
                             )
                             _latch_authority_auto_off(
                                 str(_card_ctx["state_path"]),
-                                "runner_outcome_unknown",
+                                (
+                                    "runner_identity_mismatch"
+                                    if identity_mismatch
+                                    else "runner_outcome_unknown"
+                                ),
                                 execution_now,
                                 notifier,
                             )
