@@ -24,6 +24,16 @@ from zoneinfo import ZoneInfo
 
 SCHEMA_VERSION = 1
 CYCLE_SECONDS = 10
+# R3 (2026-07-28): jeden kanoniczny kontrakt świeżości i nazw źródeł dla
+# snapshotu live ETA. Nie używać progów courier_resolvera — to inny produktowy
+# kontrakt (flota/scoring), podczas gdy tutaj owner zatwierdził LIVE <=120 s
+# oraz WARM(last_event) <=180 s.
+LIVE_POSITION_MAX_AGE_SECONDS = 120
+WARM_EVENT_MAX_AGE_SECONDS = 180
+SOURCE_LIVE = "live"
+SOURCE_WARM = "warm"
+SOURCE_PLANNED = "planned"
+ETA_SOURCES = frozenset({SOURCE_LIVE, SOURCE_WARM, SOURCE_PLANNED})
 # Snapshot starszy niż tyle = martwy/zawieszony daemon → NIE serwuj (konsument fallback).
 # 6 pominiętych cykli; bez tego panel/kafel/mapa/apka pokazują starą godzinę bez końca.
 STALE_AFTER_SECONDS = 6 * CYCLE_SECONDS
@@ -77,7 +87,9 @@ def _coord(value: object) -> tuple[float, float] | None:
         return None
 
 
-def _normalize_stops(stops: Iterable[Mapping[str, object]]) -> list[dict]:
+def _normalize_stops(
+    stops: Iterable[Mapping[str, object]], *, source_contract: bool = False
+) -> list[dict]:
     """Ujednolić stop i scalić kolejne pozycje pod tym samym adresem.
 
     ``order_ids`` pozwala jednemu fizycznemu odbiorowi/dostawie nadać jeden ETA
@@ -96,7 +108,7 @@ def _normalize_stops(stops: Iterable[Mapping[str, object]]) -> list[dict]:
         else:
             order_ids = []
         point = _coord(raw.get("coord"))
-        if not order_ids or point is None:
+        if not order_ids or (point is None and not source_contract):
             continue
         floor_raw = raw.get("floor_at")
         floor_values = (
@@ -116,12 +128,23 @@ def _normalize_stops(stops: Iterable[Mapping[str, object]]) -> list[dict]:
         normalized = {
             "kind": kind,
             "order_ids": sorted(dict.fromkeys(order_ids)),
-            "coord": [point[0], point[1]],
+            "coord": [point[0], point[1]] if point is not None else None,
             "floor_at": _iso_utc(floor) if floor is not None else None,
             "dwell_s": max(0.0, dwell_s),
         }
+        if source_contract:
+            planned = _as_utc(raw.get("planned_at"))
+            normalized["planned_at"] = (
+                _iso_utc(planned) if planned is not None else None
+            )
+            normalized["unpriced_reason"] = (
+                str(raw.get("unpriced_reason") or "bad_coords")
+                if point is None
+                else None
+            )
         if (
             out
+            and point is not None
             and out[-1]["kind"] == normalized["kind"]
             and out[-1]["coord"] == normalized["coord"]
         ):
@@ -132,6 +155,12 @@ def _normalize_stops(stops: Iterable[Mapping[str, object]]) -> list[dict]:
             if floor is not None and (old_floor is None or floor > old_floor):
                 out[-1]["floor_at"] = _iso_utc(floor)
             out[-1]["dwell_s"] = max(out[-1]["dwell_s"], normalized["dwell_s"])
+            if source_contract:
+                old_planned = _as_utc(out[-1].get("planned_at"))
+                if planned is not None and (
+                    old_planned is None or planned > old_planned
+                ):
+                    out[-1]["planned_at"] = _iso_utc(planned)
             continue
         out.append(normalized)
     return out
@@ -145,10 +174,12 @@ def calculate_live_eta(
     now: datetime,
     duration_provider: DurationProvider,
     cycle_id: int,
+    start_source: object = None,
+    source_contract: bool = False,
 ) -> dict:
     """JEDYNY kalkulator ETA: jeden snapshot całej trasy, jeden duration-provider."""
     start_coord = _coord(start)
-    normalized = _normalize_stops(stops)
+    normalized = _normalize_stops(stops, source_contract=source_contract)
     generated_at = _iso_utc(now)
     base = {
         "schema_version": SCHEMA_VERSION,
@@ -158,8 +189,17 @@ def calculate_live_eta(
         "stops": [],
         "orders": {},
     }
-    if start_coord is None or not normalized:
+    if not source_contract and (start_coord is None or not normalized):
         return base
+    if source_contract:
+        return _calculate_source_eta(
+            base=base,
+            start_coord=start_coord,
+            start_source=start_source,
+            normalized=normalized,
+            now=now,
+            duration_provider=duration_provider,
+        )
     points = [start_coord] + [
         (float(stop["coord"][0]), float(stop["coord"][1])) for stop in normalized
     ]
@@ -194,6 +234,112 @@ def calculate_live_eta(
             )
             slot[field] = eta_at
         cursor = arrival + timedelta(seconds=float(stop["dwell_s"]))
+    return base
+
+
+def _calculate_source_eta(
+    *,
+    base: dict,
+    start_coord: tuple[float, float] | None,
+    start_source: object,
+    normalized: list[dict],
+    now: datetime,
+    duration_provider: DurationProvider,
+) -> dict:
+    """R3: wyceń każdy stop niezależnie i zawsze opisz źródło.
+
+    Brak współrzędnych jest lokalną dziurą ``planned`` zamiast kasowania całej
+    trasy. Gdy plan ma ``predicted_at``, stanowi on konserwatywną kotwicę czasu
+    dla dalszych poprawnych stopów; bez niej kalkulator kontynuuje od ostatniej
+    znanej geometrii i co najmniej bieżącego kursora. Takie dalsze ETA pozostają
+    ``planned`` (nigdy nie podszywają się pod LIVE/WARM). Stary reader nadal
+    widzi wyłącznie ``orders``.
+    """
+    route_source = (
+        str(start_source)
+        if str(start_source) in {SOURCE_LIVE, SOURCE_WARM}
+        else SOURCE_PLANNED
+    )
+    cursor = now.astimezone(timezone.utc)
+    anchor = start_coord
+    degraded_to_planned = route_source == SOURCE_PLANNED
+
+    for index, stop in enumerate(normalized):
+        coord = _coord(stop.get("coord"))
+        eta_at: str | None = None
+        eta_hhmm: str | None = None
+        reason: str | None = None
+        source = (
+            SOURCE_PLANNED
+            if degraded_to_planned or coord is None
+            else route_source
+        )
+        arrival: datetime | None = None
+
+        if coord is None:
+            reason = str(stop.get("unpriced_reason") or "bad_coords")
+            planned = _as_utc(stop.get("planned_at"))
+            floor = _as_utc(stop.get("floor_at"))
+            time_anchor = max(
+                (value for value in (planned, floor) if value is not None),
+                default=cursor,
+            )
+            # Nie znamy przejazdu do brakującego punktu, więc samego stopu NIE
+            # wyceniamy. Dalszą trasę wolno jednak policzyć od ostatniej znanej
+            # geometrii, po przesunięciu zegara co najmniej do planu/flooru+dwell;
+            # wszystkie takie dalsze stopy są jawnie PLANNED, nigdy LIVE/WARM.
+            cursor = max(cursor, time_anchor) + timedelta(
+                seconds=float(stop["dwell_s"])
+            )
+            degraded_to_planned = True
+        elif anchor is None:
+            reason = "no_position"
+        else:
+            legs = duration_provider([anchor, coord])
+            if legs is None or len(legs) != 1:
+                reason = "osrm_fail"
+            else:
+                try:
+                    leg_s = max(0.0, float(legs[0]))
+                except (TypeError, ValueError):
+                    reason = "osrm_fail"
+                else:
+                    arrival = cursor + timedelta(seconds=leg_s)
+                    floor = _as_utc(stop.get("floor_at"))
+                    planned = _as_utc(stop.get("planned_at"))
+                    if floor is not None and floor > arrival:
+                        arrival = floor
+                    if degraded_to_planned and planned is not None and planned > arrival:
+                        arrival = planned
+                    eta_at = _iso_utc(arrival)
+                    eta_hhmm = arrival.astimezone(WARSAW).strftime("%H:%M")
+
+        projected = {
+            "position": index,
+            "kind": stop["kind"],
+            "order_ids": stop["order_ids"],
+            "eta_at": eta_at,
+            "eta_hhmm": eta_hhmm,
+            "source": source,
+        }
+        if reason is not None:
+            projected["unpriced_reason"] = reason
+        base["stops"].append(projected)
+
+        field = "pickup_at" if stop["kind"] == "pickup" else "delivery_at"
+        for oid in stop["order_ids"]:
+            slot = base["orders"].setdefault(
+                oid, {"pickup_at": None, "delivery_at": None}
+            )
+            slot[field] = eta_at
+
+        if arrival is not None:
+            cursor = arrival + timedelta(seconds=float(stop["dwell_s"]))
+            anchor = coord
+        elif coord is not None and reason == "osrm_fail":
+            # OSRM jednej nogi nie może zatruć pozostałych; następny stop nadal
+            # próbuje od ostatniej zweryfikowanej kotwicy.
+            degraded_to_planned = True
     return base
 
 
@@ -297,10 +443,12 @@ def write_cycle(
             snapshot = calculate_live_eta(
                 courier_id=courier_id,
                 start=route.get("start"),
+                start_source=route.get("start_source"),
                 stops=route.get("stops") or [],
                 now=current,
                 duration_provider=duration_provider,
                 cycle_id=cycle_id,
+                source_contract=bool(route.get("source_contract")),
             )
             entries[courier_id] = {"snapshot": snapshot}
         store = {

@@ -13,11 +13,12 @@ import json
 import os
 import tempfile
 from contextlib import contextmanager
-from dataclasses import dataclass
-from datetime import datetime, timezone
+from dataclasses import dataclass, replace
+from datetime import datetime, time, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, Mapping, Optional
+from zoneinfo import ZoneInfo
 
 
 OVERRIDES_PATH = "/root/.openclaw/workspace/dispatch_state/manual_overrides.json"
@@ -25,6 +26,15 @@ GRAFIK_FULL_NAMES_PATH = (
     "/root/.openclaw/workspace/dispatch_state/grafik_full_names.json"
 )
 STORE_KEY = "availability_by_cid"
+
+# R4: granica doby operacyjnej. DOKŁADNIE ta sama, na której bliźniaczy
+# `manual_overrides_daily_reset.py` (timer `dispatch-overrides-reset.timer`,
+# `OnCalendar=*-*-* 06:00:00 Europe/Warsaw`) kasuje `excluded`/`excluded_cids`/
+# `working`. Kontrakt CID-keyed przejął semantykę tamtej trójki, więc MUSI
+# dziedziczyć też jej horyzont — inaczej ta sama klasa stanu ma dwa różne
+# cykle życia. Patrz `docs/R4_OPERATOR_ON_MAP.md`.
+OPERATIONAL_DAY_TZ = ZoneInfo("Europe/Warsaw")
+OPERATIONAL_DAY_RESET_HOUR = 6
 
 
 class AvailabilityState(str, Enum):
@@ -57,6 +67,9 @@ class AvailabilityDecision:
     schedule_name: Optional[str] = None
     schedule_entry: Optional[dict] = None
     detail: Optional[str] = None
+    # R4: rekord operatorski BYŁ, ale wygasł — decyzję podjął grafik. Wyłącznie
+    # obserwowalność (konsument stempluje log puli); nie wchodzi do polityki.
+    operator_expired: bool = False
 
 
 @dataclass(frozen=True)
@@ -67,6 +80,10 @@ class AvailabilityContext:
     schedule_error: Optional[str]
     schedule_names_by_cid: Mapping[str, str]
     identity_error: Optional[str]
+    # R4: „teraz" zamrożone RAZ na wywołanie `dispatchable_fleet()` — inaczej
+    # kurierzy z tej samej pętli mogliby wygasać na różnych znacznikach czasu.
+    now: Optional[datetime] = None
+    expiry_enabled: bool = False
 
 
 def _canon_cid(cid: Any) -> str:
@@ -109,6 +126,41 @@ def _parse_store_ts(value: Any) -> Optional[datetime]:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def _operational_day_start_after(moment: datetime) -> datetime:
+    """Pierwsza granica doby operacyjnej ŚCIŚLE po ``moment`` (UTC-aware).
+
+    Liczone na dacie lokalnej, nie arytmetyką na aware-datetime: dodanie
+    ``timedelta(days=1)`` do momentu z offsetem daje przy zmianie czasu przesuniętą
+    godzinę ścienną, a granicą jest właśnie godzina ścienna 06:00 (tak samo, jak
+    rozumie ją `OnCalendar` systemd). 06:00 nigdy nie wpada w lukę DST w
+    Europe/Warsaw (przeskoki 02:00/03:00), więc odwzorowanie jest jednoznaczne.
+    """
+    local = moment.astimezone(OPERATIONAL_DAY_TZ)
+    boundary_time = time(hour=OPERATIONAL_DAY_RESET_HOUR)
+    boundary = datetime.combine(local.date(), boundary_time, tzinfo=OPERATIONAL_DAY_TZ)
+    if boundary <= local:
+        boundary = datetime.combine(
+            local.date() + timedelta(days=1), boundary_time, tzinfo=OPERATIONAL_DAY_TZ
+        )
+    return boundary.astimezone(timezone.utc)
+
+
+def _operator_record_expired(record: Mapping[str, Any], now: datetime) -> bool:
+    """Czy rekord operatorski przestał być prawdą o BIEŻĄCEJ dobie operacyjnej.
+
+    Zasada jedna: *niedowodliwa świeżość nigdy nie nadaje dostępności*. Gdy
+    ``updated_at`` jest pusty albo nie-ISO (rekord tknięty ręcznie — writer
+    :func:`set_operator_availability` zawsze stempluje), ``OPERATOR_ON`` wygasa,
+    bo wpuszczenie do puli wymaga przesłanki, a jej nie ma; ``OPERATOR_OFF``
+    zostaje, bo ZDJĘCIE ograniczenia wymaga dowodu, że granica doby minęła — a nie
+    braku takiego dowodu.
+    """
+    stamped = _parse_store_ts(record.get("updated_at"))
+    if stamped is None:
+        return record.get("state") == AvailabilityState.OPERATOR_ON.value
+    return now >= _operational_day_start_after(stamped)
 
 
 def _read_json_dict(path: str) -> tuple[dict, Optional[str]]:
@@ -173,14 +225,32 @@ def _schedule_names(path: str) -> tuple[dict, Optional[str]]:
     return names, None
 
 
+def _expiry_flag_enabled() -> bool:
+    """Fail-closed odczyt kill-switcha R4: awaria/brak klucza = zachowanie sprzed R4."""
+    try:
+        from dispatch_v2 import common as _common
+
+        return bool(_common.decision_flag("ENABLE_OPERATOR_AVAILABILITY_EXPIRY"))
+    except Exception:
+        return False
+
+
 def load_context(
     schedule: Optional[Mapping[str, Any]],
     *,
     schedule_error: Optional[str] = None,
     overrides_path: str = OVERRIDES_PATH,
     grafik_names_path: str = GRAFIK_FULL_NAMES_PATH,
+    now: Optional[datetime] = None,
+    expiry_enabled: Optional[bool] = None,
 ) -> AvailabilityContext:
-    """Ładuje oba CID-keyed wejścia raz na wywołanie ``dispatchable_fleet``."""
+    """Ładuje oba CID-keyed wejścia raz na wywołanie ``dispatchable_fleet``.
+
+    R4: flaga wygasania czytana TU (raz na wywołanie, nie per kurier) i zamrażana
+    w kontekście razem z ``now`` — cała pętla puli rozstrzyga na jednym stanie
+    flagi i jednym znaczniku czasu. Hot-reload działa MIĘDZY wywołaniami, tak samo
+    jak dla pozostałych flag czytanych w ``dispatchable_fleet``.
+    """
     records, operator_error = _operator_records(overrides_path)
     names, identity_error = _schedule_names(grafik_names_path)
     schedule_map: Mapping[str, Any] = schedule if isinstance(schedule, Mapping) else {}
@@ -195,6 +265,10 @@ def load_context(
         schedule_error=schedule_error,
         schedule_names_by_cid=names,
         identity_error=identity_error,
+        now=now or datetime.now(timezone.utc),
+        expiry_enabled=(
+            _expiry_flag_enabled() if expiry_enabled is None else bool(expiry_enabled)
+        ),
     )
 
 
@@ -206,7 +280,13 @@ def resolve(
     mins_to_shift_start: Callable[[dict], Optional[float]],
     pre_shift_window_min: float,
 ) -> AvailabilityDecision:
-    """Rozstrzyga jedną dostępność. Nie używa nazw floty ani fuzzy fallbacków."""
+    """Rozstrzyga jedną dostępność. Nie używa nazw floty ani fuzzy fallbacków.
+
+    R4: rekord operatorski jest prawdą tylko o SWOJEJ dobie operacyjnej. Po jej
+    granicy jest traktowany jak nieobecny, więc decyzja spada na grafik — czyli
+    dokładnie ta sama ścieżka, którą już dziś realizuje ``None`` (neutral) z konsoli.
+    Żadnego nowego stanu ani gałęzi u konsumenta. Flaga OFF = zachowanie sprzed R4.
+    """
     key = _canon_cid(cid)
     if context.operator_error:
         return AvailabilityDecision(
@@ -218,6 +298,14 @@ def resolve(
         )
 
     operator = context.operator_records.get(key)
+    expired = False
+    if operator and context.expiry_enabled:
+        expired = _operator_record_expired(
+            operator, context.now or datetime.now(timezone.utc)
+        )
+        if expired:
+            operator = None
+
     if operator:
         state = AvailabilityState(operator["state"])
         return AvailabilityDecision(
@@ -227,6 +315,25 @@ def resolve(
             state is AvailabilityState.OPERATOR_ON,
         )
 
+    decision = _resolve_from_schedule(
+        context,
+        key,
+        is_on_shift=is_on_shift,
+        mins_to_shift_start=mins_to_shift_start,
+        pre_shift_window_min=pre_shift_window_min,
+    )
+    return replace(decision, operator_expired=True) if expired else decision
+
+
+def _resolve_from_schedule(
+    context: AvailabilityContext,
+    key: str,
+    *,
+    is_on_shift: Callable[[str, Mapping[str, Any]], tuple[bool, str]],
+    mins_to_shift_start: Callable[[dict], Optional[float]],
+    pre_shift_window_min: float,
+) -> AvailabilityDecision:
+    """Grafikowa część :func:`resolve` — bez zmian względem stanu sprzed R4."""
     if context.schedule_error:
         return AvailabilityDecision(
             key,

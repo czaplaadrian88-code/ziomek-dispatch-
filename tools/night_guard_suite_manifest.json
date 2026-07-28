@@ -1,6 +1,6 @@
 {
-  "base_sha": "d0746467dffe7949fbeec44dd4f4d03cceb9fe7a",
-  "manifest_version": 31,
+  "base_sha": "c18c7a0a8",
+  "manifest_version": 33,
   "nodeids": [
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix1_kurier_ids_load_fail_logs_error_and_dedups",
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix2_bag_not_stale_dedup_same_input",
@@ -4249,6 +4249,16 @@
     "tests/test_r1_wave_scoped_directionality.py::test_case_d_same_direction_positive",
     "tests/test_r1_wave_scoped_directionality.py::test_flag_off_block_inert",
     "tests/test_r1_wave_scoped_directionality.py::test_serializer_keys_present_both_locations",
+    "tests/test_r2_proposal_freshness.py::test_assignment_episode_commit_requires_exact_generation_under_lock",
+    "tests/test_r2_proposal_freshness.py::test_assignment_episode_duplicate_generation_is_at_most_once",
+    "tests/test_r2_proposal_freshness.py::test_assignment_episode_durable_retry_is_not_late_backfill",
+    "tests/test_r2_proposal_freshness.py::test_assignment_episode_resolves_now_instead_of_using_stale_proposal",
+    "tests/test_r2_proposal_freshness.py::test_cas_and_shadow_separation_source_ratchets",
+    "tests/test_r2_proposal_freshness.py::test_panel_assignment_instrument_is_fail_safe",
+    "tests/test_r2_proposal_freshness.py::test_panel_assignment_prepares_before_apply_and_cas_commits_after",
+    "tests/test_r2_proposal_freshness.py::test_r2_flags_are_off_strip_covered_and_fingerprinted",
+    "tests/test_r2_proposal_freshness.py::test_refresh_hook_is_fail_safe",
+    "tests/test_r2_proposal_freshness.py::test_refresh_only_after_fleet_and_winner_change_with_cooldown",
     "tests/test_r3_fix_skew.py::test_feats_drop_omits_pool_feasible",
     "tests/test_r3_fix_skew.py::test_feats_full_9_features_order_and_values",
     "tests/test_r3_fix_skew.py::test_feats_peak_window",
@@ -4747,7 +4757,17 @@
     "tests/test_route_order_golden.py::test_golden_structural_invariants",
     "tests/test_route_order_golden.py::test_pickup_merge_min_pinned_to_corpus",
     "tests/test_route_order_golden.py::test_plan_docs_use_stops_key",
-    "tests/test_route_order_live_parity.py::test_live_route_order_parity_and_flag_pin",
+    "tests/test_route_order_live_parity.py::test_ENABLE_PLAN_AWARE_PODJAZDY_on_off_drift_is_broken_without_data",
+    "tests/test_route_order_live_parity.py::test_kotlin_projection_real_dto_structures",
+    "tests/test_route_order_live_parity.py::test_kotlin_projection_reuses_existing_route_order_golden_min_three_cases",
+    "tests/test_route_order_live_parity.py::test_live_route_order_parity_read_only_smoke",
+    "tests/test_route_order_live_parity.py::test_mutation_probe_bypassed_kotlin_projection_is_broken",
+    "tests/test_route_order_live_parity.py::test_mutation_probe_zero_work_to_ok_is_rejected",
+    "tests/test_route_order_live_parity.py::test_qualifying_bag_backend_error_is_broken_not_no_data",
+    "tests/test_route_order_live_parity.py::test_real_backend_builder_known_writer_is_suppressed_and_restored",
+    "tests/test_route_order_live_parity.py::test_result_file_is_atomic_0600_and_contains_heartbeat",
+    "tests/test_route_order_live_parity.py::test_structural_ratchet_uses_backend_dto_and_not_panel_twin",
+    "tests/test_route_order_live_parity.py::test_tristate_ok_oracle",
     "tests/test_route_order_unify_s30.py::test_all_public_symbols_reexported",
     "tests/test_route_order_unify_s30.py::test_build_stop_sequence_equals_branch1_transform",
     "tests/test_route_order_unify_s30.py::test_order_matches_golden_corpus",
@@ -5825,7 +5845,7 @@
     "tests/test_zombie01_pickup_guard.py::test_picked_up_recent_kept",
     "tests/test_zombie01_pickup_guard.py::test_zombie_assigned_with_stale_pickup_filtered"
   ],
-  "nodeids_sha256": "7561a66438c58ec7c9649e80875f28c26f8462b686055c3381e2a832d3c562f1",
+  "nodeids_sha256": "44160e5b604298df8945a9537f2721a933082e23e952a91ac0337269d5134aa1",
   "outcome_contracts": {
     "tests/test_canon_static_check_a1.py::test_defer_completion_guard_armed_when_defer_exists": [
       "skipped"
@@ -5940,8 +5960,8 @@
       "skipped"
     ]
   },
-  "owner": "CTO-Fable",
-  "reason": "merge nogps-explicit-unknown v2 (pozycja nieznana=jawny stan, 6 warstw, obie flagi OFF=inert)",
+  "owner": "Codex-Sol",
+  "reason": "PAR route-order monitor: tri-state backend DTO to Kotlin projection oracles and exact live-smoke quarantine",
   "schema_version": 1,
-  "updated_at_utc": "2026-07-22T13:56:23+00:00"
+  "updated_at_utc": "2026-07-28T00:00:00+00:00"
 }

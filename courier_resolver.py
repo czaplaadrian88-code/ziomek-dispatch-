@@ -1094,6 +1094,32 @@ def _resolve_position(kid, cs, orders, gps, now_utc, fleet,
         fleet[kid] = cs
 
 
+# G5 (2026-07-27, CZASY 492): migawka OSTATNIEGO przebiegu filtra puli w TYM
+# procesie. `dispatchable_fleet` i tak liczy powody odrzuceń (`_rejected_for_log`)
+# — dotąd wyrzucaliśmy tę liczbę zaraz po zalogowaniu. Producent snapshotu
+# loadgov (`core/loadgov_publisher`) potrzebuje DOKŁADNIE jednej z nich:
+# ilu kurierów wypadło z puli WYŁĄCZNIE za brak pozycji. To jest cała różnica
+# między mianownikiem „flota dispatchowalna" a mianownikiem EQUAL-TREATMENT
+# (kurier na zmianie bez GPS jest tak samo realnym kurierem — jego zamówienia
+# i tak są w liczniku). Ekspozycja jest CZYTELNIKIEM już policzonej prawdy,
+# nie drugim writerem: `courier_resolver` pozostaje jedynym właścicielem
+# decyzji „kto jest dostępny".
+_FLEET_FILTER_STATS: Dict[str, Any] = {
+    "computed_at": None, "pid": None, "dispatchable": 0,
+    "no_position": 0, "rejected_total": 0,
+}
+
+
+def last_fleet_filter_stats() -> Dict[str, Any]:
+    """Kopia migawki ostatniego `dispatchable_fleet()` w tym procesie.
+
+    `computed_at` (UTC) i `pid` są częścią kontraktu: konsument MUSI umieć
+    odrzucić statystykę z innego procesu albo z innego ticku, bo mianownik
+    z innego stanu świata niż licznik dałby fałszywe obciążenie.
+    """
+    return dict(_FLEET_FILTER_STATS)
+
+
 def build_fleet_snapshot(
     include_koordynator: bool = False,
 ) -> Dict[str, CourierState]:
@@ -1808,6 +1834,9 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
             # bo pod DISPATCH_STATE_DIR rozjeżdżał się z writerem.
             overrides_path=_availability.effective_overrides_path(),
             grafik_names_path=GRAFIK_FULL_NAMES_PATH,
+            # R4: jedno „teraz" na CAŁĄ pętlę puli — inaczej kurierzy z tego samego
+            # wywołania mogliby wygasać na różnych znacznikach czasu.
+            now=_now_utc_fleet,
         )
     result = []
     # TASK 3: collect rejected dla observability logger (zero overhead gdy flag false)
@@ -1838,6 +1867,9 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
                     "reason": f"availability_{availability.state.value.lower()}",
                     "availability_provenance": availability.provenance.value,
                     "availability_detail": availability.detail,
+                    # R4: rekord operatorski istniał, ale minęła jego doba —
+                    # licznik wpływu flagi w logu puli.
+                    "availability_operator_expired": availability.operator_expired,
                 })
                 continue
 
@@ -2039,6 +2071,19 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
         for _cs_af in result:
             _cs_af.available_from, _cs_af.available_from_source = \
                 available_from_from_shift_start(_cs_af.shift_start, _now_utc_fleet)
+
+    # G5: zapamiętaj powody odrzuceń ZANIM znikną (patrz `last_fleet_filter_stats`).
+    # Bez flagi i bez I/O — to czysty licznik w pamięci, więc nie zmienia ani
+    # wyniku funkcji, ani żadnej decyzji; `dispatchable_fleet` zwraca `result`
+    # bajt-w-bajt jak dotąd.
+    _FLEET_FILTER_STATS.update(
+        computed_at=_now_utc_fleet,
+        pid=os.getpid(),
+        dispatchable=len(result),
+        no_position=sum(1 for _r in _rejected_for_log
+                        if _r.get("reason") == "no_position"),
+        rejected_total=len(_rejected_for_log),
+    )
 
     # TASK 3 observability hook — NIGDY raise (flag-gated, isolated try/except)
     # A1: dawniej silent → audit trail lost cicho. Dedup-by-class.

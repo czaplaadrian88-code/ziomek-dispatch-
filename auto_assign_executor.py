@@ -53,6 +53,36 @@ LEARNING_LOG_TAIL_BYTES = 262144  # wzorzec _PANEL_AGREE_TAIL_BYTES
 ASSIGN_OK_SENTINEL = "ASSIGN_OK:"
 GASTRO_ASSIGN_TIMEOUT_SEC = 45  # +read-back (--verify) round-trip (było 30)
 
+# AUTON-02 / T2 (2026-07-28, ODR-002 „tylko owner podnosi autonomię"):
+# PIN właściciela na PODNIESIENIE autonomii żyje w PANELU (nadajesz_clone,
+# commit d42da13, POST /coordinator/auto-assign) i chroni WYŁĄCZNIE ścieżkę
+# przycisku w konsoli. `ENABLE_AUTO_ASSIGN` mieszka w `flags.json` — pliku, do
+# którego pisze każdy proces/agent/merge z prawem zapisu, więc panelowy PIN da
+# się ominąć w całości, nie dotykając panelu. To nie jest hipoteza: 2026-07-21
+# 20:57 flaga weszła do gita workspace w cudzym merge'u (memory
+# `enable-auto-assign-true-bez-pin-2026-07-26`).
+#
+# Dlatego silnik NIE ufa samej fladze. Stan ON musi być WYTŁUMACZALNY: ostatni
+# udany toggle w dzienniku audytu koordynatora ma podnosić flagę i mieć
+# `pin_verified=true`, i musi być ŚWIEŻY. Upoważnienie ODR-002 to ZDARZENIE, nie
+# stan wieczysty — inaczej jedno kliknięcie ownera autoryzuje autonomię na
+# zawsze (dokładnie to zrobił flip z 20.07: PIN o 13:31Z, a flaga została ON
+# przez tydzień).
+#
+# ⚠ UCZCIWA GRANICA (ta sama klasa co sekcja 2D karty canary): sesje agentów
+# chodzą po tym hoście jako root, więc ten plik jest teoretycznie podrabialny.
+# Bramka daje fail-closed default, jedną wąską ścieżkę i tamper-EVIDENCE —
+# NIE kryptograficzną niepodrabialność. Ta wymaga klucza ownera POZA hostem
+# (osobna bramka ODR-002). W oknie TTL bramka nie odróżni też ręcznego
+# wyłączenia i ponownego podniesienia poza panelem (killswitch nie zostawia
+# wiersza) — świadomie ograniczone czasem, nie udawane jako pełna ochrona.
+COORDINATOR_AUDIT_PATH = "/root/.openclaw/workspace/dispatch_state/coordinator_assign_audit.jsonl"
+COORDINATOR_AUDIT_TAIL_BYTES = 262144
+AUTO_ASSIGN_OWNER_AUTH_TTL_SEC = 86400.0  # karta canary może zacieśnić (flags.json/env)
+_OWNER_AUTH_CLOCK_SKEW_SEC = 120.0
+_OWNER_AUTH_WARN_THROTTLE_SEC = 300.0
+_last_owner_auth_warn: Dict[str, float] = {}
+
 # AUDYT 2.0 Blocker-2 — pokrętła operacyjne (env/flags-overridable W MODULE
 # executora; common.py poza tym pasem). Domyślne wartości = dokumentacja.
 AUTO_ASSIGN_ARM_DELAY_SEC = 45.0          # dry-first: pauza po KAŻDEJ zmianie flags.json
@@ -192,6 +222,91 @@ def _flags_recently_changed(now_ts: float, arm_delay_sec: float) -> bool:
     return (now_ts - mt) < arm_delay_sec
 
 
+def _last_successful_toggle(audit_path: str) -> Optional[Dict[str, Any]]:
+    """Ostatni UDANY wiersz `auto_assign_toggle` z dziennika audytu koordynatora
+    (tail-scan, wzorzec `_recent_override_for_courier`). `ok=false` to PRÓBA
+    zapisu flagi, nie upoważnienie — odfiltrowana. Zwraca None gdy pliku nie ma,
+    nie da się go odczytać albo nie zawiera ani jednego takiego wiersza."""
+    try:
+        size = os.path.getsize(audit_path)
+    except OSError:
+        return None
+    try:
+        with open(audit_path, "r", encoding="utf-8", errors="replace") as f:
+            if size > COORDINATOR_AUDIT_TAIL_BYTES:
+                f.seek(size - COORDINATOR_AUDIT_TAIL_BYTES)
+                f.readline()  # odetnij ucięty pierwszy wiersz
+            lines = f.readlines()
+    except OSError:
+        return None
+    found = None
+    for ln in lines:
+        ln = ln.strip()
+        if not ln:
+            continue
+        try:
+            row = json.loads(ln)
+        except Exception:  # noqa: BLE001 — pojedyncze śmieci nie mogą autoryzować ANI wywracać
+            continue
+        if not isinstance(row, dict):
+            continue
+        if row.get("kind") == "auto_assign_toggle" and row.get("ok") is True:
+            found = row
+    return found
+
+
+def _owner_authorization(now: datetime, audit_path: Optional[str] = None
+                         ) -> Tuple[bool, str]:
+    """Czy bieżący stan `ENABLE_AUTO_ASSIGN=true` jest pokryty świeżym,
+    PIN-owanym podniesieniem właściciela (ODR-002)? Zwraca (ok, powód).
+
+    Wołane WYŁĄCZNIE gdy flaga jest ON — ścieżka OFF zostaje bez I/O (kontrakt
+    AUTON-01 pkt 1). Każda wątpliwość = False (fail-closed): brak pliku, brak
+    wiersza, ostatni toggle wyłączający, brak `pin_verified`, nieczytelny albo
+    przeterminowany znacznik czasu. `audit_path=None` → atrybut modułu w czasie
+    wywołania (testy monkeypatchują COORDINATOR_AUDIT_PATH)."""
+    if audit_path is None:
+        audit_path = COORDINATOR_AUDIT_PATH
+    row = _last_successful_toggle(audit_path)
+    if row is None:
+        return False, ("audit_unreadable" if not os.path.exists(audit_path)
+                       else "no_toggle_row")
+    if row.get("value") is not True:
+        return False, "last_toggle_disabled"
+    if row.get("pin_verified") is not True:
+        return False, "not_pin_verified"
+    try:
+        ts = datetime.fromisoformat(str(row.get("ts")))
+    except (TypeError, ValueError):
+        return False, "authorization_stale"
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    age = (now - ts).total_seconds()
+    # Wiersz z PRZYSZŁOŚCI = ujemny wiek = „zawsze młodszy niż TTL" → wieczne
+    # upoważnienie z jednej daty. Odrzucamy, tolerując drobny rozjazd zegarów
+    # panel↔silnik (osobne procesy, ts stawia panel).
+    if age < -_OWNER_AUTH_CLOCK_SKEW_SEC:
+        return False, "authorization_future"
+    ttl = _exec_numeric("AUTO_ASSIGN_OWNER_AUTH_TTL_SEC", AUTO_ASSIGN_OWNER_AUTH_TTL_SEC)
+    if age > ttl:
+        return False, "authorization_stale"
+    return True, "ok"
+
+
+def _warn_owner_auth(reason: str, now_ts: float) -> None:
+    """WARN o odmowie autoryzacji — dławiony per powód, bo przy ON bez
+    upoważnienia trafiałby na KAŻDĄ decyzję i utopiłby log."""
+    last = _last_owner_auth_warn.get(reason, 0.0)
+    if now_ts - last < _OWNER_AUTH_WARN_THROTTLE_SEC:
+        return
+    _last_owner_auth_warn[reason] = now_ts
+    log.warning(
+        f"AUTO_ASSIGN blocked owner_auth_missing reason={reason} — "
+        f"ENABLE_AUTO_ASSIGN=true BEZ pokrycia PIN-em właściciela (ODR-002). "
+        f"Podnieś autonomię przyciskiem w konsoli koordynatora (z PIN-em) "
+        f"albo wyłącz flagę.")
+
+
 def _recent_auto_assign(state: Dict[str, Any], oid: str, now_ts: float, ttl_sec: float) -> bool:
     """True gdy oid już auto-przypisany w ostatnich ttl_sec (idempotencja per-order:
     reconcile-lag panelu 15-90 s + 2. event z innym event_id = podwójny assign)."""
@@ -284,6 +399,15 @@ def maybe_execute(
         # 1. Killswitch hot (kanon ETAP4 flags.json, default false).
         if not C.decision_flag("ENABLE_AUTO_ASSIGN"):
             return None
+        # 1b. AUTON-02/T2: UPOWAŻNIENIE WŁAŚCICIELA (ODR-002) — sama flaga nie
+        # wystarcza, bo flags.json pisze każdy z prawem zapisu (incydent 21.07).
+        # PRZED bramką jakościową: odmowa ma być WIDOCZNA w logu decyzji nawet
+        # gdy jakość i tak by odrzuciła — inaczej „lewa" flaga jest niema.
+        now = now or datetime.now(timezone.utc)
+        _auth_ok, _auth_reason = _owner_authorization(now)
+        if not _auth_ok:
+            _warn_owner_auth(_auth_reason, now.timestamp())
+            return {"blocked": "owner_auth_missing", "reason": _auth_reason}
         # 2. Bramka jakościowa (czysta, policzona w dispatch_pipeline).
         if not getattr(result, "would_auto_assign", False):
             return None
@@ -299,7 +423,6 @@ def maybe_execute(
         if not oid or not cid or not name:
             return {"blocked": "missing_oid_cid_or_name"}
 
-        now = now or datetime.now(timezone.utc)
         now_ts = now.timestamp()
 
         # 2b. DRY-FIRST (Blocker-2): pierwszy tick po flipie OFF→ON (i po każdej

@@ -160,6 +160,29 @@ def _emit_and_apply_state(
     """Atomowy event+outbox, exact-payload state apply i trwały downstream."""
     emitter = emit_audit if audit else emit
     state_body = (payload or {}) if state_payload is None else (state_payload or {})
+    # R2: capture assignment-time truth immediately BEFORE the canonical state
+    # mutation.  Preparation and commit are both fail-safe; the instrument can
+    # neither veto nor alter an operator assignment.
+    _assignment_episode = None
+    if event_type == "COURIER_ASSIGNED":
+        try:
+            from dispatch_v2 import proposal_freshness as _proposal_freshness
+
+            if C.decision_flag(_proposal_freshness.FLAG):
+                _assignment_episode = (
+                    _proposal_freshness.prepare_assignment_episode(
+                        str(order_id),
+                        state_body,
+                        expected_assignment_event_id=str(event_id),
+                    )
+                )
+        except Exception as _assignment_episode_exc:  # noqa: BLE001
+            _log.warning(
+                "R2 assignment episode prepare fail-safe oid=%s: %s: %s",
+                order_id,
+                type(_assignment_episode_exc).__name__,
+                _assignment_episode_exc,
+            )
     source = str(state_body.get("source") or "")
     state_event_metadata = {}
     if event_type == "COURIER_ASSIGNED" and source in _PANEL_LEARNING_SOURCES:
@@ -180,7 +203,7 @@ def _emit_and_apply_state(
             else "return_previous_cleanup_authorized"
         )
         state_event_metadata[marker] = bool(old_plan_release_authorized)
-    return durable_event_apply.emit_and_apply(
+    _outcome = durable_event_apply.emit_and_apply(
         event_type,
         order_id=str(order_id),
         courier_id=courier_id,
@@ -195,6 +218,22 @@ def _emit_and_apply_state(
         state_event_metadata=state_event_metadata or None,
         sweeper_enabled=_STATE_OUTBOX_SWEEPER_TICK_SNAPSHOT.get(),
     )
+    if _assignment_episode is not None:
+        try:
+            _proposal_freshness.commit_assignment_episode(
+                _assignment_episode,
+                str(_outcome.event_id),
+                str(courier_id),
+            )
+        except Exception as _assignment_episode_exc:  # noqa: BLE001
+            _log.warning(
+                "R2 assignment episode commit fail-safe oid=%s event_id=%s: %s: %s",
+                order_id,
+                getattr(_outcome, "event_id", event_id),
+                type(_assignment_episode_exc).__name__,
+                _assignment_episode_exc,
+            )
+    return _outcome
 
 
 def _load_coords():

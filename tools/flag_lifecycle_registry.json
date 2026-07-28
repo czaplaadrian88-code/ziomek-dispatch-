@@ -2,16 +2,16 @@
  "_meta": {
   "counts": {
    "apka": 27,
-   "engine": 404,
+   "engine": 421,
    "engine_1b_units": 12,
-   "etap4": 135,
+   "etap4": 147,
    "flags_json_keys": 247,
    "fp_extra": 35,
    "known_drift": 0,
    "numeric": 30,
    "panel": 86,
    "test_isolated": 6,
-   "total": 517,
+   "total": 534,
    "twins_concepts": 5
   },
   "generator": "tools/flag_lifecycle_seed.py",
@@ -3287,6 +3287,44 @@
    "twin_of": [],
    "worlds": [
     "apka"
+   ]
+  },
+  "ENABLE_ASSIGNMENT_EPISODE_LOG": {
+   "carriers": [
+    "common.py:ETAP4_DECISION_FLAGS",
+    "dispatch_v2/common.py-const"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/panel_watcher.py",
+    "dispatch_v2/proposal_freshness.py"
+   ],
+   "curated_at": "2026-07-28",
+   "current_snapshot": {
+    "default": false
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_ASSIGNMENT_EPISODE_LOG",
+   "notes": "R2 assignment-time truth: świeży kanoniczny solve przed assignment, append assignment_episode.v1 dopiero po commit-time CAS dokładnej generacji. Aktywacja wyłącznie po gate R2; kod default OFF.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-panel-watcher.service"
+   },
+   "removal_condition": "po ustaleniu stałego kontraktu pomiaru albo retire za ACK",
+   "review_date": "2026-08-10",
+   "rollback": "flags.json false/brak klucza (hot-reload, bez restartu)",
+   "source_of_truth": "flags.json",
+   "twin_of": [],
+   "worlds": [
+    "engine"
    ]
   },
   "ENABLE_AUTO_ASSIGN": {
@@ -8461,7 +8499,80 @@
     "LIVE_ETA_FRESH_OVERRIDE_ONLY"
    ],
    "worlds": [
-    "apka"
+   "apka"
+   ]
+  },
+  "ENABLE_LIVE_ETA_WARM_SOURCE": {
+   "carriers": [
+    "common.py:ETAP4_DECISION_FLAGS",
+    "dispatch_v2/common.py-const"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py:ENABLE_LIVE_ETA_WARM_SOURCE",
+    "dispatch_v2/live_eta_daemon.py"
+   ],
+   "curated_at": "2026-07-28",
+   "current_snapshot": {
+    "default": false
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_LIVE_ETA_WARM_SOURCE",
+   "notes": "R3: OFF zachowuje legacy snapshot bajt-w-bajt; ON publikuje per-stop LIVE(gps<=120s)/WARM(last_event<=180s)/PLANNED. WARM nigdy jako LIVE. Flip dopiero po porannym ACK ownera i weryfikacji etykiet wszystkich powierzchni.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-live-eta.service"
+   },
+   "removal_condition": "po stabilizacji kontraktu źródeł i minimum 2 dniach obserwacji decyzja ownera: utrwalić albo retire",
+   "review_date": "2026-08-04",
+   "rollback": "flags.json ENABLE_LIVE_ETA_WARM_SOURCE=false hot-reload; revert commita R3",
+   "source_of_truth": "common.py-const",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
+  "ENABLE_LOADGOV_SNAPSHOT_PUBLISH": {
+   "carriers": [
+    "dispatch_v2/common.py-const"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py:ENABLE_LOADGOV_SNAPSHOT_PUBLISH",
+    "dispatch_v2/core/loadgov_publisher.py",
+    "dispatch_v2/dispatch_pipeline.py",
+    "dispatch_v2/shadow_dispatcher.py"
+   ],
+   "curated_at": "2026-07-27",
+   "current_snapshot": {},
+   "default": false,
+   "intentional_per_process": {
+    "reason": "Publikuje WYLACZNIE proces, ktory zglosil sie przez loadgov_publisher.claim_producer_role(LOADGOV_SNAPSHOT_PRODUCER_ROLE) — dzis tylko shadow_dispatcher.run. Czasowka/plan-recheck/panel-quote wolaja te sama sciezke assess_order, ale ich EWMA po pierwszej probce ROWNA SIE obciazeniu chwilowemu, wiec publikacja stamtad utworzylaby drugi niestabilny governor (RUN3-b sekcja 3, G5).",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_LOADGOV_SNAPSHOT_PUBLISH",
+   "notes": "G5 planu v4 (CZASY 492). Niedecyzyjny kill-switch KANONICZNEGO PRODUCENTA snapshotu loadgov (spec docs/G5_LOADGOV_SNAPSHOT.md). OFF = plik snapshotu nie powstaje, czytnik WB2 (core/loadgov_snapshot.py) widzi 'absent' i bierze STRICT 5 — stan sprzed G5. ON = shadow publikuje atomowy snapshot z mianownikiem EQUAL-TREATMENT (kurierzy z GPS i bez liczeni rownorzednie). Poza ETAP4_DECISION_FLAGS, bo dopoki nie istnieje producent Alarm certificate (OD-04), window_tol_min zwraca strict niezaleznie od EWMA — publikacja nie zmienia ZADNEJ decyzji (ratchet: test_snapshot_ponad_progiem_NADAL_daje_strict). UWAGA: z dniem powstania producenta Alarm certificate flaga STAJE SIE decyzyjna i MUSI przeniesc sie do ETAP4_DECISION_FLAGS.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-shadow.service"
+   },
+   "removal_condition": "n/d — kill-switch producenta zostaje jako rollback; przeglad razem z decyzja ownera o unifikacji mianownika serii legacy (rekalibracja progow LOADGOV 2.7/3.5/3.0)",
+   "review_date": "2026-10-27",
+   "rollback": "flags.json OFF hot-reload (bez restartu); OFF = brak pliku snapshotu, czytnik STRICT 5 jak przed G5",
+   "source_of_truth": "flags.json",
+   "twin_of": [],
+   "worlds": [
+    "engine"
    ]
   },
   "ENABLE_LOADAWARE_SELECTION_SHADOW": {
@@ -9536,6 +9647,43 @@
    },
    "removal_condition": "n/d dopóki live",
    "review_date": "2026-10-10",
+   "rollback": "flags.json OFF hot-reload (bez restartu)",
+   "source_of_truth": "flags.json",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
+  "ENABLE_OPERATOR_AVAILABILITY_EXPIRY": {
+   "carriers": [
+    "flags.json",
+    "common.py:ETAP4_DECISION_FLAGS"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/courier_availability.py"
+   ],
+   "curated_at": "2026-07-28",
+   "current_snapshot": {
+    "flags.json": null
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_OPERATOR_AVAILABILITY_EXPIRY",
+   "notes": "R4 (karta engine.operator-on-expiry-r4): rekord availability_by_cid wygasa na granicy doby operacyjnej 06:00 Europe/Warsaw liczonej od updated_at — tej samej, na której manual_overrides_daily_reset kasuje bliźniacze excluded/working. OFF = rekord bezterminowy jak przed R4. Mapa: docs/R4_OPERATOR_ON_MAP.md. Warunek dzialania: ENABLE_CID_AVAILABILITY_CONTRACT=ON (przy OFF pula nie konsumuje tego store'u wcale).",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-shadow.service"
+   },
+   "removal_condition": "aktywacja lub retire wg roadmapy (ACK Adrian)",
+   "review_date": "2026-08-10",
    "rollback": "flags.json OFF hot-reload (bez restartu)",
    "source_of_truth": "flags.json",
    "twin_of": [],
@@ -11656,6 +11804,44 @@
    "removal_condition": "n/d dopóki live",
    "review_date": "2026-10-10",
    "rollback": "env OFF w flags.json + restart dispatch-shadow.service ZA ACK",
+   "source_of_truth": "flags.json",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
+  "ENABLE_PROPOSAL_REFRESH": {
+   "carriers": [
+    "common.py:ETAP4_DECISION_FLAGS",
+    "dispatch_v2/common.py-const"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/proposal_refresh.py",
+    "dispatch_v2/tools/pending_global_resweep.py"
+   ],
+   "curated_at": "2026-07-28",
+   "current_snapshot": {
+    "default": false
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_PROPOSAL_REFRESH",
+   "notes": "R2 shadow-first: po zmianie członkostwa dostępnej floty i realnej zmianie zwycięzcy zapisuje wyłącznie SHADOW_ONLY do shadow_decisions; bez pending/konsoli/Telegrama. Kod default OFF.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-pending-resweep-shadow.service"
+   },
+   "removal_condition": "po werdykcie gate R2 i ustaleniu stałego odświeżania albo retire za ACK",
+   "review_date": "2026-08-10",
+   "rollback": "flags.json false/brak klucza (hot-reload, bez restartu)",
    "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [
@@ -19421,6 +19607,150 @@
    "removal_condition": "n/d — guard trwaly; przeglad progow po kalibracji z ledgera v2",
    "review_date": "2026-10-27",
    "rollback": "flags.json OFF (hot-reload przez _D3_FALA_A_FLAGS, bez restartu)",
+   "source_of_truth": "flags.json",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
+  "LOADGOV_SNAPSHOT_MIN_INTERVAL_S": {
+   "carriers": [
+    "flags.json",
+    "common.py:FLAGS_JSON_NUMERIC_OVERRIDES",
+    "dispatch_v2/common.py-const"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/core/loadgov_publisher.py"
+   ],
+   "curated_at": "2026-07-27",
+   "current_snapshot": {},
+   "default": "30.0",
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "LOADGOV_SNAPSHOT_MIN_INTERVAL_S",
+   "notes": "G5: dlawienie ZAPISU snapshotu (seria EWMA konsumuje KAZDA probke — dlawiony jest wylacznie plik, zeby fsync nie stal w sciezce decyzji czesciej niz trzeba). LOADGOV_SNAPSHOT_TTL_S jest przycinany od dolu do 2x tej wartosci.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-shadow.service"
+   },
+   "removal_condition": "n/d — parametr swiezosci snapshotu",
+   "review_date": "2026-10-27",
+   "rollback": "flags.json na wartosc sprzed zmiany (hot-reload)",
+   "source_of_truth": "flags.json",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
+  "LOADGOV_SNAPSHOT_TTL_S": {
+   "carriers": [
+    "flags.json",
+    "common.py:FLAGS_JSON_NUMERIC_OVERRIDES",
+    "dispatch_v2/common.py-const"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/core/loadgov_publisher.py"
+   ],
+   "curated_at": "2026-07-27",
+   "current_snapshot": {},
+   "default": "180.0",
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "LOADGOV_SNAPSHOT_TTL_S",
+   "notes": "G5: waznosc snapshotu (valid_until = observed_at + TTL). Czytnik WB2 NIE MA wlasnego progu staleness — bierze now>valid_until wprost z pliku, wiec cala polityke swiezosci definiuje producent. Przycinany od dolu do 2x LOADGOV_SNAPSHOT_MIN_INTERVAL_S, zeby zdrowy producent nie zostawial dziury, w ktorej konsument widzi 'expired' w srodku normalnej pracy.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-shadow.service"
+   },
+   "removal_condition": "n/d — parametr swiezosci snapshotu",
+   "review_date": "2026-10-27",
+   "rollback": "flags.json na wartosc sprzed zmiany (hot-reload)",
+   "source_of_truth": "flags.json",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
+  "LOADGOV_SNAPSHOT_MIN_SAMPLES": {
+   "carriers": [
+    "flags.json",
+    "common.py:FLAGS_JSON_NUMERIC_OVERRIDES",
+    "dispatch_v2/common.py-const"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/core/loadgov_publisher.py"
+   ],
+   "curated_at": "2026-07-27",
+   "current_snapshot": {},
+   "default": "2",
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "LOADGOV_SNAPSHOT_MIN_SAMPLES",
+   "notes": "G5: rozgrzewka serii przed pierwsza publikacja. Po JEDNEJ probce 'EWMA' jest doslownie obciazeniem chwilowym — publikowanie jej jako miary wygladzonej byloby tym samym klamstwem, przed ktorym broni zakaz recompute w oneshocie (RUN3-b sekcja 3, G5).",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-shadow.service"
+   },
+   "removal_condition": "n/d — parametr swiezosci snapshotu",
+   "review_date": "2026-10-27",
+   "rollback": "flags.json na wartosc sprzed zmiany (hot-reload)",
+   "source_of_truth": "flags.json",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
+  "LOADGOV_FLEET_STATS_MAX_AGE_S": {
+   "carriers": [
+    "flags.json",
+    "common.py:FLAGS_JSON_NUMERIC_OVERRIDES",
+    "dispatch_v2/common.py-const"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/core/loadgov_publisher.py"
+   ],
+   "curated_at": "2026-07-27",
+   "current_snapshot": {},
+   "default": "120.0",
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "LOADGOV_FLEET_STATS_MAX_AGE_S",
+   "notes": "G5: maksymalny wiek migawki filtra puli (courier_resolver.last_fleet_filter_stats) akceptowanej jako mianownik EQUAL-TREATMENT. Starsza = mianownik z innego stanu swiata niz licznik -> producent NIE publikuje (fail-safe: brak snapshotu => czytnik STRICT 5).",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-shadow.service"
+   },
+   "removal_condition": "n/d — parametr swiezosci snapshotu",
+   "review_date": "2026-10-27",
+   "rollback": "flags.json na wartosc sprzed zmiany (hot-reload)",
    "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [

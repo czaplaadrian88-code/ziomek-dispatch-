@@ -365,6 +365,63 @@ def _block_real_telegram_sends(monkeypatch, request):
     )
 
 
+@pytest.fixture
+def grant_owner_autonomy_auth(tmp_path, monkeypatch):
+    """AUTON-02/T2: nadaj testowi WAŻNE upoważnienie właściciela na auto-assign.
+
+    Od bramki T2 (ODR-002) sam `ENABLE_AUTO_ASSIGN=true` NIE wystarcza — executor
+    żąda świeżego, PIN-owanego podniesienia w dzienniku audytu koordynatora.
+    Testy, które badają warstwę ZA autoryzacją (rate-cap, cooldown, idempotencja,
+    TOCTOU, sentinel), muszą więc dostać upoważnienie, inaczej odbijają się od
+    bramki zanim dojdą do swojego scenariusza.
+
+    JEDNA kanoniczna definicja dla wszystkich takich plików — bez niej każdy plik
+    trzymałby własną kopię polityki (drugi writer tego samego kontraktu).
+
+    Robi dwie rzeczy:
+      1. pisze wiersz `auto_assign_toggle` (ok+value+pin_verified) do tmp i pina
+         `COORDINATOR_AUDIT_PATH` — co ODCINA test od ŻYWEGO
+         `coordinator_assign_audit.jsonl` hosta (hermetyczność Z-P2-07);
+      2. rozluźnia TTL świeżości, bo te pliki wołają `maybe_execute` raz z
+         historycznym `NOW`, a raz z prawdziwym zegarem — wynik NIE MOŻE zależeć
+         od tego, jak daleko dzisiejsza data odjechała od `NOW` w pliku.
+         Sama świeżość/wygasanie ma własne, jawne testy w
+         `test_auto_assign_owner_auth_gate.py` i tam TTL jest ustawiany wprost.
+
+    Kotwica wiersza celowo leży TYDZIEŃ przed `anchor`: testy wołają executor z
+    `now` w okolicy `anchor` (czasem parę godzin wstecz), a wiersz z PRZYSZŁOŚCI
+    względem `now` jest odrzucany jako `authorization_future`.
+
+    Użycie w pliku testowym:
+        @pytest.fixture(autouse=True)
+        def _owner_authorized(grant_owner_autonomy_auth):
+            grant_owner_autonomy_auth(E, NOW)
+    """
+    import json as _json
+    from datetime import datetime as _dt
+    from datetime import timedelta as _td
+    from datetime import timezone as _tz
+
+    def _grant(executor_module, anchor=None):
+        # Executor bez bramki T2 (kanon przed mergem) — nie ma czego autoryzować.
+        # Brak bramki i tak krzyczy głośno tam, gdzie powinien: w
+        # `test_auto_assign_owner_auth_gate.py`, który pina tę stałą wprost.
+        if not hasattr(executor_module, "COORDINATOR_AUDIT_PATH"):
+            return None
+        anchor = anchor or _dt.now(_tz.utc)
+        path = tmp_path / "coordinator_assign_audit.jsonl"
+        path.write_text(_json.dumps({
+            "ts": (anchor - _td(days=7)).isoformat(),
+            "kind": "auto_assign_toggle", "actor": "ac@nadajesz.pl",
+            "requested": True, "ok": True, "rc": 0, "value": True,
+            "from": False, "pin_verified": True}) + "\n", encoding="utf-8")
+        monkeypatch.setattr(executor_module, "COORDINATOR_AUDIT_PATH", str(path))
+        monkeypatch.setenv("AUTO_ASSIGN_OWNER_AUTH_TTL_SEC", str(100 * 365 * 24 * 3600))
+        return path
+
+    return _grant
+
+
 def pytest_configure(config):
     """C-HERMETIC-GATE-TESTS (audyt 2026-06-24 §6.C): rejestracja markera
     `nonhermetic` dla testów zależnych od żywego stanu (OSRM traffic, zegar,

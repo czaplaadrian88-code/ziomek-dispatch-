@@ -12,8 +12,8 @@
       "modes": ["strict"]
     },
     {
-      "match": "test_route_order_live_parity",
-      "reason": "Wymaga interpretera venv PANELU (assert PANEL_PY.exists) — parytet route-order silnik<->panel. Ortogonalne do dispatch_state; zaleznosc od zewnetrznego venva.",
+      "match": "test_route_order_live_parity.py::test_live_route_order_parity_read_only_smoke",
+      "reason": "Jawny read-only smoke realnego lancucha route_order -> courier-api DTO -> projekcja Kotlin; zalezy od zywego state, backendu i venv hosta. Pozostale oracle w tym pliku sa hermetyczne i MUSZA biec w STRICT.",
       "modes": ["strict"]
     },
     {

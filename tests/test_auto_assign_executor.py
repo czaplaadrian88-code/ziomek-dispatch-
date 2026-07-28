@@ -16,6 +16,14 @@ from dispatch_v2 import auto_assign_executor as E
 NOW = datetime(2026, 6, 13, 3, 0, tzinfo=timezone.utc)
 
 
+@pytest.fixture(autouse=True)
+def _owner_authorized(grant_owner_autonomy_auth):
+    """AUTON-02/T2: ten plik bada bezpieczniki PO autoryzacji (rate-cap, cooldown,
+    verdict), więc dostaje ważne upoważnienie właściciela — i przy okazji zostaje
+    odcięty od żywego dziennika audytu. Definicja: `tests/conftest.py`."""
+    grant_owner_autonomy_auth(E, NOW)
+
+
 def _record(verdict="PROPOSE", oid="480300", cid="101", name="Kurier Testowy",
             target_min=12):
     tgt = (NOW + timedelta(minutes=target_min)).isoformat()

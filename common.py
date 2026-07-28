@@ -57,6 +57,18 @@ ENABLE_STAGE_TIMING_OBSERVATION = False
 # Nie nalezy do ETAP4_DECISION_FLAGS, bo nie zmienia tresci decyzji (jak wyzej).
 ENABLE_LEX_WINDOW_LEDGER_V2 = False
 
+# G5 (2026-07-27, incydent CZASY 492): niedecyzyjny kill-switch KANONICZNEGO
+# PRODUCENTA snapshotu load-governora (`core/loadgov_publisher.py`, spec
+# `docs/G5_LOADGOV_SNAPSHOT.md`). OFF (default) = plik snapshotu nie powstaje,
+# czytnik WB2 widzi `absent` i bierze STRICT 5 — czyli stan sprzed G5.
+# ON = kanoniczny producent (tylko `dispatch-shadow`) publikuje atomowy
+# snapshot; czytnik nadal zwraca STRICT, bo tolerancja loose wymaga wg OD-04
+# Alarm certificate, ktorego NIKT nie produkuje. Dlatego flaga jest dzis poza
+# ETAP4_DECISION_FLAGS (precedens ENABLE_LEX_WINDOW_LEDGER_V2 z WB1).
+# ⚠ Z dniem powstania producenta Alarm certificate flaga STAJE SIE decyzyjna
+# i MUSI zostac przeniesiona do ETAP4_DECISION_FLAGS.
+ENABLE_LOADGOV_SNAPSHOT_PUBLISH = False
+
 # ─── K05 refaktor (2026-07-06, ADR-R01): FlagSnapshot per tick ───
 # Problem: flagi czytane z dysku w TRAKCIE decyzji (nawet z perf-lazy TTL 0,25 s
 # odświeżenie może wypaść W ŚRODKU ticku) → zmiana flags.json mid-tick daje
@@ -245,6 +257,11 @@ ETAP4_DECISION_FLAGS = (
     # wybranego kuriera i puli w chwili decyzji/commitu planu. Log-only,
     # wszystkie wyjątki fail-safe; brak klucza flags.json = OFF.
     "ENABLE_DECISION_ETA_LOG",
+    # R3 LIVE-ETA SOURCES (2026-07-28): addytywny kontrakt per-stop
+    # LIVE(gps<=120s)/WARM(last_event<=180s)/PLANNED + izolacja bad-coords.
+    # OFF = legacy snapshot bajt-w-bajt. Flip dopiero po porannym ACK ownera
+    # i potwierdzeniu, że wszystkie powierzchnie pokazują WARM jako WARM.
+    "ENABLE_LIVE_ETA_WARM_SOURCE",
     # JOIN-HARDENING (2026-07-21): PANEL_AGREE/OVERRIDE wiąże learning_log
     # z event_id źródłowej decyzji shadow. Osobna flaga, bo świeży E1 używał
     # tej samej nazwy pola dla ID późniejszego COURIER_ASSIGNED.
@@ -283,6 +300,12 @@ ETAP4_DECISION_FLAGS = (
     # selektor OFF/ON na pełnej puli przed top[:16]. Nie zmienia decyzji;
     # ETAP4 zapewnia hot-reload, fingerprint i izolację testów.
     "ENABLE_C7_NORMAL_PATH_LOG",
+    # R2 PROPOSAL FRESHNESS (2026-07-28): oba kanały są domyślnie OFF i
+    # shadow-only. Pierwszy mierzy świeżą decyzję dokładnie przy assignment;
+    # drugi loguje zmianę zwycięzcy po zmianie dostępnej floty. Rejestracja
+    # ETAP4 = hot-reload + fingerprint + conftest strip żywych flag.
+    "ENABLE_ASSIGNMENT_EPISODE_LOG",
+    "ENABLE_PROPOSAL_REFRESH",
     # ETAP4-GAP DOMKNIĘTY (2026-06-25): live-decyzyjna flaga selekcji best_effort
     # (carry-aware objm pick) była POZA rejestrem → poza zasięgiem flag_registry/
     # parytetu cross-proces/izolacji conftest (testy dziedziczyły żywy flags.json=ON).
@@ -595,6 +618,11 @@ ETAP4_DECISION_FLAGS = (
     # dostępności konsumowany wyłącznie przez dispatchable_fleet. OFF =
     # dotychczasowe składanie grafik + manual_overrides bajt-w-bajt.
     "ENABLE_CID_AVAILABILITY_CONTRACT",
+    # R4 (2026-07-28): wygasanie rekordu operatorskiego na granicy doby
+    # operacyjnej (06:00 Europe/Warsaw) — tej samej, na której bliźniaczy
+    # manual_overrides_daily_reset kasuje `excluded`/`working`. OFF = rekord
+    # bezterminowy bajt-w-bajt jak dziś. Mapa: docs/R4_OPERATOR_ON_MAP.md.
+    "ENABLE_OPERATOR_AVAILABILITY_EXPIRY",
 )
 
 # Stałe-fallback (module-level OFF) dla flag dodanych do ETAP4_DECISION_FLAGS
@@ -629,6 +657,13 @@ ENABLE_CZASOWKA_RECLAIM_LIVE = False
 # R-POOL-TRUTH: dark launch; flip dopiero po ACK, inicjalizacji stanu ON/OFF i
 # porównaniu puli. Rollback hot = false/brak klucza w flags.json.
 ENABLE_CID_AVAILABILITY_CONTRACT = False
+# R4 (2026-07-28, karta engine.operator-on-expiry-r4): rekord operatorski
+# w CID-keyed store dostępności (owner: courier_availability.py) przestaje być
+# prawdą o BIEŻĄCEJ dobie po granicy 06:00 Europe/Warsaw liczonej od
+# stempla zapisu. Domyślnie OFF = rekord żyje
+# bezterminowo, dokładnie jak przed R4. Kanon po aktywacji = flags.json
+# (hot-reload między wywołaniami dispatchable_fleet); rollback = klucz false.
+ENABLE_OPERATOR_AVAILABILITY_EXPIRY = False
 # W0.2 advisory (roadmapa 08, werdykt E-1 „GO hybryda"): bezpiecznik fabrykacji ETA.
 # Wykrycie: pred_carry > ETA_FABRICATION_FLOOR_MIN ∧ pred_carry > RATIO×robust_ref,
 # gdzie robust_ref = osrm_freeflow(pickup→deliv)·traffic_mult + service + slack
@@ -649,8 +684,11 @@ ENABLE_MODE_LAYER_SHADOW = False
 # flipie = flags.json przez decision_flag(); brak module-level odczytu env.
 ENABLE_FULL_CHOICE_SET_LOG = False
 ENABLE_DECISION_ETA_LOG = False
+ENABLE_LIVE_ETA_WARM_SOURCE = False
 ENABLE_LEARNING_LOG_DECISION_JOIN = False
 ENABLE_C7_NORMAL_PATH_LOG = False
+ENABLE_ASSIGNMENT_EPISODE_LOG = False
+ENABLE_PROPOSAL_REFRESH = False
 ETA_FABRICATION_FLOOR_MIN = 60.0     # T=60: E-1 łapie 100% fabrykacji (>90 gubi połowę)
 ETA_FABRICATION_RATIO = 2.5          # pred>2,5×robust_ref (komponent ratio Opusa vs FP kryzysu)
 ETA_ROBUST_SERVICE_MIN = 12.0        # service_time (odbiór+wydanie) w robust_ref
@@ -825,6 +863,12 @@ FLAGS_JSON_NUMERIC_OVERRIDES = (
     "LEX_WINDOW_CARRY_CAP_MIN",
     "LEX_WINDOW_CARRY_CAP_ALARM_MIN",
     "LEX_WINDOW_MIN_GAIN_MIN",
+    # G5 (2026-07-27, CZASY 492): okres/ważność/rozgrzewka snapshotu loadgov.
+    # Strojenie w cieniu ma iść flags.json (hot-reload), nie restartem shadow.
+    "LOADGOV_SNAPSHOT_MIN_INTERVAL_S",
+    "LOADGOV_SNAPSHOT_TTL_S",
+    "LOADGOV_SNAPSHOT_MIN_SAMPLES",
+    "LOADGOV_FLEET_STATS_MAX_AGE_S",
     # BUNDLE-06 Faza 1 + BUNDLE-03 (2026-06-12):
     "BUNDLE_FIT_W_COS",
     "BUNDLE_FIT_THERMAL_FREE_MIN",
@@ -3490,6 +3534,31 @@ OBJ_COMMITTED_PICKUP_PENALTY_COEFF = float(_os.environ.get(
 OBJ_COMMITTED_PICKUP_TOL_STRICT_MIN = 5.0
 OBJ_COMMITTED_PICKUP_TOL_LOOSE_MIN = 10.0
 OBJ_COMMITTED_PICKUP_LOAD_THRESHOLD = 4.5   # loadgov_ewma ≥ to → loosening (Adrian: 50 zleceń/11 std ≈ 4,5)
+
+# ── G5 (2026-07-27, CZASY 492): kanoniczny PRODUCENT snapshotu loadgov ──
+# Kanoniczny właściciel progów = TEN plik; override przez flags.json
+# (FLAGS_JSON_NUMERIC_OVERRIDES, hot-reload), NIGDY przez os.environ.
+# ROLA: tylko proces, który zgłosił się przez `loadgov_publisher.claim_producer_role`
+# TĄ nazwą, publikuje. EWMA jest stanem pamięci procesu, więc producentem może
+# być wyłącznie pętla długo żyjąca (shadow); czasówka/plan-recheck/panel-quote
+# startują od próbki chwilowej i publikowanie stamtąd dałoby drugi governor.
+LOADGOV_SNAPSHOT_PRODUCER_ROLE = "dispatch-shadow"
+# Dławienie ZAPISU (seria EWMA aktualizuje się co próbkę — dławiony jest wyłącznie
+# plik, żeby nie robić fsync w ścieżce decyzji częściej niż to potrzebne).
+LOADGOV_SNAPSHOT_MIN_INTERVAL_S = 30.0
+# Ważność snapshotu. MUSI przeżyć przerwę między dwoma zapisami zdrowego
+# producenta (publisher przycina od dołu do 2× okresu) — inaczej konsument
+# widziałby `expired` w środku normalnej pracy. Cisza dłuższa niż TTL (brak
+# nowych zleceń = brak próbek) świadomie wygasza snapshot → czytnik STRICT.
+LOADGOV_SNAPSHOT_TTL_S = 180.0
+# Minimalna liczba próbek serii przed pierwszą publikacją. Po JEDNEJ próbce
+# „EWMA" jest dosłownie obciążeniem chwilowym — publikowanie jej jako miary
+# wygładzonej byłoby tym samym kłamstwem, przed którym broni zakaz recompute.
+LOADGOV_SNAPSHOT_MIN_SAMPLES = 2
+# Maksymalny wiek migawki filtra puli (`courier_resolver.last_fleet_filter_stats`)
+# akceptowany jako mianownik. Starsza = mianownik z innego stanu świata niż
+# licznik → nie publikujemy (fail-safe: brak snapshotu ⇒ czytnik STRICT).
+LOADGOV_FLEET_STATS_MAX_AGE_S = 120.0
 
 # ESKALACJA kary committed (Adrian 2026-06-22 D1): "±5 za darmo, od +6 kara MOCNO
 # ROSNĄCA o każdą minutę". Pojedynczy SetCumulVarSoftUpperBound jest LINIOWY → drugi

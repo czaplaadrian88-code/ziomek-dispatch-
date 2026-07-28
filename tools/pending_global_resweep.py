@@ -46,6 +46,7 @@ from dispatch_v2 import common as C
 from dispatch_v2 import courier_resolver as CR
 from dispatch_v2.core.decide import decide as _decide  # K09 fasada
 from dispatch_v2.core.world_state import WorldState
+from dispatch_v2.proposal_freshness import order_event_from_state
 
 _log = logging.getLogger("pending_global_resweep")
 
@@ -75,19 +76,13 @@ DEFAULT_PINGPONG_MARGIN_MULTIPLIER = 2.0
 DEFAULT_PINGPONG_COOLDOWN_MIN = 10.0
 MAX_HANGING = 8                          # bezpiecznik: max wiszących zleceń/ tick
 
-_EVENT_FIELDS = (
-    "order_id", "restaurant", "delivery_address", "pickup_coords", "delivery_coords",
-    "czas_kuriera_warsaw", "pickup_at_warsaw", "pickup_at", "address_id", "order_type",
-    "created_at_utc", "created_at", "delivery_city", "uwagi_pickup_parsed", "prep_minutes",
-)
-
-
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
 
 
 def _state_to_order_event(rec: dict) -> dict:
-    return {k: rec.get(k) for k in _EVENT_FIELDS if rec.get(k) is not None}
+    """Compatibility alias; canonical projection is owned by R2 freshness."""
+    return order_event_from_state(rec)
 
 
 def _append_jsonl(rows: List[dict]) -> None:
@@ -273,6 +268,28 @@ def _cand_by_cid(res, cid: str):
         if str(getattr(c, "courier_id", "")) == str(cid):
             return c
     return None
+
+
+def _record_proposal_refresh_fail_safe(
+    results: Dict[str, Any],
+    proposed: Dict[str, dict],
+    fleet: Dict[str, Any],
+    now: datetime,
+) -> int:
+    """R2 shadow-only sink; never interrupts or mutates the legacy resweep."""
+    try:
+        from dispatch_v2 import proposal_refresh
+
+        if not C.decision_flag(proposal_refresh.FLAG):
+            return 0
+        return proposal_refresh.record_refreshes(results, proposed, fleet, now)
+    except Exception as exc:  # noqa: BLE001 — observation must remain fail-safe
+        _log.warning(
+            "R2 proposal refresh fail-safe: %s: %s",
+            type(exc).__name__,
+            exc,
+        )
+        return 0
 
 
 # L6.C3 (2026-07-04): ekstrakcja do modułu SILNIKA — jedno źródło claimu dla
@@ -596,8 +613,12 @@ def _live_apply(rows: List[dict], ga_results: Dict[str, Any], now: datetime) -> 
 
 
 def run_once(now: Optional[datetime] = None, margin: Optional[float] = None) -> dict:
-    """Jeden sweep. No-op gdy flaga master OFF."""
-    if not C.flag(FLAG, False):
+    """Jeden sweep. R2 refresh may run independently of the legacy writer."""
+    legacy_resweep_enabled = bool(C.flag(FLAG, False))
+    proposal_refresh_enabled = bool(
+        C.decision_flag("ENABLE_PROPOSAL_REFRESH")
+    )
+    if not (legacy_resweep_enabled or proposal_refresh_enabled):
         return {"skipped": "flag_off"}
     now = now or _now_utc()
     _t0 = time.monotonic()
@@ -650,13 +671,19 @@ def run_once(now: Optional[datetime] = None, margin: Optional[float] = None) -> 
 
     # Faza C: gdy zapis dla konsoli ON, zbierz pełne wyniki w TYM SAMYM przebiegu
     # (global_allocate._results_out) — zero podwójnego liczenia assess_order.
-    _alloc_write = C.flag("ENABLE_GLOBAL_ALLOC_WRITE", False)
+    _alloc_write = legacy_resweep_enabled and C.flag(
+        "ENABLE_GLOBAL_ALLOC_WRITE", False
+    )
     # K5 LIVE (2026-07-05, Wariant A Adriana: konsola/1-klik, NIE Telegram):
     # bramka live_gate_open() konsultowana RAZ, WCZEŚNIE (loguje HOLD gdy geometria
     # OFF — L6.C, nie do ominięcia). Wyniki pełne (_ga_results) są również źródłem
     # proposed_km w telemetrii shadow oraz serializacji akcji live; samo ich zachowanie
     # nie uruchamia żadnej dodatkowej oceny ani akcji.
-    _live_armed = bool(C.flag(FLAG_LIVE, False)) and live_gate_open()
+    _live_armed = bool(
+        legacy_resweep_enabled
+        and C.flag(FLAG_LIVE, False)
+        and live_gate_open()
+    )
     _ga_results: Dict[str, Any] = {}
     # INV-FEAS-NO-DOUBLE-BOOK: zbierz diagnostykę claim-ledger tego sweepu (licznik do jsonl).
     _ga_diag: Dict[str, Any] = {}
@@ -782,25 +809,33 @@ def run_once(now: Optional[datetime] = None, margin: Optional[float] = None) -> 
 
     # G6: shadow zachowuje osobny kontrfaktyczny stan; LIVE ufa wyłącznie
     # provenance faktycznie wykonanych podmian z pending_proposals.
-    try:
-        if _live_armed:
-            live_pingpong_state = _pingpong_state_from_live(proposed)
-            _annotate_pingpong_rows(
-                rows, pingpong_score_maps, live_pingpong_state, now, margin,
-                pingpong_margin_multiplier, pingpong_cooldown_min)
-        else:
-            _annotate_pingpong_shadow(
-                rows, pingpong_score_maps, now, margin,
-                pingpong_margin_multiplier, pingpong_cooldown_min)
-    except Exception as exc:  # noqa: BLE001 — pomiar nie może wywalić shadow-ticka
-        _log.warning("pingpong guard telemetry fail: %s: %s", type(exc).__name__, exc)
-        for row in rows:
-            # LIVE fail-closed: brak oceny historii nigdy nie przepuszcza podmiany.
-            # Shadow tylko ujawnia lukę pomiaru (None), bez zmiany would_repropose.
-            row["would_pingpong_block"] = True if _live_armed else None
-            row["pingpong_state_error"] = type(exc).__name__
+    if legacy_resweep_enabled:
+        try:
             if _live_armed:
-                row["pingpong_guard_fail_closed"] = True
+                live_pingpong_state = _pingpong_state_from_live(proposed)
+                _annotate_pingpong_rows(
+                    rows, pingpong_score_maps, live_pingpong_state, now, margin,
+                    pingpong_margin_multiplier, pingpong_cooldown_min)
+            else:
+                _annotate_pingpong_shadow(
+                    rows, pingpong_score_maps, now, margin,
+                    pingpong_margin_multiplier, pingpong_cooldown_min)
+        except Exception as exc:  # noqa: BLE001 — pomiar nie może wywalić shadow-ticka
+            _log.warning("pingpong guard telemetry fail: %s: %s", type(exc).__name__, exc)
+            for row in rows:
+                # LIVE fail-closed: brak oceny historii nigdy nie przepuszcza podmiany.
+                # Shadow tylko ujawnia lukę pomiaru (None), bez zmiany would_repropose.
+                row["would_pingpong_block"] = True if _live_armed else None
+                row["pingpong_state_error"] = type(exc).__name__
+                if _live_armed:
+                    row["pingpong_guard_fail_closed"] = True
+
+    # R2: use the already-computed canonical results.  The dedicated sink writes
+    # only SHADOW_ONLY records without top-level `best`, so neither the console
+    # nor telegram_approver can interpret them as actionable proposals.
+    refresh_logged = _record_proposal_refresh_fail_safe(
+        _ga_results, proposed, fleet, now
+    )
 
     # K5 LIVE: akcje PRZED zapisem jsonl — wiersze dostają marker live_action
     # (audytowalność per zlecenie: co podmieniono / czemu pominięto).
@@ -813,7 +848,7 @@ def run_once(now: Optional[datetime] = None, margin: Optional[float] = None) -> 
 
     # Final allocation results only (not intermediate counterfactual rounds).
     # This keeps one decision-time ETA snapshot per order in the sweep.
-    if _ga_results:
+    if legacy_resweep_enabled and _ga_results:
         _rows_by_oid = {str(row.get("order_id")): row for row in rows}
         try:
             from dispatch_v2 import decision_eta_log as _dtlog
@@ -840,7 +875,8 @@ def run_once(now: Optional[datetime] = None, margin: Optional[float] = None) -> 
         except Exception as exc:  # defense-in-depth: log-only path
             _log.warning("decision ETA resweep hook fail-safe: %s", exc)
 
-    _append_jsonl(rows)
+    if legacy_resweep_enabled:
+        _append_jsonl(rows)
 
     # Faza C (2026-06-27): dedykowany kanał globalnej alokacji DLA KONSOLI.
     # resweep (proces POZA gorącą ścieżką, co 1 min) nadpisuje global_alloc.json PEŁNYM
@@ -874,6 +910,8 @@ def run_once(now: Optional[datetime] = None, margin: Optional[float] = None) -> 
         "spread_improved": spread_improved,
         "claim_ledger_breaches": n_claim_breaches,
         "live_acted": live_acted,
+        "proposal_refresh_logged": refresh_logged,
+        "legacy_resweep_enabled": legacy_resweep_enabled,
         "margin": margin,
         "pingpong_margin_multiplier": pingpong_margin_multiplier,
         "pingpong_cooldown_min": pingpong_cooldown_min,
