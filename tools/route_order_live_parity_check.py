@@ -30,6 +30,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -42,6 +43,21 @@ sys.path.insert(0, str(_SCRIPTS))
 
 STATE_DIR = Path("/root/.openclaw/workspace/dispatch_state")
 ORDERS_PATH = STATE_DIR / "orders_state.json"
+
+# Monitor jest READ-ONLY wobec żywego stanu — a ścieżka budowy DTO
+# (courier_api.delivery_town) przy cache-miss ZAPISUJE wspólny cache miast.
+# Przekierowanie na seedowaną temp-kopię: odczyty identyczne, zapisy nie
+# dotykają produkcji (HERMETIC-GUARD łapał to pod pytestem jako naruszenie).
+if "DELIVERY_TOWN_CACHE" not in os.environ:
+    _live_town_cache = STATE_DIR / "delivery_town_cache.json"
+    _tmp_town_cache = Path(tempfile.gettempdir()) / (
+        f"parity_town_cache_{os.getpid()}.json")
+    try:
+        if _live_town_cache.exists():
+            _tmp_town_cache.write_bytes(_live_town_cache.read_bytes())
+    except OSError:
+        pass
+    os.environ["DELIVERY_TOWN_CACHE"] = str(_tmp_town_cache)
 PLANS_PATH = STATE_DIR / "courier_plans.json"
 CORPUS_PATH = (
     _SCRIPTS / "dispatch_v2" / "tests" / "golden" / "route_order_corpus.json"
