@@ -455,6 +455,15 @@ konsumentem decyzji puli. Rollback po przyszłym flipie: klucz `false` w
 produkcyjnym `flags.json`; sam flip, inicjalizacja bieżących stanów i obserwacja
 puli wymagają osobnego ACK ownera.
 
+`ENABLE_OPERATOR_AVAILABILITY_EXPIRY` ma default `false` i jest w ETAP4. ON wygasza
+operatorski rekord dostępności na granicy doby operacyjnej 06:00 Europe/Warsaw;
+OFF zachowuje bezterminowy rekord, a flip wymaga osobnego ACK ownera.
+
+`ENABLE_LOADGOV_SNAPSHOT_PUBLISH` ma default `false` i jest w ETAP4 dla hermetycznego
+stripu oraz cross-procesowego fingerprinta. ON pozwala wyłącznie `dispatch-shadow`
+publikować atomowy snapshot G5; bez producenta Alarm certificate czytnik nadal
+zwraca STRICT 5, więc flaga nie zmienia dziś decyzji.
+
 - 🟢 **LIVE-ON:** `RECONCILIATION_ENABLED`, `ENABLE_V325_SCHEDULE_HARDENING`,
   `ENABLE_V324A_SCHEDULE_INTEGRATION`, `ENABLE_V327_WAIT_PENALTY`, `ENABLE_V326_OSRM_TRAFFIC_MULTIPLIER`,
   `ENABLE_V326_SPEED_MULTIPLIER`, `ENABLE_R_PACZKI_FLEX`, `ENABLE_R_RETURN_TO_RESTAURANT_VETO`,

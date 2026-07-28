@@ -924,6 +924,14 @@ TEST_ISOLATED_INFRA_FLAGS = (
     # po flipie ownera na `true` bramka „OFF ⇒ v1 bajt-w-bajt" sprawdzała stan
     # nieosiągalny w procesie testowym. Testy sterują wersją ledgera stałą.
     "ENABLE_LEX_WINDOW_LEDGER_V2",
+    # G5 (2026-07-27, CZASY 492): kill-switch kanonicznego PRODUCENTA snapshotu
+    # loadgov. NIEDECYZYJNY dopóki nie istnieje producent Alarm certificate
+    # (OD-04) — czytnik zwraca STRICT niezależnie od EWMA. Ten sam wzorzec co
+    # ENABLE_LEX_WINDOW_LEDGER_V2 wyżej; wpis domyka intencję z komentarza przy
+    # stałej (nocy S1 zabrakło go tutaj — ratchet strip odpalił po flipie ON
+    # 28.07). Z dniem powstania Alarm certificate flaga staje się decyzyjna
+    # i przechodzi do ETAP4_DECISION_FLAGS.
+    "ENABLE_LOADGOV_SNAPSHOT_PUBLISH",
 )
 
 # Flagi zunifikowane już wcześniej wzorcem runtime (E2 audytu 10.06) — wchodzą
