@@ -515,6 +515,10 @@ ETAP4_DECISION_FLAGS = (
     # flip za ACK po replayu ON↔OFF. Stałe-fallback: LEXQUAL ~2910, CLAIM w claim_ledger.
     "ENABLE_LEXQUAL_GEOMETRY_TIEBREAK",
     "ENABLE_ENGINE_CLAIM_LEDGER",
+    # ETAP 1 proposal-claims (2026-07-28): wiszące PROPOSE-y z istniejącego
+    # pending_proposals.json obciążają snapshot wyłącznie w shadow _tick.
+    # Default OFF; hot-reload; rollback = false bez restartu.
+    "ENABLE_PROPOSAL_CLAIM_PERSISTENCE",
     # === Sprint B inwarianty (2026-07-08, INV-FEAS-NO-DOUBLE-BOOK): tripwier
     # spójności claim-ledger. _CHECK = log-loud obserwacja (NIE zmienia decyzji,
     # strażnik nie reguła); _HARD = twarda blokada (raise) — odłożona za ACK po
@@ -689,6 +693,8 @@ ENABLE_LEARNING_LOG_DECISION_JOIN = False
 ENABLE_C7_NORMAL_PATH_LOG = False
 ENABLE_ASSIGNMENT_EPISODE_LOG = False
 ENABLE_PROPOSAL_REFRESH = False
+ENABLE_PROPOSAL_CLAIM_PERSISTENCE = False
+PROPOSAL_CLAIM_TTL_SEC = 240
 ETA_FABRICATION_FLOOR_MIN = 60.0     # T=60: E-1 łapie 100% fabrykacji (>90 gubi połowę)
 ETA_FABRICATION_RATIO = 2.5          # pred>2,5×robust_ref (komponent ratio Opusa vs FP kryzysu)
 ETA_ROBUST_SERVICE_MIN = 12.0        # service_time (odbiór+wydanie) w robust_ref
@@ -869,6 +875,9 @@ FLAGS_JSON_NUMERIC_OVERRIDES = (
     "LOADGOV_SNAPSHOT_TTL_S",
     "LOADGOV_SNAPSHOT_MIN_SAMPLES",
     "LOADGOV_FLEET_STATS_MAX_AGE_S",
+    # ETAP 1 proposal-claims: p90 reakcji koordynatora 4,27 min; 240 s to
+    # krótki, hot-reloadowany limit życia wirtualnego obciążenia.
+    "PROPOSAL_CLAIM_TTL_SEC",
     # BUNDLE-06 Faza 1 + BUNDLE-03 (2026-06-12):
     "BUNDLE_FIT_W_COS",
     "BUNDLE_FIT_THERMAL_FREE_MIN",
