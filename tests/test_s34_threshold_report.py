@@ -148,7 +148,9 @@ def test_parser_dedup_and_grid_on_ten_synthetic_records(tmp_path):
     assert (ledger.read_bytes(), ledger.stat().st_mtime_ns) == ledger_before
     assert out.read_bytes() == first_md
     assert out.with_suffix(".json").read_bytes() == first_json
-    assert {path.name for path in tmp_path.iterdir()} == {
+    # Kanoniczny conftest (izolacja flag) dokłada własny flags.json do tmp_path
+    # — asercja pilnuje TYLKO artefaktów harnessu, nie całego katalogu.
+    assert {path.name for path in tmp_path.iterdir()} - {"flags.json"} == {
         "ledger.jsonl",
         "S34_PAKIET_PROGOW_TEST.md",
         "S34_PAKIET_PROGOW_TEST.json",
