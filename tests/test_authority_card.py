@@ -423,7 +423,11 @@ def _executor_paths(tmp_path):
     )
     heartbeat = tmp_path / "monitor-heartbeat.json"
     heartbeat.write_text(
-        json.dumps({"ts": NOW.isoformat(), "pid": 123, "checks": {}}),
+        json.dumps({
+            "ts": NOW.isoformat(),
+            "pid": 123,
+            "checks": {"verdict": "OK", "reasons": []},
+        }),
         encoding="utf-8",
     )
     return {
@@ -453,7 +457,10 @@ def test_valid_card_and_scope_reach_quality_gate(tmp_path, monkeypatch):
         SimpleNamespace(would_auto_assign=False),
         {"status_id": 2},
         now=NOW,
-        assign_runner=lambda *args: (runner_calls.append(args) or (True, "ok")),
+        assign_runner=lambda *args: (
+            runner_calls.append(args)
+            or (True, "ASSIGN_OK: fixture [verify_ok_kid=101]")
+        ),
         notifier=lambda _text: None,
         **paths,
     )
@@ -471,7 +478,10 @@ def test_missing_scope_evidence_denies_without_execution(tmp_path, monkeypatch):
         SimpleNamespace(would_auto_assign=True),
         {"status_id": 2},
         now=NOW,
-        assign_runner=lambda *args: (calls.append(args) or (True, "ok")),
+        assign_runner=lambda *args: (
+            calls.append(args)
+            or (True, "ASSIGN_OK: fixture [verify_ok_kid=101]")
+        ),
         notifier=lambda _text: None,
         **paths,
     )
@@ -586,7 +596,10 @@ def test_executor_negative_matrix_has_zero_execution(
         SimpleNamespace(would_auto_assign=True),
         {"status_id": 2},
         now=NOW,
-        assign_runner=lambda *args: (calls.append(args) or (True, "ok")),
+        assign_runner=lambda *args: (
+            calls.append(args)
+            or (True, "ASSIGN_OK: fixture [verify_ok_kid=101]")
+        ),
         notifier=lambda _text: None,
         **paths,
     )
@@ -611,7 +624,10 @@ def test_tamper_latches_and_fixed_card_stays_blocked(tmp_path, monkeypatch):
         SimpleNamespace(would_auto_assign=True),
         {"status_id": 2},
         now=NOW,
-        assign_runner=lambda *args: (calls.append(args) or (True, "ok")),
+        assign_runner=lambda *args: (
+            calls.append(args)
+            or (True, "ASSIGN_OK: fixture [verify_ok_kid=101]")
+        ),
         notifier=lambda _text: None,
         **paths,
     )
@@ -624,7 +640,10 @@ def test_tamper_latches_and_fixed_card_stays_blocked(tmp_path, monkeypatch):
         SimpleNamespace(would_auto_assign=True),
         {"status_id": 2},
         now=NOW,
-        assign_runner=lambda *args: (calls.append(args) or (True, "ok")),
+        assign_runner=lambda *args: (
+            calls.append(args)
+            or (True, "ASSIGN_OK: fixture [verify_ok_kid=101]")
+        ),
         notifier=lambda _text: None,
         **paths,
     )
@@ -642,7 +661,10 @@ def test_success_updates_card_counters_atomically(tmp_path, monkeypatch):
         SimpleNamespace(would_auto_assign=True),
         {"status_id": 2},
         now=NOW,
-        assign_runner=lambda *_args: (True, "ASSIGN_OK: fixture"),
+        assign_runner=lambda *_args: (
+            True,
+            "ASSIGN_OK: fixture [verify_ok_kid=101]",
+        ),
         notifier=lambda _text: None,
         **paths,
     )
@@ -699,7 +721,10 @@ def test_reservation_is_durable_before_runner_and_replay_refuses_after_crash(
         SimpleNamespace(would_auto_assign=True),
         {"status_id": 2},
         now=NOW,
-        assign_runner=lambda *args: (runner_calls.append(args) or (True, "ok")),
+        assign_runner=lambda *args: (
+            runner_calls.append(args)
+            or (True, "ASSIGN_OK: fixture [verify_ok_kid=101]")
+        ),
         notifier=lambda _text: None,
         **paths,
     )
@@ -715,7 +740,7 @@ def test_card_is_revalidated_with_fresh_time_after_solve_before_reservation(
     tmp_path,
     monkeypatch,
 ):
-    """RED G1: karta wygasła podczas solve, więc runner nie może wystartować."""
+    """RED I1/I2: solve przesuwa czas poza valid_until; finalny gate ma to zobaczyć."""
     paths = _executor_paths(tmp_path)
     card = Path(paths["authority_card_path"])
     audit = Path(paths["authority_audit_path"])
@@ -746,11 +771,17 @@ def test_card_is_revalidated_with_fresh_time_after_solve_before_reservation(
     )
     _grant_owner_auth(monkeypatch, audit)
     monkeypatch.setattr(C, "ENABLE_AUTO_ASSIGN", True)
-    monkeypatch.setattr(
-        E,
-        "_fresh_execution_now",
-        lambda: NOW + timedelta(seconds=2),
-    )
+    clock = {"now": NOW}
+    monkeypatch.setattr(E, "_fresh_execution_now", lambda: clock["now"])
+    solve_calls = []
+
+    def solve_after_card_was_initially_valid(_oid, _payload, now=None):
+        solve_calls.append(now)
+        assert now == NOW
+        clock["now"] = NOW + timedelta(seconds=2)
+        return _commit_snapshot()
+
+    paths["commit_recheck_provider"] = solve_after_card_was_initially_valid
     calls = []
 
     out = E.maybe_execute(
@@ -758,12 +789,16 @@ def test_card_is_revalidated_with_fresh_time_after_solve_before_reservation(
         SimpleNamespace(would_auto_assign=True),
         {"status_id": 2},
         now=NOW,
-        assign_runner=lambda *args: (calls.append(args) or (True, "ok")),
+        assign_runner=lambda *args: (
+            calls.append(args)
+            or (True, "ASSIGN_OK: fixture [verify_ok_kid=101]")
+        ),
         notifier=lambda _text: None,
         **paths,
     )
 
     assert out["blocked"] == "authority_card_card_expired"
+    assert solve_calls == [NOW]
     assert calls == []
     assert not Path(paths["state_path"]).exists()
 
@@ -958,8 +993,8 @@ def test_verification_writer_releases_only_oid_until_max_total(tmp_path):
     assert state["in_flight"] is None
 
 
-def test_latch_clear_changes_only_latch_and_is_audited(tmp_path):
-    """F2: odzatrzaśnięcie zachowuje liczniki, pending i pierwszą przyczynę."""
+def test_latch_clear_refuses_until_in_flight_and_pending_are_reconciled(tmp_path):
+    """RED I5: ACK nie może zdjąć latcha przed verify-execution/reconcile."""
     state_path = str(tmp_path / "card-state.json")
     audit_path = str(tmp_path / "audit.jsonl")
     before = _state(
@@ -973,9 +1008,37 @@ def test_latch_clear_changes_only_latch_and_is_audited(tmp_path):
     )
     AC.save_state(state_path, before)
 
+    with pytest.raises(ValueError, match="verify-execution"):
+        AC.clear_latch(
+            state_path,
+            reason="owner ACK przed reconcile",
+            operator="operator-test",
+            now=NOW,
+            audit_path=audit_path,
+        )
+
+    assert AC.load_state(state_path) == before
+    assert not Path(audit_path).exists()
+
+
+def test_latch_clear_on_clean_state_changes_only_latch_and_is_audited(tmp_path):
+    """Po reconcile czysty stan może zdjąć wyłącznie latch za ACK ownera."""
+    state_path = str(tmp_path / "card-state.json")
+    audit_path = str(tmp_path / "audit.jsonl")
+    before = _state(
+        executed_total=2,
+        executed_ts=[NOW.timestamp() - 60, NOW.timestamp()],
+        in_flight=None,
+        pending_verification=[],
+        auto_off_latch=True,
+        auto_off_reason="runner_outcome_unknown",
+        auto_off_ts=NOW.isoformat(),
+    )
+    AC.save_state(state_path, before)
+
     after = AC.clear_latch(
         state_path,
-        reason="owner ACK po reconcile 5b",
+        reason="owner ACK po reconcile 5b i verify-execution",
         operator="operator-test",
         now=NOW,
         audit_path=audit_path,
@@ -986,7 +1049,7 @@ def test_latch_clear_changes_only_latch_and_is_audited(tmp_path):
         Path(audit_path).read_text(encoding="utf-8").strip()
     )
     assert row["kind"] == "authority_latch_cleared"
-    assert row["reason"] == "owner ACK po reconcile 5b"
+    assert row["reason"] == "owner ACK po reconcile 5b i verify-execution"
     assert row["operator"] == "operator-test"
 
 
@@ -1039,7 +1102,10 @@ def test_executor_missing_heartbeat_denies_and_latches(tmp_path, monkeypatch):
         SimpleNamespace(would_auto_assign=True),
         {"status_id": 2},
         now=NOW,
-        assign_runner=lambda *args: (calls.append(args) or (True, "ok")),
+        assign_runner=lambda *args: (
+            calls.append(args)
+            or (True, "ASSIGN_OK: fixture [verify_ok_kid=101]")
+        ),
         notifier=lambda _text: None,
         **paths,
     )
@@ -1048,6 +1114,91 @@ def test_executor_missing_heartbeat_denies_and_latches(tmp_path, monkeypatch):
     state = AC.load_state(paths["authority_state_path"])
     assert state["auto_off_latch"] is True
     assert state["auto_off_reason"] == "monitor_heartbeat_stale"
+
+
+@pytest.mark.parametrize("checks", [
+    {"verdict": "ALARM", "reasons": ["counter_divergence"]},
+    {},
+    {"verdict": "UNKNOWN"},
+    [],
+])
+def test_heartbeat_requires_explicit_ok_verdict(tmp_path, checks):
+    """RED I7: świeżość procesu bez jawnego verdict=OK nie daje execute."""
+    heartbeat = tmp_path / "heartbeat.json"
+    heartbeat.write_text(
+        json.dumps({"ts": NOW.isoformat(), "pid": 123, "checks": checks}),
+        encoding="utf-8",
+    )
+    assert E.AAM.heartbeat_fresh(str(heartbeat), NOW) == (
+        False,
+        "monitor_verdict_not_ok",
+    )
+
+
+def test_executor_monitor_alarm_denies_latches_and_mutation_reopens(tmp_path, monkeypatch):
+    """RED/mutation I7: usunięcie konsumpcji verdictu znów uruchamia runner."""
+    real_root = tmp_path / "real"
+    real_root.mkdir()
+    paths = _executor_paths(real_root)
+    Path(paths["monitor_heartbeat_path"]).write_text(
+        json.dumps({
+            "ts": NOW.isoformat(),
+            "pid": 123,
+            "checks": {
+                "verdict": "ALARM",
+                "reasons": ["counter_divergence"],
+            },
+        }),
+        encoding="utf-8",
+    )
+    _grant_owner_auth(monkeypatch, Path(paths["authority_audit_path"]))
+    monkeypatch.setattr(C, "ENABLE_AUTO_ASSIGN", True)
+    calls = []
+    out = E.maybe_execute(
+        _record(),
+        SimpleNamespace(would_auto_assign=True),
+        {"status_id": 2},
+        now=NOW,
+        assign_runner=lambda *args: (
+            calls.append(args)
+            or (True, "ASSIGN_OK: fixture [verify_ok_kid=101]")
+        ),
+        notifier=lambda _text: None,
+        **paths,
+    )
+    assert out["blocked"] == "monitor_verdict_not_ok"
+    assert calls == []
+    state = AC.load_state(paths["authority_state_path"])
+    assert state["auto_off_latch"] is True
+    assert state["auto_off_reason"] == "monitor_verdict_not_ok"
+
+    mutant_root = tmp_path / "mutant"
+    mutant_root.mkdir()
+    mutant_paths = _executor_paths(mutant_root)
+    Path(mutant_paths["monitor_heartbeat_path"]).write_text(
+        Path(paths["monitor_heartbeat_path"]).read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    _grant_owner_auth(
+        monkeypatch,
+        Path(mutant_paths["authority_audit_path"]),
+    )
+    monkeypatch.setattr(E.AAM, "heartbeat_fresh", lambda *_a, **_k: (True, "ok"))
+    mutated_calls = []
+    mutated = E.maybe_execute(
+        _record(),
+        SimpleNamespace(would_auto_assign=True),
+        {"status_id": 2},
+        now=NOW,
+        assign_runner=lambda *args: (
+            mutated_calls.append(args)
+            or (True, "ASSIGN_OK: fixture [verify_ok_kid=101]")
+        ),
+        notifier=lambda _text: None,
+        **mutant_paths,
+    )
+    assert mutated["executed"] is True
+    assert len(mutated_calls) == 1
 
 
 def test_executor_route_generation_stale_denies_without_latch(
@@ -1066,7 +1217,10 @@ def test_executor_route_generation_stale_denies_without_latch(
         SimpleNamespace(would_auto_assign=True),
         {"status_id": 2},
         now=NOW,
-        assign_runner=lambda *args: (calls.append(args) or (True, "ok")),
+        assign_runner=lambda *args: (
+            calls.append(args)
+            or (True, "ASSIGN_OK: fixture [verify_ok_kid=101]")
+        ),
         notifier=lambda _text: None,
         **paths,
     )
@@ -1113,7 +1267,10 @@ def test_h1_ambiguous_runner_identity_is_denied_without_latch(
         SimpleNamespace(would_auto_assign=True),
         {"status_id": 2},
         now=NOW,
-        assign_runner=lambda *args: (calls.append(args) or (True, "ok")),
+        assign_runner=lambda *args: (
+            calls.append(args)
+            or (True, "ASSIGN_OK: fixture [verify_ok_kid=101]")
+        ),
         notifier=lambda _text: None,
         **paths,
     )
@@ -1154,6 +1311,36 @@ def test_h1_runner_readback_mismatch_latches_and_keeps_reservation(
     assert state["in_flight"] == "480300"
     assert state["auto_off_latch"] is True
     assert state["auto_off_reason"] == "runner_identity_mismatch"
+
+
+def test_h1_missing_runner_readback_is_unknown_and_keeps_reservation(
+    tmp_path,
+    monkeypatch,
+):
+    """RED I3: na enforced lane sukces bez CID read-back jest stanem UNKNOWN."""
+    paths = _executor_paths(tmp_path)
+    _grant_owner_auth(monkeypatch, Path(paths["authority_audit_path"]))
+    monkeypatch.setattr(C, "ENABLE_AUTO_ASSIGN", True)
+    monkeypatch.setenv("ALLOW_AUTO_ASSIGN_STATE_IN_TEST", "1")
+
+    out = E.maybe_execute(
+        _record(),
+        SimpleNamespace(would_auto_assign=True),
+        {"status_id": 2},
+        now=NOW,
+        assign_runner=lambda *_args: (True, "ASSIGN_OK: fixture"),
+        notifier=lambda _text: None,
+        **paths,
+    )
+
+    assert out["executed"] is False
+    assert out["runner_outcome"] == "unknown"
+    state = AC.load_state(paths["authority_state_path"])
+    assert state["executed_total"] == 1
+    assert state["in_flight"] == "480300"
+    assert state["pending_verification"] == ["480300"]
+    assert state["auto_off_latch"] is True
+    assert state["auto_off_reason"] == "runner_outcome_unknown"
 
 
 def test_h2_oserror_after_child_start_is_unknown_and_never_rolls_back(
@@ -1282,7 +1469,8 @@ def test_h3_missing_signed_state_is_latched_not_a_fresh_budget(
         {"status_id": 2},
         now=NOW,
         assign_runner=lambda *args: (
-            mutated_calls.append(args) or (True, "ASSIGN_OK: fixture")
+            mutated_calls.append(args)
+            or (True, "ASSIGN_OK: fixture [verify_ok_kid=101]")
         ),
         notifier=lambda _text: None,
         **mutated_paths,
@@ -1313,7 +1501,10 @@ def test_h4_clock_is_sampled_after_locks_for_heartbeat_and_proposal(
         SimpleNamespace(would_auto_assign=True),
         {"status_id": 2},
         now=NOW,
-        assign_runner=lambda *args: (calls.append(args) or (True, "ok")),
+        assign_runner=lambda *args: (
+            calls.append(args)
+            or (True, "ASSIGN_OK: fixture [verify_ok_kid=101]")
+        ),
         notifier=lambda _text: None,
         **paths,
     )
@@ -1350,7 +1541,10 @@ def test_h5_hot_flip_off_between_recheck_and_final_gate_stops_execution(
         SimpleNamespace(would_auto_assign=True),
         {"status_id": 2},
         now=NOW,
-        assign_runner=lambda *args: (calls.append(args) or (True, "ok")),
+        assign_runner=lambda *args: (
+            calls.append(args)
+            or (True, "ASSIGN_OK: fixture [verify_ok_kid=101]")
+        ),
         notifier=lambda _text: None,
         **paths,
     )
@@ -1368,7 +1562,8 @@ def test_h5_hot_flip_off_between_recheck_and_final_gate_stops_execution(
         {"status_id": 2},
         now=NOW,
         assign_runner=lambda *args: (
-            mutated_calls.append(args) or (True, "ASSIGN_OK: fixture")
+            mutated_calls.append(args)
+            or (True, "ASSIGN_OK: fixture [verify_ok_kid=101]")
         ),
         notifier=lambda _text: None,
         **paths,

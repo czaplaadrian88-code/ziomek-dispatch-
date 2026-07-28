@@ -243,7 +243,30 @@ def test_on_corrupt_lines_do_not_authorize(flag_on, audit_path, runner_spy,
     audit_path.write_text("{nie-json\n[]\n\n", encoding="utf-8")
     out = _run(assign_runner=runner_spy, notifier=notify_spy, state_path=state_path)
     assert out.get("blocked") == "owner_auth_missing"
-    assert out.get("reason") == "no_toggle_row"
+    assert out.get("reason") == "authorization_audit_corrupt"
+
+
+def test_corrupt_tail_after_valid_toggle_invalidates_authorization(
+    flag_on,
+    audit_path,
+    runner_spy,
+    notify_spy,
+    state_path,
+    isolated_llog,
+):
+    """RED I4: ucięty ogon po poprawnym toggle nie może odsłonić starszej zgody."""
+    audit_path.write_text(
+        json.dumps(_toggle(minutes_ago=5)) + "\n{broken",
+        encoding="utf-8",
+    )
+    out = _run(
+        assign_runner=runner_spy,
+        notifier=notify_spy,
+        state_path=state_path,
+    )
+    assert out.get("blocked") == "owner_auth_missing"
+    assert out.get("reason") == "authorization_audit_corrupt"
+    assert runner_spy.calls == []
 
 
 # ---------------- ŚCIEŻKA POZYTYWNA: świeże PIN-owane podniesienie ----------------

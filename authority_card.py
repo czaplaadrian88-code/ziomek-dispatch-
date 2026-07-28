@@ -743,6 +743,15 @@ def clear_latch(
             )
         if state.get("auto_off_latch") is not True:
             raise ValueError("authority latch is not set")
+        if (
+            state.get("in_flight") is not None
+            or state.get("pending_verification")
+        ):
+            raise ValueError(
+                "authority state is not reconciled: najpierw reconcile 5b, "
+                "potem verify-execution dla każdego pending oid, dopiero "
+                "latch-clear za ACK ownera"
+            )
         _append_audit_row(audit_path, {
             "ts": now.astimezone(timezone.utc).isoformat(),
             "kind": "authority_latch_cleared",

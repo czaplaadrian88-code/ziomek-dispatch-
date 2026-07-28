@@ -167,12 +167,13 @@ def test_missing_and_stale_heartbeat_are_fail_closed(tmp_path):
         {
             "ts": (NOW - timedelta(seconds=61)).isoformat(),
             "pid": 123,
-            "checks": {},
+            "checks": {"verdict": "OK"},
         },
     )
     assert M.heartbeat_fresh(str(path), NOW)[0] is False
     M.write_heartbeat(
-        str(path), {"ts": NOW.isoformat(), "pid": 123, "checks": {}}
+        str(path),
+        {"ts": NOW.isoformat(), "pid": 123, "checks": {"verdict": "OK"}},
     )
     assert M.heartbeat_fresh(str(path), NOW) == (True, "ok")
 
@@ -209,7 +210,36 @@ def test_monitor_counter_divergence_latches_and_writes_atomic_heartbeat(tmp_path
     assert AC.load_state(str(card_state))["auto_off_latch"] is True
     assert heartbeat.exists()
     assert not list(tmp_path.glob("monitor-heartbeat.json.tmp.*"))
-    assert json.loads(heartbeat.read_text(encoding="utf-8")) == result
+    published = json.loads(heartbeat.read_text(encoding="utf-8"))
+    assert published == result
+    assert published["checks"]["verdict"] == "ALARM"
+
+
+def test_monitor_clean_cycle_always_publishes_explicit_ok_verdict(tmp_path):
+    """I7 producer ratchet: także czysty heartbeat ma jawne checks.verdict."""
+    card_state = tmp_path / "card-state.json"
+    auto_state = tmp_path / "auto-state.json"
+    heartbeat = tmp_path / "monitor-heartbeat.json"
+    shadow = tmp_path / "shadow.jsonl"
+    AC.save_state(str(card_state), AC.empty_state())
+    auto_state.write_text(
+        json.dumps({"executed_total": 0, "executed_order_ids": []}),
+        encoding="utf-8",
+    )
+    shadow.write_text("", encoding="utf-8")
+
+    result = M.run_cycle(
+        now=NOW,
+        heartbeat_path=str(heartbeat),
+        authority_state_path=str(card_state),
+        auto_state_path=str(auto_state),
+        shadow_path=str(shadow),
+    )
+
+    published = json.loads(heartbeat.read_text(encoding="utf-8"))
+    assert result["checks"]["verdict"] == "OK"
+    assert published["checks"]["verdict"] == "OK"
+    assert published == result
 
 
 def test_monitor_accepts_correlated_unknown_execution_budget(tmp_path):

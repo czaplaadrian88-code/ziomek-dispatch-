@@ -250,33 +250,40 @@ def _last_successful_toggle(audit_path: str) -> Optional[Dict[str, Any]]:
     """Ostatni UDANY wiersz `auto_assign_toggle` z dziennika audytu koordynatora
     (tail-scan, wzorzec `_recent_override_for_courier`). `ok=false` to PRÓBA
     zapisu flagi, nie upoważnienie — odfiltrowana. Zwraca None gdy pliku nie ma,
-    nie da się go odczytać albo nie zawiera ani jednego takiego wiersza."""
+    nie da się go odczytać albo nie zawiera ani jednego takiego wiersza.
+
+    Każdy niepusty, nieparsowalny lub niedictowy wiersz w skanowanym oknie
+    unieważnia CAŁE okno. Pierwszy ucięty wiersz po seeku jest świadomie
+    odcinany; wszystkie kolejne aż do EOF muszą być poprawnym JSONL."""
     try:
         size = os.path.getsize(audit_path)
     except OSError:
         return None
     try:
-        with open(audit_path, "r", encoding="utf-8", errors="replace") as f:
+        with open(audit_path, "r", encoding="utf-8", errors="strict") as f:
             if size > COORDINATOR_AUDIT_TAIL_BYTES:
                 f.seek(size - COORDINATOR_AUDIT_TAIL_BYTES)
                 f.readline()  # odetnij ucięty pierwszy wiersz
             lines = f.readlines()
-    except OSError:
-        return None
+    except (OSError, UnicodeError):
+        return {"_authorization_audit_corrupt": True}
     found = None
+    corrupt = False
     for ln in lines:
         ln = ln.strip()
         if not ln:
             continue
         try:
             row = json.loads(ln)
-        except Exception:  # noqa: BLE001 — pojedyncze śmieci nie mogą autoryzować ANI wywracać
+        except (TypeError, ValueError):
+            corrupt = True
             continue
         if not isinstance(row, dict):
+            corrupt = True
             continue
         if row.get("kind") == "auto_assign_toggle" and row.get("ok") is True:
             found = row
-    return found
+    return {"_authorization_audit_corrupt": True} if corrupt else found
 
 
 def _owner_authorization(now: datetime, audit_path: Optional[str] = None
@@ -295,6 +302,8 @@ def _owner_authorization(now: datetime, audit_path: Optional[str] = None
     if row is None:
         return False, ("audit_unreadable" if not os.path.exists(audit_path)
                        else "no_toggle_row")
+    if row.get("_authorization_audit_corrupt") is True:
+        return False, "authorization_audit_corrupt"
     if row.get("value") is not True:
         return False, "last_toggle_disabled"
     if row.get("pin_verified") is not True:
@@ -925,6 +934,23 @@ def maybe_execute(
 
                 reservation_active = False
                 if _card_ctx.get("enforced"):
+                    # I1/I2: solve i registry mogą zużyć okno ważności. Ostatni
+                    # gate oraz rezerwacja muszą użyć zegara pobranego PO solve,
+                    # nie próbki sprzed niego.
+                    execution_now = _fresh_execution_now()
+                    if execution_now.tzinfo is None:
+                        execution_now = execution_now.replace(
+                            tzinfo=timezone.utc
+                        )
+                    execution_now = execution_now.astimezone(timezone.utc)
+                    execution_ts = execution_now.timestamp()
+                    _auth_ok, _auth_reason = _owner_authorization(execution_now)
+                    if not _auth_ok:
+                        _warn_owner_auth(_auth_reason, execution_ts)
+                        return {
+                            "blocked": "owner_auth_missing",
+                            "reason": _auth_reason,
+                        }
                     # H5/G1: OSTATNI gate po fresh solve czyta źródło flags.json
                     # poza FlagSnapshot. Między nim a rezerwacją nie ma pracy.
                     fresh_flag_on, fresh_flag_fp = _fresh_execution_flags()
@@ -1030,10 +1056,12 @@ def maybe_execute(
                 identity_mismatch = False
                 if ok and _card_ctx.get("enforced"):
                     readback_cid = _runner_readback_cid(msg)
-                    if (
-                        readback_cid is not None
-                        and readback_cid != canon_cid(cid)
-                    ):
+                    if readback_cid is None:
+                        # Sukces procesu bez CID z read-back nie dowodzi skutku.
+                        # Rezerwacja zostaje, a wspólna ścieżka unknown poniżej
+                        # zatrzaskuje runner_outcome_unknown.
+                        ok = False
+                    elif readback_cid != canon_cid(cid):
                         identity_mismatch = True
                         ok = False
                         _latch_authority_auto_off(

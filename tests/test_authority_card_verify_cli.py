@@ -18,7 +18,7 @@ def _read_rows(path):
     ]
 
 
-def test_cli_latch_clear_preserves_budget_and_pending(tmp_path, capsys):
+def test_cli_latch_clear_refuses_budget_with_pending_verification(tmp_path, capsys):
     state_path = tmp_path / "state.json"
     audit_path = tmp_path / "audit.jsonl"
     before = {
@@ -38,6 +38,35 @@ def test_cli_latch_clear_preserves_budget_and_pending(tmp_path, capsys):
         "--audit", str(audit_path),
         "latch-clear",
         "--reason", "owner ACK po reconcile 5b",
+        "--operator", "operator-test",
+    ])
+
+    assert rc == 1
+    assert AC.load_state(str(state_path)) == before
+    assert not audit_path.exists()
+    response = json.loads(capsys.readouterr().out)
+    assert response["cleared"] is False
+    assert "verify-execution" in response["reason"]
+
+
+def test_cli_latch_clear_accepts_clean_reconciled_state(tmp_path, capsys):
+    state_path = tmp_path / "state.json"
+    audit_path = tmp_path / "audit.jsonl"
+    before = {
+        **AC.empty_state(),
+        "executed_total": 1,
+        "executed_ts": [NOW.timestamp()],
+        "auto_off_latch": True,
+        "auto_off_reason": "runner_outcome_unknown",
+        "auto_off_ts": NOW.isoformat(),
+    }
+    AC.save_state(str(state_path), before)
+
+    rc = CLI.main([
+        "--state", str(state_path),
+        "--audit", str(audit_path),
+        "latch-clear",
+        "--reason", "owner ACK po verify-execution",
         "--operator", "operator-test",
     ])
 

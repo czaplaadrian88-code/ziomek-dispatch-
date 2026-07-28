@@ -73,8 +73,14 @@ def heartbeat_fresh(
             value = json.load(stream)
     except Exception:
         return False, "monitor_heartbeat_stale"
-    if not isinstance(value, dict) or not isinstance(value.get("checks"), dict):
-        return False, "monitor_heartbeat_stale"
+    if not isinstance(value, dict):
+        return False, "monitor_verdict_not_ok"
+    checks = value.get("checks")
+    if (
+        not isinstance(checks, dict)
+        or checks.get("verdict") != "OK"
+    ):
+        return False, "monitor_verdict_not_ok"
     ts = _parse_ts(value.get("ts"))
     pid = value.get("pid")
     if ts is None or isinstance(pid, bool) or not isinstance(pid, int) or pid <= 0:

@@ -1127,6 +1127,33 @@ def upsert_order(
                         f"incoming={incoming_marker}"
                     )
                 return dict(existing)
+            if existing:
+                # Rekord sprzed ery markerów jest już żywym agregatem. NEW_ORDER
+                # może tu wyłącznie uzupełnić brakujący dowód first-write; nie
+                # wolno mu ponownie zastosować create-payloadu, dopisać historii
+                # ani odświeżyć updated_at, bo cofnąłby assignment/lifecycle.
+                if not incoming_marker:
+                    _log.warning(
+                        "NEW_ORDER duplicate without marker refused "
+                        f"oid={order_id}"
+                    )
+                    return dict(existing)
+                marked_existing = dict(existing)
+                marked_existing[
+                    "last_lifecycle_event_id_new_order"
+                ] = str(incoming_marker)
+                state[order_id] = marked_existing
+                _guarded_write(
+                    path,
+                    state,
+                    old_count,
+                    op="new_order_marker_backfill",
+                )
+                _log.info(
+                    "NEW_ORDER marker backfilled without lifecycle merge "
+                    f"oid={order_id} marker={incoming_marker}"
+                )
+                return marked_existing
             data = dict(data)
             # Jawne None jest dowodem „nieprzypisany”; brak klucza nie może
             # autoryzować AUTO. TYLKO setdefault przy pierwszym create:

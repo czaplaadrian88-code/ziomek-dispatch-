@@ -9,11 +9,19 @@
 3. karta T5: latch → podpis audytowy → ważność → fingerprint → scope → limity;
 4. istniejąca quality gate i bezpieczniki wykonania.
 
-Po fresh solve ten sam gate jest ponawiany ze świeżym `now`, bezpośrednio przed
-trwałą rezerwacją. Rezerwacja powstaje pod lockami przed subprocess-em:
+Po fresh solve executor pobiera drugi, nowy zegar i na nim ponawia owner-auth
+oraz cały gate karty, bezpośrednio przed trwałą rezerwacją. Rezerwacja powstaje
+pod lockami przed subprocess-em:
 idempotencja oid, budżet, `in_flight` i `pending_verification` są fsyncowane.
 Odwołanie/wygaśnięcie karty albo latch w oknie TOCTOU wygrywa, a crash po skutku
 w panelu nie otwiera replayowi drugiego wykonania.
+
+Tail audytu podniesienia ownera jest czytany fail-closed. Wybrana semantyka jest
+ostrzejsza niż minimum: każdy niepusty, nieparsowalny albo niedictowy wiersz
+w całym skanowanym oknie unieważnia autoryzację jako
+`authorization_audit_corrupt`, także gdy wcześniej wystąpił poprawny toggle.
+Jedyny pomijany fragment to pierwszy potencjalnie ucięty rekord wynikający
+technicznie z rozpoczęcia ograniczonego tail-skanu w środku starszego wiersza.
 
 Body karty jest hashowane jako JSON UTF-8 z `sort_keys=True` i
 `separators=(",", ":")`. Liczy się ostatni wiersz
@@ -67,17 +75,18 @@ Przed uruchomieniem nazwowego runnera executor rozwiązuje nazwę przez kanonicz
 `canon_cid`. Brak, tie albo rozjazd daje `runner_identity_ambiguous` bez rezerwacji
 i bez latcha (staleness konfiguracji). Obecny `gastro_assign.py` nie przyjmuje CID
 jako argumentu; pozostaje więc niezmieniony w tej karcie. Jego `--verify` niesie
-jednak `verify_ok_kid=...`: rozjazd read-back z intencją executora pozostawia
+jednak `verify_ok_kid=...`: brak tego pola jest stanem nieznanym
+`runner_outcome_unknown`, a rozjazd read-back z intencją executora pozostawia
 rezerwację, zatrzaskuje `runner_identity_mismatch` i wymaga reconcile. Osobna karta
 powinna dodać do współdzielonego runnera jawny argument CID i jego walidację
 end-to-end.
 
-Po wejściu pod lock stanu karty i lifecycle executor pobiera jeden świeży zegar.
-Ten sam punkt czasu zasila finalny TTL autoryzacji ownera, okno ważności karty,
-60-sekundowy heartbeat i 15-sekundową świeżość proposal. Po fresh solve ostatni
-gate czyta `ENABLE_AUTO_ASSIGN` i fingerprint bezpośrednio ze źródłowego
-`flags.json`, z pominięciem cache i per-tick `FlagSnapshot`; OFF albo błąd odczytu
-odmawia przed rezerwacją.
+Po wejściu pod lock stanu karty i lifecycle executor pobiera świeży zegar dla
+heartbeat i 15-sekundowej świeżości proposal. Po fresh solve pobiera go ponownie:
+ta druga próbka zasila finalny TTL autoryzacji ownera, okno ważności karty i
+rezerwację. Ostatni gate czyta też `ENABLE_AUTO_ASSIGN` i fingerprint bezpośrednio
+ze źródłowego `flags.json`, z pominięciem cache i per-tick `FlagSnapshot`; OFF albo
+błąd odczytu odmawia przed rezerwacją.
 
 ## Fail-closed matrix
 
@@ -97,6 +106,9 @@ odmawia przed rezerwacją.
 | brak albo negatywny dowód predykatu 1–7 | `scope_*` | nie; order jest `recommend-only` |
 | limit 1/h, 1 in-flight, 3 total lub pending verification | `max_per_hour`, `in_flight`, `max_total`, `pending_verification` | nie |
 | nazwa nie rozwiązuje się jednoznacznie do zamierzonego CID | `runner_identity_ambiguous` | nie; brak rezerwacji |
+| heartbeat nie ma jawnego `checks.verdict=="OK"` | `monitor_verdict_not_ok` | tak |
+| heartbeat nie istnieje, jest nieczytelny albo nieświeży | `monitor_heartbeat_stale` | tak |
+| sukces runnera nie niesie CID z read-back | `runner_outcome_unknown` | tak + rezerwacja zostaje |
 | read-back runnera wskazuje inny CID | `runner_identity_mismatch` | tak + rezerwacja zostaje |
 | końcowy źródłowy killswitch jest OFF/nieczytelny | `flag_off_at_execution` | nie; brak rezerwacji |
 | runner nie potwierdził wyniku po możliwym wysłaniu | `runner_outcome_unknown` | tak + budżet jak wykonanie |
@@ -115,6 +127,9 @@ blok przechodzi przez wspólny serializer L1.1 do LOCATION A+B. Każdy brak
 istniejącym lifecycle lockiem i w tym samym atomowym upsercie,
 `last_lifecycle_event_id_new_order` oraz jawne `courier_id=None`. Retransmisja
 tego samego event_id jest no-opem: nie dopisuje historii i nie dotyka pliku.
+Jeżeli istnieje już żywy rekord sprzed ery markerów, duplikat `NEW_ORDER`
+uzupełnia wyłącznie pierwszy marker; status, CID, payload, historia i `updated_at`
+pozostają bajtowo niezmienione.
 Dzięki temu predykat 1 jest dziś dowodliwy z realnego przepływu
 state-machine→scope; usunięcie markera ponownie daje `scope_1_absent`.
 
@@ -152,8 +167,9 @@ Każdy krok live wymaga właściwego ACK ownera. Kolejność jest niezamienna:
 4. owner podpisuje kartę w torze z PIN-em, dopiero po zgodnym BUILD_SHA;
 5. ten sam tor, zanim potwierdzi gotowość podpisu, wykonuje
    `authority_card_verify.py initialize-state`; brak tego kroku = podpis niegotowy;
-6. jeżeli stan jest zatrzaśnięty, po ręcznym reconcile użyj za osobnym ACK
-   `latch-clear` opisanym niżej;
+6. jeżeli stan jest zatrzaśnięty, wykonaj ręczny reconcile 5b, następnie
+   `verify-execution` dla każdego pending oid i dopiero za osobnym ACK użyj
+   `latch-clear` opisanego niżej;
 7. dopiero na końcu owner może flipnąć `ENABLE_AUTO_ASSIGN=true`.
 
 Writer jest idempotentny i zapisuje `temp → fsync → rename → fsync katalogu`.
@@ -169,7 +185,8 @@ bezpieczna sekwencja:
 
 `write_build_sha + --verify` → `restart + health` → `podpis karty z PIN-em` →
 `initialize-state` →
-`reconcile 5b i latch-clear, tylko jeśli latch był ON` → `flip flagi`.
+`reconcile 5b` → `verify-execution` → `latch-clear, tylko jeśli latch był ON`
+→ `flip flagi`.
 
 ## CLI
 
@@ -205,10 +222,11 @@ python3 tools/authority_card_verify.py \
 
 Jeżeli latch powstał przez `runner_outcome_unknown`, reconcile obejmuje najpierw
 `verify-execution` dla tego oid; dopiero potem wolno wykonać `latch-clear`.
-Komenda zmienia wyłącznie `auto_off_latch` na false. Liczniki, timestampy,
-`in_flight`, `pending_verification` oraz pierwotny reason/ts zostają zachowane;
-audyt dostaje `kind=authority_latch_cleared`. Nigdy nie usuwaj pliku stanu,
-bo resetuje budżet i niszczy ślad.
+Komenda odmawia, dopóki `in_flight` nie jest `null` i
+`pending_verification` nie jest puste. Po czystym reconcile zmienia wyłącznie
+`auto_off_latch` na false; liczniki, timestampy oraz pierwotny reason/ts zostają
+zachowane, a audyt dostaje `kind=authority_latch_cleared`. Nigdy nie usuwaj pliku
+stanu, bo resetuje budżet i niszczy ślad.
 
 ## Rollback
 

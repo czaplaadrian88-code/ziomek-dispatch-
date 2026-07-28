@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import inspect
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -467,6 +467,68 @@ def test_real_state_machine_scope_reaches_gate_and_stops_at_scope_4(
         None,
         _scope_contract(),
     ) == (False, "scope_4_absent")
+
+
+def test_pre_marker_duplicate_new_order_only_backfills_marker(
+    tmp_path,
+    monkeypatch,
+):
+    """RED/mutation I6: legacy live record is byte-identical outside first marker."""
+    state_path = tmp_path / "orders-state.json"
+    existing = {
+        "order_id": OID,
+        "status": "assigned",
+        "courier_id": "101",
+        "restaurant": "Original Restaurant",
+        "pickup_address": "Original 1",
+        "delivery_address": "Original 2",
+        "history": [
+            {"at": (NOW - timedelta(minutes=3)).isoformat(),
+             "event": "COURIER_ASSIGNED", "status": "assigned"},
+        ],
+        "updated_at": (NOW - timedelta(minutes=3)).isoformat(),
+        "operator_note": "must survive",
+    }
+    state_path.write_text(
+        json.dumps({OID: existing}, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(state_machine, "_state_path", lambda: str(state_path))
+    duplicate = {
+        **_order_event(),
+        "event_id": f"{OID}_NEW_ORDER_retransmission",
+        "payload": {
+            "status_id": 2,
+            "restaurant": "Incoming Must Not Win",
+            "pickup_address": "Incoming Pickup",
+            "delivery_address": "Incoming Delivery",
+            "pickup_at_warsaw": NOW.isoformat(),
+        },
+    }
+
+    after = state_machine.update_from_event(duplicate)
+    marker = after.pop("last_lifecycle_event_id_new_order")
+    assert marker == duplicate["event_id"]
+    assert json.dumps(
+        after,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8") == json.dumps(
+        existing,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+    # Mutation control: dawny merge odtwarza dokładnie regres status/courier/data.
+    legacy_mutant = {
+        **existing,
+        "status": "planned",
+        "courier_id": None,
+        "restaurant": "Incoming Must Not Win",
+    }
+    assert legacy_mutant != existing
 
 
 def test_new_order_marker_is_mutation_oracle_for_scope_1(
