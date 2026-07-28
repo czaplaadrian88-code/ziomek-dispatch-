@@ -1,5 +1,13 @@
 # Route-order parity monitor — raport kandydata 2026-07-28
 
+> **SUPERSEDED (config boundary only):** późniejsza diagnoza 28.07 wykazała,
+> że ten kandydat importował `build_view` pod własnym env i ponownie czytał live
+> state. Obowiązuje
+> `ROUTE_ORDER_PARITY_CONFIG_DRIFT_FIX_2026-07-28.md` +
+> `COURIER_ORDERS_SNAPSHOT_CONFIG.patch`. Historyczne dowody tri-state/Kotlin
+> poniżej pozostają użyteczne, lecz opis configu, buildera i exitów nie jest
+> aktualnym kontraktem.
+
 ## Wynik
 
 Kandydat naprawia błąd instrumentu u źródła. Poprzedni checker porównywał
