@@ -422,6 +422,9 @@ def _serialize_candidate(c) -> dict:
         "r6_worst_oid": m.get("r6_worst_oid"),
         "r6_is_solo": m.get("r6_is_solo"),
         "r6_bag_size": compact["r6_bag_size"],
+        # ETAP 1 proposal-claims: liczba miękkich, między-tickowych claimów,
+        # które kandydat rzeczywiście widział. Nie zmienia bag_size_before.
+        "proposal_claims_count": m.get("proposal_claims_count", 0),
         # Fix 2026-05-17 (#474227): r6_bag_size jest null gdy feasibility_v2
         # robi early-return PRZED blokiem R6 (np. bramka sla_violation:538).
         # bag_size_before (feasibility_v2:276) ustawiane bezwarunkowo = len(bag).
@@ -946,6 +949,9 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
             # — best). Patrz _serialize_candidate dla detali. r6_bag_size null
             # przy feasibility early-return przed R6 → fallback do bag_size_before.
             "bag_size_before": best_m.get("bag_size_before"),
+            # ETAP 1 proposal-claims (LOCATION B). Jawnie, mimo automatycznej
+            # propagacji metrics, aby nie powtórzyć recydywy lekcji #80.
+            "proposal_claims_count": best_m.get("proposal_claims_count", 0),
             # V3.28 ANCHOR FIX 2026-05-10 — per-order thermal violations (anchor=ready_at)
             "r6_per_order_violations": best_m.get("r6_per_order_violations"),
             "r6_picked_up_violations": best_m.get("r6_picked_up_violations"),
@@ -1122,6 +1128,12 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
         # PipelineResult bez tych pól (dla replay zaszłych eventów).
         "pool_total_count": getattr(result, "pool_total_count", None),
         "pool_feasible_count": getattr(result, "pool_feasible_count", None),
+        # Decision-level pola Etapu 1. ``bag_size_before`` pozostaje realnym
+        # workiem sprzed proposed-claimów; nie zmieniamy jego semantyki.
+        "proposal_claims_count": best_m.get("proposal_claims_count", 0),
+        "proposal_claims_relaxed": bool(
+            getattr(result, "proposal_claims_relaxed", False)
+        ),
         # KOORD-redirect dicts (2026-05-26 / 2026-05-27): bramki best_effort_r6
         # (BUG E) i commit_divergence (BUG C verdict-gate) emitują verdict=KOORD
         # i dorzucają strukturalny payload na PipelineResult dla analytics +
@@ -1527,6 +1539,105 @@ def _sanitize_payload_coords(payload: dict, oid) -> bool:
     return changed
 
 
+def _proposal_claim_count(fleet: Dict, cid: str) -> int:
+    """Ile wpisów ``proposed`` widzi dany kurier w przekazanym świecie."""
+    cs = fleet.get(str(cid))
+    return sum(
+        1
+        for entry in (getattr(cs, "bag", None) or [])
+        if (entry or {}).get("commitment_level") == "proposed"
+    )
+
+
+def _apply_persistent_proposal_claims(
+    fleet: Dict,
+    state_all: dict,
+    now: datetime,
+):
+    """Dołącz aktywne pending proposals do snapshotu bez nowego store/writera."""
+    from dispatch_v2 import claim_ledger as _cl
+    from dispatch_v2 import pending_proposals_store as _pps
+
+    ttl_sec = C.flag(
+        "PROPOSAL_CLAIM_TTL_SEC",
+        C.PROPOSAL_CLAIM_TTL_SEC,
+    )
+    pending = _pps.load(_pps.PENDING_PATH)
+    claims = _pps.active_proposal_claims(
+        pending,
+        state_all,
+        now,
+        ttl_sec,
+    )
+    out = fleet
+    for claim in claims:
+        out = _cl.tentative_assign(
+            out,
+            claim["cid"],
+            claim["order"],
+            commitment_level="proposed",
+        )
+    violations = _cl.check_proposal_claim_window_guarded(
+        out,
+        claims,
+        log=_log,
+        context="shadow_tick_persistent",
+    )
+    return out, claims, violations
+
+
+def _assess_with_proposal_claim_relaxation(
+    event: dict,
+    fleet_with_claims: Dict,
+    fleet_without_claims: Dict,
+    meta: Optional[dict],
+    now: datetime,
+    *,
+    persistence_enabled: bool,
+):
+    """Oceń z claimami, a przy fałszywym KOORD powtórz bez nich.
+
+    W rzadkim fallbacku oba solve'y zachowują world-record: pierwszy dokumentuje
+    przyczynę rozluźnienia, drugi jest finalnym światem zgodnym z decyzją w
+    shadow_decisions. Wracamy także ze światem faktycznie użytym do wyniku, aby
+    metryka zwycięzcy nie przypisywała mu claimów, które zostały rozluźnione.
+    """
+    result = process_event(event, fleet_with_claims, meta, now=now)
+    used_fleet = fleet_with_claims
+    relaxed = False
+    if (
+        persistence_enabled
+        and int(getattr(result, "pool_feasible_count", 0) or 0) == 0
+    ):
+        without_claims = process_event(
+            event,
+            fleet_without_claims,
+            meta,
+            now=now,
+        )
+        if int(getattr(without_claims, "pool_feasible_count", 0) or 0) > 0:
+            result = without_claims
+            used_fleet = fleet_without_claims
+            relaxed = True
+    result.proposal_claims_relaxed = relaxed
+    best = getattr(result, "best", None)
+    metrics = getattr(best, "metrics", None) if best is not None else None
+    if isinstance(metrics, dict):
+        best_cid = str(getattr(best, "courier_id", "") or "")
+        metrics["proposal_claims_count"] = _proposal_claim_count(
+            used_fleet,
+            best_cid,
+        )
+        # ``bag_size_before`` jest istniejącym kontraktem realnego worka.
+        # Feasibility musi widzieć proposed-claimy, lecz telemetria nie może
+        # po cichu zmienić znaczenia na real+proposed (lekcja #80).
+        real_cs = fleet_without_claims.get(best_cid)
+        metrics["bag_size_before"] = len(
+            getattr(real_cs, "bag", None) or []
+        )
+    return result, used_fleet
+
+
 @_ST.observation_gate(lambda: _ST.observation_enabled(
     C.flag, C.ENABLE_STAGE_TIMING_OBSERVATION))
 def _tick(shadow_log_path: str, meta: Optional[dict], *,
@@ -1583,6 +1694,37 @@ def _tick(shadow_log_path: str, meta: Optional[dict], *,
     _state_wall_ms = (
         (time.perf_counter_ns() - _state_started_ns) / 1_000_000.0
         if _stage_timing_on else None)
+    # ETAP 1: snapshot bez trwałych claimów jest potrzebny wyłącznie do taniego
+    # soft-relax fallbacku. Oba światy dostają później te same claimy bieżącego
+    # ticku, więc różnią się tylko pending proposals z poprzednich ticków.
+    fleet_without_proposal_claims = fleet
+    _proposal_claim_persistence = C.decision_flag(
+        "ENABLE_PROPOSAL_CLAIM_PERSISTENCE"
+    )
+    _proposal_claims_active: list = []
+    _proposal_claim_window_violations: list = []
+    if _proposal_claim_persistence:
+        try:
+            (
+                fleet,
+                _proposal_claims_active,
+                _proposal_claim_window_violations,
+            ) = _apply_persistent_proposal_claims(
+                fleet,
+                state_all,
+                datetime.now(timezone.utc),
+            )
+        except Exception as _proposal_claim_exc:  # noqa: BLE001
+            _proposal_claim_window_violations = [{
+                "cid": None,
+                "oid": None,
+                "kind": "application_error",
+                "exception_type": type(_proposal_claim_exc).__name__,
+            }]
+            _log.error(
+                "PROPOSAL_CLAIM_WINDOW_INVARIANT application_error: %s",
+                type(_proposal_claim_exc).__name__,
+            )
     if _stage_timing_on:
         _batch_ready_ns = time.perf_counter_ns()
         _batch_wall_now = datetime.now(timezone.utc)
@@ -1639,6 +1781,7 @@ def _tick(shadow_log_path: str, meta: Optional[dict], *,
     _accepted_claim_trace: list = []
     _tick_breaches: list = []
     _tick_feral_drops: list = []
+    _tick_checker_errors = 0
     _claim_hard_seen = False
 
     for _batch_index, ev in enumerate(events):
@@ -1722,7 +1865,15 @@ def _tick(shadow_log_path: str, meta: Optional[dict], *,
             # tego rekordy miały now=null → replay bit-w-bit niemożliwy).
             _process_started_ns = (
                 time.perf_counter_ns() if _stage_timing_on else None)
-            result = process_event(ev, fleet, meta, now=datetime.now(timezone.utc))
+            _decision_now = datetime.now(timezone.utc)
+            result, _decision_fleet = _assess_with_proposal_claim_relaxation(
+                ev,
+                fleet,
+                fleet_without_proposal_claims,
+                meta,
+                _decision_now,
+                persistence_enabled=_proposal_claim_persistence,
+            )
             if _stage_timing_on:
                 _process_ended_ns = time.perf_counter_ns()
                 _process_wall_ms = (
@@ -1731,7 +1882,8 @@ def _tick(shadow_log_path: str, meta: Optional[dict], *,
             # SHADOW probe (2026-05-29) — race Baanko-type same-restaurant.
             # Logging-only, flag-gated, try/except wewnątrz — NIGDY nie wywróci
             # dispatchu. Diagnoza orphan-drop vs visible-but-filtered.
-            _probe_same_restaurant_race(oid, result, fleet, state_all)
+            _probe_same_restaurant_race(
+                oid, result, _decision_fleet, state_all)
 
             # L6.C3 ENGINE CLAIM LEDGER (2026-07-04, R2 ROOT-8 / INV-LAYER-4):
             # po PROPOSE dołóż zwycięzcy TO zlecenie do jego worka w snapshocie floty
@@ -1743,6 +1895,8 @@ def _tick(shadow_log_path: str, meta: Optional[dict], *,
             _claim_applied = False
             _claim_dropped = False
             _claim_drop_viol: list = []
+            _claim_checker_error = 0
+            _claim_check_for_event = False
             _claim_hard_for_event = False
             if C.decision_flag("ENABLE_ENGINE_CLAIM_LEDGER"):
                 try:
@@ -1756,30 +1910,47 @@ def _tick(shadow_log_path: str, meta: Optional[dict], *,
                             _cl_rec.setdefault("order_id", oid)
                             # INV-FEAS-NO-DOUBLE-BOOK: worek zwycięzcy PRZED doklejeniem
                             # (= obraz floty, który ocena tego eventu widziała).
-                            _cl_bag_seen = len(getattr(fleet.get(_cl_cid), "bag", None) or [])
+                            # Intra-tick checker śledzi wyłącznie przyrost claimów
+                            # bieżącego ticku. Trwałe ``proposed`` mają osobny
+                            # verify_proposal_claim_window i nie mogą powodować
+                            # fałszywego gap/stale po soft-relax.
+                            _cl_bag_seen = len(
+                                getattr(
+                                    fleet_without_proposal_claims.get(_cl_cid),
+                                    "bag",
+                                    None,
+                                )
+                                or []
+                            )
                             _cl_claim = (_cl_cid, oid, _cl_bag_seen)
                             _claim_trace.append(_cl_claim)
+                            _claim_check_for_event = C.decision_flag(
+                                "ENABLE_CLAIM_LEDGER_INVARIANT_CHECK")
                             _claim_hard_for_event = (
-                                C.decision_flag(
-                                    "ENABLE_CLAIM_LEDGER_INVARIANT_CHECK")
+                                _claim_check_for_event
                                 and C.decision_flag(
                                     "ENABLE_CLAIM_LEDGER_INVARIANT_HARD")
                             )
-                            if _claim_hard_for_event:
-                                _claim_hard_seen = True
-                                try:
-                                    _claim_drop_viol = _cl.check_feral_claim(
-                                        _accepted_claim_trace, _cl_claim,
-                                        log=_log, context="shadow_tick")
-                                except Exception as _cl_check_e:  # noqa: BLE001
-                                    _log.warning(
-                                        "claim_ledger HARD checker fail-soft "
-                                        f"order={oid}: {_cl_check_e}")
-                                    _claim_drop_viol = []
-
-                            if _claim_drop_viol:
-                                _claim_dropped = True
+                            if _claim_check_for_event:
+                                if _claim_hard_for_event:
+                                    _claim_hard_seen = True
+                                (
+                                    _claim_drop_viol,
+                                    _claim_checker_error_type,
+                                ) = _cl.check_feral_claim_guarded(
+                                    _accepted_claim_trace,
+                                    _cl_claim,
+                                    hard=_claim_hard_for_event,
+                                    log=_log,
+                                    context="shadow_tick",
+                                )
                                 _tick_breaches.extend(_claim_drop_viol)
+                                if _claim_checker_error_type is not None:
+                                    _claim_checker_error = 1
+                                    _tick_checker_errors += 1
+
+                            if _claim_hard_for_event and _claim_drop_viol:
+                                _claim_dropped = True
                                 _tick_feral_drops.append({
                                     "cid": _cl_cid,
                                     "oid": oid,
@@ -1789,6 +1960,13 @@ def _tick(shadow_log_path: str, meta: Optional[dict], *,
                                 _accepted_claim_trace.append(_cl_claim)
                                 fleet = _cl.tentative_assign(
                                     fleet, _cl_cid, _cl_rec)
+                                fleet_without_proposal_claims = (
+                                    _cl.tentative_assign(
+                                        fleet_without_proposal_claims,
+                                        _cl_cid,
+                                        _cl_rec,
+                                    )
+                                )
                                 _claim_applied = True
                                 _log.info(
                                     f"CLAIM_LEDGER order={oid} cid={_cl_cid} "
@@ -1896,6 +2074,9 @@ def _tick(shadow_log_path: str, meta: Optional[dict], *,
                 # proposal/live. Rekord zostaje w jsonl jako log-loud evidence.
                 record["g_claim_ledger_feral_drops"] = int(_claim_dropped)
                 record["g_claim_ledger_breaches"] = len(_claim_drop_viol)
+            if _claim_checker_error:
+                # L1.1: addytywna metryka błędu oracle w finalnym rekordzie decyzji.
+                record["claim_checker_error"] = 1
             if _claim_dropped:
                 record["verdict"] = "DROP_FERAL_CLAIM"
                 record["reason"] = (
@@ -2095,20 +2276,18 @@ def _tick(shadow_log_path: str, meta: Optional[dict], *,
         except Exception as _pp_e:
             _log.warning(f"pending_proposals write fail: {_pp_e}")
 
-    # INV-FEAS-NO-DOUBLE-BOOK bliźniak global_allocate. CHECK-only pozostaje
-    # obserwatorem post-tick; HARD sprawdzał każdy claim przed przyjęciem i dropił
-    # wyłącznie feralne wejście. Żadna ścieżka produkcyjna nie rzuca z tego guarda.
-    if _claim_trace and C.decision_flag("ENABLE_CLAIM_LEDGER_INVARIANT_CHECK"):
-        try:
-            if not _claim_hard_seen:
-                from dispatch_v2 import claim_ledger as _cl_chk
-                _tick_breaches = _cl_chk.check_sweep_trace(
-                    _claim_trace, log=_log, context="shadow_tick")
-        except Exception as _cti_e:  # noqa: BLE001 — obserwator nie wywala ticku
-            _log.warning(f"claim_ledger tick invariant fail-soft: {_cti_e}")
+    # Oba tryby sprawdzają każdy claim wspólnym fail-policy przed przyjęciem.
+    # HARD dropi wyłącznie naruszenie; log-only zachowuje decyzję i loguje/metrykuje.
     if _claim_hard_seen:
         stats["claim_ledger_breaches"] = len(_tick_breaches)
         stats["claim_ledger_feral_drops"] = len(_tick_feral_drops)
+    if _tick_checker_errors:
+        stats["claim_checker_error"] = _tick_checker_errors
+    if _proposal_claim_persistence:
+        stats["proposal_claims_active"] = len(_proposal_claims_active)
+        stats["proposal_claim_window_breaches"] = len(
+            _proposal_claim_window_violations
+        )
 
     # Faza C: globalna re-alokacja → konsola realizowana POZA gorącą ścieżką
     # (resweep co 1 min pisze dispatch_state/global_alloc.json, feed.py overlay).

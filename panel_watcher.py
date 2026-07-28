@@ -360,6 +360,49 @@ _PANEL_LEARNING_SOURCES = frozenset({
 })
 
 
+def _pending_proposals_path() -> str:
+    """Ścieżka pending resolwowana w CALL-time (wzorzec state_machine):
+    hermetyczne testy dostają sandbox przez DISPATCH_STATE_DIR, żywy proces
+    (bez env) — kanoniczną ścieżkę produkcyjną."""
+    sb = os.environ.get("DISPATCH_STATE_DIR")
+    if sb:
+        return os.path.join(sb, "pending_proposals.json")
+    return _PENDING_PROPOSALS_PATH
+
+
+def _remove_pending_on_assign(order_id: str) -> None:
+    """Usuń proposal po kanonicznym COURIER_ASSIGNED.
+
+    Wywołuje to retryowalny lifecycle downstream dopiero PO konsumentach
+    proposal (learning + zapis planu). Delta ``locked_pop`` jest idempotentna
+    i nie nadpisuje wpisów innych zleceń/writerów.
+
+    BEST-EFFORT z konstrukcji: sprzątanie jest higieną, NIE warunkiem
+    poprawności — stale wpis nigdy nie staje się claimem (filtr
+    ``status==planned`` w active_proposal_claims) i wygasa sweep_expired.
+    Błąd tutaj NIE może wywrócić kanonicznego callbacku ASSIGNED
+    (raise → wieczny retry receiptu na trwałej awarii pliku)."""
+    try:
+        path = _pending_proposals_path()
+        # Brak store oznacza brak proposal do sprzątnięcia. Nie twórz pustego
+        # pending_proposals ani lockfile przy zwykłym manualnym assignment.
+        if not os.path.exists(path):
+            return
+        from dispatch_v2 import pending_proposals_store as _pps
+
+        _pps.locked_pop(
+            str(order_id),
+            path=path,
+        )
+    except Exception as exc:
+        _log.warning(
+            "PENDING_PROPOSALS_ASSIGN_CLEANUP fail oid=%s: %s: %s",
+            order_id,
+            type(exc).__name__,
+            exc,
+        )
+
+
 def _durable_downstream_attempt(
     lifecycle_event_id: Optional[str],
     *,

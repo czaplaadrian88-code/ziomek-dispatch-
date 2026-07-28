@@ -15,18 +15,32 @@ silnika) — bezpieczny dla każdego procesu.
 from __future__ import annotations
 
 import copy as _copy
-from typing import Any, Dict
+from typing import Any, Dict, Iterable
 
 
-def bag_entry_from_order(rec: dict) -> dict:
-    """Wirtualny wpis do worka kuriera (kopia rekordu zlecenia, status=assigned)."""
+def bag_entry_from_order(
+    rec: dict,
+    commitment_level: str = "assigned",
+) -> dict:
+    """Wirtualny wpis do worka kuriera.
+
+    Domyślne ``assigned`` zachowuje dotychczasowy kontrfaktyk wszystkich starych
+    callerów. Trwały claim propozycji jawnie przekazuje ``proposed``; status
+    pozostaje ``assigned``, bo istniejący feasibility/symulator rozpoznaje wpis
+    worka po tym polu, a poziom zobowiązania rozróżnia semantykę.
+    """
     e = dict(rec)
     e["status"] = "assigned"
-    e["commitment_level"] = "assigned"
+    e["commitment_level"] = str(commitment_level)
     return e
 
 
-def tentative_assign(fleet: Dict[str, Any], cid: str, order_rec: dict) -> Dict[str, Any]:
+def tentative_assign(
+    fleet: Dict[str, Any],
+    cid: str,
+    order_rec: dict,
+    commitment_level: str = "assigned",
+) -> Dict[str, Any]:
     """Płytka kopia floty z `order_rec` DOklejonym do worka kuriera `cid`
     (kontrfaktyk „gdyby ten kurier dostał to zlecenie"). NIE mutuje wejścia."""
     out = dict(fleet)
@@ -34,9 +48,82 @@ def tentative_assign(fleet: Dict[str, Any], cid: str, order_rec: dict) -> Dict[s
     if cs is None:
         return out
     cs2 = _copy.copy(cs)
-    cs2.bag = list(cs.bag or []) + [bag_entry_from_order(order_rec)]
+    cs2.bag = list(cs.bag or []) + [
+        bag_entry_from_order(order_rec, commitment_level=commitment_level)
+    ]
     out[cid] = cs2
     return out
+
+
+def verify_proposal_claim_window(
+    fleet: Dict[str, Any],
+    claims: Iterable[dict],
+):
+    """INV-FEAS-NO-DOUBLE-BOOK poza granicą ticku.
+
+    Każdy aktywny claim z ``pending_proposals`` musi wystąpić dokładnie raz w
+    worku wskazanego kuriera i nieść ``commitment_level=proposed``. Brak wpisu
+    oznacza powrót ślepego między-tickowego pile-onu; duplikat oznacza podwójne
+    obciążenie. Funkcja jest pure i nie rozstrzyga legalności bundlingu — tę
+    nadal ocenia kanoniczne feasibility.
+    """
+    violations = []
+    for claim in claims:
+        cid = str((claim or {}).get("cid") or "")
+        oid = str((claim or {}).get("oid") or "")
+        cs = fleet.get(cid)
+        bag = list(getattr(cs, "bag", None) or []) if cs is not None else []
+        matches = [
+            entry for entry in bag
+            if str((entry or {}).get("order_id") or "") == oid
+        ]
+        if len(matches) != 1:
+            violations.append({
+                "cid": cid,
+                "oid": oid,
+                "kind": "missing" if not matches else "duplicate",
+                "seen": len(matches),
+                "expected": 1,
+            })
+            continue
+        level = str(matches[0].get("commitment_level") or "")
+        if level != "proposed":
+            violations.append({
+                "cid": cid,
+                "oid": oid,
+                "kind": "wrong_commitment",
+                "seen": level,
+                "expected": "proposed",
+            })
+    return violations
+
+
+def check_proposal_claim_window_guarded(
+    fleet: Dict[str, Any],
+    claims: Iterable[dict],
+    *,
+    log=None,
+    context: str = "",
+):
+    """Fail-closed instrument: błąd checkera jest jawnym naruszeniem."""
+    try:
+        violations = verify_proposal_claim_window(fleet, claims)
+    except Exception as exc:  # noqa: BLE001 — polityka hardfixu checkera
+        violations = [{
+            "cid": None,
+            "oid": None,
+            "kind": "checker_error",
+            "exception_type": type(exc).__name__,
+        }]
+    if violations and log is not None:
+        log.error(
+            "PROPOSAL_CLAIM_WINDOW_INVARIANT breach [%s]: %d naruszen(ia) "
+            "INV-FEAS-NO-DOUBLE-BOOK: %r",
+            context or "?",
+            len(violations),
+            violations[:8],
+        )
+    return violations
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -133,3 +220,59 @@ def check_feral_claim(accepted_trace, claim, log=None, context=""):
             context or "?", viol[0],
         )
     return viol
+
+
+def check_feral_claim_guarded(
+    accepted_trace,
+    claim,
+    *,
+    hard,
+    log=None,
+    context="",
+):
+    """Uruchom per-claim oracle z jedną polityką awarii dla obu konsumentów.
+
+    Zwraca ``(violations, checker_error_type)``. Błąd checkera w trybie HARD
+    jest syntetycznym naruszeniem ``checker_error`` i dlatego caller odrzuca
+    bieżący claim. W trybie log-only pozostaje fail-soft (pusta lista naruszeń),
+    ale typ błędu jest zwracany do metryki ``claim_checker_error``. Oba tryby
+    logują awarię na poziomie ERROR wraz z typem wyjątku.
+    """
+    try:
+        violations = check_feral_claim(
+            accepted_trace,
+            claim,
+            log=log if hard else None,
+            context=context,
+        )
+    except Exception as exc:  # noqa: BLE001 — jawna granica fail-policy
+        error_type = type(exc).__name__
+        if log is not None:
+            log.error(
+                "CLAIM_LEDGER_CHECKER_ERROR [%s]: exception_type=%s hard=%s",
+                context or "?",
+                error_type,
+                bool(hard),
+            )
+        if not hard:
+            return [], error_type
+        return [{
+            "cid": claim[0],
+            "oid_prev": None,
+            "oid": claim[1],
+            "seen_prev": None,
+            "seen": claim[2],
+            "expected": None,
+            "kind": "checker_error",
+            "exception_type": error_type,
+        }], error_type
+
+    if violations and not hard and log is not None:
+        log.error(
+            "CLAIM_LEDGER_INVARIANT breach [%s]: "
+            "%d naruszen(ia) INV-FEAS-NO-DOUBLE-BOOK: %r",
+            context or "?",
+            len(violations),
+            violations[:8],
+        )
+    return violations, None

@@ -165,6 +165,8 @@ def apply(event: dict) -> None:
         payload.get("source") in {"parcel_assign", "parcel_status_inbox"}
         and etype != "PICKUP_TIME_UPDATED"
     ):
+        if etype == "COURIER_ASSIGNED":
+            pw._remove_pending_on_assign(oid)  # type: ignore[attr-defined]
         return
     # Durable callback nie moze pomylic uszkodzonego/brakujacego pliku z
     # prawdziwym brakiem zlecenia. Wyjatek zostawia receipt do retry.
@@ -403,6 +405,9 @@ def apply(event: dict) -> None:
             _redecide_authorized_by_receipt=redecide_authorized,
             _invalidate_authorized_by_receipt=invalidate_authorized,
         )
+        # Proposal jest potrzebny powyżej do learningu i planu. Usuwamy go
+        # dopiero na końcu kanonicznego, retryowalnego callbacku ASSIGNED.
+        pw._remove_pending_on_assign(oid)
         return
 
     if etype == "COURIER_DELIVERED":

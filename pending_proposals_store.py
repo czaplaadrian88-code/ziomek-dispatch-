@@ -121,6 +121,56 @@ def sweep_expired(pending: Dict[str, Any], now: datetime) -> Dict[str, Any]:
     return out
 
 
+def active_proposal_claims(
+    pending: Dict[str, Any],
+    orders_state: Dict[str, Any],
+    now: datetime,
+    ttl_sec: float,
+) -> list[dict]:
+    """Zmaterializuj aktywne claimy z istniejącego store bez nowego writera.
+
+    Claim żyje tylko, gdy propozycja jest młodsza od TTL, a kanoniczny stan
+    zlecenia nadal mówi ``planned`` bez ``courier_id``. To samo źródło usuwa
+    zombie po assignment i gwarantuje dedup względem realnego worka.
+    """
+    try:
+        ttl = float(ttl_sec)
+    except (TypeError, ValueError):
+        ttl = 0.0
+    if ttl <= 0:
+        return []
+    out = []
+    for raw_oid, raw_entry in (pending or {}).items():
+        oid = str(raw_oid)
+        entry = raw_entry if isinstance(raw_entry, dict) else {}
+        order = (orders_state or {}).get(oid)
+        if not isinstance(order, dict):
+            continue
+        if order.get("status") != "planned" or order.get("courier_id"):
+            continue
+        sent_at = _parse_iso(entry.get("sent_at"))
+        if sent_at is None:
+            continue
+        age_s = (now.astimezone(timezone.utc) - sent_at.astimezone(timezone.utc)).total_seconds()
+        if age_s < 0 or age_s >= ttl:
+            continue
+        decision = entry.get("decision_record") or {}
+        best = decision.get("best") or {}
+        cid = str(best.get("courier_id") or "")
+        if not cid:
+            continue
+        order_rec = dict(order)
+        order_rec["order_id"] = oid
+        out.append({
+            "oid": oid,
+            "cid": cid,
+            "sent_at": sent_at.isoformat(),
+            "age_s": age_s,
+            "order": order_rec,
+        })
+    return out
+
+
 def build_entry(record: Dict[str, Any], now: datetime, ttl_sec: int = DEFAULT_TTL_SEC) -> Dict[str, Any]:
     """Wpis w schemacie telegram_approver: {message_id, sent_at, expires_at, decision_record}.
     message_id=None (brak Telegrama). decision_record = rekord shadow (ten z shadow_decisions)."""
