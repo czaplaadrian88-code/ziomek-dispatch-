@@ -20,6 +20,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from dispatch_v2 import common as C
+from dispatch_v2 import authority_card
 from dispatch_v2 import courier_resolver
 from dispatch_v2 import state_machine
 from dispatch_v2.c7_normal_path import _default_code_sha
@@ -31,6 +32,8 @@ _log = logging.getLogger("proposal_freshness")
 
 FLAG = "ENABLE_ASSIGNMENT_EPISODE_LOG"
 SCHEMA = "assignment_episode.v1"
+COMMIT_SCHEMA = "commit_proposal.v1"
+MAX_COMMIT_PROPOSAL_AGE_SECONDS = 15.0
 ASSIGNMENT_EPISODE_PATH = C.STATE_DIR / "assignment_episode.jsonl"
 
 # One canonical allowlist for state -> decision-event projections.  It excludes
@@ -134,7 +137,6 @@ def _fleet_snapshot(fleet: Dict[str, Any]) -> dict:
                 **row,
                 "bag_order_ids": bag_ids,
                 "position": pos_for_hash,
-                "pos_age_min": getattr(courier, "pos_age_min", None),
                 "shift_start": _iso(getattr(courier, "shift_start", None)),
                 "shift_end": _iso(getattr(courier, "shift_end", None)),
             }
@@ -192,6 +194,197 @@ def _candidate_summary(result: Any) -> dict:
     }
 
 
+def _sha256_json(value: Any) -> str:
+    packed = json.dumps(
+        value, ensure_ascii=True, separators=(",", ":"), sort_keys=True
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(packed).hexdigest()
+
+
+def _order_generation(record: dict) -> str:
+    material = order_event_from_state(record)
+    material.update({
+        "status": record.get("status"),
+        "courier_id": record.get("courier_id"),
+        "assignment_event_id": record.get("assignment_event_id"),
+        "last_lifecycle_event_id_new_order": record.get(
+            "last_lifecycle_event_id_new_order"
+        ),
+        "last_lifecycle_event_id_courier_assigned": record.get(
+            "last_lifecycle_event_id_courier_assigned"
+        ),
+    })
+    return _sha256_json(material)
+
+
+def _winner_snapshot(result: Any, fleet: Dict[str, Any]) -> dict:
+    best = getattr(result, "best", None)
+    cid = getattr(best, "courier_id", None) if best is not None else None
+    courier = fleet.get(str(cid)) if cid not in (None, "") else None
+    active_order_ids = _bag_ids(courier) if courier is not None else []
+    metrics = getattr(best, "metrics", None)
+    metrics = metrics if isinstance(metrics, dict) else {}
+    route_generation = metrics.get("plan_expected_version")
+    plan = getattr(best, "plan", None)
+    route_material = {
+        "sequence": list(getattr(plan, "sequence", None) or []),
+        "pickup_order_ids": sorted(
+            str(oid) for oid in (getattr(plan, "pickup_at", None) or {})
+        ),
+        "generation": route_generation,
+    }
+    return {
+        "active_order_ids": active_order_ids,
+        "bag_size": len(active_order_ids),
+        "route_generation": route_generation,
+        "route_signature": _sha256_json(route_material),
+    }
+
+
+def build_decision_snapshot(
+    order_event: dict,
+    fleet: Dict[str, Any],
+    now: datetime,
+    result: Any,
+    order_state: Optional[dict],
+) -> dict:
+    """Shared R2/T1 snapshot owner; no caller reimplements solve signatures."""
+    state = dict(order_state or {})
+    state.update(order_event or {})
+    fleet_snapshot = _fleet_snapshot(fleet)
+    proposal = _candidate_summary(result)
+    winner = _winner_snapshot(result, fleet)
+    best = getattr(result, "best", None)
+    winner_cid = proposal.get("winner_cid")
+    winner_courier = (
+        fleet.get(str(winner_cid)) if winner_cid not in (None, "") else None
+    )
+    pos_age_min = (
+        getattr(winner_courier, "pos_age_min", None)
+        if winner_courier is not None else None
+    )
+    gps_fresh = bool(
+        winner_courier is not None
+        and getattr(winner_courier, "pos_source", None) == "gps"
+        and isinstance(pos_age_min, (int, float))
+        and not isinstance(pos_age_min, bool)
+        and 0.0 <= float(pos_age_min) * 60.0 <= 120.0
+    )
+    hard_valid = bool(
+        best is not None
+        and getattr(best, "feasibility_verdict", None) == "MAYBE"
+        and getattr(result, "verdict", None) == "PROPOSE"
+        and getattr(result, "would_auto_assign", False) is True
+        and str(winner_cid or "") in fleet
+        and gps_fresh
+    )
+    core = {
+        "order_generation": _order_generation(state),
+        "fleet_generation": fleet_snapshot["generation"],
+        "winner_cid": proposal.get("winner_cid"),
+        "winner": winner,
+    }
+    return {
+        "schema": COMMIT_SCHEMA,
+        "proposal_computed_at": now.isoformat(),
+        "order_generation": core["order_generation"],
+        "fleet": fleet_snapshot,
+        "proposal": proposal,
+        "winner": winner,
+        "hard_valid": hard_valid,
+        "code_git_sha": authority_card.read_code_git_sha(),
+        "flag_fingerprint": C.flag_fingerprint(),
+        "signature": _sha256_json(core),
+    }
+
+
+def attach_commit_proposal(
+    result: Any,
+    order_event: dict,
+    order_state: Optional[dict],
+    fleet: Dict[str, Any],
+    now: datetime,
+) -> dict:
+    snapshot = build_decision_snapshot(
+        order_event, fleet, now, result, order_state
+    )
+    result.commit_proposal = snapshot
+    return snapshot
+
+
+def prepare_commit_recheck(
+    order_id: str,
+    assignment_payload: Optional[dict],
+    *,
+    now: Optional[datetime] = None,
+) -> dict:
+    """Fresh solve used by AUTO commit and by no other competing implementation."""
+    now = now or _utc_now()
+    current = state_machine.get_order_strict(str(order_id)) or {}
+    merged = dict(current)
+    merged.update(assignment_payload or {})
+    merged["order_id"] = str(order_id)
+    order_event = order_event_from_state(merged)
+    fleet = _dispatchable_fleet()
+    result = _solve_fresh(order_event, fleet, now)
+    return build_decision_snapshot(
+        order_event, fleet, now, result, current
+    )
+
+
+def compare_commit_snapshots(
+    original: Any,
+    fresh: Any,
+    now: datetime,
+    max_age_seconds: float = MAX_COMMIT_PROPOSAL_AGE_SECONDS,
+) -> tuple[bool, str]:
+    """Exact commit CAS. Mismatches are ordinary staleness and never latch here."""
+    if not isinstance(original, dict) or original.get("schema") != COMMIT_SCHEMA:
+        return False, "commit_recheck_evidence_missing"
+    if not isinstance(fresh, dict) or fresh.get("schema") != COMMIT_SCHEMA:
+        return False, "commit_recheck_internal"
+    try:
+        computed = datetime.fromisoformat(
+            str(original.get("proposal_computed_at")).replace("Z", "+00:00")
+        )
+        if computed.tzinfo is None:
+            computed = computed.replace(tzinfo=timezone.utc)
+        age = (now - computed).total_seconds()
+    except (TypeError, ValueError):
+        return False, "commit_recheck_proposal_age"
+    if age < 0.0 or age > float(max_age_seconds):
+        return False, "commit_recheck_proposal_age"
+    if original.get("code_git_sha") != fresh.get("code_git_sha"):
+        return False, "commit_recheck_code_fingerprint"
+    if original.get("flag_fingerprint") != fresh.get("flag_fingerprint"):
+        return False, "commit_recheck_flag_fingerprint"
+    if (original.get("proposal") or {}).get("winner_cid") != (
+        fresh.get("proposal") or {}
+    ).get("winner_cid"):
+        return False, "commit_recheck_winner"
+    old_winner = original.get("winner") or {}
+    new_winner = fresh.get("winner") or {}
+    if old_winner.get("active_order_ids") != new_winner.get("active_order_ids"):
+        return False, "commit_recheck_active_orders"
+    if old_winner.get("bag_size") != new_winner.get("bag_size"):
+        return False, "commit_recheck_bag"
+    if old_winner.get("route_generation") != new_winner.get("route_generation"):
+        return False, "commit_recheck_route_generation"
+    if (original.get("fleet") or {}).get("generation") != (
+        fresh.get("fleet") or {}
+    ).get("generation"):
+        return False, "commit_recheck_fleet_generation"
+    if original.get("order_generation") != fresh.get("order_generation"):
+        return False, "commit_recheck_order_generation"
+    if old_winner.get("route_signature") != new_winner.get("route_signature"):
+        return False, "commit_recheck_route_signature"
+    if original.get("signature") != fresh.get("signature"):
+        return False, "commit_recheck_signature"
+    if fresh.get("hard_valid") is not True:
+        return False, "commit_recheck_hard_validator"
+    return True, "ok"
+
+
 def prepare_assignment_episode(
     order_id: str,
     assignment_payload: Optional[dict],
@@ -221,12 +414,15 @@ def prepare_assignment_episode(
     order_event = order_event_from_state(merged)
     fleet = _dispatchable_fleet()
     result = _solve_fresh(order_event, fleet, now)
+    snapshot = build_decision_snapshot(
+        order_event, fleet, now, result, current
+    )
     return {
         "schema": SCHEMA,
         "order_id": str(order_id),
-        "proposal_computed_at": now.isoformat(),
-        "fleet": _fleet_snapshot(fleet),
-        "proposal": _candidate_summary(result),
+        "proposal_computed_at": snapshot["proposal_computed_at"],
+        "fleet": snapshot["fleet"],
+        "proposal": snapshot["proposal"],
         "code_sha": _default_code_sha(),
         "flag_fingerprint": C.flag_fingerprint(),
     }

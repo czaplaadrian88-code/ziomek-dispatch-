@@ -6,9 +6,12 @@ liczników karty i zatrzasku AUTO-OFF. Każda niepewność kończy się odmową.
 from __future__ import annotations
 
 import glob
+import fcntl
 import hashlib
 import json
 import os
+import threading
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional, Tuple
@@ -70,6 +73,38 @@ _STATE_KEYS = frozenset({
     "auto_off_reason",
     "auto_off_ts",
 })
+_STATE_THREAD_LOCK = threading.RLock()
+_STATE_LOCAL = threading.local()
+
+
+@contextmanager
+def state_lock(path: str = STATE_PATH):
+    """One reentrant cross-process lock for limits, execution and card state."""
+    depth = int(getattr(_STATE_LOCAL, "depth", 0) or 0)
+    locked_path = getattr(_STATE_LOCAL, "path", None)
+    if depth:
+        if locked_path != os.path.abspath(path):
+            raise RuntimeError("nested authority state lock path mismatch")
+        _STATE_LOCAL.depth = depth + 1
+        try:
+            yield
+        finally:
+            _STATE_LOCAL.depth -= 1
+        return
+    with _STATE_THREAD_LOCK:
+        lock_path = os.path.abspath(path) + ".lock"
+        os.makedirs(os.path.dirname(lock_path), mode=0o700, exist_ok=True)
+        fd = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX)
+            _STATE_LOCAL.depth = 1
+            _STATE_LOCAL.path = os.path.abspath(path)
+            yield
+        finally:
+            _STATE_LOCAL.depth = 0
+            _STATE_LOCAL.path = None
+            fcntl.flock(fd, fcntl.LOCK_UN)
+            os.close(fd)
 
 
 @dataclass(frozen=True)
@@ -414,7 +449,7 @@ def _incomplete_temp_exists(path: str) -> bool:
     return bool(glob.glob(f"{glob.escape(path)}.tmp.*"))
 
 
-def load_state(path: str = STATE_PATH) -> Dict[str, Any]:
+def _load_state_unlocked(path: str) -> Dict[str, Any]:
     """Brak stanu oznacza zero; korupcja lub osierocony temp oznacza latch ON."""
     if (
         _pytest_active()
@@ -436,7 +471,12 @@ def load_state(path: str = STATE_PATH) -> Dict[str, Any]:
     return state
 
 
-def save_state(path: str, state: Dict[str, Any]) -> None:
+def load_state(path: str = STATE_PATH) -> Dict[str, Any]:
+    with state_lock(path):
+        return _load_state_unlocked(path)
+
+
+def _save_state_unlocked(path: str, state: Dict[str, Any]) -> None:
     """Zapis temp → fsync → rename → fsync katalogu."""
     if not _state_valid(state):
         raise ValueError("invalid authority card state")
@@ -480,6 +520,11 @@ def save_state(path: str, state: Dict[str, Any]) -> None:
         raise
 
 
+def save_state(path: str, state: Dict[str, Any]) -> None:
+    with state_lock(path):
+        _save_state_unlocked(path, state)
+
+
 def check_limits(
     state: Dict[str, Any],
     now_ts: float,
@@ -516,18 +561,19 @@ def latch_auto_off(
     now: Optional[datetime] = None,
 ) -> Dict[str, Any]:
     """Zatrzask jest monotoniczny: kolejne wywołanie nie zmienia pierwszej przyczyny."""
-    state = load_state(state_path)
-    if state.get("auto_off_latch") is True:
-        if os.path.exists(state_path) and _state_valid(state):
-            return state
-    now = now or datetime.now(timezone.utc)
-    if now.tzinfo is None:
-        now = now.replace(tzinfo=timezone.utc)
-    state["auto_off_latch"] = True
-    state["auto_off_reason"] = str(reason)
-    state["auto_off_ts"] = now.astimezone(timezone.utc).isoformat()
-    save_state(state_path, state)
-    return state
+    with state_lock(state_path):
+        state = _load_state_unlocked(state_path)
+        if state.get("auto_off_latch") is True:
+            if os.path.exists(state_path) and _state_valid(state):
+                return state
+        now = now or datetime.now(timezone.utc)
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=timezone.utc)
+        state["auto_off_latch"] = True
+        state["auto_off_reason"] = str(reason)
+        state["auto_off_ts"] = now.astimezone(timezone.utc).isoformat()
+        _save_state_unlocked(state_path, state)
+        return state
 
 
 def check_scope(
@@ -692,15 +738,16 @@ def record_success(
     now: datetime,
 ) -> Dict[str, Any]:
     """Po potwierdzonym assignie zapisuje trzy sprzężone liczniki jednym rename."""
-    updated = dict(state)
-    updated["executed_total"] = int(updated.get("executed_total", 0)) + 1
-    timestamps = list(updated.get("executed_ts") or [])
-    timestamps.append(now.timestamp())
-    updated["executed_ts"] = timestamps
-    updated["in_flight"] = str(oid)
-    pending = list(updated.get("pending_verification") or [])
-    if str(oid) not in pending:
-        pending.append(str(oid))
-    updated["pending_verification"] = pending
-    save_state(state_path, updated)
-    return updated
+    with state_lock(state_path):
+        updated = dict(state)
+        updated["executed_total"] = int(updated.get("executed_total", 0)) + 1
+        timestamps = list(updated.get("executed_ts") or [])
+        timestamps.append(now.timestamp())
+        updated["executed_ts"] = timestamps
+        updated["in_flight"] = str(oid)
+        pending = list(updated.get("pending_verification") or [])
+        if str(oid) not in pending:
+            pending.append(str(oid))
+        updated["pending_verification"] = pending
+        _save_state_unlocked(state_path, updated)
+        return updated

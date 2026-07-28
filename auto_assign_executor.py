@@ -36,11 +36,15 @@ import logging
 import os
 import subprocess
 import time
+from contextlib import nullcontext
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from dispatch_v2 import common as C
 from dispatch_v2 import authority_card as AC
+from dispatch_v2 import proposal_freshness as PF
+from dispatch_v2 import state_machine
+from dispatch_v2.tools import auto_assign_monitor as AAM
 
 log = logging.getLogger("auto_assign_executor")
 
@@ -48,6 +52,8 @@ GASTRO_ASSIGN_PATH = "/root/.openclaw/workspace/scripts/gastro_assign.py"
 STATE_PATH = "/root/.openclaw/workspace/dispatch_state/auto_assign_state.json"
 LEARNING_LOG_PATH = "/root/.openclaw/workspace/dispatch_state/learning_log.jsonl"
 LEARNING_LOG_TAIL_BYTES = 262144  # wzorzec _PANEL_AGREE_TAIL_BYTES
+MONITOR_HEARTBEAT_PATH = AAM.HEARTBEAT_PATH
+SHADOW_DECISIONS_PATH = AAM.SHADOW_PATH
 
 # AUDYT 2.0 Blocker-1: executor ufa sentinelowi z gastro_assign, NIE samemu
 # exit-code (exit 0 mimo niewykonanego przypisania = cichy drop bez człowieka).
@@ -483,6 +489,9 @@ def maybe_execute(
     authority_card_path: str = AUTHORITY_CARD_PATH,
     authority_audit_path: str = COORDINATOR_AUDIT_PATH,
     authority_state_path: str = AUTHORITY_CARD_STATE_PATH,
+    monitor_heartbeat_path: str = MONITOR_HEARTBEAT_PATH,
+    shadow_decisions_path: str = SHADOW_DECISIONS_PATH,
+    commit_recheck_provider: Optional[Callable[..., Dict[str, Any]]] = None,
     code_git_sha: Optional[str] = None,
     flag_fp: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
@@ -580,88 +589,137 @@ def maybe_execute(
             log.warning(f"AUTO_ASSIGN blocked override_cooldown oid={oid} cid={cid}")
             return {"blocked": "override_cooldown", "courier_id": cid}
 
-        # 4b. ATOMOWY re-check flagi TUŻ przed wykonaniem (TOCTOU: flip→OFF w
-        # trakcie I/O rate-cap/cooldown/idempotencji MUSI anulować wykonanie).
-        if not C.decision_flag("ENABLE_AUTO_ASSIGN"):
-            log.info(f"AUTO_ASSIGN aborted flag_off_at_execution oid={oid}")
-            return {"blocked": "flag_off_at_execution", "order_id": oid}
-
-        # Karta jest capability odwoływalnym w każdej chwili. Pierwszy check
-        # ustala kolejność 1c przed quality gate; ten drugi zamyka TOCTOU
-        # card/audit/latch/state tuż przed nieodwracalnym subprocess-em.
-        _card_ok, _card_reason, _card_ctx = _authority_card_gate(
-            record=record,
-            result=result,
-            payload=payload,
-            now=now,
-            card_path=authority_card_path,
-            audit_path=authority_audit_path,
-            state_path=authority_state_path,
-            code_git_sha=code_git_sha,
-            flag_fp=flag_fp,
+        # 4b/T1/T6. Jedna sekcja: limity karty + heartbeat + lifecycle CAS +
+        # świeży solve + runner + sprzężone zapisy. Card lock jest reentrant,
+        # lifecycle lock blokuje każdego writera materialnego orders_state.
+        authority_lock = (
+            AC.state_lock(authority_state_path)
+            if _card_ctx.get("enforced")
+            else nullcontext()
         )
-        if not _card_ok:
-            _warn_authority_card(_card_reason, now_ts)
-            return {
-                "blocked": f"authority_card_{_card_reason}",
-                "reason": _card_reason,
-            }
-
-        # 5. Wykonanie (ścieżka ASSIGN_DIRECT — subprocess gastro_assign).
-        time_minutes = _time_minutes_from_record(record, now)
-        runner = assign_runner or _default_assign_runner
-        ok, msg = runner(oid, str(name), time_minutes)
-
-        outcome = {
-            "executed": bool(ok),
-            "order_id": oid,
-            "courier_id": cid,
-            "courier_name": name,
-            "time_minutes": time_minutes,
-            "runner_msg": msg,
-        }
-        if ok:
-            _authority_state_path = _card_ctx.get("state_path")
-            if _authority_state_path:
-                try:
-                    AC.record_success(
-                        str(_authority_state_path),
-                        _card_ctx["state"],
-                        oid,
-                        now,
+        with authority_lock:
+            with state_machine.lifecycle_apply_lock():
+                if not C.decision_flag("ENABLE_AUTO_ASSIGN"):
+                    log.info(f"AUTO_ASSIGN aborted flag_off_at_execution oid={oid}")
+                    return {"blocked": "flag_off_at_execution", "order_id": oid}
+                _card_ok, _card_reason, _card_ctx = _authority_card_gate(
+                    record=record,
+                    result=result,
+                    payload=payload,
+                    now=now,
+                    card_path=authority_card_path,
+                    audit_path=authority_audit_path,
+                    state_path=authority_state_path,
+                    code_git_sha=code_git_sha,
+                    flag_fp=flag_fp,
+                )
+                if not _card_ok:
+                    _warn_authority_card(_card_reason, now_ts)
+                    return {
+                        "blocked": f"authority_card_{_card_reason}",
+                        "reason": _card_reason,
+                    }
+                if _card_ctx.get("enforced"):
+                    heartbeat_ok, heartbeat_reason = AAM.heartbeat_fresh(
+                        monitor_heartbeat_path, now
                     )
-                    outcome["authority_card_sha256"] = _card_ctx.get(
-                        "card_sha256")
-                except Exception as card_state_error:
-                    outcome["authority_state_recorded"] = False
-                    log.warning(
-                        f"AUTO_ASSIGN authority state write fail oid={oid}: "
-                        f"{type(card_state_error).__name__}: {card_state_error}")
-                    try:
+                    if not heartbeat_ok:
                         AC.latch_auto_off(
-                            str(_authority_state_path),
-                            "state_write_failed_after_execution",
-                            now,
+                            authority_state_path, heartbeat_reason, now
                         )
-                    except Exception as latch_error:
-                        log.warning(
-                            f"AUTO_ASSIGN post-exec latch write fail oid={oid}: "
-                            f"{type(latch_error).__name__}: {latch_error}")
-            state.setdefault("executed", []).append(now_ts)
-            _record_auto_assign(state, oid, now_ts, idem_ttl)  # idempotencja per-order
-            _save_state(state_path, state)
-            _append_learning_log({
-                "ts": now.isoformat(),
-                "order_id": oid,
-                "action": "AUTO_ASSIGN_EXECUTED",
-                "courier_id": cid,
-                "courier_name": name,
-                "time_minutes": time_minutes,
-                "score": best.get("score"),
-            })
-            log.info(f"AUTO_ASSIGN_EXECUTED oid={oid} cid={cid} time={time_minutes}min")
-        else:
-            log.warning(f"AUTO_ASSIGN runner fail oid={oid} cid={cid}: {msg}")
+                        return {
+                            "blocked": heartbeat_reason,
+                            "reason": heartbeat_reason,
+                        }
+
+                # Powtórz także idempotencję po wejściu pod wspólny lock.
+                state = _load_state(state_path)
+                if _recent_auto_assign(state, oid, now_ts, idem_ttl):
+                    return {"blocked": "idempotent_recent", "order_id": oid}
+
+                if _card_ctx.get("enforced"):
+                    recheck = commit_recheck_provider or PF.prepare_commit_recheck
+                    fresh = recheck(oid, payload, now=now)
+                    commit_ok, commit_reason = PF.compare_commit_snapshots(
+                        record.get("commit_proposal"), fresh, now
+                    )
+                    if not commit_ok:
+                        # Staleness != tamper: celowo bez latcha.
+                        return {
+                            "blocked": commit_reason,
+                            "reason": commit_reason,
+                        }
+
+                time_minutes = _time_minutes_from_record(record, now)
+                runner = assign_runner or _default_assign_runner
+                ok, msg = runner(oid, str(name), time_minutes)
+                outcome = {
+                    "executed": bool(ok),
+                    "order_id": oid,
+                    "courier_id": cid,
+                    "courier_name": name,
+                    "time_minutes": time_minutes,
+                    "runner_msg": msg,
+                }
+                if ok:
+                    if _card_ctx.get("state_path"):
+                        try:
+                            AC.record_success(
+                                str(_card_ctx["state_path"]),
+                                _card_ctx["state"],
+                                oid,
+                                now,
+                            )
+                            outcome["authority_card_sha256"] = _card_ctx.get(
+                                "card_sha256")
+                        except Exception as card_state_error:
+                            outcome["authority_state_recorded"] = False
+                            log.warning(
+                                f"AUTO_ASSIGN authority state write fail oid={oid}: "
+                                f"{type(card_state_error).__name__}: {card_state_error}")
+                            AC.latch_auto_off(
+                                str(_card_ctx["state_path"]),
+                                "state_write_failed_after_execution",
+                                now,
+                            )
+                    state.setdefault("executed", []).append(now_ts)
+                    _record_auto_assign(state, oid, now_ts, idem_ttl)
+                    state["executed_total"] = int(
+                        state.get("executed_total", 0) or 0
+                    ) + 1
+                    order_ids = [
+                        str(value)
+                        for value in (state.get("executed_order_ids") or [])
+                    ]
+                    if oid not in order_ids:
+                        order_ids.append(oid)
+                    state["executed_order_ids"] = order_ids
+                    _save_state(state_path, state)
+                    if _card_ctx.get("enforced"):
+                        from dispatch_v2.core.jsonl_appender import append_jsonl
+                        append_jsonl(shadow_decisions_path, {
+                            "ts": now.isoformat(),
+                            "record_type": "auto_executed",
+                            "auto_executed": True,
+                            "order_id": oid,
+                            "courier_id": cid,
+                            "card_sha256": _card_ctx.get("card_sha256"),
+                        })
+                    _append_learning_log({
+                        "ts": now.isoformat(),
+                        "order_id": oid,
+                        "action": "AUTO_ASSIGN_EXECUTED",
+                        "courier_id": cid,
+                        "courier_name": name,
+                        "time_minutes": time_minutes,
+                        "score": best.get("score"),
+                    })
+                    log.info(
+                        f"AUTO_ASSIGN_EXECUTED oid={oid} cid={cid} "
+                        f"time={time_minutes}min")
+                else:
+                    log.warning(
+                        f"AUTO_ASSIGN runner fail oid={oid} cid={cid}: {msg}")
 
         # 6. Notyfikacja post-hoc (informacja, nie pytanie).
         notify = notifier or _default_notifier

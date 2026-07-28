@@ -327,12 +327,33 @@ def _record(scope=None):
         "verdict": "PROPOSE",
         "order_id": "480300",
         "authority_scope": scope if scope is not None else _scope_ok(),
+        "commit_proposal": _commit_snapshot(),
         "best": {
             "courier_id": "101",
             "name": "Kurier Testowy",
             "score": 55.0,
             "target_pickup_at": (NOW + timedelta(minutes=12)).isoformat(),
         },
+    }
+
+
+def _commit_snapshot():
+    return {
+        "schema": "commit_proposal.v1",
+        "proposal_computed_at": NOW.isoformat(),
+        "order_generation": "sha256:order",
+        "fleet": {"generation": "sha256:fleet", "available_cids": ["101"]},
+        "proposal": {"winner_cid": "101"},
+        "winner": {
+            "active_order_ids": [],
+            "bag_size": 0,
+            "route_generation": 1,
+            "route_signature": "sha256:route",
+        },
+        "hard_valid": True,
+        "code_git_sha": GIT_SHA,
+        "flag_fingerprint": FLAG_FP,
+        "signature": "sha256:proposal",
     }
 
 
@@ -351,6 +372,11 @@ def _grant_owner_auth(monkeypatch, audit):
 
 def _executor_paths(tmp_path):
     card, audit, _ = _valid_files(tmp_path)
+    heartbeat = tmp_path / "monitor-heartbeat.json"
+    heartbeat.write_text(
+        json.dumps({"ts": NOW.isoformat(), "pid": 123, "checks": {}}),
+        encoding="utf-8",
+    )
     return {
         "authority_card_path": str(card),
         "authority_audit_path": str(audit),
@@ -358,6 +384,11 @@ def _executor_paths(tmp_path):
         "code_git_sha": GIT_SHA,
         "flag_fp": FLAG_FP,
         "state_path": str(tmp_path / "auto-state.json"),
+        "monitor_heartbeat_path": str(heartbeat),
+        "shadow_decisions_path": str(tmp_path / "shadow.jsonl"),
+        "commit_recheck_provider": (
+            lambda _oid, _payload, now=None: _commit_snapshot()
+        ),
     }
 
 
@@ -571,6 +602,55 @@ def test_success_updates_card_counters_atomically(tmp_path, monkeypatch):
     assert state["in_flight"] == "480300"
     assert state["pending_verification"] == ["480300"]
     assert state["executed_ts"] == [NOW.timestamp()]
+
+
+def test_executor_missing_heartbeat_denies_and_latches(tmp_path, monkeypatch):
+    paths = _executor_paths(tmp_path)
+    Path(paths["monitor_heartbeat_path"]).unlink()
+    _grant_owner_auth(monkeypatch, Path(paths["authority_audit_path"]))
+    monkeypatch.setattr(C, "ENABLE_AUTO_ASSIGN", True)
+    calls = []
+    out = E.maybe_execute(
+        _record(),
+        SimpleNamespace(would_auto_assign=True),
+        {"status_id": 2},
+        now=NOW,
+        assign_runner=lambda *args: (calls.append(args) or (True, "ok")),
+        notifier=lambda _text: None,
+        **paths,
+    )
+    assert out["blocked"] == "monitor_heartbeat_stale"
+    assert calls == []
+    state = AC.load_state(paths["authority_state_path"])
+    assert state["auto_off_latch"] is True
+    assert state["auto_off_reason"] == "monitor_heartbeat_stale"
+
+
+def test_executor_route_generation_stale_denies_without_latch(
+    tmp_path, monkeypatch
+):
+    paths = _executor_paths(tmp_path)
+    paths["commit_recheck_provider"] = lambda *_args, **_kwargs: {
+        **_commit_snapshot(),
+        "winner": {**_commit_snapshot()["winner"], "route_generation": 2},
+    }
+    _grant_owner_auth(monkeypatch, Path(paths["authority_audit_path"]))
+    monkeypatch.setattr(C, "ENABLE_AUTO_ASSIGN", True)
+    calls = []
+    out = E.maybe_execute(
+        _record(),
+        SimpleNamespace(would_auto_assign=True),
+        {"status_id": 2},
+        now=NOW,
+        assign_runner=lambda *args: (calls.append(args) or (True, "ok")),
+        notifier=lambda _text: None,
+        **paths,
+    )
+    assert out["blocked"] == "commit_recheck_route_generation"
+    assert calls == []
+    assert AC.load_state(paths["authority_state_path"])[
+        "auto_off_latch"
+    ] is False
 
 
 def test_pytest_guard_refuses_default_production_paths():

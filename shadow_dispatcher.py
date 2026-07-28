@@ -1184,6 +1184,9 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
     _authority_scope = getattr(result, "authority_scope", None)
     if isinstance(_authority_scope, dict):
         out["authority_scope"] = _json_safe(_authority_scope)
+    _commit_proposal = getattr(result, "commit_proposal", None)
+    if isinstance(_commit_proposal, dict):
+        out["commit_proposal"] = _json_safe(_commit_proposal)
     # CHOICE-SET: OFF zachowuje legacy shape bajt-w-bajt (klucza nie ma).
     # ON zapisuje pełną pulę sprzed top-N, bez ciężkich planów/metrics.
     if C.decision_flag("ENABLE_FULL_CHOICE_SET_LOG"):
@@ -1519,6 +1522,12 @@ def process_event(
     from dispatch_v2 import authority_scope as _authority_scope
     _authority_scope.attach_authority_scope(
         result, order_event, current_order_state
+    )
+    # T1: proposal-computed-at + podpis decyzji są liczone przez ten sam rdzeń,
+    # którego R2 używa do świeżego assignment-time solve.
+    from dispatch_v2 import proposal_freshness as _proposal_freshness
+    _proposal_freshness.attach_commit_proposal(
+        result, order_event, current_order_state, fleet, now
     )
     return result
 
