@@ -28,7 +28,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timezone, time as _time, timedelta
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 from zoneinfo import ZoneInfo
 
 from dispatch_v2.common import CZASOWKA_PREP_MIN, setup_logger, flag
@@ -467,24 +467,29 @@ def parse_panel_html(html: str) -> dict:
     return v1_result
 
 
-def _open_with_relogin(req: urllib.request.Request, timeout: float = 10):
+def _open_with_relogin(
+    request_builder: Callable[[str], urllib.request.Request],
+    csrf: str,
+    timeout: float = 10,
+):
     """urllib opener z automatycznym re-login przy HTTP 401/419 (P0.5b Fix #4).
 
     Max 1 retry. NIE uzywane w login() samym (uniknięcie rekursji) — tylko
     w wrapperach zewnętrznych (fetch_order_details). fetch_panel_html ma
     własny redirect-based re-login przez force=True w for attempt loop.
+    Builder przebudowuje body po re-loginie, żeby retry używał świeżego CSRF.
     """
+    opener = _session["opener"]
     for attempt in range(2):
-        opener = _session["opener"]
         if opener is None:
-            login()
-            opener = _session["opener"]
+            opener, csrf, _ = login()
+        req = request_builder(csrf)
         try:
             return opener.open(req, timeout=timeout)
         except urllib.error.HTTPError as e:
             if e.code in (401, 419) and attempt == 0:
                 _log.warning(f"panel HTTP {e.code} → re-login + retry")
-                login(force=True)
+                opener, csrf, _ = login(force=True)
                 continue
             raise
     raise RuntimeError("_open_with_relogin: unreachable")
@@ -553,8 +558,11 @@ def fetch_order_details(zid: str, csrf: Optional[str] = None, timeout: int = 10)
         opener, csrf, _ = login()
 
     try:
-        req = _details_request(csrf, zid)
-        raw = _open_with_relogin(req, timeout=timeout).read().decode("utf-8", errors="replace")
+        raw = _open_with_relogin(
+            lambda fresh_csrf: _details_request(fresh_csrf, zid),
+            csrf=csrf,
+            timeout=timeout,
+        ).read().decode("utf-8", errors="replace")
         return _extract_zlecenie(json.loads(raw))
     except urllib.error.HTTPError as he:
         _log.warning(f"fetch_order_details({zid}): HTTP {he.code}")
