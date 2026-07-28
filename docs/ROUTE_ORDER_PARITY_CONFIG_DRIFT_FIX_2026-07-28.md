@@ -1,5 +1,39 @@
 # Route-order parity — config-drift fix (2026-07-28)
 
+## Mikro-fix grupowania wspólnych pickupów
+
+Żywy bieg po naprawie config-drift ujawnił fałszywy `BROKEN`: kanon miał
+`["pickup", ["A", "B"]]`, a projekcja apki dwa kolejne kroki
+`["pickup", ["A"]]`, `["pickup", ["B"]]`. Kolejność `(kind, order_id)` była
+identyczna; różniły się wyłącznie granice grup.
+
+Komparator schematu v3 spłaszcza teraz **obie** projekcje do sekwencji
+`(kind, order_id)`, zachowując kolejność grup i kolejność wewnątrz grup.
+Werdykt jest liczony ze spłaszczonych sekwencji. Gdy surowe projekcje są różne,
+ale spłaszczone równe:
+
+- wynik pozostaje `OK`, nie `BROKEN`;
+- obie surowe, zanonimizowane projekcje pozostają w `mismatches`;
+- rekord ma `grouping_only_difference=true`;
+- `grouping_only_difference_bags` rośnie jako INFO, a `mismatch_bags`
+  pozostaje `0`.
+
+Rzeczywista zamiana kolejności po spłaszczeniu nadal daje `BROKEN`, exit 1,
+`grouping_only_difference=false` i `mismatch_bags=1`.
+
+Dowody: RED-first `2 failed`; po fixie focused `14 passed`; mutation usuwająca
+porównanie spłaszczonych sekwencji ponownie dała RED dokładnego grouped-vs-split
+oracle; po przywróceniu focused ponownie `14 passed`. Nowe przypadki są częścią
+istniejących nodeidów night-guarda, więc zbiór manifestu nie dryfuje. Zero
+deployu, restartu, flipa flagi i modyfikacji runtime.
+
+Końcowe `py_compile`, import-check i focused 14P przeszły lokalnym Pythonem.
+Kanoniczny venv `dispatch` działał podczas RED-first i pierwszego biegu 2P,
+ale później sandbox cofnął do niego dostęp (`Permission denied`, również przy
+próbie pełnego `pytest tests/ -q`). Pełna regresja pozostaje zatem jawnie HOLD
+do powtórzenia przez CTO w kanonicznym venv; nie zastąpiono jej niewiarygodną
+pełną suitą na systemowym Pythonie.
+
 ## Wynik
 
 Monitor nie importuje już konfiguracji trasy z własnego środowiska i nie

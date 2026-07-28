@@ -305,6 +305,41 @@ def _redact_projection(projection: Sequence[Sequence[Any]]) -> list[list[Any]]:
     ]
 
 
+def _flatten_projection(
+    projection: Sequence[Sequence[Any]],
+) -> list[tuple[str, str]]:
+    """Normalize stop grouping without changing the route sequence.
+
+    A grouped pickup ``["pickup", ["A", "B"]]`` and two adjacent pickup
+    groups ``["pickup", ["A"]], ["pickup", ["B"]]`` describe the same
+    route.  Flattening both sides to ``(kind, order_id)`` pairs preserves the
+    order within every group and across groups while removing only that
+    representational boundary.
+    """
+    flattened: list[tuple[str, str]] = []
+    for index, step in enumerate(projection):
+        if (
+            not isinstance(step, Sequence)
+            or isinstance(step, (str, bytes))
+            or len(step) != 2
+        ):
+            raise ValueError(f"projection step {index} must be [kind, order_ids]")
+        kind, raw_order_ids = step
+        if not isinstance(kind, str):
+            raise ValueError(f"projection step {index} kind must be a string")
+        if (
+            not isinstance(raw_order_ids, Sequence)
+            or isinstance(raw_order_ids, (str, bytes))
+        ):
+            raise ValueError(
+                f"projection step {index} order_ids must be a sequence"
+            )
+        flattened.extend(
+            (kind, str(order_id)) for order_id in raw_order_ids
+        )
+    return flattened
+
+
 def _gate_line(verdict: str, coverage: Mapping[str, Any], reason: str) -> str:
     alarm = "—"
     if verdict in {"BROKEN", "CONFIG_DRIFT"}:
@@ -338,6 +373,8 @@ def evaluate(
     qualifying = len(bags)
     checked = 0
     mismatches: list[dict[str, Any]] = []
+    parity_mismatch_bags = 0
+    grouping_only_difference_bags = 0
     errors: list[dict[str, str]] = []
 
     flag_drift = dict(live_flags) != dict(corpus_flags)
@@ -351,6 +388,8 @@ def evaluate(
                     courier_id, orders_snapshot, plans, route_config
                 )
                 client = project_kotlin_build_steps(dto)
+                canonical_flat = _flatten_projection(canonical)
+                client_flat = _flatten_projection(client)
             except Exception as exc:
                 # One bad courier must make coverage fail closed.
                 errors.append(
@@ -362,11 +401,17 @@ def evaluate(
                 continue
             checked += 1
             if client != canonical:
+                grouping_only_difference = client_flat == canonical_flat
+                if grouping_only_difference:
+                    grouping_only_difference_bags += 1
+                else:
+                    parity_mismatch_bags += 1
                 mismatches.append(
                     {
                         "courier_ref": _safe_id(courier_id),
                         "canonical": _redact_projection(canonical),
                         "client": _redact_projection(client),
+                        "grouping_only_difference": grouping_only_difference,
                     }
                 )
 
@@ -374,7 +419,8 @@ def evaluate(
         "qualifying_bags": qualifying,
         "checked_bags": checked,
         "coverage_ratio": (checked / qualifying) if qualifying else None,
-        "mismatch_bags": len(mismatches),
+        "mismatch_bags": parity_mismatch_bags,
+        "grouping_only_difference_bags": grouping_only_difference_bags,
         "error_bags": len(errors),
     }
     if flag_drift:
@@ -391,7 +437,7 @@ def evaluate(
             "qualifying DTO coverage is incomplete",
             EXIT_INFRA_BROKEN,
         )
-    elif mismatches:
+    elif parity_mismatch_bags:
         verdict, verdict_class, reason, exit_code = (
             "BROKEN",
             "PARITY_BROKEN",
@@ -414,7 +460,7 @@ def evaluate(
         )
 
     result = {
-        "schema_version": 2,
+        "schema_version": 3,
         "monitor": GATE_ID,
         "verdict": verdict,
         "verdict_class": verdict_class,
@@ -469,11 +515,12 @@ def _infra_result(exc: Exception) -> tuple[dict[str, Any], int]:
         "checked_bags": 0,
         "coverage_ratio": None,
         "mismatch_bags": 0,
+        "grouping_only_difference_bags": 0,
         "error_bags": 1,
     }
     reason = f"{type(exc).__name__}: {exc}"[:240]
     result = {
-        "schema_version": 2,
+        "schema_version": 3,
         "monitor": GATE_ID,
         "verdict": "BROKEN",
         "verdict_class": "INFRA_BROKEN",
@@ -575,6 +622,7 @@ def main() -> int:
             f"checked={coverage['checked_bags']}/"
             f"{coverage['qualifying_bags']} "
             f"mismatches={coverage['mismatch_bags']} "
+            f"grouping_only={coverage['grouping_only_difference_bags']} "
             f"errors={coverage['error_bags']}"
         )
         print(result["open_gates_line"])
