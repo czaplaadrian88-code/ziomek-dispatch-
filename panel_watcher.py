@@ -69,6 +69,8 @@ from dispatch_v2.panel_client import (
     KOORDYNATOR_ID,
 )
 from dispatch_v2.state_machine import (
+    ORDER_DETAILS_ENRICHMENT_FIELDS,
+    ORDER_DETAILS_ENRICHMENT_REQUIRED_FIELDS,
     build_czasowka_manual_ck_pickup_event,
     event_effect_status,
     get_all as state_get_all,
@@ -122,6 +124,22 @@ def _write_uwagi_bridge_shadow_metric(
 _running = True
 _fail_count = 0
 _last_panel_unreachable_emit = 0.0
+
+# HEAL-PATH (case 490733): numeric operational knob, intentionally not a
+# decision flag. Invalid values fail safe to the reviewed default; zero disables
+# attempts for the process without changing dispatch policy.
+try:
+    WATCHER_DETAILS_HEAL_MAX_ATTEMPTS = max(
+        0, int(os.environ.get("WATCHER_DETAILS_HEAL_MAX_ATTEMPTS", "5"))
+    )
+except (TypeError, ValueError):
+    WATCHER_DETAILS_HEAL_MAX_ATTEMPTS = 5
+
+_DETAILS_HEAL_BACKOFF_BASE_S = 20.0
+_DETAILS_HEAL_BACKOFF_CAP_S = 15.0 * 60.0
+# zid -> (failed attempts, earliest next monotonic attempt)
+_DETAILS_HEAL_RETRY_STATE: dict[str, tuple[int, float]] = {}
+
 # tech-debt #24: cold-start packs scan one-shot post-restart. Eliminuje
 # MISSING_FROM_STATE phantoms gdy panel-watcher restart in-peak drops
 # COURIER_ASSIGNED dla orderów mid-way ASSIGN→PICKUP (post-restart diff
@@ -2239,6 +2257,432 @@ class _TickOverlapTracker:
         return frag
 
 
+def _build_order_details_payload(
+    zid: str,
+    raw: dict,
+    restaurant_name: Optional[str],
+) -> Optional[tuple[dict, dict]]:
+    """Jedyny builder gastro: raw -> normalize -> firmowe/geocode -> payload."""
+    norm = normalize_order(raw, restaurant_name)
+    if norm is None:
+        return None
+
+    _aid = norm.get("address_id")
+    _aid_str = str(_aid) if _aid is not None else None
+    _is_firmowe_konto = (
+        _aid is not None
+        and int(_aid) in FIRMOWE_KONTO_ADDRESS_IDS
+    )
+    if _is_firmowe_konto:
+        _pcoords = _COORDS.get(_aid_str) if _aid_str else None
+    else:
+        _pcoords, _pc_source, _pc_drift_m = _resolve_pickup_coords(
+            _aid_str,
+            norm.get("pickup_address"),
+            norm.get("pickup_city"),
+            zid=zid,
+        )
+
+    _uwagi_pickup_parsed = None
+    _pickup_address_override = None
+    _restaurant_override = None
+    _bridge_metric_enabled = False
+    _bridge_attempt = None
+    _bridge_metric_reason = "not_evaluated"
+    _bridge_parsed = False
+    _bridge_geocode_ok = False
+    _bridge_binding_rejected = False
+    if (
+        _pcoords is None
+        and _is_firmowe_konto
+        and flag("ENABLE_UWAGI_ADDRESS_PARSER", True)
+    ):
+        _uwagi_text = norm.get("uwagi")
+        _bridge_requested = flag("ENABLE_UWAGI_BRIDGE_NADAWCA", False)
+        _reject_on_geocode_fail = flag(
+            "ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL", True
+        )
+        _bridge_format = C.uwagi_bridge_flags_coherent(
+            bridge_enabled=_bridge_requested,
+            reject_enabled=_reject_on_geocode_fail,
+        )
+        _bridge_metric_enabled = bool(_bridge_requested)
+        if _bridge_requested and not _reject_on_geocode_fail:
+            _log.warning(
+                f"NEW_ORDER {zid} firmowe-konto aid={_aid}: "
+                "ENABLE_UWAGI_BRIDGE_NADAWCA=ON, ale efektywne "
+                "ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL=OFF; "
+                "bridge_format=False (sprzężenie fail-closed)"
+            )
+        _bridge_hmac_material = None
+        if _bridge_format:
+            try:
+                _bridge_hmac_material = load_bridge_hmac()
+            except BridgeCredentialError as exc:
+                _log.error(
+                    "NEW_ORDER %s firmowe-konto aid=%s: bridge HMAC "
+                    "niedostępny (%s); fail-closed do legacy/KOORD",
+                    zid,
+                    _aid,
+                    type(exc).__name__,
+                )
+            _bridge_attempt = inspect_bridge_nadawca(
+                _uwagi_text,
+                hmac_material=_bridge_hmac_material,
+            )
+            _bridge_metric_reason = _bridge_attempt.reason
+            if _bridge_attempt.pickup is not None:
+                _parsed = _bridge_attempt.pickup
+            elif _bridge_attempt.envelope_seen:
+                _parsed = None
+            else:
+                _parsed = parse_pickup_from_uwagi(
+                    _uwagi_text,
+                    bridge_format=False,
+                )
+        else:
+            if _bridge_requested:
+                _bridge_attempt = inspect_bridge_nadawca(_uwagi_text)
+                _bridge_metric_reason = "binding_reject_flag_off"
+            if _bridge_attempt is not None and _bridge_attempt.envelope_seen:
+                _parsed = None
+                _bridge_binding_rejected = True
+            else:
+                _parsed = parse_pickup_from_uwagi(
+                    _uwagi_text,
+                    bridge_format=False,
+                )
+        _bridge_rejection_reason = None
+        if _bridge_binding_rejected:
+            _bridge_rejection_reason = _bridge_metric_reason
+        elif (
+            _parsed is None
+            and _bridge_attempt is not None
+            and _bridge_attempt.envelope_seen
+        ):
+            _bridge_rejection_reason = _bridge_attempt.reason
+        _bridge_envelope_rejected = bool(
+            _bridge_attempt is not None
+            and _bridge_attempt.envelope_seen
+            and (
+                _bridge_attempt.pickup is None
+                or _bridge_binding_rejected
+            )
+        )
+        if _parsed is not None:
+            _bridge_parsed = bool(
+                _bridge_attempt is not None
+                and _bridge_attempt.pickup is not None
+            )
+            _pickup_address_override = f"{_parsed.street} {_parsed.number}"
+            _pcoords = geocode(
+                _pickup_address_override,
+                city=(getattr(_parsed, "city", None) or "Białystok"),
+                timeout=2.0,
+            )
+            if (
+                _pcoords is not None
+                and not C.coords_in_bialystok_bbox(_pcoords)
+            ):
+                _log.error(
+                    "NEW_ORDER %s firmowe-konto aid=%s: geocode poza bbox; "
+                    "REJECT+FLAG (→ no_pickup_geocode/KOORD)",
+                    zid,
+                    _aid,
+                )
+                _pcoords = None
+                if _bridge_parsed:
+                    _bridge_metric_reason = "geocode_out_of_bbox"
+            if _pcoords is None:
+                if _bridge_parsed and _bridge_metric_reason == "parsed_v2":
+                    _bridge_metric_reason = "geocode_failed"
+                if _reject_on_geocode_fail:
+                    _log.error(
+                        f"NEW_ORDER {zid} firmowe-konto aid={_aid}: parser OK "
+                        f"({_pickup_address_override!r} conf={_parsed.confidence}) "
+                        "ALE geocode FAIL — REJECT+FLAG "
+                        "(→ no_pickup_geocode/KOORD), NIE podstawiam centrali"
+                    )
+                else:
+                    _log.warning(
+                        f"NEW_ORDER {zid} firmowe-konto aid={_aid}: parser "
+                        f"OK ({_pickup_address_override!r} conf={_parsed.confidence}) "
+                        "ALE geocode fail — fallback do "
+                        "FIRMOWE_KONTO_FALLBACK_COORDS"
+                    )
+                    _pcoords = tuple(FIRMOWE_KONTO_FALLBACK_COORDS)
+            else:
+                if _bridge_parsed:
+                    _bridge_geocode_ok = True
+                _log.info(
+                    f"NEW_ORDER {zid} firmowe-konto aid={_aid}: uwagi-parser "
+                    f"resolved pickup {_pickup_address_override!r} "
+                    f"conf={_parsed.confidence} → coords={_pcoords}"
+                )
+            if _parsed.company:
+                _restaurant_override = _parsed.company
+            _uwagi_pickup_parsed = {
+                "street": _parsed.street,
+                "number": _parsed.number,
+                "company": _parsed.company,
+                "confidence": _parsed.confidence,
+                "raw_pickup_line": _parsed.raw_pickup_line,
+            }
+            if _bridge_parsed and _pcoords is None:
+                _uwagi_pickup_parsed["bridge_envelope_rejected"] = True
+        else:
+            if _reject_on_geocode_fail or _bridge_envelope_rejected:
+                _log.error(
+                    f"NEW_ORDER {zid} firmowe-konto aid={_aid}: parser zwrócił "
+                    "None (P3 edge) — REJECT+FLAG "
+                    "(→ no_pickup_geocode/KOORD), NIE podstawiam centrali; "
+                    f"bridge_reason={_bridge_rejection_reason!r}. "
+                    "Uwagi: "
+                    f"{'<bridge-envelope-redacted>' if _bridge_envelope_rejected else repr(_uwagi_text)}"
+                )
+                _pcoords = None
+                _uwagi_pickup_parsed = {
+                    "street": None,
+                    "number": None,
+                    "company": None,
+                    "confidence": 0.0,
+                    "raw_pickup_line": (
+                        "<bridge-envelope-redacted>"
+                        if _bridge_envelope_rejected
+                        else (_uwagi_text or "")
+                    ),
+                    "geocode_rejected": True,
+                }
+                if _bridge_envelope_rejected:
+                    _uwagi_pickup_parsed["bridge_envelope_rejected"] = True
+            else:
+                _log.info(
+                    f"NEW_ORDER {zid} firmowe-konto aid={_aid}: parser zwrócił "
+                    "None (P3 edge), fallback do FIRMOWE_KONTO_FALLBACK_COORDS. "
+                    f"Uwagi: {_uwagi_text!r}"
+                )
+                _pcoords = tuple(FIRMOWE_KONTO_FALLBACK_COORDS)
+                _uwagi_pickup_parsed = {
+                    "street": None,
+                    "number": None,
+                    "company": None,
+                    "confidence": 0.0,
+                    "raw_pickup_line": _uwagi_text or "",
+                    "fallback_coords_used": True,
+                }
+
+    if _bridge_metric_enabled:
+        _write_uwagi_bridge_shadow_metric(
+            zid,
+            envelope_seen=bool(
+                _bridge_attempt and _bridge_attempt.envelope_seen
+            ),
+            version=(
+                _bridge_attempt.version
+                if _bridge_attempt is not None
+                else None
+            ),
+            reason=_bridge_metric_reason,
+            parsed=_bridge_parsed,
+            geocode_ok=_bridge_geocode_ok,
+            central_fallback=(
+                _pcoords is not None
+                and tuple(_pcoords)
+                == tuple(FIRMOWE_KONTO_FALLBACK_COORDS)
+            ),
+        )
+
+    _del_addr = norm.get("delivery_address")
+    _del_city = norm.get("delivery_city")
+    _dcoords = None
+    if _del_addr:
+        _dcoords = geocode(_del_addr, city=_del_city, timeout=2.0)
+        if _dcoords is None:
+            _log.warning(
+                f"NEW_ORDER {zid}: geocode fail for "
+                f"'{_del_addr}' city={_del_city!r}"
+            )
+
+    ev_payload = {
+        "restaurant": _restaurant_override or norm["restaurant"],
+        "pickup_address": _pickup_address_override or norm["pickup_address"],
+        "pickup_city": norm.get("pickup_city"),
+        "delivery_address": norm["delivery_address"],
+        "delivery_city": _del_city,
+        "pickup_at_warsaw": norm["pickup_at_warsaw"],
+        "prep_minutes": norm["prep_minutes"],
+        "order_type": norm["order_type"],
+        "status_id": norm["status_id"],
+        "first_seen": now_iso(),
+        "address_id": _aid_str,
+        "pickup_coords": list(_pcoords) if _pcoords else None,
+        "delivery_coords": list(_dcoords) if _dcoords else None,
+        "czas_kuriera_warsaw": norm.get("czas_kuriera_warsaw"),
+        "czas_kuriera_hhmm": norm.get("czas_kuriera_hhmm"),
+        "uwagi": norm.get("uwagi"),
+        "uwagi_pickup_parsed": _uwagi_pickup_parsed,
+        "decision_deadline": norm.get("decision_deadline"),
+        "zmiana_czasu_odbioru": norm.get("zmiana_czasu_odbioru"),
+        "created_at_utc": norm.get("created_at_utc"),
+    }
+    return norm, ev_payload
+
+
+def _details_heal_value_present(value) -> bool:
+    return value not in (None, "", [], {})
+
+
+def _details_heal_backoff_seconds(failed_attempts: int) -> float:
+    return min(
+        _DETAILS_HEAL_BACKOFF_CAP_S,
+        _DETAILS_HEAL_BACKOFF_BASE_S * (2 ** max(0, failed_attempts - 1)),
+    )
+
+
+def _heal_missing_order_details(
+    parsed: dict,
+    current_state: dict,
+    details_fn,
+    stats: dict,
+    *,
+    now_monotonic: Optional[float] = None,
+) -> None:
+    """Ulecz najwyżej jeden widoczny, aktywny rekord gastro na tick."""
+    now_mono = time.monotonic() if now_monotonic is None else now_monotonic
+    visible_ids = {str(zid) for zid in (parsed.get("order_ids") or [])}
+    terminal = {"delivered", "returned_to_pool", "cancelled"}
+
+    def _candidate(zid: str, order: dict) -> bool:
+        return bool(
+            order
+            and zid in visible_ids
+            and order.get("status") not in terminal
+            and order.get("source") != "parcel"
+            and any(
+                not _details_heal_value_present(order.get(field))
+                for field in (
+                    "restaurant",
+                    "pickup_address",
+                    "delivery_address",
+                )
+            )
+        )
+
+    for zid in list(_DETAILS_HEAL_RETRY_STATE):
+        if not _candidate(zid, current_state.get(zid) or {}):
+            _DETAILS_HEAL_RETRY_STATE.pop(zid, None)
+
+    selected = None
+    for raw_zid in parsed.get("order_ids") or []:
+        zid = str(raw_zid)
+        order = current_state.get(zid) or {}
+        if not _candidate(zid, order):
+            continue
+        failed_attempts, retry_at = _DETAILS_HEAL_RETRY_STATE.get(
+            zid, (0, 0.0)
+        )
+        if failed_attempts >= WATCHER_DETAILS_HEAL_MAX_ATTEMPTS:
+            stats["details_heal_exhausted"] = (
+                stats.get("details_heal_exhausted", 0) + 1
+            )
+            continue
+        if now_mono < retry_at:
+            stats["details_heal_backoff"] = (
+                stats.get("details_heal_backoff", 0) + 1
+            )
+            continue
+        selected = (zid, failed_attempts)
+        break
+
+    if selected is None:
+        return
+    zid, failed_attempts = selected
+    stats["details_heal_attempted"] = (
+        stats.get("details_heal_attempted", 0) + 1
+    )
+
+    def _retry(reason: str) -> None:
+        attempts = failed_attempts + 1
+        _DETAILS_HEAL_RETRY_STATE[zid] = (
+            attempts,
+            now_mono + _details_heal_backoff_seconds(attempts),
+        )
+        stats["details_heal_retry"] = stats.get("details_heal_retry", 0) + 1
+        _log.warning(
+            "ORDER_DETAILS_HEAL retry oid=%s attempt=%s/%s reason=%s",
+            zid,
+            attempts,
+            WATCHER_DETAILS_HEAL_MAX_ATTEMPTS,
+            reason,
+        )
+
+    try:
+        raw = details_fn(zid)
+    except Exception as exc:
+        _retry(f"fetch:{type(exc).__name__}")
+        return
+    if not raw:
+        _retry("fetch_none_or_419")
+        return
+
+    try:
+        built = _build_order_details_payload(
+            zid,
+            raw,
+            (parsed.get("rest_names") or {}).get(zid),
+        )
+    except Exception as exc:
+        _retry(f"build:{type(exc).__name__}")
+        return
+    if built is None:
+        _retry("normalize_ignored")
+        return
+    _norm, full_payload = built
+    heal_payload = {
+        field: full_payload.get(field)
+        for field in ORDER_DETAILS_ENRICHMENT_FIELDS
+        if _details_heal_value_present(full_payload.get(field))
+    }
+    if not all(
+        _details_heal_value_present(heal_payload.get(field))
+        for field in ORDER_DETAILS_ENRICHMENT_REQUIRED_FIELDS
+    ):
+        _retry("incomplete_required_payload")
+        return
+
+    payload_json = json.dumps(
+        heal_payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    payload_hash = hashlib.sha256(payload_json.encode("utf-8")).hexdigest()[:20]
+    event_id = f"{zid}_ORDER_DETAILS_ENRICHED_{payload_hash}"
+    try:
+        outcome = _emit_and_apply_state(
+            "ORDER_DETAILS_ENRICHED",
+            order_id=zid,
+            payload=heal_payload,
+            event_id=event_id,
+            audit=True,
+        )
+    except Exception as exc:
+        _retry(f"apply:{type(exc).__name__}")
+        return
+    if not outcome.state_ready:
+        _retry(f"apply:{outcome.failure_stage or 'pending'}")
+        return
+
+    _DETAILS_HEAL_RETRY_STATE.pop(zid, None)
+    stats["details_healed"] = stats.get("details_healed", 0) + 1
+    _log.info(
+        "ORDER_DETAILS_HEALED oid=%s fields=%s event_id=%s",
+        zid,
+        sorted(heal_payload),
+        event_id,
+    )
+
+
 def _build_prefetch_candidates(parsed: dict, current_state: dict, ignored_ids,
                                freeze_new: bool, ck_detection_on: bool,
                                pickup_time_detection_on: bool) -> list:
@@ -2458,6 +2902,15 @@ def _diff_and_emit(
             return _prefetch_map[zid]
         return fetch_order_details(zid, csrf)
 
+    # HEAL-PATH: cold-start mógł stworzyć minimalny assigned przed NEW_ORDER.
+    # Ten sam _details() oraz ten sam builder co NEW; najwyżej jeden fetch/tick.
+    _heal_missing_order_details(
+        parsed,
+        current_state,
+        _details,
+        stats,
+    )
+
     # 1. NOWE: ID widoczne w HTML ale nieznane w state.
     # PARSE-01: gdy _freeze_new => iterujemy po pustej liście (zero emisji NEW),
     # reszta _diff_and_emit (sekcja 2 — zmiany/terminalne) działa normalnie.
@@ -2481,283 +2934,12 @@ def _diff_and_emit(
         if not raw:
             continue
 
-        norm = normalize_order(raw, rest_names.get(zid))
-        if norm is None:
+        built = _build_order_details_payload(zid, raw, rest_names.get(zid))
+        if built is None:
             stats["ignored"] += 1
             _ignored_ids.add(zid)
             continue
-
-        # Emit NEW_ORDER (idempotent per zid + first_seen)
-        _aid = norm.get("address_id")
-        _aid_str = str(_aid) if _aid is not None else None
-        _is_firmowe_konto = (
-            _aid is not None
-            and int(_aid) in FIRMOWE_KONTO_ADDRESS_IDS
-        )
-        # FRONT-B (2026-06-11): zwykłe restauracje → helper (geokod adresu
-        # panelu liczony zawsze + drift; selekcja live-first za flagą OFF).
-        # Firmowe konto ZOSTAJE na starym lookupie — pickup w uwagach (niżej).
-        if _is_firmowe_konto:
-            _pcoords = _COORDS.get(_aid_str) if _aid_str else None
-        else:
-            _pcoords, _pc_source, _pc_drift_m = _resolve_pickup_coords(
-                _aid_str, norm.get("pickup_address"), norm.get("pickup_city"),
-                zid=zid)
-
-        # Firmowe konto path: address_id ∈ FIRMOWE_KONTO_ADDRESS_IDS znaczy
-        # adres pickup'u jest w polu uwagi (free-text), nie w panel address.
-        # Parser PRIMARY: parsuj uwagi → geocode → real coords (Mickiewicza 50,
-        # Wyszyńskiego 2/75, etc.). Legacy fallback do centrali obowiązuje tylko
-        # przy efektywnym ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL=OFF. P0 bridge
-        # wolno uruchomić wyłącznie razem z reject=ON, więc bridge-geocode FAIL
-        # zawsze zostawia None → jawny KOORD, nigdy wiarygodnie-złą centralę.
-        _uwagi_pickup_parsed = None
-        _pickup_address_override = None
-        _restaurant_override = None
-        _bridge_metric_enabled = False
-        _bridge_attempt = None
-        _bridge_metric_reason = "not_evaluated"
-        _bridge_parsed = False
-        _bridge_geocode_ok = False
-        _bridge_binding_rejected = False
-        if (_pcoords is None
-                and _is_firmowe_konto
-                and flag("ENABLE_UWAGI_ADDRESS_PARSER", True)):
-            _uwagi_text = norm.get("uwagi")
-            _bridge_requested = flag("ENABLE_UWAGI_BRIDGE_NADAWCA", False)
-            _reject_on_geocode_fail = flag(
-                "ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL", True
-            )
-            _bridge_format = C.uwagi_bridge_flags_coherent(
-                bridge_enabled=_bridge_requested,
-                reject_enabled=_reject_on_geocode_fail,
-            )
-            _bridge_metric_enabled = bool(_bridge_requested)
-            if _bridge_requested and not _reject_on_geocode_fail:
-                _log.warning(
-                    f"NEW_ORDER {zid} firmowe-konto aid={_aid}: "
-                    "ENABLE_UWAGI_BRIDGE_NADAWCA=ON, ale efektywne "
-                    "ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL=OFF; "
-                    "bridge_format=False (sprzężenie fail-closed)"
-                )
-            _bridge_hmac_material = None
-            if _bridge_format:
-                try:
-                    _bridge_hmac_material = load_bridge_hmac()
-                except BridgeCredentialError as exc:
-                    _log.error(
-                        "NEW_ORDER %s firmowe-konto aid=%s: bridge HMAC "
-                        "niedostępny (%s); fail-closed do legacy/KOORD",
-                        zid,
-                        _aid,
-                        type(exc).__name__,
-                    )
-                # Anti-replay: no independent expected_order_id here — the
-                # panel `zid` lives in a different namespace than the bridge's
-                # source `#order_id`, so binding is enforced by the envelope
-                # itself (signed-oid must match the content `#oid` = internal
-                # consistency, plus the freshness window). A captured envelope
-                # is thus non-eternal and any tamper breaks the signature.
-                _bridge_attempt = inspect_bridge_nadawca(
-                    _uwagi_text,
-                    hmac_material=_bridge_hmac_material,
-                )
-                _bridge_metric_reason = _bridge_attempt.reason
-                if _bridge_attempt.pickup is not None:
-                    _parsed = _bridge_attempt.pickup
-                elif _bridge_attempt.envelope_seen:
-                    _parsed = None
-                else:
-                    _parsed = parse_pickup_from_uwagi(
-                        _uwagi_text,
-                        bridge_format=False,
-                    )
-            else:
-                if _bridge_requested:
-                    _bridge_attempt = inspect_bridge_nadawca(_uwagi_text)
-                    _bridge_metric_reason = "binding_reject_flag_off"
-                if _bridge_attempt is not None and _bridge_attempt.envelope_seen:
-                    # Incoherent ON/OFF configuration must not silently parse a
-                    # signed bridge payload through the unauthenticated legacy
-                    # path or revive the central fallback.
-                    _parsed = None
-                    _bridge_binding_rejected = True
-                else:
-                    _parsed = parse_pickup_from_uwagi(
-                        _uwagi_text,
-                        bridge_format=False,
-                    )
-            _bridge_rejection_reason = None
-            if _bridge_binding_rejected:
-                _bridge_rejection_reason = _bridge_metric_reason
-            elif (_parsed is None and _bridge_attempt is not None
-                  and _bridge_attempt.envelope_seen):
-                _bridge_rejection_reason = _bridge_attempt.reason
-            _bridge_envelope_rejected = bool(
-                _bridge_attempt is not None
-                and _bridge_attempt.envelope_seen
-                and (
-                    _bridge_attempt.pickup is None
-                    or _bridge_binding_rejected
-                )
-            )
-            if _parsed is not None:
-                _bridge_parsed = bool(
-                    _bridge_attempt is not None
-                    and _bridge_attempt.pickup is not None
-                )
-                _pickup_address_override = f"{_parsed.street} {_parsed.number}"
-                _pcoords = geocode(_pickup_address_override,
-                                   city=(getattr(_parsed, "city", None) or "Białystok"),
-                                   timeout=2.0)
-                if (_pcoords is not None
-                        and not C.coords_in_bialystok_bbox(_pcoords)):
-                    _log.error(
-                        "NEW_ORDER %s firmowe-konto aid=%s: geocode poza bbox; "
-                        "REJECT+FLAG (→ no_pickup_geocode/KOORD)",
-                        zid,
-                        _aid,
-                    )
-                    _pcoords = None
-                    if _bridge_parsed:
-                        _bridge_metric_reason = "geocode_out_of_bbox"
-                if _pcoords is None:
-                    if _bridge_parsed and _bridge_metric_reason == "parsed_v2":
-                        _bridge_metric_reason = "geocode_failed"
-                    if _reject_on_geocode_fail:
-                        # FAZA 2 #1: reject+flag — znamy adres, geocode padł →
-                        # NIE udawaj że to centrala. None → no_pickup_geocode → KOORD.
-                        _log.error(
-                            f"NEW_ORDER {zid} firmowe-konto aid={_aid}: parser OK "
-                            f"({_pickup_address_override!r} conf={_parsed.confidence}) "
-                            f"ALE geocode FAIL — REJECT+FLAG (→ no_pickup_geocode/KOORD), "
-                            f"NIE podstawiam centrali"
-                        )
-                        # _pcoords zostaje None → downstream defense gate → KOORD
-                    else:
-                        _log.warning(
-                            f"NEW_ORDER {zid} firmowe-konto aid={_aid}: parser "
-                            f"OK ({_pickup_address_override!r} conf={_parsed.confidence}) "
-                            f"ALE geocode fail — fallback do FIRMOWE_KONTO_FALLBACK_COORDS"
-                        )
-                        _pcoords = tuple(FIRMOWE_KONTO_FALLBACK_COORDS)
-                else:
-                    if _bridge_parsed:
-                        _bridge_geocode_ok = True
-                    _log.info(
-                        f"NEW_ORDER {zid} firmowe-konto aid={_aid}: uwagi-parser "
-                        f"resolved pickup {_pickup_address_override!r} conf={_parsed.confidence} "
-                        f"→ coords={_pcoords}"
-                    )
-                if _parsed.company:
-                    _restaurant_override = _parsed.company
-                _uwagi_pickup_parsed = {
-                    "street": _parsed.street,
-                    "number": _parsed.number,
-                    "company": _parsed.company,
-                    "confidence": _parsed.confidence,
-                    "raw_pickup_line": _parsed.raw_pickup_line,
-                }
-                if _bridge_parsed and _pcoords is None:
-                    # Persist the provenance-aware reject so downstream twins
-                    # cannot re-geocode or revive the central fallback.
-                    _uwagi_pickup_parsed["bridge_envelope_rejected"] = True
-            else:
-                # P3 edge: parser nie wyciągnął adresu (np. uwagi=company-only
-                # "MALI WOJOWNICY"). FAZA 2 #1: reject+flag — bez adresu NIE
-                # zgadujemy centrali; koordynator ustala adres (None → KOORD).
-                if _reject_on_geocode_fail or _bridge_envelope_rejected:
-                    _log.error(
-                        f"NEW_ORDER {zid} firmowe-konto aid={_aid}: parser zwrócił "
-                        f"None (P3 edge) — REJECT+FLAG (→ no_pickup_geocode/KOORD), "
-                        f"NIE podstawiam centrali; "
-                        f"bridge_reason={_bridge_rejection_reason!r}. "
-                        f"Uwagi: {'<bridge-envelope-redacted>' if _bridge_envelope_rejected else repr(_uwagi_text)}"
-                    )
-                    _pcoords = None
-                    _uwagi_pickup_parsed = {
-                        "street": None, "number": None, "company": None,
-                        "confidence": 0.0,
-                        "raw_pickup_line": (
-                            "<bridge-envelope-redacted>"
-                            if _bridge_envelope_rejected else (_uwagi_text or "")
-                        ),
-                        "geocode_rejected": True,
-                    }
-                    if _bridge_envelope_rejected:
-                        _uwagi_pickup_parsed["bridge_envelope_rejected"] = True
-                else:
-                    _log.info(
-                        f"NEW_ORDER {zid} firmowe-konto aid={_aid}: parser zwrócił "
-                        f"None (P3 edge), fallback do FIRMOWE_KONTO_FALLBACK_COORDS. "
-                        f"Uwagi: {_uwagi_text!r}"
-                    )
-                    _pcoords = tuple(FIRMOWE_KONTO_FALLBACK_COORDS)
-                    _uwagi_pickup_parsed = {
-                        "street": None,
-                        "number": None,
-                        "company": None,
-                        "confidence": 0.0,
-                        "raw_pickup_line": _uwagi_text or "",
-                        "fallback_coords_used": True,
-                    }
-
-        if _bridge_metric_enabled:
-            _write_uwagi_bridge_shadow_metric(
-                zid,
-                envelope_seen=bool(
-                    _bridge_attempt and _bridge_attempt.envelope_seen
-                ),
-                version=(
-                    _bridge_attempt.version if _bridge_attempt is not None else None
-                ),
-                reason=_bridge_metric_reason,
-                parsed=_bridge_parsed,
-                geocode_ok=_bridge_geocode_ok,
-                central_fallback=(
-                    _pcoords is not None
-                    and tuple(_pcoords) == tuple(FIRMOWE_KONTO_FALLBACK_COORDS)
-                ),
-            )
-
-        # Geocode delivery address (cache hit ~90% = 0ms, miss = Google API max 2s)
-        _del_addr = norm.get("delivery_address")
-        _del_city = norm.get("delivery_city")
-        _dcoords = None
-        if _del_addr:
-            _dcoords = geocode(_del_addr, city=_del_city, timeout=2.0)
-            if _dcoords is None:
-                _log.warning(f"NEW_ORDER {zid}: geocode fail for '{_del_addr}' city={_del_city!r}")
-
-        ev_payload = {
-            "restaurant": _restaurant_override or norm["restaurant"],
-            "pickup_address": _pickup_address_override or norm["pickup_address"],
-            "pickup_city": norm.get("pickup_city"),
-            "delivery_address": norm["delivery_address"],
-            "delivery_city": _del_city,
-            "pickup_at_warsaw": norm["pickup_at_warsaw"],
-            "prep_minutes": norm["prep_minutes"],
-            "order_type": norm["order_type"],
-            "status_id": norm["status_id"],
-            "first_seen": now_iso(),
-            "address_id": _aid_str,
-            "pickup_coords": list(_pcoords) if _pcoords else None,
-            "delivery_coords": list(_dcoords) if _dcoords else None,
-            # V3.19f: czas_kuriera 2-field propagation (Step 5 emit layer).
-            # Parse+persist zawsze (niezależnie od flagi). Pipeline consume pod flagą.
-            "czas_kuriera_warsaw": norm.get("czas_kuriera_warsaw"),
-            "czas_kuriera_hhmm": norm.get("czas_kuriera_hhmm"),
-            # Audit trail dla firmowego konto path (zwykle None).
-            "uwagi": norm.get("uwagi"),
-            "uwagi_pickup_parsed": _uwagi_pickup_parsed,
-            # Tech debt #19a/b/c (2026-05-07) — fields tracone od V3.x:
-            # - decision_deadline: SLA visibility (panel deadline na decyzję koord)
-            # - zmiana_czasu_odbioru: audit flag czy panel zmienił pickup time
-            # - created_at_utc: single anchor dla downstream age_minutes consumers
-            "decision_deadline": norm.get("decision_deadline"),
-            "zmiana_czasu_odbioru": norm.get("zmiana_czasu_odbioru"),
-            "created_at_utc": norm.get("created_at_utc"),
-        }
+        norm, ev_payload = built
 
         # Deterministyczny event_id: {order_id}_NEW_ORDER_first_seen (bez timestamp - raz na zycie)
         event_id = f"{zid}_NEW_ORDER_first"

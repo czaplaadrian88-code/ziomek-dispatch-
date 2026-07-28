@@ -48,6 +48,7 @@ LIFECYCLE_EVENT_TARGETS = {
 DATA_ONLY_EVENT_TYPES = frozenset({
     "CZAS_KURIERA_UPDATED",
     "PICKUP_TIME_UPDATED",
+    "ORDER_DETAILS_ENRICHED",
 })
 
 # Event-bus messages which are not order lifecycle mutations.  Keeping them
@@ -327,6 +328,8 @@ def _validate_timestamps(
         paths = ("payload.new_ck_iso",)
     elif event_type == "PICKUP_TIME_UPDATED":
         paths = ("payload.new_pickup_at_warsaw",)
+    elif event_type == "ORDER_DETAILS_ENRICHED":
+        paths = ("payload.pickup_at_warsaw", "payload.created_at_utc")
     elif event_type == "ORDER_RECLAIMED_TO_CZASOWKA":
         paths = ("payload.reclaimed_at", "payload.expected_pickup_at_warsaw")
 
