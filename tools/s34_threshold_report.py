@@ -27,6 +27,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator, Mapping, Sequence
 
+from dispatch_v2.core import carry_freshness as _carry_freshness
+from dispatch_v2.core import lex_window_guards as _lex_window_guards
+
 try:
     from dispatch_v2.tools import _rotated_logs
 except ModuleNotFoundError:  # bezpieczne także dla bezpośredniego uruchomienia pliku
@@ -42,7 +45,7 @@ except ModuleNotFoundError:  # bezpieczne także dla bezpośredniego uruchomieni
     _helper_spec.loader.exec_module(_rotated_logs)
 
 
-SCHEMA = "s34.threshold_report.v1"
+SCHEMA = "s34.threshold_report.v2"
 LEDGER_SCHEMA = "lex_window_ledger.v2"
 EPISODE_SCHEMA = "assignment_episode.v1"
 
@@ -266,72 +269,152 @@ def _delivery_delta(record: Mapping[str, Any]) -> float | None:
     return max(deltas) if deltas else None
 
 
-def _post_dwell_carry(
+def _guard_inputs(
     record: Mapping[str, Any],
-) -> tuple[float, float] | None:
-    """(baseline, chosen) max carry po dwell dla pozycji już niesionych.
+) -> tuple[
+    _lex_window_guards.Facts,
+    _lex_window_guards.Facts,
+    list[str],
+    list[str],
+] | None:
+    """Minimalny adapter ledger-v2 -> wejście kanonicznego enforcementu.
 
-    ``raw_carry_min`` v2 jest wiekiem przy przyjeździe chosen. Zatem:
-      chosen = raw_carry + dwell
-      baseline = raw_carry - arrival + baseline_arrival + dwell
+    Adapter nie zawiera progów ani polityki przeżycia. Odtwarza wyłącznie fakty
+    zapisane przez writer WB1/WB2; brak któregokolwiek pola potrzebnego przez
+    ``core.lex_window_guards.evaluate`` daje N/D.
     """
+    baseline_w, chosen_w = _window_values(record)
+    baseline_drive = _nested_number(
+        record, ("baseline", "drive_min"), ("raw", "drive_baseline")
+    )
+    chosen_drive = _nested_number(
+        record, ("chosen", "drive_min"), ("raw", "drive_chosen")
+    )
     bag = record.get("bag")
     items = record.get("items")
-    if not isinstance(bag, Mapping) or not isinstance(items, list):
+    if (
+        baseline_w is None
+        or chosen_w is None
+        or baseline_drive is None
+        or chosen_drive is None
+        or not isinstance(bag, Mapping)
+        or not isinstance(items, list)
+    ):
         return None
-    carried = bag.get("carried")
-    if not isinstance(carried, list):
+    if not baseline_w.is_integer() or not chosen_w.is_integer():
         return None
-    if not carried:
-        return 0.0, 0.0
 
-    by_order: dict[str, Mapping[str, Any]] = {}
+    carried_raw = bag.get("carried")
+    if not isinstance(carried_raw, list):
+        return None
+    carried_ids = [str(oid) for oid in carried_raw if oid is not None]
+    if len(carried_ids) != len(carried_raw) or len(set(carried_ids)) != len(
+        carried_ids
+    ):
+        return None
+    carried_set = set(carried_ids)
+
+    baseline_handoff: dict[str, float | None] = {}
+    chosen_handoff: dict[str, float | None] = {}
+    baseline_carry: dict[str, float | None] = {}
+    chosen_carry: dict[str, float | None] = {}
+    assigned_ids: list[str] = []
+    seen_dropoffs: set[str] = set()
+
     for item in items:
         if not isinstance(item, Mapping) or item.get("kind") != "dropoff":
             continue
         oid = item.get("order_id")
-        if oid is not None:
-            by_order[str(oid)] = item
-
-    baseline_values: list[float] = []
-    chosen_values: list[float] = []
-    for oid in carried:
-        item = by_order.get(str(oid))
-        if item is None:
+        if oid is None:
             return None
+        oid_text = str(oid)
+        if oid_text in seen_dropoffs:
+            return None
+        seen_dropoffs.add(oid_text)
+
         raw_carry = _number(item.get("raw_carry_min"))
         dwell = _number(item.get("dwell_min"))
         arrival = _number(item.get("arrival_min"))
         baseline_arrival = _number(item.get("baseline_arrival_min"))
-        if None in (raw_carry, dwell, arrival, baseline_arrival):
+        if None in (dwell, arrival, baseline_arrival):
             return None
-        assert raw_carry is not None
         assert dwell is not None
         assert arrival is not None
         assert baseline_arrival is not None
-        chosen_values.append(raw_carry + dwell)
-        baseline_values.append(
-            raw_carry - arrival + baseline_arrival + dwell
+
+        chosen_handoff_value = _carry_freshness.handoff_min(arrival, dwell)
+        baseline_handoff_value = _carry_freshness.handoff_min(
+            baseline_arrival, dwell
         )
-    return max(baseline_values), max(chosen_values)
+        if chosen_handoff_value is None or baseline_handoff_value is None:
+            return None
+        chosen_handoff[oid_text] = chosen_handoff_value
+        baseline_handoff[oid_text] = baseline_handoff_value
+
+        if oid_text in carried_set:
+            if raw_carry is None:
+                return None
+            possession_min = arrival - raw_carry
+            chosen_carry_value = _carry_freshness.carry_min(
+                chosen_handoff_value, possession_min
+            )
+            baseline_carry_value = _carry_freshness.carry_min(
+                baseline_handoff_value, possession_min
+            )
+            if chosen_carry_value is None or baseline_carry_value is None:
+                return None
+            chosen_carry[oid_text] = chosen_carry_value
+            baseline_carry[oid_text] = baseline_carry_value
+        else:
+            assigned_ids.append(oid_text)
+
+    if not carried_set.issubset(seen_dropoffs):
+        return None
+
+    baseline = _lex_window_guards.Facts(
+        window_viol=int(baseline_w),
+        drive_min=baseline_drive,
+        handoff_by_order=baseline_handoff,
+        carry_by_order=baseline_carry,
+    )
+    chosen = _lex_window_guards.Facts(
+        window_viol=int(chosen_w),
+        drive_min=chosen_drive,
+        handoff_by_order=chosen_handoff,
+        carry_by_order=chosen_carry,
+    )
+    return baseline, chosen, assigned_ids, carried_ids
 
 
 def grid_survives(
-    window_class: str,
+    record: Mapping[str, Any],
     *,
-    delivery_delta: float | None,
-    drive_gain: float | None,
     tol: float,
     gain: float,
+    cap: float,
 ) -> bool | None:
-    """Kontrakt G1/G2-delta/G3, celowo bez osobno raportowanego capu."""
-    if window_class == "strict_w":
-        return True
-    if window_class != "equal_w":
+    """Przeżycie dokładnie wg ``core.lex_window_guards.evaluate``.
+
+    Jedyna lokalna odpowiedzialność to adapter danych. Brak danych potrzebnych
+    enforcementowi daje N/D; reporter nie zgaduje ani nie odtwarza guardów.
+    """
+    adapted = _guard_inputs(record)
+    if adapted is None:
         return None
-    if delivery_delta is None or drive_gain is None:
-        return None
-    return delivery_delta <= tol and drive_gain >= gain
+    baseline, chosen, assigned_ids, carried_ids = adapted
+    result = _lex_window_guards.evaluate(
+        baseline,
+        chosen,
+        assigned_ids=assigned_ids,
+        carried_ids=carried_ids,
+        thresholds=_lex_window_guards.Thresholds(
+            delay_tol_min=tol,
+            carry_cap_min=cap,
+            min_gain_min=gain,
+            alarm=(cap == 40.0),
+        ),
+    )
+    return result.admissible
 
 
 def _oracle_492(
@@ -365,45 +448,42 @@ def _grid(features: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     for tol in TOLS:
         for gain in GAINS:
-            by_class: dict[str, dict[str, int]] = {}
-            for klass in ("strict_w", "equal_w"):
-                counts = Counter({"survive": 0, "die": 0, "n/d": 0})
-                for feature in features:
-                    if feature["class"] != klass:
-                        continue
-                    survives = grid_survives(
-                        klass,
-                        delivery_delta=feature["delivery_delta"],
-                        drive_gain=feature["drive_gain"],
-                        tol=tol,
-                        gain=gain,
-                    )
-                    counts[
-                        "n/d" if survives is None else "survive" if survives else "die"
-                    ] += 1
-                by_class[klass] = dict(counts)
+            by_cap: dict[str, dict[str, Any]] = {}
+            for cap in CARRY_CAPS:
+                by_class: dict[str, dict[str, int]] = {}
+                for klass in ("strict_w", "equal_w"):
+                    counts = Counter({"survive": 0, "die": 0, "n/d": 0})
+                    for feature in features:
+                        if feature["class"] != klass:
+                            continue
+                        survives = grid_survives(
+                            feature["record"], tol=tol, gain=gain, cap=cap
+                        )
+                        counts[
+                            "n/d"
+                            if survives is None
+                            else "survive"
+                            if survives
+                            else "die"
+                        ] += 1
+                    by_class[klass] = dict(counts)
 
-            oracle = [
-                feature for feature in features if feature.get("oracle_492") is True
-            ]
-            oracle_killed = 0
-            oracle_nd = 0
-            for feature in oracle:
-                survives = grid_survives(
-                    "equal_w",
-                    delivery_delta=feature["delivery_delta"],
-                    drive_gain=feature["drive_gain"],
-                    tol=tol,
-                    gain=gain,
-                )
-                if survives is None:
-                    oracle_nd += 1
-                elif not survives:
-                    oracle_killed += 1
-            rows.append(
-                {
-                    "tol_min": tol,
-                    "gain_min": gain,
+                oracle = [
+                    feature
+                    for feature in features
+                    if feature.get("oracle_492") is True
+                ]
+                oracle_killed = 0
+                oracle_nd = 0
+                for feature in oracle:
+                    survives = grid_survives(
+                        feature["record"], tol=tol, gain=gain, cap=cap
+                    )
+                    if survives is None:
+                        oracle_nd += 1
+                    elif not survives:
+                        oracle_killed += 1
+                by_cap[str(int(cap))] = {
                     "strict_w": by_class["strict_w"],
                     "equal_w": by_class["equal_w"],
                     "oracle_492": {
@@ -415,12 +495,14 @@ def _grid(features: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
                         ),
                     },
                 }
+            rows.append(
+                {
+                    "tol_min": tol,
+                    "gain_min": gain,
+                    "caps": by_cap,
+                }
             )
     return rows
-
-
-def _cap_passes(baseline: float, chosen: float, cap: float) -> bool:
-    return chosen <= cap or (baseline > cap and chosen <= baseline)
 
 
 def _histogram(values: Sequence[float]) -> dict[str, int]:
@@ -452,36 +534,40 @@ def _histogram(values: Sequence[float]) -> dict[str, int]:
 
 def _cap_analysis(features: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     strict = [feature for feature in features if feature["class"] == "strict_w"]
-    evaluated: list[tuple[float, float]] = []
-    nd = 0
+    chosen_carry: list[float] = []
     for feature in strict:
-        carry = _post_dwell_carry(feature["record"])
-        if carry is None:
-            nd += 1
-        else:
-            evaluated.append(carry)
+        adapted = _guard_inputs(feature["record"])
+        if adapted is None:
+            continue
+        _baseline, chosen, _assigned_ids, _carried_ids = adapted
+        value = _carry_freshness.max_carry_min(chosen.carry_by_order)
+        if value is not None:
+            chosen_carry.append(value)
+    nd = len(strict) - len(chosen_carry)
     result: dict[str, Any] = {
-        "method": "per-item raw_carry_min + dwell_min; relative over-cap escape",
+        "method": "core.lex_window_guards.evaluate przez adapter ledger-v2",
         "strict_w_total": len(strict),
-        "evaluable": len(evaluated),
+        "evaluable": len(chosen_carry),
         "n/d": nd,
-        "chosen_post_dwell_histogram_min": _histogram(
-            [chosen for _, chosen in evaluated]
-        ),
+        "chosen_post_dwell_histogram_min": _histogram(chosen_carry),
         "caps": {},
     }
     for cap in CARRY_CAPS:
-        die = sum(
-            1
-            for baseline, chosen in evaluated
-            if not _cap_passes(baseline, chosen, cap)
-        )
+        counts = Counter({"survive": 0, "die": 0, "n/d": 0})
+        for feature in strict:
+            survives = grid_survives(
+                feature["record"], tol=TOLS[0], gain=GAINS[0], cap=cap
+            )
+            counts[
+                "n/d" if survives is None else "survive" if survives else "die"
+            ] += 1
+        die = counts["die"]
         result["caps"][str(int(cap))] = {
-            "survive": len(evaluated) - die,
+            "survive": counts["survive"],
             "die": die,
-            "n/d": nd,
+            "n/d": counts["n/d"],
             "die_rate_evaluable": (
-                round(die / len(evaluated), 6) if evaluated else None
+                round(die / len(chosen_carry), 6) if chosen_carry else None
             ),
         }
     return result
@@ -1032,18 +1118,26 @@ def _fmt(value: object) -> str:
 def _recommendations(ledger: Mapping[str, Any]) -> list[dict[str, Any]]:
     notes: list[dict[str, Any]] = []
     for row in ledger["grid"]:
-        strict = row["strict_w"]
-        equal = row["equal_w"]
-        oracle = row["oracle_492"]
+        cap35 = row["caps"]["35"]
+        cap40 = row["caps"]["40"]
         notes.append(
             {
                 "tol_min": row["tol_min"],
                 "gain_min": row["gain_min"],
                 "analytical_note": (
-                    f"strict-W: {strict['survive']} przeżywa / {strict['die']} ginie "
-                    f"/ {strict['n/d']} N/D; equal-W: {equal['survive']} przeżywa / "
-                    f"{equal['die']} ginie / {equal['n/d']} N/D; oracle-492: "
-                    f"{oracle['killed']}/{oracle['n']} zabite"
+                    "cap35 "
+                    f"strict={cap35['strict_w']['survive']}/"
+                    f"{cap35['strict_w']['die']}/{cap35['strict_w']['n/d']}, "
+                    f"equal={cap35['equal_w']['survive']}/"
+                    f"{cap35['equal_w']['die']}/{cap35['equal_w']['n/d']}, "
+                    f"oracle={cap35['oracle_492']['killed']}/"
+                    f"{cap35['oracle_492']['n']}; cap40 "
+                    f"strict={cap40['strict_w']['survive']}/"
+                    f"{cap40['strict_w']['die']}/{cap40['strict_w']['n/d']}, "
+                    f"equal={cap40['equal_w']['survive']}/"
+                    f"{cap40['equal_w']['die']}/{cap40['equal_w']['n/d']}, "
+                    f"oracle={cap40['oracle_492']['killed']}/"
+                    f"{cap40['oracle_492']['n']}"
                 ),
                 "business_verdict": "NIE WYDAJE — build analityczny",
             }
@@ -1124,24 +1218,31 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             ),
             "",
             "Identity decisions są wyłączone z siatki: guard nie wybiera w nich "
-            "kandydata. Siatka izoluje TOL/GAIN; cap jest policzony osobno niżej.",
+            "kandydata. Każda komórka przechodzi przez kanoniczny enforcement "
+            "osobno dla cap=35 i cap=40.",
             "",
             "## 2. Siatka TOL × GAIN",
             "",
-            "| TOL | GAIN | strict przeżywa/gin/N-D | equal przeżywa/gin/N-D | "
-            "oracle zabite/n |",
-            "|---:|---:|---:|---:|---:|",
+            "| TOL | GAIN | strict c35 p/g/N-D | equal c35 p/g/N-D | "
+            "strict c40 p/g/N-D | equal c40 p/g/N-D | oracle c35/c40 zabite/n |",
+            "|---:|---:|---:|---:|---:|---:|---:|",
         ]
     )
     for row in ledger["grid"]:
-        strict = row["strict_w"]
-        equal = row["equal_w"]
-        oracle = row["oracle_492"]
+        cap35 = row["caps"]["35"]
+        cap40 = row["caps"]["40"]
         lines.append(
             f"| {_fmt(row['tol_min'])} | {_fmt(row['gain_min'])} | "
-            f"{strict['survive']}/{strict['die']}/{strict['n/d']} | "
-            f"{equal['survive']}/{equal['die']}/{equal['n/d']} | "
-            f"{oracle['killed']}/{oracle['n']} |"
+            f"{cap35['strict_w']['survive']}/{cap35['strict_w']['die']}/"
+            f"{cap35['strict_w']['n/d']} | "
+            f"{cap35['equal_w']['survive']}/{cap35['equal_w']['die']}/"
+            f"{cap35['equal_w']['n/d']} | "
+            f"{cap40['strict_w']['survive']}/{cap40['strict_w']['die']}/"
+            f"{cap40['strict_w']['n/d']} | "
+            f"{cap40['equal_w']['survive']}/{cap40['equal_w']['die']}/"
+            f"{cap40['equal_w']['n/d']} | "
+            f"{cap35['oracle_492']['killed']}/{cap35['oracle_492']['n']} / "
+            f"{cap40['oracle_492']['killed']}/{cap40['oracle_492']['n']} |"
         )
 
     cap = ledger["cap"]
@@ -1190,22 +1291,24 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             lines.extend(
                 [
                     "| grupa | n | TOL | GAIN | strict survive/die/N-D | "
-                    "equal survive/die/N-D | oracle killed/n |",
-                    "|---|---:|---:|---:|---:|---:|---:|",
+                    "equal survive/die/N-D | cap | oracle killed/n |",
+                    "|---|---:|---:|---:|---:|---:|---:|---:|",
                 ]
             )
             for group_name, group in cohort["groups"].items():
                 for row in group["grid"]:
-                    strict = row["strict_w"]
-                    equal = row["equal_w"]
-                    oracle = row["oracle_492"]
-                    lines.append(
-                        f"| {group_name} | {group['n']} | "
-                        f"{_fmt(row['tol_min'])} | {_fmt(row['gain_min'])} | "
-                        f"{strict['survive']}/{strict['die']}/{strict['n/d']} | "
-                        f"{equal['survive']}/{equal['die']}/{equal['n/d']} | "
-                        f"{oracle['killed']}/{oracle['n']} |"
-                    )
+                    for cap_key in ("35", "40"):
+                        cap_row = row["caps"][cap_key]
+                        strict = cap_row["strict_w"]
+                        equal = cap_row["equal_w"]
+                        oracle = cap_row["oracle_492"]
+                        lines.append(
+                            f"| {group_name} | {group['n']} | "
+                            f"{_fmt(row['tol_min'])} | {_fmt(row['gain_min'])} | "
+                            f"{strict['survive']}/{strict['die']}/{strict['n/d']} | "
+                            f"{equal['survive']}/{equal['die']}/{equal['n/d']} | "
+                            f"{cap_key} | {oracle['killed']}/{oracle['n']} |"
+                        )
             lines.append("")
 
     agreement = r2["agreement"]
@@ -1262,7 +1365,13 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             f"| {_fmt(note['tol_min'])} | {_fmt(note['gain_min'])} | "
             f"{note['analytical_note']} |"
         )
-    lines.extend(["", "## 8. LUKI", ""])
+    lines.extend(
+        [
+            "",
+            "## 8. LUKI — reimplementacja strict/equal-W usunięta",
+            "",
+        ]
+    )
     lines.extend(f"- {gap}" for gap in report["gaps"])
     lines.extend(
         [
@@ -1272,8 +1381,9 @@ def render_markdown(report: Mapping[str, Any]) -> str:
             "- `raw_carry_min + dwell_min` jest uczciwym post-dwell wynikiem "
             "symulatora v2, ale possession_source może nadal być proxy; to nie "
             "awansuje wyniku do fizycznej prawdy R6.",
-            "- Grid TOL/GAIN nie miesza efektu capu; cap 35/40 jest pokazany "
-            "oddzielnie z regułą `over_cap_not_worsened`.",
+            "- Każda komórka gridu TOL/GAIN dla cap=35 i cap=40 woła "
+            "`core.lex_window_guards.evaluate`; raport nie ma własnej kopii "
+            "reguły capa ani wyjątków strict/equal-W.",
             "- GPS/no-GPS i Alarm są klasyfikowane tylko z jawnych pól. "
             "Brak pola daje N/D; loadgov EWMA nie jest certyfikatem Alarmu.",
             "- ETA liczy wyłącznie literalne LIVE/WARM/PLANNED. Starsze "
@@ -1371,7 +1481,10 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
             "freeze_reference": str(Path(args.freeze)),
         },
         "method": {
-            "grid": "strict-W exempt; equal-W delta<=TOL and drive_gain>=GAIN",
+            "grid": (
+                "core.lex_window_guards.evaluate via fail-closed ledger-v2 adapter"
+            ),
+            "grid_caps_min": [35.0, 40.0],
             "grid_cap_separated": True,
             "oracle_492": "equal-W and delivery_delta>=4 and drive_gain<3",
             "proposal_freshness_s": PROPOSAL_FRESHNESS_S,
