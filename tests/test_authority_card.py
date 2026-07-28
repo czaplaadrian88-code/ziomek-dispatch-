@@ -35,6 +35,7 @@ E = _load_local("auto_assign_executor_authority_wt", REPO / "auto_assign_executo
 REAL_FRESH_EXECUTION_FLAGS = E._fresh_execution_flags
 
 NOW = datetime(2026, 7, 29, 9, 0, tzinfo=timezone.utc)
+OWNER_ACK_PHRASE = "ODBLOKOWUJE AUTO-CANARY 2026-07-29"
 GIT_SHA = "7a63f8008abcdef0123456789abcdef012345678"
 FLAG_FP = "ENABLE_AUTO_ASSIGN=True|fixture=v1"
 STOP_CONTRACT_SHA256 = (
@@ -278,6 +279,7 @@ def test_corrupt_synthetic_state_cannot_be_cleared_or_persisted(
             str(state_path),
             reason="owner ACK",
             operator="operator-test",
+            owner_ack_phrase=OWNER_ACK_PHRASE,
             now=NOW,
             audit_path=str(audit_path),
         )
@@ -1013,6 +1015,43 @@ def test_latch_clear_refuses_until_in_flight_and_pending_are_reconciled(tmp_path
             state_path,
             reason="owner ACK przed reconcile",
             operator="operator-test",
+            owner_ack_phrase=OWNER_ACK_PHRASE,
+            now=NOW,
+            audit_path=audit_path,
+        )
+
+    assert AC.load_state(state_path) == before
+    assert not Path(audit_path).exists()
+
+
+@pytest.mark.parametrize(
+    "owner_ack_phrase",
+    [
+        "",
+        "ODBLOKOWUJE AUTO-CANARY 2026-07-29.",
+        "ODBLOKOWUJE AUTO-CANARY 2026-07-28",
+    ],
+)
+def test_latch_clear_refuses_invalid_owner_ack_phrase_without_writes(
+    tmp_path,
+    owner_ack_phrase,
+):
+    """RED J1: brak, literówka i stara data nie mogą zdjąć latcha ani pisać audytu."""
+    state_path = str(tmp_path / "card-state.json")
+    audit_path = str(tmp_path / "audit.jsonl")
+    before = _state(
+        auto_off_latch=True,
+        auto_off_reason="runner_outcome_unknown",
+        auto_off_ts=NOW.isoformat(),
+    )
+    AC.save_state(state_path, before)
+
+    with pytest.raises(ValueError, match="owner ACK phrase"):
+        AC.clear_latch(
+            state_path,
+            reason="owner ACK po reconcile 5b i verify-execution",
+            operator="operator-test",
+            owner_ack_phrase=owner_ack_phrase,
             now=NOW,
             audit_path=audit_path,
         )
@@ -1040,6 +1079,7 @@ def test_latch_clear_on_clean_state_changes_only_latch_and_is_audited(tmp_path):
         state_path,
         reason="owner ACK po reconcile 5b i verify-execution",
         operator="operator-test",
+        owner_ack_phrase=OWNER_ACK_PHRASE,
         now=NOW,
         audit_path=audit_path,
     )
@@ -1051,6 +1091,7 @@ def test_latch_clear_on_clean_state_changes_only_latch_and_is_audited(tmp_path):
     assert row["kind"] == "authority_latch_cleared"
     assert row["reason"] == "owner ACK po reconcile 5b i verify-execution"
     assert row["operator"] == "operator-test"
+    assert row["owner_ack_phrase"] == OWNER_ACK_PHRASE
 
 
 def test_new_latch_sends_one_unthrottled_alert(tmp_path, monkeypatch):
@@ -1435,6 +1476,7 @@ def test_h3_missing_signed_state_is_latched_not_a_fresh_budget(
             paths["authority_state_path"],
             reason="mutation probe",
             operator="test",
+            owner_ack_phrase=OWNER_ACK_PHRASE,
             now=NOW,
             audit_path=paths["authority_audit_path"],
         )
@@ -1570,6 +1612,47 @@ def test_h5_hot_flip_off_between_recheck_and_final_gate_stops_execution(
     )
     assert mutated["executed"] is True
     assert len(mutated_calls) == 1
+
+
+def test_j2_heartbeat_aging_during_solve_stops_final_execution(
+    tmp_path,
+    monkeypatch,
+):
+    """RED/mutation J2: finalny gate musi ponowić heartbeat po fresh solve."""
+    paths = _executor_paths(tmp_path)
+    body = json.loads(Path(paths["authority_card_path"]).read_text(encoding="utf-8"))
+    AC.initialize_state(paths["authority_state_path"], AC.card_sha256(body), NOW)
+    _grant_owner_auth(monkeypatch, Path(paths["authority_audit_path"]))
+    monkeypatch.setattr(C, "ENABLE_AUTO_ASSIGN", True)
+    clock = iter([NOW, NOW + timedelta(seconds=61)])
+    monkeypatch.setattr(E, "_fresh_execution_now", lambda: next(clock))
+    solve_calls = []
+
+    def solve_while_heartbeat_ages(_oid, _payload, now=None):
+        solve_calls.append(now)
+        return _commit_snapshot()
+
+    paths["commit_recheck_provider"] = solve_while_heartbeat_ages
+    calls = []
+    out = E.maybe_execute(
+        _record(),
+        SimpleNamespace(would_auto_assign=True),
+        {"status_id": 2},
+        now=NOW,
+        assign_runner=lambda *args: (
+            calls.append(args)
+            or (True, "ASSIGN_OK: fixture [verify_ok_kid=101]")
+        ),
+        notifier=lambda _text: None,
+        **paths,
+    )
+
+    assert solve_calls == [NOW]
+    assert out["blocked"] == "monitor_heartbeat_stale"
+    assert calls == []
+    state = AC.load_state(paths["authority_state_path"])
+    assert state["auto_off_latch"] is True
+    assert state["auto_off_reason"] == "monitor_heartbeat_stale"
 
 
 def test_h5_source_read_bypasses_active_flag_snapshot(tmp_path, monkeypatch):

@@ -42,10 +42,18 @@ def _parser() -> argparse.ArgumentParser:
     )
     clear = sub.add_parser(
         "latch-clear",
-        help="za ACK ownera zdejmij wyłącznie latch, zachowując budżet",
+        help="za proceduralny ACK ownera zdejmij wyłącznie latch, zachowując budżet",
     )
     clear.add_argument("--reason", required=True)
     clear.add_argument("--operator", required=True)
+    clear.add_argument(
+        "--owner-ack-phrase",
+        required=True,
+        help=(
+            'dokładnie "ODBLOKOWUJE AUTO-CANARY [YYYY-MM-DD]" '
+            "z dzisiejszą datą UTC"
+        ),
+    )
     execution = sub.add_parser(
         "verify-execution",
         help="zapisz ręczne potwierdzenie wykonania wskazanego oid",
@@ -97,6 +105,7 @@ def main(argv=None) -> int:
                 args.state,
                 reason=args.reason,
                 operator=args.operator,
+                owner_ack_phrase=args.owner_ack_phrase,
                 now=datetime.now(timezone.utc),
                 audit_path=args.audit,
             )
@@ -111,6 +120,7 @@ def main(argv=None) -> int:
             "class_id": AC.CLASS_ID,
             "cleared": True,
             "executed_total": state["executed_total"],
+            "owner_ack_phrase": args.owner_ack_phrase,
             "pending_verification": state["pending_verification"],
         }, ensure_ascii=False, sort_keys=True))
         return 0

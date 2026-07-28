@@ -718,18 +718,31 @@ def clear_latch(
     operator: str = "",
     now: Optional[datetime] = None,
     *,
+    owner_ack_phrase: str = "",
     audit_path: str = AUDIT_PATH,
 ) -> Dict[str, Any]:
-    """Za ACK ownera zdejmuje wyłącznie boolean latch; budżet zostaje nietknięty.
+    """Proceduralnie zdejmuje wyłącznie boolean latch; budżet zostaje nietknięty.
 
     Audyt zapisujemy przed stanem. Crash pomiędzy plikami może więc zostawić
     nadmiarowy wiersz audytu, ale nigdy cicho zdjęty latch — kierunek fail-safe.
+    CLI ufa operatorowi: ACK nie jest tu kryptograficznie weryfikowany. Dowodem
+    proceduralnym jest dokładna dzienna fraza w wierszu audytu oraz receipt toru
+    operatorskiego; kryptograficzna niepodrabialność leży poza granicą 2D karty.
     """
-    reason = _audit_value(reason, "reason")
-    operator = _audit_value(operator, "operator")
     now = now or datetime.now(timezone.utc)
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)
+    now = now.astimezone(timezone.utc)
+    expected_ack_phrase = (
+        f"ODBLOKOWUJE AUTO-CANARY {now.date().isoformat()}"
+    )
+    if owner_ack_phrase != expected_ack_phrase:
+        raise ValueError(
+            "owner ACK phrase mismatch: wymagane dokładnie "
+            f"{expected_ack_phrase!r}"
+        )
+    reason = _audit_value(reason, "reason")
+    operator = _audit_value(operator, "operator")
     with state_lock(state_path):
         state = _load_state_unlocked(state_path)
         if state.get("synthetic") is True:
@@ -753,11 +766,12 @@ def clear_latch(
                 "latch-clear za ACK ownera"
             )
         _append_audit_row(audit_path, {
-            "ts": now.astimezone(timezone.utc).isoformat(),
+            "ts": now.isoformat(),
             "kind": "authority_latch_cleared",
             "class_id": CLASS_ID,
             "operator": operator,
             "reason": reason,
+            "owner_ack_phrase": owner_ack_phrase,
             "previous_auto_off_reason": state.get("auto_off_reason"),
             "previous_auto_off_ts": state.get("auto_off_ts"),
         })

@@ -951,8 +951,9 @@ def maybe_execute(
                             "blocked": "owner_auth_missing",
                             "reason": _auth_reason,
                         }
-                    # H5/G1: OSTATNI gate po fresh solve czyta źródło flags.json
-                    # poza FlagSnapshot. Między nim a rezerwacją nie ma pracy.
+                    # J2/H5/G1: OSTATNI gate po fresh solve czyta źródło
+                    # flags.json poza FlagSnapshot, kartę i heartbeat. Między
+                    # finalnym heartbeat a rezerwacją nie ma innej pracy.
                     fresh_flag_on, fresh_flag_fp = _fresh_execution_flags()
                     if not fresh_flag_on:
                         log.info(
@@ -979,6 +980,20 @@ def maybe_execute(
                         return {
                             "blocked": f"authority_card_{_card_reason}",
                             "reason": _card_reason,
+                        }
+                    heartbeat_ok, heartbeat_reason = AAM.heartbeat_fresh(
+                        monitor_heartbeat_path, execution_now
+                    )
+                    if not heartbeat_ok:
+                        _latch_authority_auto_off(
+                            authority_state_path,
+                            heartbeat_reason,
+                            execution_now,
+                            notifier,
+                        )
+                        return {
+                            "blocked": heartbeat_reason,
+                            "reason": heartbeat_reason,
                         }
                     try:
                         reserved_state = AC.reserve_execution(

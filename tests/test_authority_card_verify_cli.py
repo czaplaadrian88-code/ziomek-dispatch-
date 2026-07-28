@@ -4,11 +4,20 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 
+import pytest
+
 from dispatch_v2 import authority_card as AC
 from dispatch_v2.tools import authority_card_verify as CLI
 
 
 NOW = datetime(2026, 7, 29, 10, 0, tzinfo=timezone.utc)
+OWNER_ACK_PHRASE = "ODBLOKOWUJE AUTO-CANARY 2026-07-29"
+
+
+class _FixedDatetime(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return NOW if tz is not None else NOW.replace(tzinfo=None)
 
 
 def _read_rows(path):
@@ -18,7 +27,11 @@ def _read_rows(path):
     ]
 
 
-def test_cli_latch_clear_refuses_budget_with_pending_verification(tmp_path, capsys):
+def test_cli_latch_clear_refuses_budget_with_pending_verification(
+    tmp_path,
+    capsys,
+    monkeypatch,
+):
     state_path = tmp_path / "state.json"
     audit_path = tmp_path / "audit.jsonl"
     before = {
@@ -32,6 +45,7 @@ def test_cli_latch_clear_refuses_budget_with_pending_verification(tmp_path, caps
         "auto_off_ts": NOW.isoformat(),
     }
     AC.save_state(str(state_path), before)
+    monkeypatch.setattr(CLI, "datetime", _FixedDatetime)
 
     rc = CLI.main([
         "--state", str(state_path),
@@ -39,6 +53,7 @@ def test_cli_latch_clear_refuses_budget_with_pending_verification(tmp_path, caps
         "latch-clear",
         "--reason", "owner ACK po reconcile 5b",
         "--operator", "operator-test",
+        "--owner-ack-phrase", OWNER_ACK_PHRASE,
     ])
 
     assert rc == 1
@@ -49,7 +64,81 @@ def test_cli_latch_clear_refuses_budget_with_pending_verification(tmp_path, caps
     assert "verify-execution" in response["reason"]
 
 
-def test_cli_latch_clear_accepts_clean_reconciled_state(tmp_path, capsys):
+def test_cli_latch_clear_requires_owner_ack_phrase_without_writes(
+    tmp_path,
+    monkeypatch,
+):
+    """RED J1: brak wymaganego parametru CLI kończy się przed writerem."""
+    state_path = tmp_path / "state.json"
+    audit_path = tmp_path / "audit.jsonl"
+    before = {
+        **AC.empty_state(),
+        "auto_off_latch": True,
+        "auto_off_reason": "runner_outcome_unknown",
+        "auto_off_ts": NOW.isoformat(),
+    }
+    AC.save_state(str(state_path), before)
+    monkeypatch.setattr(CLI, "datetime", _FixedDatetime)
+
+    with pytest.raises(SystemExit):
+        CLI.main([
+            "--state", str(state_path),
+            "--audit", str(audit_path),
+            "latch-clear",
+            "--reason", "owner ACK po verify-execution",
+            "--operator", "operator-test",
+        ])
+
+    assert AC.load_state(str(state_path)) == before
+    assert not audit_path.exists()
+
+
+@pytest.mark.parametrize(
+    "owner_ack_phrase",
+    [
+        "ODBLOKOWUJE AUTO-CANARY 2026-07-29.",
+        "ODBLOKOWUJE AUTO-CANARY 2026-07-28",
+    ],
+)
+def test_cli_latch_clear_refuses_wrong_or_stale_owner_ack_phrase_without_writes(
+    tmp_path,
+    capsys,
+    monkeypatch,
+    owner_ack_phrase,
+):
+    state_path = tmp_path / "state.json"
+    audit_path = tmp_path / "audit.jsonl"
+    before = {
+        **AC.empty_state(),
+        "auto_off_latch": True,
+        "auto_off_reason": "runner_outcome_unknown",
+        "auto_off_ts": NOW.isoformat(),
+    }
+    AC.save_state(str(state_path), before)
+    monkeypatch.setattr(CLI, "datetime", _FixedDatetime)
+
+    rc = CLI.main([
+        "--state", str(state_path),
+        "--audit", str(audit_path),
+        "latch-clear",
+        "--reason", "owner ACK po verify-execution",
+        "--operator", "operator-test",
+        "--owner-ack-phrase", owner_ack_phrase,
+    ])
+
+    assert rc == 1
+    assert AC.load_state(str(state_path)) == before
+    assert not audit_path.exists()
+    response = json.loads(capsys.readouterr().out)
+    assert response["cleared"] is False
+    assert "owner ACK phrase mismatch" in response["reason"]
+
+
+def test_cli_latch_clear_accepts_clean_reconciled_state(
+    tmp_path,
+    capsys,
+    monkeypatch,
+):
     state_path = tmp_path / "state.json"
     audit_path = tmp_path / "audit.jsonl"
     before = {
@@ -61,6 +150,7 @@ def test_cli_latch_clear_accepts_clean_reconciled_state(tmp_path, capsys):
         "auto_off_ts": NOW.isoformat(),
     }
     AC.save_state(str(state_path), before)
+    monkeypatch.setattr(CLI, "datetime", _FixedDatetime)
 
     rc = CLI.main([
         "--state", str(state_path),
@@ -68,6 +158,7 @@ def test_cli_latch_clear_accepts_clean_reconciled_state(tmp_path, capsys):
         "latch-clear",
         "--reason", "owner ACK po verify-execution",
         "--operator", "operator-test",
+        "--owner-ack-phrase", OWNER_ACK_PHRASE,
     ])
 
     assert rc == 0
@@ -75,19 +166,25 @@ def test_cli_latch_clear_accepts_clean_reconciled_state(tmp_path, capsys):
         **before,
         "auto_off_latch": False,
     }
-    assert _read_rows(audit_path)[0]["kind"] == "authority_latch_cleared"
-    assert json.loads(capsys.readouterr().out)["cleared"] is True
+    row = _read_rows(audit_path)[0]
+    assert row["kind"] == "authority_latch_cleared"
+    assert row["owner_ack_phrase"] == OWNER_ACK_PHRASE
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["cleared"] is True
+    assert receipt["owner_ack_phrase"] == OWNER_ACK_PHRASE
 
 
 def test_cli_latch_clear_refuses_corrupt_synthetic_state_without_writes(
     tmp_path,
     capsys,
+    monkeypatch,
 ):
     """G3: CLI nie może zamienić syntetycznego latcha w pusty stan."""
     state_path = tmp_path / "state.json"
     audit_path = tmp_path / "audit.jsonl"
     corrupt_bytes = b"{broken"
     state_path.write_bytes(corrupt_bytes)
+    monkeypatch.setattr(CLI, "datetime", _FixedDatetime)
 
     rc = CLI.main([
         "--state", str(state_path),
@@ -95,6 +192,7 @@ def test_cli_latch_clear_refuses_corrupt_synthetic_state_without_writes(
         "latch-clear",
         "--reason", "owner ACK bez reconcile",
         "--operator", "operator-test",
+        "--owner-ack-phrase", OWNER_ACK_PHRASE,
     ])
 
     assert rc == 1

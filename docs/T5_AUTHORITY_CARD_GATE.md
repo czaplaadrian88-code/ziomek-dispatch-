@@ -9,9 +9,9 @@
 3. karta T5: latch → podpis audytowy → ważność → fingerprint → scope → limity;
 4. istniejąca quality gate i bezpieczniki wykonania.
 
-Po fresh solve executor pobiera drugi, nowy zegar i na nim ponawia owner-auth
-oraz cały gate karty, bezpośrednio przed trwałą rezerwacją. Rezerwacja powstaje
-pod lockami przed subprocess-em:
+Po fresh solve executor pobiera drugi, nowy zegar i na nim ponawia owner-auth,
+źródłową flagę, cały gate karty oraz świeżość i jawny werdykt `OK` heartbeat,
+bezpośrednio przed trwałą rezerwacją. Rezerwacja powstaje pod lockami przed subprocess-em:
 idempotencja oid, budżet, `in_flight` i `pending_verification` są fsyncowane.
 Odwołanie/wygaśnięcie karty albo latch w oknie TOCTOU wygrywa, a crash po skutku
 w panelu nie otwiera replayowi drugiego wykonania.
@@ -83,10 +83,11 @@ end-to-end.
 
 Po wejściu pod lock stanu karty i lifecycle executor pobiera świeży zegar dla
 heartbeat i 15-sekundowej świeżości proposal. Po fresh solve pobiera go ponownie:
-ta druga próbka zasila finalny TTL autoryzacji ownera, okno ważności karty i
-rezerwację. Ostatni gate czyta też `ENABLE_AUTO_ASSIGN` i fingerprint bezpośrednio
-ze źródłowego `flags.json`, z pominięciem cache i per-tick `FlagSnapshot`; OFF albo
-błąd odczytu odmawia przed rezerwacją.
+ta druga próbka zasila finalny TTL autoryzacji ownera, okno ważności karty,
+ponowną kontrolę świeżości i `checks.verdict=="OK"` heartbeat oraz rezerwację.
+Ostatni gate czyta też `ENABLE_AUTO_ASSIGN` i fingerprint bezpośrednio ze
+źródłowego `flags.json`, z pominięciem cache i per-tick `FlagSnapshot`; OFF, błąd
+odczytu albo heartbeat, który zestarzał się podczas solve, odmawia przed rezerwacją.
 
 ## Fail-closed matrix
 
@@ -213,11 +214,22 @@ Komenda usuwa tylko ten oid z `pending_verification`, zeruje `in_flight`
 wyłącznie gdy wskazuje ten sam oid i dopisuje
 `kind=authority_execution_verified`. Nie wykonuje przypisania ani reconcile.
 
-Zdjęcie latcha jest dozwolone **TYLKO po reconcile 5b i jawnym ACK ownera**:
+### Granica 2D — proceduralny ACK dla `latch-clear`
+
+Zdjęcie latcha jest dozwolone **TYLKO po reconcile 5b i jawnym ACK ownera**.
+CLI ufa operatorowi: ACK jest proceduralny, a dowód stanowią wiersz audytu
+`authority_latch_cleared` z dokładną frazą i datą oraz receipt toru
+operatorskiego. Kryptograficzna niepodrabialność tego ACK pozostaje poza
+zakresem 2D karty.
+
+Operator musi wpisać dokładnie `ODBLOKOWUJE AUTO-CANARY YYYY-MM-DD`, gdzie data
+jest dzisiejszą datą UTC. Brak parametru, literówka, dodatkowy znak albo stara
+data kończą się odmową przed zapisem audytu i stanu:
 
 ```bash
 python3 tools/authority_card_verify.py \
-  latch-clear --reason "OWNER_ACK: po reconcile 5b" --operator OPERATOR
+  latch-clear --reason "OWNER_ACK: po reconcile 5b" --operator OPERATOR \
+  --owner-ack-phrase "ODBLOKOWUJE AUTO-CANARY YYYY-MM-DD"
 ```
 
 Jeżeli latch powstał przez `runner_outcome_unknown`, reconcile obejmuje najpierw
@@ -225,8 +237,9 @@ Jeżeli latch powstał przez `runner_outcome_unknown`, reconcile obejmuje najpie
 Komenda odmawia, dopóki `in_flight` nie jest `null` i
 `pending_verification` nie jest puste. Po czystym reconcile zmienia wyłącznie
 `auto_off_latch` na false; liczniki, timestampy oraz pierwotny reason/ts zostają
-zachowane, a audyt dostaje `kind=authority_latch_cleared`. Nigdy nie usuwaj pliku
-stanu, bo resetuje budżet i niszczy ślad.
+zachowane, a audyt dostaje `kind=authority_latch_cleared` wraz z polem
+`owner_ack_phrase`. Nigdy nie usuwaj pliku stanu, bo resetuje budżet i niszczy
+ślad.
 
 ## Rollback
 
