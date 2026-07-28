@@ -135,7 +135,8 @@ class _MockResp:
         return self._b
 
 
-def _mock_open_ok(req, timeout=10):
+def _mock_open_ok(request_builder, csrf, timeout=10):
+    assert request_builder(csrf).data
     return _MockResp(_mock_response)
 
 
@@ -152,7 +153,8 @@ _mock_response_no = json.dumps({
 }).encode()
 
 
-def _mock_open_no_ck(req, timeout=10):
+def _mock_open_no_ck(request_builder, csrf, timeout=10):
+    assert request_builder(csrf).data
     return _MockResp(_mock_response_no)
 
 
@@ -170,7 +172,8 @@ _mock_response_extra = json.dumps({
 }).encode()
 
 
-def _mock_open_extra(req, timeout=10):
+def _mock_open_extra(request_builder, csrf, timeout=10):
+    assert request_builder(csrf).data
     return _MockResp(_mock_response_extra)
 
 
