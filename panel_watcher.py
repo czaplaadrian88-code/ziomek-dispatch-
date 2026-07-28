@@ -360,6 +360,39 @@ _PANEL_LEARNING_SOURCES = frozenset({
 })
 
 
+def _remove_pending_on_assign(
+    order_id: str,
+    *,
+    _raise_on_error: bool = False,
+) -> None:
+    """Usuń proposal po kanonicznym COURIER_ASSIGNED.
+
+    Wywołuje to retryowalny lifecycle downstream dopiero PO konsumentach
+    proposal (learning + zapis planu). Delta ``locked_pop`` jest idempotentna
+    i nie nadpisuje wpisów innych zleceń/writerów.
+    """
+    try:
+        # Brak store oznacza brak proposal do sprzątnięcia. Nie twórz pustego
+        # pending_proposals ani lockfile przy zwykłym manualnym assignment.
+        if not os.path.exists(_PENDING_PROPOSALS_PATH):
+            return
+        from dispatch_v2 import pending_proposals_store as _pps
+
+        _pps.locked_pop(
+            str(order_id),
+            path=_PENDING_PROPOSALS_PATH,
+        )
+    except Exception as exc:
+        _log.warning(
+            "PENDING_PROPOSALS_ASSIGN_CLEANUP fail oid=%s: %s: %s",
+            order_id,
+            type(exc).__name__,
+            exc,
+        )
+        if _raise_on_error:
+            raise
+
+
 def _durable_downstream_attempt(
     lifecycle_event_id: Optional[str],
     *,
