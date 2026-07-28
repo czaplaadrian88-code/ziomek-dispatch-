@@ -69,7 +69,7 @@ PANEL_TO_SCHEDULE = {
     'Michał Rom':    'Michał Romańczuk',
     'Grzegorz':      'Grzegorz Rogowski',  # V3.25: cid=500 (Adrian Q1)
     'Grzegorz R':    'Grzegorz Rogowski',  # V3.25 alias
-    'Jakub OL':      'Kuba Olchowik',      # V3.25: cid=370 (Adrian Q2 minimum invasive)
+    'Jakub OL':      'Jakub Olchowik',     # V3.25: cid=370 (Adrian Q2); 2026-07-28: grafik przemianowany Kuba→Jakub 17.07
     'Szymon Sa':     'Szymon Sadowski',    # V3.25: cid=522 (Adrian Q3 alias-pair)
     'Mykyta K':      None,                  # V3.25: ex-kurier (Adrian 23.04)
     'Krystian':      None,                  # V3.25: ex-kurier (Adrian 23.04)
