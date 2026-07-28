@@ -73,6 +73,7 @@ _STATE_KEYS = frozenset({
     "auto_off_reason",
     "auto_off_ts",
 })
+_SYNTHETIC_STATE_KEYS = _STATE_KEYS | {"synthetic"}
 _STATE_THREAD_LOCK = threading.RLock()
 _STATE_LOCAL = threading.local()
 
@@ -404,12 +405,22 @@ def _latched_state(reason: str) -> Dict[str, Any]:
         "auto_off_latch": True,
         "auto_off_reason": reason,
         "auto_off_ts": datetime.now(timezone.utc).isoformat(),
+        "synthetic": True,
     })
     return state
 
 
 def _state_valid(state: Any) -> bool:
-    if not isinstance(state, dict) or frozenset(state) != _STATE_KEYS:
+    if not isinstance(state, dict):
+        return False
+    keys = frozenset(state)
+    if keys == _SYNTHETIC_STATE_KEYS:
+        if (
+            state.get("synthetic") is not True
+            or state.get("auto_off_latch") is not True
+        ):
+            return False
+    elif keys != _STATE_KEYS:
         return False
     total = state.get("executed_total")
     timestamps = state.get("executed_ts")
@@ -478,7 +489,7 @@ def load_state(path: str = STATE_PATH) -> Dict[str, Any]:
 
 def _save_state_unlocked(path: str, state: Dict[str, Any]) -> None:
     """Zapis temp → fsync → rename → fsync katalogu."""
-    if not _state_valid(state):
+    if not _state_valid(state) or state.get("synthetic") is True:
         raise ValueError("invalid authority card state")
     if (
         _pytest_active()
@@ -585,7 +596,7 @@ def check_limits(
     limits: Dict[str, Any],
 ) -> Tuple[bool, str]:
     """Limity pochodzą wyłącznie z podpisanej karty, nigdy z ``flags.json``."""
-    if not _state_valid(state):
+    if not _state_valid(state) or state.get("synthetic") is True:
         return False, "state_corrupt"
     if state.get("auto_off_latch") is True:
         return False, "latch_on"
@@ -659,6 +670,10 @@ def clear_latch(
         now = now.replace(tzinfo=timezone.utc)
     with state_lock(state_path):
         state = _load_state_unlocked(state_path)
+        if state.get("synthetic") is True:
+            raise ValueError(
+                "stan uszkodzony — wymagany ręczny reconcile, nie clear"
+            )
         if state.get("auto_off_latch") is not True:
             raise ValueError("authority latch is not set")
         _append_audit_row(audit_path, {
@@ -750,6 +765,7 @@ def check_scope(
     if (
         p2.get("bag_size") != 0
         or p2.get("active_order_ids") != []
+        or p2.get("soon_free_applied") is not False
         or isinstance(generation, bool)
         or not isinstance(generation, int)
         or generation < 0
@@ -831,20 +847,24 @@ def check_scope(
     return True, "ok"
 
 
-def record_success(
+def reserve_execution(
     state_path: str,
     state: Dict[str, Any],
     oid: str,
     now: datetime,
 ) -> Dict[str, Any]:
-    """Zużywa budżet wykonania, mergując bieżący stan pod tym samym lockiem.
+    """Trwale rezerwuje intencję wykonania PRZED zewnętrznym runnerem.
 
     ``state`` pozostaje w sygnaturze dla kompatybilności callerów, ale celowo nie
-    jest źródłem zapisu: może być snapshotem sprzed runnera.
+    jest źródłem zapisu: może być snapshotem sprzed fresh solve. Rezerwacja
+    zużywa budżet, ustawia ``in_flight`` i ``pending_verification`` w jednym
+    fsyncowanym zapisie. Replay widzi ją nawet po śmierci executora.
     """
     with state_lock(state_path):
         del state
         updated = _load_state_unlocked(state_path)
+        if updated.get("synthetic") is True:
+            raise ValueError("cannot reserve against synthetic authority state")
         updated["executed_total"] = int(updated.get("executed_total", 0)) + 1
         timestamps = list(updated.get("executed_ts") or [])
         timestamps.append(now.timestamp())
@@ -854,6 +874,74 @@ def record_success(
         if str(oid) not in pending:
             pending.append(str(oid))
         updated["pending_verification"] = pending
+        _save_state_unlocked(state_path, updated)
+        return updated
+
+
+def record_success(
+    state_path: str,
+    state: Dict[str, Any],
+    oid: str,
+    now: datetime,
+) -> Dict[str, Any]:
+    """Kompatybilny alias: historyczna funkcja jest dziś rezerwacją pre-runner."""
+    return reserve_execution(state_path, state, oid, now)
+
+
+def rollback_execution_reservation(
+    state_path: str,
+    oid: str,
+    reserved_at: datetime,
+    reason: str,
+    *,
+    audit_path: str = AUDIT_PATH,
+) -> Dict[str, Any]:
+    """Wycofaj wyłącznie własną rezerwację po udowodnionej odmowie pre-send.
+
+    Audyt jest fsyncowany przed zmianą stanu. Crash pomiędzy zapisami pozostawia
+    bezpieczniejszą rezerwację (replay nadal zablokowany), nigdy cichy zwrot
+    budżetu bez śladu.
+    """
+    oid = _audit_value(oid, "oid")
+    reason = _audit_value(reason, "reason")
+    if reserved_at.tzinfo is None:
+        reserved_at = reserved_at.replace(tzinfo=timezone.utc)
+    reserved_ts = reserved_at.timestamp()
+    with state_lock(state_path):
+        state = _load_state_unlocked(state_path)
+        if state.get("synthetic") is True:
+            raise ValueError("cannot rollback synthetic authority state")
+        pending = list(state.get("pending_verification") or [])
+        if state.get("in_flight") != oid or oid not in pending:
+            raise ValueError(f"execution reservation {oid} is not active")
+        timestamps = list(state.get("executed_ts") or [])
+        try:
+            timestamp_index = len(timestamps) - 1 - timestamps[::-1].index(
+                reserved_ts
+            )
+        except ValueError as exc:
+            raise ValueError(
+                f"execution reservation {oid} timestamp is missing"
+            ) from exc
+        if int(state.get("executed_total", 0)) <= 0:
+            raise ValueError(f"execution reservation {oid} budget is missing")
+
+        _append_audit_row(audit_path, {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "kind": "reservation_rolled_back",
+            "class_id": CLASS_ID,
+            "oid": oid,
+            "reason": reason,
+            "reserved_at": reserved_at.astimezone(timezone.utc).isoformat(),
+        })
+        updated = dict(state)
+        updated["executed_total"] = int(state["executed_total"]) - 1
+        timestamps.pop(timestamp_index)
+        updated["executed_ts"] = timestamps
+        updated["pending_verification"] = [
+            pending_oid for pending_oid in pending if pending_oid != oid
+        ]
+        updated["in_flight"] = None
         _save_state_unlocked(state_path, updated)
         return updated
 

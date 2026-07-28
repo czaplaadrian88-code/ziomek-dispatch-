@@ -9,8 +9,11 @@
 3. karta T5: latch → podpis audytowy → ważność → fingerprint → scope → limity;
 4. istniejąca quality gate i bezpieczniki wykonania.
 
-Ten sam gate jest ponawiany bezpośrednio przed subprocess-em przypisującym, aby
-odwołanie karty, nowy latch albo zmiana liczników w oknie TOCTOU wygrały.
+Po fresh solve ten sam gate jest ponawiany ze świeżym `now`, bezpośrednio przed
+trwałą rezerwacją. Rezerwacja powstaje pod lockami przed subprocess-em:
+idempotencja oid, budżet, `in_flight` i `pending_verification` są fsyncowane.
+Odwołanie/wygaśnięcie karty albo latch w oknie TOCTOU wygrywa, a crash po skutku
+w panelu nie otwiera replayowi drugiego wykonania.
 
 Body karty jest hashowane jako JSON UTF-8 z `sort_keys=True` i
 `separators=(",", ":")`. Liczy się ostatni wiersz
@@ -33,19 +36,21 @@ próba użycia ścieżek produkcyjnych pod pytest jest blokowana.
 Stan karty ma jednego właściciela serializacji w `authority_card.py` i jest zapisywany
 `temp → fsync → rename → fsync katalogu`. Uszkodzony JSON albo osierocony plik
 temp jest traktowany jak latch ON. Po sukcesie jednym zapisem aktualizowane są:
-`executed_total`, `executed_ts`, `in_flight` i `pending_verification`.
-Writery sukcesu, stanu nieznanego, weryfikacji koordynatora i latcha zawsze
+`receipt` i learning-log; natomiast `executed_total`, `executed_ts`,
+`in_flight` i `pending_verification` są rezerwowane jeszcze przed runnerem.
+Writery rezerwacji, rollbacku pre-send, stanu nieznanego, weryfikacji
+koordynatora i latcha zawsze
 re-czytają stan pod tym samym `state_lock` i mergują wyłącznie własne pola.
 
 `ok=false` po uruchomieniu runnera nie oznacza automatycznie porażki. Timeout,
 exit bez sentinela, wyjątek runnera i każdy nierozpoznany wynik mogły nastąpić
-po commicie w panelu, więc są stanem **NIEZNANYM**: zapisują idempotencję oid,
-zużywają oba skorelowane liczniki wykonania, ustawiają `in_flight` i
-`pending_verification`, zatrzaskują `runner_outcome_unknown` oraz każą wykonać
-reconcile 5b karty. Wyłącznie dowód, że proces nie został utworzony
+po commicie w panelu, więc są stanem **NIEZNANYM**: pozostawiają wcześniejszą
+rezerwację, zatrzaskują `runner_outcome_unknown` oraz każą wykonać reconcile 5b
+karty. Wyłącznie dowód, że proces nie został utworzony
 (`blocked_pytest_context`, błąd launch `FileNotFoundError`/`PermissionError`/
 `OSError` albo jawny kontrakt `pre_send_refusal:`), jest twardą odmową przed
-wysłaniem: zapisuje idempotencję, ale nie konsumuje budżetu i nie latchuje.
+wysłaniem: wycofuje oba skorelowane liczniki i idempotencję pod lockami, dopisuje
+fsyncowany audyt `reservation_rolled_back` i nie latchuje.
 Sam `exit != 0` nigdy nie jest takim dowodem, bo child mógł wcześniej wykonać
 side-effect.
 
@@ -64,7 +69,7 @@ side-effect.
 | brak albo negatywny dowód predykatu 1–7 | `scope_*` | nie; order jest `recommend-only` |
 | limit 1/h, 1 in-flight, 3 total lub pending verification | `max_per_hour`, `in_flight`, `max_total`, `pending_verification` | nie |
 | runner nie potwierdził wyniku po możliwym wysłaniu | `runner_outcome_unknown` | tak + budżet jak wykonanie |
-| jawny brak startu procesu | `definitive_pre_send_refusal` | nie; tylko idempotencja oid |
+| jawny brak startu procesu | `definitive_pre_send_refusal` | rezerwacja wycofana w obu stanach; audyt `reservation_rolled_back` |
 
 ## Uczciwa granica danych scope
 
@@ -94,6 +99,15 @@ dzisiejszym rekordzie pierwszą odmową w kolejności gate'u jest dokładnie
 `scope_4_absent`.
 
 Kod nie uruchamia `git` w hot-path. Odczytuje SHA wyłącznie z `BUILD_SHA`.
+
+## Ograniczenia poświadczenia buildu
+
+`tools/write_build_sha.py` przy zapisie i `--verify` odmawia, jeżeli
+`git status --porcelain --untracked-files=no` pokazuje zmianę śledzonego pliku.
+Untracked (w tym robocze `eod_drafts`) są świadomie poza tym checkiem. BUILD_SHA
+poświadcza czysty commit HEAD; pełna atestacja wszystkich bajtów procesu,
+interpretera, zależności, generowanych artefaktów i hosta pozostaje poza zakresem
+T5.
 
 ## Rytuał uruchomienia klasy — kolejność twarda
 

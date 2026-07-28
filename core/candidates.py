@@ -224,6 +224,15 @@ def eval_courier_inner(ctx: EvalContext, cid, cs):
     if courier_pos is None and origin_travel is None:
         return None
     bag_raw = getattr(cs, "bag", []) or []
+    # T5/G4: execution authority pyta o worek TERAZ, nie o syntetyczny worek
+    # przyszły po soon-free. Snapshot powstaje przed jakąkolwiek substytucją.
+    authority_bag_oids_now = [
+        str(item.get("order_id") or item.get("zid"))
+        for item in bag_raw
+        if isinstance(item, dict)
+        and (item.get("order_id") or item.get("zid")) not in (None, "")
+    ]
+    authority_bag_size_now = len(bag_raw)
     bag_sim = [_bag_dict_to_ordersim(b) for b in bag_raw]
 
     # === SP-B2-ZARAZWOLNY (2026-06-11): kurier "zaraz-wolny" ===
@@ -1958,6 +1967,9 @@ def eval_courier_inner(ctx: EvalContext, cid, cs):
         # Z-P0-04: optimistic-CAS token dla event-time save w panel_watcher.
         # Powstal PRZED pula kandydatow, nie tuz przed pozniejszym zapisem.
         "plan_expected_version": _plan_expected_version,
+        # T5/G4: surowy cs.bag z chwili pętli kandydatów, przed soon-free.
+        "authority_bag_size_now": authority_bag_size_now,
+        "authority_bag_oids_now": authority_bag_oids_now,
         "score": score_result,
         "km_to_pickup": (None if explicit_unknown else round(km_to_pickup_haversine, 2)),
         # NOGPS-NEUTRAL-SCORE (2026-07-19): road_km z pozycji-fikcji (centrum)?

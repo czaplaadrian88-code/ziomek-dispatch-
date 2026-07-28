@@ -50,6 +50,33 @@ def test_cli_latch_clear_preserves_budget_and_pending(tmp_path, capsys):
     assert json.loads(capsys.readouterr().out)["cleared"] is True
 
 
+def test_cli_latch_clear_refuses_corrupt_synthetic_state_without_writes(
+    tmp_path,
+    capsys,
+):
+    """G3: CLI nie może zamienić syntetycznego latcha w pusty stan."""
+    state_path = tmp_path / "state.json"
+    audit_path = tmp_path / "audit.jsonl"
+    corrupt_bytes = b"{broken"
+    state_path.write_bytes(corrupt_bytes)
+
+    rc = CLI.main([
+        "--state", str(state_path),
+        "--audit", str(audit_path),
+        "latch-clear",
+        "--reason", "owner ACK bez reconcile",
+        "--operator", "operator-test",
+    ])
+
+    assert rc == 1
+    assert state_path.read_bytes() == corrupt_bytes
+    assert not audit_path.exists()
+    response = json.loads(capsys.readouterr().out)
+    assert response["cleared"] is False
+    assert "stan uszkodzony" in response["reason"]
+    assert "reconcile" in response["reason"]
+
+
 def test_cli_verify_execution_only_releases_requested_oid(tmp_path, capsys):
     state_path = tmp_path / "state.json"
     audit_path = tmp_path / "audit.jsonl"

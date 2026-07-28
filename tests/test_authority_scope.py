@@ -16,6 +16,7 @@ from dispatch_v2 import authority_card
 from dispatch_v2 import authority_scope
 from dispatch_v2 import shadow_dispatcher
 from dispatch_v2 import state_machine
+from dispatch_v2.core import candidates
 from dispatch_v2.tools import write_build_sha
 
 
@@ -38,6 +39,9 @@ def _result(*, metrics=None, best_effort=False):
     default_metrics = {
         "bag_size_before": 0,
         "bag_context": [],
+        "authority_bag_size_now": 0,
+        "authority_bag_oids_now": [],
+        "soon_free_applied": False,
         "plan_expected_version": 17,
         "pos_source": "gps",
         "pos_age_sec": 30.0,
@@ -112,9 +116,10 @@ def _full_scope():
             "2_empty_bag": {
                 "bag_size": 0,
                 "active_order_ids": [],
+                "soon_free_applied": False,
                 "generation": 17,
                 "sources": {
-                    "bag": "Candidate.metrics.bag_context",
+                    "bag": "CourierState.bag@candidate_loop",
                     "generation": "Candidate.metrics.plan_expected_version",
                 },
             },
@@ -205,9 +210,10 @@ def test_producer_emits_v1_with_honest_absences_and_no_pii():
     assert predicates["2_empty_bag"] == {
         "bag_size": 0,
         "active_order_ids": [],
+        "soon_free_applied": False,
         "generation": 17,
         "sources": {
-            "bag": "Candidate.metrics.bag_context",
+            "bag": "CourierState.bag@candidate_loop",
             "generation": "Candidate.metrics.plan_expected_version",
         },
     }
@@ -220,6 +226,47 @@ def test_producer_emits_v1_with_honest_absences_and_no_pii():
     assert predicates["6_winner_position"]["contract"] == "LIVE"
     assert "absent" in predicates["7_no_gps_parity"]
     _assert_no_pii_keys(block)
+
+
+def test_soon_free_winner_uses_real_current_bag_for_authority_predicate_2():
+    """RED/mutation G4: pusty worek przyszły nie jest pustym workiem teraz."""
+    result = _result(metrics={
+        "bag_size_before": 0,
+        "bag_context": [],
+        "soon_free_applied": True,
+        "authority_bag_size_now": 1,
+        "authority_bag_oids_now": ["ACTIVE-1"],
+    })
+    block = authority_scope.build_authority_scope(
+        result,
+        _order_event(),
+        _order_state(),
+    )
+
+    predicate = block["predicates"]["2_empty_bag"]
+    assert predicate["bag_size"] == 1
+    assert predicate["active_order_ids"] == ["ACTIVE-1"]
+    assert authority_card.check_scope(
+        {"authority_scope": _full_scope() | {
+            "predicates": {
+                **_full_scope()["predicates"],
+                "2_empty_bag": predicate,
+            }
+        }},
+        None,
+        None,
+        _scope_contract(),
+    ) == (False, "scope_bag_not_empty")
+
+
+def test_candidate_captures_authority_bag_before_soon_free_mutation():
+    """Ratchet producenta G4: raw snapshot musi powstać przed `bag_raw=[]`."""
+    source = inspect.getsource(candidates.eval_courier_inner)
+    capture = source.index("authority_bag_oids_now")
+    soon_free_mutation = source.index("bag_raw = []")
+    assert capture < soon_free_mutation
+    assert '"authority_bag_size_now"' in source
+    assert '"authority_bag_oids_now"' in source
 
 
 def test_producer_marks_predicates_absent_when_inputs_are_missing():
@@ -498,6 +545,11 @@ def test_build_sha_verify_cli_returns_zero_or_one_hermetically(
     expected = "c" * 40
     monkeypatch.setattr(authority_card, "BUILD_SHA_PATH", str(path))
     monkeypatch.setattr(write_build_sha, "git_head", lambda _repo: expected)
+    monkeypatch.setattr(
+        write_build_sha,
+        "tracked_worktree_clean",
+        lambda _repo: True,
+    )
 
     path.write_text(f"{expected}\n", encoding="ascii")
     assert write_build_sha.main(
@@ -507,6 +559,32 @@ def test_build_sha_verify_cli_returns_zero_or_one_hermetically(
     assert write_build_sha.main(
         ["--verify", "--repo", str(tmp_path)]
     ) == 1
+
+
+@pytest.mark.parametrize("verify", [False, True])
+def test_build_sha_cli_refuses_dirty_tracked_tree_without_touching_file(
+    tmp_path,
+    monkeypatch,
+    verify,
+):
+    """RED G5: BUILD_SHA poświadcza commit, nigdy brudne śledzone bajty."""
+    path = tmp_path / "BUILD_SHA"
+    previous = "c" * 40
+    path.write_text(f"{previous}\n", encoding="ascii")
+    monkeypatch.setattr(authority_card, "BUILD_SHA_PATH", str(path))
+    monkeypatch.setattr(write_build_sha, "git_head", lambda _repo: "c" * 40)
+    monkeypatch.setattr(
+        write_build_sha,
+        "tracked_worktree_clean",
+        lambda _repo: False,
+        raising=False,
+    )
+    args = ["--repo", str(tmp_path)]
+    if verify:
+        args.insert(0, "--verify")
+
+    assert write_build_sha.main(args) == 1
+    assert path.read_text(encoding="ascii") == f"{previous}\n"
 
 
 def test_build_sha_rejects_non_git_sha(tmp_path):

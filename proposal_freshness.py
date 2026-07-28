@@ -321,15 +321,26 @@ def prepare_commit_recheck(
     """Fresh solve used by AUTO commit and by no other competing implementation."""
     now = now or _utc_now()
     current = state_machine.get_order_strict(str(order_id)) or {}
-    merged = dict(current)
-    merged.update(assignment_payload or {})
-    merged["order_id"] = str(order_id)
-    order_event = order_event_from_state(merged)
+    canonical = dict(current)
+    canonical["order_id"] = str(order_id)
+    order_event = order_event_from_state(canonical)
+    comparison_payload = (
+        assignment_payload if isinstance(assignment_payload, dict) else {}
+    )
+    payload_drift_fields = sorted(
+        key
+        for key in ORDER_EVENT_FIELDS
+        if key != "order_id"
+        and key in comparison_payload
+        and comparison_payload.get(key) != current.get(key)
+    )
     fleet = _dispatchable_fleet()
     result = _solve_fresh(order_event, fleet, now)
-    return build_decision_snapshot(
+    snapshot = build_decision_snapshot(
         order_event, fleet, now, result, current
     )
+    snapshot["order_payload_drift_fields"] = payload_drift_fields
+    return snapshot
 
 
 def compare_commit_snapshots(
@@ -354,6 +365,8 @@ def compare_commit_snapshots(
         return False, "commit_recheck_proposal_age"
     if age < 0.0 or age > float(max_age_seconds):
         return False, "commit_recheck_proposal_age"
+    if fresh.get("order_payload_drift_fields"):
+        return False, "commit_recheck_order_payload_drift"
     if original.get("code_git_sha") != fresh.get("code_git_sha"):
         return False, "commit_recheck_code_fingerprint"
     if original.get("flag_fingerprint") != fresh.get("flag_fingerprint"):

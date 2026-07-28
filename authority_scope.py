@@ -78,32 +78,32 @@ def _new_unassigned(
 
 
 def _empty_bag(best_metrics: Mapping[str, Any]) -> Dict[str, Any]:
-    bag_size = best_metrics.get("bag_size_before")
-    bag_context = best_metrics.get("bag_context")
+    bag_size = best_metrics.get("authority_bag_size_now")
+    active_order_ids = best_metrics.get("authority_bag_oids_now")
+    soon_free_applied = best_metrics.get("soon_free_applied")
     generation = best_metrics.get("plan_expected_version")
     if (
         isinstance(bag_size, bool)
         or not isinstance(bag_size, int)
-        or not isinstance(bag_context, list)
-        or any(not isinstance(row, Mapping) for row in bag_context)
+        or not isinstance(active_order_ids, list)
+        or any(
+            not isinstance(oid, str) or not oid
+            for oid in active_order_ids
+        )
+        or not isinstance(soon_free_applied, bool)
         or isinstance(generation, bool)
         or not isinstance(generation, int)
     ):
         return _absent(
             "winner bag size, active-order snapshot, or generation is unavailable"
         )
-    active_order_ids = []
-    for row in bag_context:
-        oid = row.get("order_id")
-        if oid in (None, ""):
-            return _absent("winner bag snapshot contains an order without oid")
-        active_order_ids.append(str(oid))
     return {
         "bag_size": bag_size,
-        "active_order_ids": active_order_ids,
+        "active_order_ids": list(active_order_ids),
+        "soon_free_applied": soon_free_applied,
         "generation": generation,
         "sources": {
-            "bag": "Candidate.metrics.bag_context",
+            "bag": "CourierState.bag@candidate_loop",
             "generation": "Candidate.metrics.plan_expected_version",
         },
     }

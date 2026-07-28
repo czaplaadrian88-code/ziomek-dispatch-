@@ -38,6 +38,12 @@ GIT_SHA = "7a63f8008abcdef0123456789abcdef012345678"
 FLAG_FP = "ENABLE_AUTO_ASSIGN=True|fixture=v1"
 
 
+@pytest.fixture(autouse=True)
+def _pin_execution_clock(monkeypatch):
+    """Executor używa świeżego zegara; fixture utrzymuje deterministyczne karty."""
+    monkeypatch.setattr(E, "_fresh_execution_now", lambda: NOW)
+
+
 def _body(**changes):
     body = {
         "class_id": "auto.canary.v1",
@@ -242,6 +248,29 @@ def test_corrupt_state_is_latched_fail_closed(tmp_path):
     state = AC.load_state(str(path))
     assert state["auto_off_latch"] is True
     assert state["auto_off_reason"] == "state_corrupt"
+    assert state["synthetic"] is True
+
+
+def test_corrupt_synthetic_state_cannot_be_cleared_or_persisted(
+    tmp_path,
+):
+    """RED G3: korupcja wymaga reconcile, nigdy resetu budżetu przez clear."""
+    state_path = tmp_path / "state.json"
+    audit_path = tmp_path / "audit.jsonl"
+    corrupt_bytes = b"{broken"
+    state_path.write_bytes(corrupt_bytes)
+
+    with pytest.raises(ValueError, match="stan uszkodzony.*reconcile"):
+        AC.clear_latch(
+            str(state_path),
+            reason="owner ACK",
+            operator="operator-test",
+            now=NOW,
+            audit_path=str(audit_path),
+        )
+
+    assert state_path.read_bytes() == corrupt_bytes
+    assert not audit_path.exists()
 
 
 def test_orphan_temp_from_crash_is_latched_fail_closed(tmp_path):
@@ -281,9 +310,10 @@ def _scope_ok():
             "2_empty_bag": {
                 "bag_size": 0,
                 "active_order_ids": [],
+                "soon_free_applied": False,
                 "generation": 1,
                 "sources": {
-                    "bag": "Candidate.metrics.bag_context",
+                    "bag": "CourierState.bag@candidate_loop",
                     "generation": "Candidate.metrics.plan_expected_version",
                 },
             },
@@ -604,6 +634,114 @@ def test_success_updates_card_counters_atomically(tmp_path, monkeypatch):
     assert state["executed_ts"] == [NOW.timestamp()]
 
 
+def test_reservation_is_durable_before_runner_and_replay_refuses_after_crash(
+    tmp_path,
+    monkeypatch,
+):
+    """RED/mutation G1: wycięcie pre-runner reservation usuwa marker i czerwieni."""
+    paths = _executor_paths(tmp_path)
+    audit = Path(paths["authority_audit_path"])
+    auto_state_path = Path(paths["state_path"])
+    marker = tmp_path / "external-effect.marker"
+    _grant_owner_auth(monkeypatch, audit)
+    monkeypatch.setattr(C, "ENABLE_AUTO_ASSIGN", True)
+    monkeypatch.setenv("ALLOW_AUTO_ASSIGN_STATE_IN_TEST", "1")
+    monkeypatch.setattr(E, "_fresh_execution_now", lambda: NOW)
+    runner_calls = []
+
+    def crash_after_effect(*args):
+        runner_calls.append(args)
+        card_state = AC.load_state(paths["authority_state_path"])
+        auto_state = json.loads(auto_state_path.read_text(encoding="utf-8"))
+        assert card_state["in_flight"] == "480300"
+        assert card_state["pending_verification"] == ["480300"]
+        assert card_state["executed_total"] == 1
+        assert "480300" in auto_state["assigned_orders"]
+        assert auto_state["executed_total"] == 1
+        marker.write_text("panel-side-effect", encoding="utf-8")
+        raise RuntimeError("synthetic crash after panel side-effect")
+
+    first = E.maybe_execute(
+        _record(),
+        SimpleNamespace(would_auto_assign=True),
+        {"status_id": 2},
+        now=NOW,
+        assign_runner=crash_after_effect,
+        notifier=lambda _text: None,
+        **paths,
+    )
+    assert first["runner_outcome"] == "unknown"
+    assert marker.read_text(encoding="utf-8") == "panel-side-effect"
+
+    # "Restart": drugi call nie ufa pamięci pierwszego executora, tylko dyskowi.
+    second = E.maybe_execute(
+        _record(),
+        SimpleNamespace(would_auto_assign=True),
+        {"status_id": 2},
+        now=NOW,
+        assign_runner=lambda *args: (runner_calls.append(args) or (True, "ok")),
+        notifier=lambda _text: None,
+        **paths,
+    )
+    assert second["blocked"] in {
+        "authority_card_latch_on",
+        "authority_card_in_flight",
+        "authority_card_pending_verification",
+    }
+    assert len(runner_calls) == 1
+
+
+def test_card_is_revalidated_with_fresh_time_after_solve_before_reservation(
+    tmp_path,
+    monkeypatch,
+):
+    """RED G1: karta wygasła podczas solve, więc runner nie może wystartować."""
+    paths = _executor_paths(tmp_path)
+    card = Path(paths["authority_card_path"])
+    audit = Path(paths["authority_audit_path"])
+    body = json.loads(card.read_text(encoding="utf-8"))
+    body["valid_until"] = (NOW + timedelta(seconds=1)).isoformat()
+    _write_card(card, body)
+    rows = [
+        json.loads(line)
+        for line in audit.read_text(encoding="utf-8").splitlines()
+        if json.loads(line).get("kind") != "authority_card_signed"
+    ]
+    rows.insert(0, {
+        "ts": NOW.isoformat(),
+        "kind": "authority_card_signed",
+        "class_id": body["class_id"],
+        "card_sha256": AC.card_sha256(body),
+        "pin_verified": True,
+    })
+    audit.write_text(
+        "".join(json.dumps(row) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    _grant_owner_auth(monkeypatch, audit)
+    monkeypatch.setattr(C, "ENABLE_AUTO_ASSIGN", True)
+    monkeypatch.setattr(
+        E,
+        "_fresh_execution_now",
+        lambda: NOW + timedelta(seconds=2),
+    )
+    calls = []
+
+    out = E.maybe_execute(
+        _record(),
+        SimpleNamespace(would_auto_assign=True),
+        {"status_id": 2},
+        now=NOW,
+        assign_runner=lambda *args: (calls.append(args) or (True, "ok")),
+        notifier=lambda _text: None,
+        **paths,
+    )
+
+    assert out["blocked"] == "authority_card_card_expired"
+    assert calls == []
+    assert not Path(paths["state_path"]).exists()
+
+
 def test_runner_unknown_mutation_oracle_consumes_budget_latch_and_idempotency(
     tmp_path, monkeypatch
 ):
@@ -644,10 +782,10 @@ def test_runner_unknown_mutation_oracle_consumes_budget_latch_and_idempotency(
     )
 
 
-def test_runner_definitive_pre_send_refusal_only_records_idempotency(
+def test_runner_definitive_pre_send_refusal_rolls_back_reservation_with_audit(
     tmp_path, monkeypatch
 ):
-    """Jawna odmowa przed utworzeniem procesu nie konsumuje budżetu i nie latchuje."""
+    """Jawna odmowa pre-send zwraca całą rezerwację i zostawia trwały audyt."""
     paths = _executor_paths(tmp_path)
     _grant_owner_auth(monkeypatch, Path(paths["authority_audit_path"]))
     monkeypatch.setattr(C, "ENABLE_AUTO_ASSIGN", True)
@@ -670,9 +808,50 @@ def test_runner_definitive_pre_send_refusal_only_records_idempotency(
     auto_state = json.loads(
         Path(paths["state_path"]).read_text(encoding="utf-8")
     )
-    assert "480300" in auto_state["assigned_orders"]
+    assert "480300" not in auto_state["assigned_orders"]
     assert auto_state.get("executed_total", 0) == 0
+    assert auto_state.get("executed_order_ids", []) == []
+    audit_rows = [
+        json.loads(line)
+        for line in Path(paths["authority_audit_path"]).read_text(
+            encoding="utf-8"
+        ).splitlines()
+    ]
+    assert audit_rows[-1]["kind"] == "reservation_rolled_back"
+    assert audit_rows[-1]["oid"] == "480300"
     assert not any("STAN NIEZNANY" in message for message in messages)
+
+
+def test_executor_reservation_rollback_merges_and_preserves_other_execution(
+    tmp_path,
+    monkeypatch,
+):
+    """Rollback G1 usuwa dokładne oid+ts, nie cudzy skorelowany budżet."""
+    monkeypatch.setenv("ALLOW_AUTO_ASSIGN_STATE_IN_TEST", "1")
+    state_path = tmp_path / "auto-state.json"
+    other_ts = NOW.timestamp() - 30
+    own_ts = NOW.timestamp()
+    E._save_state(str(state_path), {
+        "assigned_orders": {"OTHER": other_ts, "480300": own_ts},
+        "executed": [other_ts, own_ts],
+        "executed_total": 2,
+        "executed_order_ids": ["OTHER", "480300"],
+        "unrelated_writer_field": {"keep": True},
+    })
+
+    updated = E._rollback_executor_reservation(
+        str(state_path),
+        "480300",
+        own_ts,
+    )
+
+    assert updated == {
+        "assigned_orders": {"OTHER": other_ts},
+        "executed": [other_ts],
+        "executed_total": 1,
+        "executed_order_ids": ["OTHER"],
+        "unrelated_writer_field": {"keep": True},
+    }
 
 
 def test_record_success_rereads_state_and_latch_preserves_counters(tmp_path):

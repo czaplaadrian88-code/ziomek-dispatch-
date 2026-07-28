@@ -111,6 +111,51 @@ def test_r2_and_t1_use_same_snapshot_builder(monkeypatch):
     assert episode["fleet"] == commit["fleet"]
 
 
+def test_commit_recheck_uses_canonical_state_and_denies_payload_drift(
+    monkeypatch,
+):
+    """RED G2: payload NEW_ORDER jest porównaniem, nigdy writerem fresh solve."""
+    current = {
+        "order_id": "OID-1",
+        "delivery_address": "Stan kanoniczny 2",
+        "pickup_coords": [53.11, 23.11],
+        "delivery_coords": [53.22, 23.22],
+        "pickup_at": "2026-07-28T08:20:00+00:00",
+    }
+    stale_payload = {
+        "order_id": "OID-1",
+        "delivery_address": "Payload stary 1",
+        "pickup_coords": [53.10, 23.10],
+        "delivery_coords": [53.20, 23.20],
+        "pickup_at": "2026-07-28T08:10:00+00:00",
+    }
+    seen = {}
+    monkeypatch.setattr(
+        PF.state_machine, "get_order_strict", lambda _oid: current
+    )
+    monkeypatch.setattr(PF, "_dispatchable_fleet", lambda: {})
+
+    def solve(order_event, _fleet, _now):
+        seen.update(order_event)
+        return SimpleNamespace()
+
+    monkeypatch.setattr(PF, "_solve_fresh", solve)
+    monkeypatch.setattr(
+        PF, "build_decision_snapshot", lambda *_args, **_kwargs: _snapshot()
+    )
+
+    fresh = PF.prepare_commit_recheck(
+        "OID-1", stale_payload, now=NOW
+    )
+
+    assert seen["delivery_coords"] == current["delivery_coords"]
+    assert seen["pickup_coords"] == current["pickup_coords"]
+    assert seen["delivery_address"] == current["delivery_address"]
+    assert PF.compare_commit_snapshots(
+        _snapshot(), fresh, NOW
+    ) == (False, "commit_recheck_order_payload_drift")
+
+
 def test_missing_and_stale_heartbeat_are_fail_closed(tmp_path):
     path = tmp_path / "monitor-heartbeat.json"
     assert M.heartbeat_fresh(str(path), NOW) == (

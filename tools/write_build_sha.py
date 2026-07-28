@@ -52,6 +52,28 @@ def git_head(repo: Path) -> str:
     return _validated_sha(completed.stdout)
 
 
+def tracked_worktree_clean(repo: Path) -> bool:
+    """True tylko gdy wszystkie śledzone bajty odpowiadają commitowi HEAD.
+
+    Untracked są świadomie pomijane (np. ``eod_drafts``); BUILD_SHA nie jest
+    pełną atestacją drzewa ani środowiska wykonawczego.
+    """
+    completed = subprocess.run(
+        [
+            "git",
+            "status",
+            "--porcelain",
+            "--untracked-files=no",
+        ],
+        cwd=str(repo),
+        check=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    return completed.stdout == ""
+
+
 def verify_sha(path: Path, expected_sha: str) -> bool:
     expected = _validated_sha(expected_sha)
     try:
@@ -120,7 +142,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
     path = Path(authority_card.BUILD_SHA_PATH)
     try:
-        expected = git_head(args.repo.resolve())
+        repo = args.repo.resolve()
+        if not tracked_worktree_clean(repo):
+            print(
+                "BUILD_SHA DIRTY: poświadcza commit, nie brudne śledzone bajty",
+                file=sys.stderr,
+            )
+            return 1
+        expected = git_head(repo)
         if args.verify:
             ok = verify_sha(path, expected)
             print(
