@@ -4,7 +4,8 @@
 The monitor deliberately does not compare two Python renderers.  For every
 qualifying live courier bag it compares:
 
-    route_order canon -> real courier-api ``build_view`` DTO
+    one orders/plans snapshot -> route_order canon
+    -> real courier-api ``build_view_from_snapshots`` DTO
     -> a faithful legacy-field projection of Kotlin ``RouteLogic.buildSteps``.
 
 WB3 v3 will add stop identity fields later.  Until then this monitor projects
@@ -16,6 +17,7 @@ Verdicts and exits:
   3 EXPECTED_NO_DATA    no qualifying active courier bags (never reported OK)
   1 BROKEN              parity/configuration failure
   2 BROKEN              infrastructure/coverage/output failure
+  4 CONFIG_DRIFT        courier-api process flags differ from the corpus
 
 The command is read-only unless ``--result-path`` is supplied.  The future
 systemd unit must supply that path; writes are atomic and mode 0600.
@@ -26,6 +28,7 @@ import argparse
 import hashlib
 import json
 import os
+import subprocess
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -48,9 +51,21 @@ EXIT_OK = 0
 EXIT_PARITY_BROKEN = 1
 EXIT_INFRA_BROKEN = 2
 EXIT_EXPECTED_NO_DATA = 3
+EXIT_CONFIG_DRIFT = 4
 PICKUP_MERGE_MIN = 10  # Kotlin RouteLogic.kt contract, pinned by golden tests.
 GATE_ID = "obs.route-parity-telemetry"
 GATE_DUE = "2026-08-01"
+COURIER_API_SERVICE = "courier-api.service"
+ROUTE_CONFIG_ENV = {
+    "app_route_from_console": "ENABLE_APP_ROUTE_FROM_CONSOLE",
+    "route_order_unified": "ENABLE_ROUTE_ORDER_UNIFIED",
+    "plan_aware_podjazdy": "ENABLE_PLAN_AWARE_PODJAZDY",
+    "build_view_trust_canon_order": "ENABLE_BUILD_VIEW_TRUST_CANON_ORDER",
+}
+
+
+class ProcessConfigError(RuntimeError):
+    """The effective courier-api process configuration cannot be attested."""
 
 
 def _load_gen():
@@ -61,8 +76,8 @@ def _load_gen():
     return gen
 
 
-def _load_backend_dto_builder() -> Callable[[str], Mapping[str, Any]]:
-    """Load the same builder that serves ``/api/courier/orders``.
+def _load_backend_module() -> Any:
+    """Load the module that serves ``/api/courier/orders``.
 
     Import failure is infrastructure BROKEN.  There is intentionally no local
     DTO reconstruction fallback: that would certify a second implementation
@@ -80,38 +95,121 @@ def _load_backend_dto_builder() -> Callable[[str], Mapping[str, Any]]:
         sys.path.insert(0, str(_SCRIPTS / "courier_api"))
         import courier_orders  # type: ignore  # noqa: PLC0415
 
-    builder = getattr(courier_orders, "build_view", None)
-    if not callable(builder):
-        raise RuntimeError("courier_orders.build_view is unavailable")
-    return _read_only_backend_builder(courier_orders, builder)
+    return courier_orders
 
 
-def _read_only_backend_builder(
-    module: Any,
-    builder: Callable[[str], Mapping[str, Any]],
-) -> Callable[[str], Mapping[str, Any]]:
-    """Suppress the known read-side earnings writer around real DTO building.
+def _backend_contract(
+    courier_orders: Any,
+) -> tuple[Callable[..., Mapping[str, Any]], type[Any]]:
+    """Require the snapshot/config-explicit courier-api boundary.
 
-    ``courier_orders.build_view`` currently calls
-    ``earnings_history.record_day`` despite its read-only docstring.  The
-    monitor must not mutate that history.  The narrowly scoped replacement is
-    restored even when DTO construction raises.
+    Falling back to ``build_view`` would reintroduce both defects: that wrapper
+    reads live files again and its module-global config reflects this monitor's
+    environment rather than the running courier-api process.
     """
+    builder = getattr(courier_orders, "build_view_from_snapshots", None)
+    if not callable(builder):
+        raise RuntimeError(
+            "courier_orders.build_view_from_snapshots is unavailable"
+        )
+    route_config_type = getattr(courier_orders, "RouteConfig", None)
+    if not isinstance(route_config_type, type):
+        raise RuntimeError("courier_orders.RouteConfig is unavailable")
+    if not callable(getattr(route_config_type, "from_environ", None)):
+        raise RuntimeError("courier_orders.RouteConfig.from_environ is unavailable")
+    if not callable(getattr(route_config_type, "as_dict", None)):
+        raise RuntimeError("courier_orders.RouteConfig.as_dict is unavailable")
+    return builder, route_config_type
 
-    def build(courier_id: str) -> Mapping[str, Any]:
-        earnings = getattr(module, "earnings_history", None)
-        record_day = getattr(earnings, "record_day", None)
-        if not callable(record_day):
-            raise RuntimeError(
-                "courier_orders earnings_history.record_day contract changed"
-            )
-        earnings.record_day = lambda *_args, **_kwargs: None
+
+def _load_backend_contract() -> tuple[Callable[..., Mapping[str, Any]], type[Any]]:
+    return _backend_contract(_load_backend_module())
+
+
+def _read_service_environ(
+    *,
+    service: str = COURIER_API_SERVICE,
+    proc_root: Path = Path("/proc"),
+    run: Callable[..., Any] = subprocess.run,
+) -> dict[str, str]:
+    """Read only the four route flags from the running service's environment."""
+    command = [
+        "systemctl",
+        "show",
+        service,
+        "--property=MainPID",
+        "--value",
+        "--no-pager",
+    ]
+    try:
+        completed = run(
+            command,
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+    except Exception as exc:
+        raise ProcessConfigError(
+            f"cannot resolve {service} MainPID: {type(exc).__name__}"
+        ) from exc
+    if completed.returncode != 0:
+        raise ProcessConfigError(
+            f"cannot resolve {service} MainPID: systemctl exit "
+            f"{completed.returncode}"
+        )
+    raw_pid = completed.stdout.strip()
+    if not raw_pid.isdecimal() or int(raw_pid) <= 0:
+        raise ProcessConfigError(f"{service} has no running MainPID")
+
+    environ_path = proc_root / raw_pid / "environ"
+    try:
+        raw_environ = environ_path.read_bytes()
+    except Exception as exc:
+        raise ProcessConfigError(
+            f"cannot read {service} process environ: {type(exc).__name__}"
+        ) from exc
+
+    watched = set(ROUTE_CONFIG_ENV.values())
+    environ: dict[str, str] = {}
+    for raw_entry in raw_environ.split(b"\0"):
+        if b"=" not in raw_entry:
+            continue
+        raw_key, raw_value = raw_entry.split(b"=", 1)
         try:
-            return builder(courier_id)
-        finally:
-            earnings.record_day = record_day
+            key = raw_key.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        if key not in watched:
+            continue
+        if key in environ:
+            raise ProcessConfigError(
+                f"{service} process environ contains duplicate {key}"
+            )
+        try:
+            environ[key] = raw_value.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise ProcessConfigError(
+                f"{service} process environ has non-UTF8 {key}"
+            ) from exc
 
-    return build
+    return environ
+
+
+def _load_state_snapshots(
+    orders_path: Path = ORDERS_PATH,
+    plans_path: Path = PLANS_PATH,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Read each live state carrier exactly once for the whole monitor cycle."""
+    raw_orders = json.loads(orders_path.read_text(encoding="utf-8"))
+    if not isinstance(raw_orders, dict):
+        raise ValueError("orders_state.json must contain an object")
+    nested_orders = raw_orders.get("orders")
+    orders = nested_orders if isinstance(nested_orders, dict) else raw_orders
+    plans = json.loads(plans_path.read_text(encoding="utf-8"))
+    if not isinstance(plans, dict):
+        raise ValueError("courier_plans.json must contain an object")
+    return orders, plans
 
 
 def _pickup_min(value: Any) -> int | None:
@@ -209,9 +307,9 @@ def _redact_projection(projection: Sequence[Sequence[Any]]) -> list[list[Any]]:
 
 def _gate_line(verdict: str, coverage: Mapping[str, Any], reason: str) -> str:
     alarm = "—"
-    if verdict == "BROKEN":
+    if verdict in {"BROKEN", "CONFIG_DRIFT"}:
         alarm = (
-            "ALARM: route parity BROKEN; "
+            f"ALARM: route parity {verdict}; "
             f"coverage={coverage.get('checked_bags', 0)}/"
             f"{coverage.get('qualifying_bags', 0)}; {reason}"
         )
@@ -224,8 +322,12 @@ def evaluate(
     bags: Mapping[str, Sequence[Mapping[str, Any]]],
     plans: Mapping[str, Any],
     *,
+    orders_snapshot: Mapping[str, Any],
+    route_config: Any,
     canon_builder: Callable[[Sequence[Mapping[str, Any]], Any], Sequence[Any]],
-    dto_builder: Callable[[str], Mapping[str, Any]],
+    dto_builder: Callable[
+        [str, Mapping[str, Any], Mapping[str, Any], Any], Mapping[str, Any]
+    ],
     canon_projector: Callable[[Sequence[Any]], list[list[Any]]],
     live_flags: Mapping[str, Any],
     corpus_flags: Mapping[str, Any],
@@ -239,29 +341,34 @@ def evaluate(
     errors: list[dict[str, str]] = []
 
     flag_drift = dict(live_flags) != dict(corpus_flags)
-    for courier_id, bag in sorted(bags.items()):
-        try:
-            canonical = canon_projector(
-                canon_builder(bag, plans.get(courier_id))
-            )
-            client = project_kotlin_build_steps(dto_builder(courier_id))
-        except Exception as exc:  # one bad courier must make coverage fail closed
-            errors.append(
-                {
-                    "courier_ref": _safe_id(courier_id),
-                    "error": f"{type(exc).__name__}: {exc}"[:240],
-                }
-            )
-            continue
-        checked += 1
-        if client != canonical:
-            mismatches.append(
-                {
-                    "courier_ref": _safe_id(courier_id),
-                    "canonical": _redact_projection(canonical),
-                    "client": _redact_projection(client),
-                }
-            )
+    if not flag_drift:
+        for courier_id, bag in sorted(bags.items()):
+            try:
+                canonical = canon_projector(
+                    canon_builder(bag, plans.get(courier_id))
+                )
+                dto = dto_builder(
+                    courier_id, orders_snapshot, plans, route_config
+                )
+                client = project_kotlin_build_steps(dto)
+            except Exception as exc:
+                # One bad courier must make coverage fail closed.
+                errors.append(
+                    {
+                        "courier_ref": _safe_id(courier_id),
+                        "error": f"{type(exc).__name__}: {exc}"[:240],
+                    }
+                )
+                continue
+            checked += 1
+            if client != canonical:
+                mismatches.append(
+                    {
+                        "courier_ref": _safe_id(courier_id),
+                        "canonical": _redact_projection(canonical),
+                        "client": _redact_projection(client),
+                    }
+                )
 
     coverage = {
         "qualifying_bags": qualifying,
@@ -271,36 +378,46 @@ def evaluate(
         "error_bags": len(errors),
     }
     if flag_drift:
-        verdict, reason, exit_code = (
-            "BROKEN",
-            "effective route flags differ from the pinned corpus",
-            EXIT_PARITY_BROKEN,
+        verdict, verdict_class, reason, exit_code = (
+            "CONFIG_DRIFT",
+            "INFRA_BROKEN",
+            "effective courier-api route config differs from the pinned corpus",
+            EXIT_CONFIG_DRIFT,
         )
     elif errors or checked != qualifying:
-        verdict, reason, exit_code = (
+        verdict, verdict_class, reason, exit_code = (
             "BROKEN",
+            "INFRA_BROKEN",
             "qualifying DTO coverage is incomplete",
             EXIT_INFRA_BROKEN,
         )
     elif mismatches:
-        verdict, reason, exit_code = (
+        verdict, verdict_class, reason, exit_code = (
             "BROKEN",
+            "PARITY_BROKEN",
             "canonical and Kotlin-projected routes differ",
             EXIT_PARITY_BROKEN,
         )
     elif qualifying == 0:
-        verdict, reason, exit_code = (
+        verdict, verdict_class, reason, exit_code = (
+            "EXPECTED_NO_DATA",
             "EXPECTED_NO_DATA",
             "no qualifying active courier bags",
             EXIT_EXPECTED_NO_DATA,
         )
     else:
-        verdict, reason, exit_code = "OK", "full parity", EXIT_OK
+        verdict, verdict_class, reason, exit_code = (
+            "OK",
+            "OK",
+            "full parity",
+            EXIT_OK,
+        )
 
     result = {
-        "schema_version": 1,
+        "schema_version": 2,
         "monitor": GATE_ID,
         "verdict": verdict,
+        "verdict_class": verdict_class,
         "reason": reason,
         "heartbeat": {
             "observed_at_utc": observed_at,
@@ -312,6 +429,10 @@ def evaluate(
         "flag_drift": flag_drift,
         "live_flags": dict(live_flags),
         "corpus_flags": dict(corpus_flags),
+        "config_source": {
+            "service": COURIER_API_SERVICE,
+            "reader": "/proc/<MainPID>/environ",
+        },
     }
     result["open_gates_line"] = _gate_line(verdict, coverage, reason)
     return result, exit_code
@@ -352,9 +473,10 @@ def _infra_result(exc: Exception) -> tuple[dict[str, Any], int]:
     }
     reason = f"{type(exc).__name__}: {exc}"[:240]
     result = {
-        "schema_version": 1,
+        "schema_version": 2,
         "monitor": GATE_ID,
         "verdict": "BROKEN",
+        "verdict_class": "INFRA_BROKEN",
         "reason": "monitor infrastructure failure",
         "heartbeat": {
             "observed_at_utc": now,
@@ -366,6 +488,10 @@ def _infra_result(exc: Exception) -> tuple[dict[str, Any], int]:
         "flag_drift": False,
         "live_flags": {},
         "corpus_flags": {},
+        "config_source": {
+            "service": COURIER_API_SERVICE,
+            "reader": "/proc/<MainPID>/environ",
+        },
     }
     result["open_gates_line"] = _gate_line(
         "BROKEN", coverage, "monitor infrastructure failure"
@@ -375,34 +501,25 @@ def _infra_result(exc: Exception) -> tuple[dict[str, Any], int]:
 
 def _run_live() -> tuple[dict[str, Any], int]:
     gen = _load_gen()
-    plan_aware = gen._dropin_on(
-        gen.PLAN_AWARE_DROPIN, "ENABLE_PLAN_AWARE_PODJAZDY"
-    )
-    trust_canon = gen._dropin_on(
-        gen.TRUST_CANON_DROPIN, "ENABLE_BUILD_VIEW_TRUST_CANON_ORDER"
-    )
-    panel_flags = gen._panel_prod_flags()
-    live_flags = {
-        "plan_aware": plan_aware,
-        "trust_canon": trust_canon,
-        "panel": panel_flags,
-    }
+    dto_builder, route_config_type = _load_backend_contract()
+    if dict(getattr(route_config_type, "ENV_BY_FIELD", {})) != ROUTE_CONFIG_ENV:
+        raise ProcessConfigError(
+            "courier_orders.RouteConfig environment schema differs from monitor"
+        )
+    process_environ = _read_service_environ()
+    route_config = route_config_type.from_environ(process_environ)
+    live_flags = route_config.as_dict()
+    if set(live_flags) != set(ROUTE_CONFIG_ENV):
+        raise ProcessConfigError(
+            "courier_orders.RouteConfig.as_dict returned an unexpected schema"
+        )
 
-    raw = json.loads(ORDERS_PATH.read_text(encoding="utf-8"))
-    orders = (
-        raw
-        if isinstance(raw, list)
-        else list((raw.get("orders", raw) or {}).values())
-        if isinstance(raw, dict)
-        else []
-    )
-    plans = json.loads(PLANS_PATH.read_text(encoding="utf-8"))
-    if not isinstance(plans, dict):
-        raise ValueError("courier_plans.json must contain an object")
-    corpus_flags = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))["meta"][
-        "flags"
-    ]
-    bags = gen._bag_dicts_live(orders)
+    orders_snapshot, plans_snapshot = _load_state_snapshots()
+    corpus = json.loads(CORPUS_PATH.read_text(encoding="utf-8"))
+    corpus_flags = corpus["meta"]["courier_api_route_config"]
+    if set(corpus_flags) != set(ROUTE_CONFIG_ENV):
+        raise ValueError("golden corpus route config schema is incomplete")
+    bags = gen._bag_dicts_live(list(orders_snapshot.values()))
 
     from dispatch_v2 import route_podjazdy as route_canon  # noqa: PLC0415
 
@@ -410,15 +527,17 @@ def _run_live() -> tuple[dict[str, Any], int]:
         return route_canon.order_podjazdy(
             bag,
             plan,
-            plan_aware=plan_aware,
-            trust_canon=trust_canon,
+            plan_aware=route_config.plan_aware_podjazdy,
+            trust_canon=route_config.build_view_trust_canon_order,
         )
 
     return evaluate(
         bags,
-        plans,
+        plans_snapshot,
+        orders_snapshot=orders_snapshot,
+        route_config=route_config,
         canon_builder=canon_builder,
-        dto_builder=_load_backend_dto_builder(),
+        dto_builder=dto_builder,
         canon_projector=gen._proj,
         live_flags=live_flags,
         corpus_flags=corpus_flags,
@@ -437,7 +556,7 @@ def main() -> int:
 
     try:
         result, exit_code = _run_live()
-    except Exception as exc:  # fail closed: no INFRA_ERROR fourth verdict
+    except Exception as exc:  # fail closed within the four-state contract
         result, exit_code = _infra_result(exc)
 
     if args.result_path is not None:

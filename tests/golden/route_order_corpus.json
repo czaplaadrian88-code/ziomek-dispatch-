@@ -3,6 +3,12 @@
   "generated_at": "2026-07-05T17:38:41.754362+00:00",
   "generator": "dispatch_v2/tools/route_order_golden_corpus_gen.py",
   "provenance": "L6.A1 Faza 3 audytu — zastępuje ziomek_time_route_monitor (expiry 2026-07-10)",
+  "courier_api_route_config": {
+   "app_route_from_console": true,
+   "route_order_unified": true,
+   "plan_aware_podjazdy": true,
+   "build_view_trust_canon_order": true
+  },
   "flags": {
    "plan_aware": true,
    "trust_canon": true,

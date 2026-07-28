@@ -1,6 +1,7 @@
-regresja: focused route-order 38 passed, 1 skipped, 0 failed; full regression N-D because canonical dispatch venv is denied by sandbox
-e2e: canon -> injected real-shape backend DTO -> faithful Kotlin buildSteps projection; live read-only smoke fail-closed BROKEN infra 0/0
-pozytywny-wplyw: zero-work changes from false OK to EXPECTED_NO_DATA and panel proxy is replaced by backend DTO plus Kotlin projection
+regresja: focused monitor 14 passed, 1 skipped, 0 failed; patched courier-api plan/unified cluster 40 passed, 0 failed; full regression N-D because canonical venv is denied by sandbox
+e2e: one orders/plans snapshot -> canon and snapshot-explicit backend DTO -> faithful Kotlin buildSteps projection; process config from systemd MainPID /proc environ; live read-only smoke fail-closed BROKEN/INFRA_BROKEN 0/0
+bajt-identycznosc: patched courier-api test compares public build_view wrapper with build_view_from_snapshots on identical state/config using sorted JSON bytes; PASS in 40-test cluster
+pozytywny-wplyw: mismatched effective courier-api flags short-circuit route calculation as CONFIG_DRIFT exit 4 instead of false routes-differ BROKEN; missing process config remains BROKEN/INFRA_BROKEN exit 2
 rollback: source-only git revert of explicit PAR commits; no runtime rollback because zero install deploy restart flag or live write
 N-D: systemd install and legacy unit removal — separate owner ACK
 N-D: full suite and canonical night-guard reseed — dispatch venv and gitdir denied by sandbox

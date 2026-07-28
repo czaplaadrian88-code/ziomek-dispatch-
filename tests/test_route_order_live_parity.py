@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 import subprocess
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -21,7 +22,40 @@ assert _spec and _spec.loader
 MON = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(MON)
 
-FLAGS = {"plan_aware": True, "trust_canon": True, "panel": {"x": True}}
+FLAGS = {
+    "app_route_from_console": True,
+    "route_order_unified": True,
+    "plan_aware_podjazdy": True,
+    "build_view_trust_canon_order": True,
+}
+
+
+@dataclass(frozen=True)
+class FakeRouteConfig:
+    app_route_from_console: bool
+    route_order_unified: bool
+    plan_aware_podjazdy: bool
+    build_view_trust_canon_order: bool
+
+    ENV_BY_FIELD = MON.ROUTE_CONFIG_ENV
+
+    @classmethod
+    def from_environ(cls, environ):
+        return cls(
+            **{
+                field: environ.get(env_name, "0") == "1"
+                for field, env_name in MON.ROUTE_CONFIG_ENV.items()
+            }
+        )
+
+    def as_dict(self):
+        return {
+            field: getattr(self, field)
+            for field in MON.ROUTE_CONFIG_ENV
+        }
+
+
+ROUTE_CONFIG = FakeRouteConfig(**FLAGS)
 
 
 def _dto(order_ids=("1",), stops=None, *, restaurant="Rukola", coords=None):
@@ -52,6 +86,12 @@ def _evaluate(bags, dto_builder, canonical):
     return MON.evaluate(
         bags,
         {},
+        orders_snapshot={
+            str(item["order_id"]): item
+            for bag in bags.values()
+            for item in bag
+        },
+        route_config=ROUTE_CONFIG,
         canon_builder=lambda _bag, _plan: canonical,
         dto_builder=dto_builder,
         canon_projector=lambda value: value,
@@ -64,14 +104,18 @@ def _evaluate(bags, dto_builder, canonical):
 def test_tristate_ok_oracle():
     canonical = [["pickup", ["1"]], ["dropoff", ["1"]]]
     result, exit_code = _evaluate(
-        {"501": [{"order_id": "1"}]}, lambda _cid: _dto(), canonical
+        {"501": [{"order_id": "1"}]},
+        lambda _cid, _orders, _plans, _config: _dto(),
+        canonical,
     )
     assert (result["verdict"], exit_code) == ("OK", MON.EXIT_OK)
     assert result["heartbeat"]["coverage"]["coverage_ratio"] == 1.0
 
 
 def test_mutation_probe_zero_work_to_ok_is_rejected():
-    result, exit_code = _evaluate({}, lambda _cid: _dto(), [])
+    result, exit_code = _evaluate(
+        {}, lambda _cid, _orders, _plans, _config: _dto(), []
+    )
     assert (result["verdict"], exit_code) == (
         "EXPECTED_NO_DATA",
         MON.EXIT_EXPECTED_NO_DATA,
@@ -88,7 +132,9 @@ def test_mutation_probe_bypassed_kotlin_projection_is_broken():
         stops=[{"order_id": order_id, "kind": "dropoff"}],
     )
     result, exit_code = _evaluate(
-        {"501": [{"order_id": order_id}]}, lambda _cid: divergent, canonical
+        {"501": [{"order_id": order_id}]},
+        lambda _cid, _orders, _plans, _config: divergent,
+        canonical,
     )
     assert (result["verdict"], exit_code) == (
         "BROKEN",
@@ -102,7 +148,7 @@ def test_mutation_probe_bypassed_kotlin_projection_is_broken():
 
 
 def test_qualifying_bag_backend_error_is_broken_not_no_data():
-    def fail(_cid):
+    def fail(_cid, _orders, _plans, _config):
         raise RuntimeError("injected DTO failure")
 
     result, exit_code = _evaluate(
@@ -121,22 +167,129 @@ def test_qualifying_bag_backend_error_is_broken_not_no_data():
     }
 
 
-def test_ENABLE_PLAN_AWARE_PODJAZDY_on_off_drift_is_broken_without_data():
+def test_route_config_drift_is_separate_verdict_and_short_circuits_routes():
+    calls = []
+
     result, exit_code = MON.evaluate(
         {},
         {},
+        orders_snapshot={},
+        route_config=FakeRouteConfig(
+            **(FLAGS | {"app_route_from_console": False})
+        ),
         canon_builder=lambda _bag, _plan: [],
-        dto_builder=lambda _cid: _dto(),
+        dto_builder=lambda *_args: calls.append(_args) or _dto(),
         canon_projector=lambda value: value,
-        live_flags=FLAGS | {"plan_aware": False},
-        corpus_flags=FLAGS | {"plan_aware": True},
+        live_flags=FLAGS | {"app_route_from_console": False},
+        corpus_flags=FLAGS,
         observed_at="2026-07-28T00:00:00+00:00",
     )
     assert (result["verdict"], exit_code) == (
-        "BROKEN",
-        MON.EXIT_PARITY_BROKEN,
+        "CONFIG_DRIFT",
+        MON.EXIT_CONFIG_DRIFT,
     )
+    assert result["verdict_class"] == "INFRA_BROKEN"
     assert result["flag_drift"] is True
+    assert calls == []
+    assert "routes differ" not in result["reason"]
+    assert "CONFIG_DRIFT" in result["open_gates_line"]
+
+
+def test_corpus_pins_all_four_courier_api_route_flags():
+    corpus = json.loads(CORPUS.read_text(encoding="utf-8"))
+    assert corpus["meta"]["courier_api_route_config"] == FLAGS
+
+
+def test_process_environ_is_read_from_systemd_main_pid(tmp_path):
+    proc = tmp_path / "proc"
+    environ_path = proc / "4312" / "environ"
+    environ_path.parent.mkdir(parents=True)
+    environ_path.write_bytes(
+        b"UNRELATED=x\0"
+        b"ENABLE_APP_ROUTE_FROM_CONSOLE=1\0"
+        b"ENABLE_ROUTE_ORDER_UNIFIED=1\0"
+        b"ENABLE_PLAN_AWARE_PODJAZDY=1\0"
+        b"ENABLE_BUILD_VIEW_TRUST_CANON_ORDER=1\0"
+    )
+    commands = []
+
+    def run(command, **kwargs):
+        commands.append((command, kwargs))
+        return subprocess.CompletedProcess(command, 0, stdout="4312\n", stderr="")
+
+    environ = MON._read_service_environ(proc_root=proc, run=run)
+    assert FakeRouteConfig.from_environ(environ) == ROUTE_CONFIG
+    assert commands[0][0] == [
+        "systemctl",
+        "show",
+        "courier-api.service",
+        "--property=MainPID",
+        "--value",
+        "--no-pager",
+    ]
+
+
+def test_missing_process_environ_is_infra_broken_not_local_env(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setenv("ENABLE_APP_ROUTE_FROM_CONSOLE", "1")
+
+    def run(command, **kwargs):
+        return subprocess.CompletedProcess(command, 0, stdout="4312\n", stderr="")
+
+    with pytest.raises(MON.ProcessConfigError, match="cannot read"):
+        MON._read_service_environ(proc_root=tmp_path / "proc", run=run)
+    result, exit_code = MON._infra_result(
+        MON.ProcessConfigError("cannot read process environ")
+    )
+    assert (result["verdict"], result["verdict_class"], exit_code) == (
+        "BROKEN",
+        "INFRA_BROKEN",
+        MON.EXIT_INFRA_BROKEN,
+    )
+    assert result["live_flags"] == {}
+
+
+def test_one_snapshot_is_passed_to_both_sides_despite_file_mutation(tmp_path):
+    orders_path = tmp_path / "orders.json"
+    plans_path = tmp_path / "plans.json"
+    original_order = {"order_id": "1", "courier_id": "501", "status": "assigned"}
+    orders_path.write_text(json.dumps({"1": original_order}), encoding="utf-8")
+    plans_path.write_text(json.dumps({"501": {"stops": []}}), encoding="utf-8")
+
+    orders_snapshot, plans_snapshot = MON._load_state_snapshots(
+        orders_path, plans_path
+    )
+    orders_path.write_text(
+        json.dumps({"2": {"order_id": "2", "courier_id": "501"}}),
+        encoding="utf-8",
+    )
+    plans_path.write_text(json.dumps({"501": {"stops": ["mutated"]}}), encoding="utf-8")
+    seen = []
+
+    def dto_builder(_cid, orders_arg, plans_arg, route_config_arg):
+        seen.append((orders_arg, plans_arg, route_config_arg))
+        return _dto()
+
+    canonical = [["pickup", ["1"]], ["dropoff", ["1"]]]
+    result, exit_code = MON.evaluate(
+        {"501": [original_order]},
+        plans_snapshot,
+        orders_snapshot=orders_snapshot,
+        route_config=ROUTE_CONFIG,
+        canon_builder=lambda bag, plan: (
+            canonical
+            if bag[0]["order_id"] == "1" and plan == {"stops": []}
+            else [["dropoff", ["mutated"]]]
+        ),
+        dto_builder=dto_builder,
+        canon_projector=lambda value: value,
+        live_flags=FLAGS,
+        corpus_flags=FLAGS,
+        observed_at="2026-07-28T00:00:00+00:00",
+    )
+    assert (result["verdict"], exit_code) == ("OK", MON.EXIT_OK)
+    assert seen == [(orders_snapshot, plans_snapshot, ROUTE_CONFIG)]
 
 
 def test_kotlin_projection_real_dto_structures():
@@ -205,7 +358,9 @@ def test_kotlin_projection_reuses_existing_route_order_golden_min_three_cases():
 
 
 def test_result_file_is_atomic_0600_and_contains_heartbeat(tmp_path):
-    result, _ = _evaluate({}, lambda _cid: _dto(), [])
+    result, _ = _evaluate(
+        {}, lambda _cid, _orders, _plans, _config: _dto(), []
+    )
     target = tmp_path / "route-parity.json"
     MON._atomic_write_json(target, result)
     persisted = json.loads(target.read_text(encoding="utf-8"))
@@ -219,33 +374,49 @@ def test_result_file_is_atomic_0600_and_contains_heartbeat(tmp_path):
 
 def test_structural_ratchet_uses_backend_dto_and_not_panel_twin():
     source = TOOL.read_text(encoding="utf-8")
-    assert "_load_backend_dto_builder()" in source
-    assert "project_kotlin_build_steps(dto_builder(courier_id))" in source
+    compact = " ".join(source.split())
+    assert "build_view_from_snapshots" in source
+    assert (
+        "dto_builder( courier_id, orders_snapshot, plans, route_config )"
+        in compact
+    )
+    assert "_read_service_environ" in source
+    assert "_dropin_on" not in source
+    assert "os.environ.get(\"ENABLE_" not in source
     assert "fleet_state" not in source
     assert "_build_route" not in source
 
 
-def test_real_backend_builder_known_writer_is_suppressed_and_restored():
-    calls = []
-
-    class Earnings:
-        @staticmethod
-        def record_day(*args):
-            calls.append(args)
-
+def test_backend_contract_requires_snapshot_builder_and_explicit_config():
     class Module:
-        earnings_history = Earnings()
+        RouteConfig = FakeRouteConfig
 
-    original = Module.earnings_history.record_day
+        @staticmethod
+        def build_view_from_snapshots(
+            courier_id, orders_snapshot, plans_snapshot, route_config
+        ):
+            assert courier_id == "501"
+            assert orders_snapshot == {"1": {"order_id": "1"}}
+            assert plans_snapshot == {"501": {"stops": []}}
+            assert route_config == ROUTE_CONFIG
+            return _dto()
 
-    def builder(_cid):
-        Module.earnings_history.record_day("would-write")
-        return _dto()
+    builder, route_config_type = MON._backend_contract(Module)
+    assert route_config_type is FakeRouteConfig
+    assert builder(
+        "501",
+        {"1": {"order_id": "1"}},
+        {"501": {"stops": []}},
+        ROUTE_CONFIG,
+    )["stop_sequence"]
 
-    safe_builder = MON._read_only_backend_builder(Module, builder)
-    assert safe_builder("501")["stop_sequence"]
-    assert calls == []
-    assert Module.earnings_history.record_day is original
+    class LegacyModule:
+        @staticmethod
+        def build_view(_courier_id):
+            return _dto()
+
+    with pytest.raises(RuntimeError, match="build_view_from_snapshots"):
+        MON._backend_contract(LegacyModule)
 
 
 @pytest.mark.skipif(

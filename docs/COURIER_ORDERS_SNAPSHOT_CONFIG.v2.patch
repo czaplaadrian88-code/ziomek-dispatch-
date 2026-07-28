@@ -1,0 +1,379 @@
+--- a/courier_api/courier_orders.py
++++ b/courier_api/courier_orders.py
+@@ -24,8 +24,10 @@
+ import time
+ import urllib.request
+ from collections.abc import Mapping
++from dataclasses import dataclass
+ from datetime import datetime, timezone
+ from types import MappingProxyType
++from typing import ClassVar
+ from zoneinfo import ZoneInfo
+ 
+ import config
+@@ -74,6 +76,49 @@
+ 
+ WARSAW = ZoneInfo("Europe/Warsaw")
+ 
++
++@dataclass(frozen=True)
++class RouteConfig:
++    """Route-order switches passed explicitly across the DTO build boundary."""
++
++    app_route_from_console: bool
++    route_order_unified: bool
++    plan_aware_podjazdy: bool
++    build_view_trust_canon_order: bool
++
++    ENV_BY_FIELD: ClassVar[dict[str, str]] = {
++        "app_route_from_console": "ENABLE_APP_ROUTE_FROM_CONSOLE",
++        "route_order_unified": "ENABLE_ROUTE_ORDER_UNIFIED",
++        "plan_aware_podjazdy": "ENABLE_PLAN_AWARE_PODJAZDY",
++        "build_view_trust_canon_order": "ENABLE_BUILD_VIEW_TRUST_CANON_ORDER",
++    }
++
++    @classmethod
++    def from_module_config(cls) -> "RouteConfig":
++        return cls(
++            app_route_from_console=config.APP_ROUTE_FROM_CONSOLE,
++            route_order_unified=config.ROUTE_ORDER_UNIFIED,
++            plan_aware_podjazdy=config.PLAN_AWARE_PODJAZDY,
++            build_view_trust_canon_order=config.BUILD_VIEW_TRUST_CANON_ORDER,
++        )
++
++    @classmethod
++    def from_environ(cls, environ: Mapping[str, str]) -> "RouteConfig":
++        """Apply the same exact ``value == "1"`` semantics as config.py."""
++        return cls(
++            **{
++                field: environ.get(env_name, "0") == "1"
++                for field, env_name in cls.ENV_BY_FIELD.items()
++            }
++        )
++
++    def as_dict(self) -> dict[str, bool]:
++        return {
++            field: getattr(self, field)
++            for field in self.ENV_BY_FIELD
++        }
++
++
+ _geo = {"data": None, "loaded_at": 0.0}
+ 
+ 
+@@ -586,7 +631,7 @@
+     return front + rest, True
+ 
+ 
+-def _reorder_steps_to_canon(seq, mine, plan):
++def _reorder_steps_to_canon(seq, mine, plan, route_config):
+     """Sprint 30 (2026-07-07) — konwergencja gałęzi FALLBACK do JEDNEGO źródła.
+ 
+     Porządkuje ISTNIEJĄCE kroki wg kanonu zunifikowanego
+@@ -598,15 +643,15 @@
+     reordery step-owe; gałąź NN dokleja ETA PO reorderze → spójne). `sorted` stabilne
+     → kroki spoza kanonu (nie powinno być — build_stop_sequence pokrywa cały worek)
+     lądują na końcu z zachowaniem kolejności. Fail-safe: brak route_podjazdy / błąd →
+-    (seq, False), caller zostaje na legacy. Gated flagą `config.ROUTE_ORDER_UNIFIED`.
++    (seq, False), caller zostaje na legacy. Gated by the explicit route config.
+     Zwraca (seq, changed: bool)."""
+     if not seq or not mine or _route_podjazdy is None:
+         return seq, False
+     try:
+         canon = _route_podjazdy.build_stop_sequence(
+             list(mine.values()), plan,
+-            plan_aware=config.PLAN_AWARE_PODJAZDY,
+-            trust_canon=config.BUILD_VIEW_TRUST_CANON_ORDER)
++            plan_aware=route_config.plan_aware_podjazdy,
++            trust_canon=route_config.build_view_trust_canon_order)
+     except Exception as e:
+         logger.warning(
+             "[route_order_unified] build_stop_sequence fail: %s: %s",
+@@ -765,6 +810,11 @@
+     return plan if isinstance(plan, dict) else None
+ 
+ 
++def _plan_from_snapshot(courier_id: str, plans_snapshot: Mapping[str, object]):
++    plan = plans_snapshot.get(str(courier_id))
++    return plan if isinstance(plan, dict) else None
++
++
+ def _plan_is_active(plan) -> bool:
+     """Plan użyteczny: istnieje, nie-zinwalidowany i ma kroki."""
+     return bool(plan) and plan.get("invalidated_at") is None and bool(plan.get("stops"))
+@@ -1015,16 +1065,32 @@
+         step["eta_src"] = src
+ 
+ 
+-def build_view(courier_id) -> dict:
+-    """Pełny widok kuriera: trasa (plan Ziomka) + kroki + historia + kwoty.
++def build_view_from_snapshots(
++    courier_id,
++    orders_snapshot,
++    plans_snapshot,
++    route_config: RouteConfig,
++) -> dict:
++    """Build the courier DTO from caller-owned state and route config.
+ 
+     Kolejność i ETA pochodzą z courier_plans.json Ziomka (jedna prawda kurier↔
+     dispatcher). Gdy planu brak / jest nieaktualny / pusty → fallback do
+     lokalnej optymalizacji NN/brute-force (defense-in-depth). Źródło trasy jawne
+     w `route_source` (telemetria + UI).
++
++    The function does not read orders/plans again and does not write earnings.
++    ``build_view`` remains the production I/O wrapper and preserves its public
++    contract.
+     """
++    if not isinstance(orders_snapshot, Mapping):
++        raise TypeError("orders_snapshot must be a mapping")
++    if not isinstance(plans_snapshot, Mapping):
++        raise TypeError("plans_snapshot must be a mapping")
++    if not isinstance(route_config, RouteConfig):
++        raise TypeError("route_config must be RouteConfig")
++
+     courier_id = str(courier_id)
+-    orders_state = _load_json(config.ORDERS_STATE_PATH)
++    orders_state = orders_snapshot
+ 
+     mine = {
+         str(oid): o
+@@ -1045,7 +1111,7 @@
+                        courier_id, type(e).__name__, e)
+         overrides = {}
+ 
+-    plan = load_plan(courier_id)
++    plan = _plan_from_snapshot(courier_id, plans_snapshot)
+     # plan_version = RAW wersja pliku (spójna z /plan-version i SSE → baseline
+     # pollingu apki). route_source mówi osobno, czy plan faktycznie użyto.
+     plan_version = (plan or {}).get("plan_version")
+@@ -1060,11 +1126,11 @@
+     # 22.06 „odbierz po drodze") = identycznie jak konsola; OFF → lokalny carried-first.
+     # Fail-soft: każdy błąd → spadamy do planu Ziomka / fallbacku (zero ryzyka).
+     _console_done = False
+-    if config.APP_ROUTE_FROM_CONSOLE and _route_podjazdy is not None and mine:
++    if route_config.app_route_from_console and _route_podjazdy is not None and mine:
+         try:
+             _order = _route_podjazdy.order_podjazdy(list(mine.values()), plan,
+-                                                    plan_aware=config.PLAN_AWARE_PODJAZDY,
+-                                                    trust_canon=config.BUILD_VIEW_TRUST_CANON_ORDER)
++                                                    plan_aware=route_config.plan_aware_podjazdy,
++                                                    trust_canon=route_config.build_view_trust_canon_order)
+             stop_sequence = [{"order_id": str(oid), "kind": typ}
+                              for (typ, oids) in _order for oid in oids]
+             ordered_ids = []
+@@ -1100,11 +1166,13 @@
+             # F5: gdy BUILD_VIEW_TRUST_CANON_ORDER — pomijamy reorder i renderujemy
+             # kanon Ziomka verbatim (F1+F2 w plan-recheck już go porządkują i
+             # re-czasują; reorder tu byłby zbędny / dawałby artefakt stałego ETA).
+-            if config.ROUTE_ORDER_UNIFIED:
++            if route_config.route_order_unified:
+                 # Sprint 30: JEDNO ŹRÓDŁO — pełna kolejność kanonu zamiast dwóch
+                 # częściowych reorderów (carried-first + committed). Fail-soft w helperze.
+                 try:
+-                    seq, _ro = _reorder_steps_to_canon(seq, mine, plan)
++                    seq, _ro = _reorder_steps_to_canon(
++                        seq, mine, plan, route_config
++                    )
+                     if _ro:
+                         logger.info(
+                             "[route_order_unified] cid=%s plan steps reordered to canon",
+@@ -1112,7 +1180,10 @@
+                 except Exception as e:
+                     logger.warning("[route_order_unified] plan fail cid=%s: %s: %s",
+                                    courier_id, type(e).__name__, e)
+-            elif config.PLAN_ORDER_INVARIANTS and not config.BUILD_VIEW_TRUST_CANON_ORDER:
++            elif (
++                config.PLAN_ORDER_INVARIANTS
++                and not route_config.build_view_trust_canon_order
++            ):
+                 try:
+                     seq, _cf = _prioritize_carried_dropoffs(seq, mine)
+                     if _cf:
+@@ -1142,12 +1213,14 @@
+     if not _console_done and route_source != "ziomek_plan":
+         # Fallback: lokalna optymalizacja jak dotychczas + dolicz ETA per stop.
+         stop_sequence = optimize_route(resolved, courier_pos)
+-        if config.ROUTE_ORDER_UNIFIED:
++        if route_config.route_order_unified:
+             # Sprint 30: JEDNO ŹRÓDŁO — kolejność kanonu zamiast carried-first +
+             # committed reorderów. optimize_route zwraca kroki BEZ ETA (doklejane
+                 # niżej przez live_eta) → reorder do kanonu PRZED ETA = spójne.
+             try:
+-                stop_sequence, _ro = _reorder_steps_to_canon(stop_sequence, mine, plan)
++                stop_sequence, _ro = _reorder_steps_to_canon(
++                    stop_sequence, mine, plan, route_config
++                )
+                 if _ro:
+                     logger.info(
+                         "[route_order_unified] cid=%s fallback steps reordered to canon",
+@@ -1222,12 +1295,6 @@
+ 
+     delivered = build_delivered(courier_id, orders_state, overrides)
+     summary = build_summary(delivered)
+-    # Dzienny snapshot do historii 7 dni (fail-soft, jeden writer).
+-    try:
+-        earnings_history.record_day(courier_id, delivered, summary)
+-    except Exception as e:
+-        logger.warning("[earnings_history] record fail cid=%s: %s: %s",
+-                       courier_id, type(e).__name__, e)
+ 
+     first = stop_sequence[0] if stop_sequence else None
+     live_eta = (
+@@ -1256,3 +1323,26 @@
+             else None
+         ),
+     }
++
++
++def build_view(courier_id) -> dict:
++    """Production I/O wrapper; public behavior remains byte-for-byte stable."""
++    courier_id = str(courier_id)
++    orders_snapshot = _load_json(config.ORDERS_STATE_PATH)
++    plans_snapshot = _load_json(config.COURIER_PLANS_PATH)
++    view = build_view_from_snapshots(
++        courier_id,
++        orders_snapshot,
++        plans_snapshot,
++        RouteConfig.from_module_config(),
++    )
++    # Dzienny snapshot do historii 7 dni (fail-soft, jeden writer). Keeping the
++    # write in the production wrapper makes the snapshot builder monitor-safe.
++    try:
++        earnings_history.record_day(
++            courier_id, view["delivered"], view["summary"]
++        )
++    except Exception as e:
++        logger.warning("[earnings_history] record fail cid=%s: %s: %s",
++                       courier_id, type(e).__name__, e)
++    return view
+--- a/courier_api/tests/test_route_order_unified_s30.py
++++ b/courier_api/tests/test_route_order_unified_s30.py
+@@ -25,6 +25,8 @@
+     reason="route_podjazdy bez build_stop_sequence (cieniowanie kanonu pre-merge) — "
+            "walidowane standalone; po merge kanon ma metodę i test biegnie")
+ 
++ROUTE_CONFIG = co.RouteConfig.from_module_config()
++
+ 
+ def _mine(*orders):
+     return {o["order_id"]: o for o in orders}
+@@ -50,7 +52,9 @@
+            {"order_id": "A", "kind": "dropoff", "eta": "a2"},
+            {"order_id": "B", "kind": "pickup", "eta": "b1"},
+            {"order_id": "B", "kind": "dropoff", "eta": "b2"}]
+-    out, changed = co._reorder_steps_to_canon(seq, mine, None)
++    out, changed = co._reorder_steps_to_canon(
++        seq, mine, None, ROUTE_CONFIG
++    )
+     assert changed is True
+     assert [(s["order_id"], s["kind"]) for s in out] == _canon_keys(mine, None)
+     # ETA jedzie z krokiem (te same obiekty-kroki, nie zgubione)
+@@ -66,7 +70,9 @@
+          "czas_kuriera_warsaw": "2026-07-07T12:30:00+02:00"})
+     canon = _canon_keys(mine, None)
+     seq = [{"order_id": oid, "kind": k, "eta": f"{oid}{k}"} for (oid, k) in canon]
+-    out, changed = co._reorder_steps_to_canon(seq, mine, None)
++    out, changed = co._reorder_steps_to_canon(
++        seq, mine, None, ROUTE_CONFIG
++    )
+     assert changed is False
+     assert out is seq
+ 
+@@ -81,10 +87,14 @@
+          "picked_up_at": "2026-07-07T10:00:00+00:00"})
+     seq = [{"order_id": "A", "kind": "pickup"}, {"order_id": "A", "kind": "dropoff"},
+            {"order_id": "B", "kind": "dropoff"}]
+-    out, changed = co._reorder_steps_to_canon(seq, mine, None)
++    out, changed = co._reorder_steps_to_canon(
++        seq, mine, None, ROUTE_CONFIG
++    )
+     assert [(s["order_id"], s["kind"]) for s in out] == _canon_keys(mine, None)
+     assert out[0]["order_id"] == "B" and out[0]["kind"] == "dropoff"  # carried-first
+ 
+ 
+ def test_reorder_failsafe_empty():
+-    assert co._reorder_steps_to_canon([], {}, None) == ([], False)
++    assert co._reorder_steps_to_canon(
++        [], {}, None, ROUTE_CONFIG
++    ) == ([], False)
+--- a/courier_api/tests/test_courier_orders_plan.py
++++ b/courier_api/tests/test_courier_orders_plan.py
+@@ -5,6 +5,7 @@
+ enrichment wyłączony (PANEL_ENRICH_ENABLED=False) — testujemy czystą logikę.
+ """
+ import json
++import inspect
+ import os
+ import sys
+ 
+@@ -160,6 +161,70 @@
+     assert all(o["order_id"] != "9999" for o in view["orders"])
+ 
+ 
++def test_snapshot_builder_is_byte_identical_to_production_wrapper(
++    wired, monkeypatch
++):
++    monkeypatch.setattr(
++        courier_orders.earnings_history,
++        "record_day",
++        lambda *_args, **_kwargs: None,
++    )
++    wrapped = courier_orders.build_view(CID)
++    orders_snapshot = json.loads(wired["orders"].read_text())
++    plans_snapshot = json.loads(wired["plans"].read_text())
++    explicit = courier_orders.build_view_from_snapshots(
++        CID,
++        orders_snapshot,
++        plans_snapshot,
++        courier_orders.RouteConfig.from_module_config(),
++    )
++    assert json.dumps(wrapped, sort_keys=True) == json.dumps(
++        explicit, sort_keys=True
++    )
++
++
++def test_snapshot_builder_has_no_route_config_or_state_module_globals():
++    source = inspect.getsource(courier_orders.build_view_from_snapshots)
++    forbidden = {
++        "os.environ",
++        "_load_json(config.ORDERS_STATE_PATH)",
++        "_load_json(config.COURIER_PLANS_PATH)",
++        "load_plan(",
++        "config.APP_ROUTE_FROM_CONSOLE",
++        "config.ROUTE_ORDER_UNIFIED",
++        "config.PLAN_AWARE_PODJAZDY",
++        "config.BUILD_VIEW_TRUST_CANON_ORDER",
++        "earnings_history.record_day",
++    }
++    assert not {token for token in forbidden if token in source}
++
++
++def test_mutation_explicit_route_config_wins_over_module_globals(monkeypatch):
++    calls = []
++
++    class RoutePodjazdy:
++        @staticmethod
++        def build_stop_sequence(_bag, _plan, *, plan_aware, trust_canon):
++            calls.append((plan_aware, trust_canon))
++            return [{"order_id": "1", "kind": "pickup"}]
++
++    monkeypatch.setattr(courier_orders, "_route_podjazdy", RoutePodjazdy)
++    monkeypatch.setattr(config, "PLAN_AWARE_PODJAZDY", True)
++    monkeypatch.setattr(config, "BUILD_VIEW_TRUST_CANON_ORDER", True)
++    explicit_off = courier_orders.RouteConfig(
++        app_route_from_console=False,
++        route_order_unified=True,
++        plan_aware_podjazdy=False,
++        build_view_trust_canon_order=False,
++    )
++    sequence = [{"order_id": "1", "kind": "pickup"}]
++    mine = {"1": {"order_id": "1", "status": "assigned"}}
++    courier_orders._reorder_steps_to_canon(
++        sequence, mine, None, explicit_off
++    )
++    assert calls == [(False, False)]
++
++
+ @pytest.mark.parametrize("iso,expected", [
+     # predicted_at z planu Ziomka jest w UTC — MUSI wyjść czas warszawski (+2h),
+     # nie surowa godzina UTC. Regresja buga "apka pokazuje 18:56 zamiast 20:56".

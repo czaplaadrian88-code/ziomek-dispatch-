@@ -8,7 +8,8 @@ not authorize them.
 
 `tools/route_order_live_parity_check.py` checks the actual chain:
 
-`route_order canon -> courier_orders.build_view (/orders DTO) -> faithful
+`one orders/plans snapshot -> route_order canon ->
+courier_orders.build_view_from_snapshots (explicit RouteConfig) -> faithful
 legacy-field projection of Kotlin RouteLogic.restaurantKey/buildSteps`.
 
 It reuses `tests/golden/route_order_corpus.json`; it does not introduce a
@@ -18,8 +19,9 @@ second WB3 golden and does not implement future `stop_id`.
 |---|---:|---|
 | `OK` | 0 | at least one qualifying active bag; 100% DTO coverage; full parity |
 | `EXPECTED_NO_DATA` | 3 | no qualifying active bag; legal, but explicitly not success |
-| `BROKEN` | 1 | route/configuration mismatch |
+| `BROKEN` | 1 | route mismatch |
 | `BROKEN` | 2 | import/read/coverage/result-write failure |
+| `CONFIG_DRIFT` | 4 | running courier-api route flags differ from golden |
 
 Every result contains a heartbeat (`observed_at_utc`, `run_id`, coverage
 denominator/numerator), mismatch/error counts, and `open_gates_line`. Courier
@@ -56,17 +58,17 @@ StandardOutput=append:/root/.openclaw/workspace/scripts/logs/route_order_live_pa
 StandardError=append:/root/.openclaw/workspace/scripts/logs/route_order_live_parity.log
 ```
 
-The dispatch venv is sufficient: the successor no longer imports panel
-`fleet_state`. The panel backend path is used only by the existing effective
-flag reader (`app.core.flags`); it does not require the panel venv. Before
-installation, the morning ACK procedure must still run an import smoke under
-the exact unit environment. An import failure must remain exit 2/BROKEN.
+The dispatch venv is sufficient: the successor does not import panel
+`fleet_state` or panel flags. It resolves `courier-api.service` `MainPID` with
+`systemctl show`, then reads only the four named route flags from
+`/proc/<MainPID>/environ`. Failure to resolve/read that process is
+`BROKEN`/`INFRA_BROKEN`, exit 2. The monitor never falls back to its own env.
 
-`courier_orders.build_view` is not actually pure despite its module docstring:
-it calls `earnings_history.record_day`. The monitor adapter suppresses exactly
-that writer for the duration of DTO construction and restores it in `finally`;
-the ratchet test proves it is not called. If the backend adds or moves a writer,
-the adapter contract and test must be reviewed before installation.
+No flag must be copied into this unit. `courier_orders.RouteConfig` is the
+single parser/owner; the monitor passes that explicit object to
+`build_view_from_snapshots`. The public production `build_view` remains the I/O
+wrapper and retains `earnings_history.record_day`; the snapshot builder has no
+state reload and no writer.
 
 Target: `/etc/systemd/system/dispatch-route-order-parity.timer`
 
@@ -87,8 +89,14 @@ WantedBy=timers.target
 
 `SuccessExitStatus=3` keeps a quiet-night `EXPECTED_NO_DATA` from being treated
 as a failed systemd execution while preserving the non-zero semantic exit.
-Exit 1/2 remains failed and reaches the standard `OnFailure` mechanism if the
+Exit 1/2/4 remains failed and reaches the standard `OnFailure` mechanism if the
 operator adds the canonical drop-in during the ACKed installation.
+
+No service-file change is required for the config fix: the proposed unit
+already runs as root, does not hide `/proc`, and starts after courier-api.
+Installation preflight must nevertheless prove that its hardening permits
+read-only access to `/proc/<MainPID>/environ`; a denial remains exit 2 rather
+than a reason to duplicate flags into `Environment=`.
 
 ## ACKed installation checklist (not executed in this sprint)
 
@@ -98,7 +106,8 @@ operator adds the canonical drop-in during the ACKed installation.
 3. Run `py_compile`, import smoke, focused tests and full canonical regression.
 4. Copy the two reviewed unit definitions, then `systemctl daemon-reload`.
 5. Run the service once manually. Inspect exit, JSON mode, result file mode
-   `0600`, coverage heartbeat and the `open_gates_line`.
+   `0600`, coverage heartbeat, `config_source`, all four effective flags and
+   the `open_gates_line`. `CONFIG_DRIFT` blocks activation.
 6. Enable/start only the timer. After two ticks verify `LastTriggerUSec`,
    result mtime, journal/log, exit and denominator.
 7. Register the recurring observer in the process-gate/shadow-job inventory.
