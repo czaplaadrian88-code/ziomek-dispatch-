@@ -536,3 +536,7 @@ def test_flaga_producenta_jest_zarejestrowana_i_domyslnie_off():
     # Dziś NIEdecyzyjna (czytnik zwraca strict niezależnie od EWMA). Gdy
     # powstanie producent Alarm certificate — MUSI wejść do ETAP4.
     assert "ENABLE_LOADGOV_SNAPSHOT_PUBLISH" not in C.ETAP4_DECISION_FLAGS
+    # …ale killswitch MUSI być strippowany w testach (wzorzec
+    # ENABLE_LEX_WINDOW_LEDGER_V2): usunięcie wpisu z listy INFRA ponownie
+    # otwiera przeciek żywego ON do suity (ratchet strip-guard czerwienieje).
+    assert "ENABLE_LOADGOV_SNAPSHOT_PUBLISH" in C.TEST_ISOLATED_INFRA_FLAGS
