@@ -378,7 +378,7 @@ def grant_owner_autonomy_auth(tmp_path, monkeypatch):
     JEDNA kanoniczna definicja dla wszystkich takich plików — bez niej każdy plik
     trzymałby własną kopię polityki (drugi writer tego samego kontraktu).
 
-    Robi dwie rzeczy:
+    Robi trzy rzeczy:
       1. pisze wiersz `auto_assign_toggle` (ok+value+pin_verified) do tmp i pina
          `COORDINATOR_AUDIT_PATH` — co ODCINA test od ŻYWEGO
          `coordinator_assign_audit.jsonl` hosta (hermetyczność Z-P2-07);
@@ -387,6 +387,9 @@ def grant_owner_autonomy_auth(tmp_path, monkeypatch):
          od tego, jak daleko dzisiejsza data odjechała od `NOW` w pliku.
          Sama świeżość/wygasanie ma własne, jawne testy w
          `test_auto_assign_owner_auth_gate.py` i tam TTL jest ustawiany wprost.
+      3. jeżeli executor ma już T5, omija WYŁĄCZNIE krok 1c, bo starsze testy
+         badają warstwy za kartą. Realny parser/hash/scope/liczniki T5 mają
+         osobny negatywny oracle w `test_authority_card.py`.
 
     Kotwica wiersza celowo leży TYDZIEŃ przed `anchor`: testy wołają executor z
     `now` w okolicy `anchor` (czasem parę godzin wstecz), a wiersz z PRZYSZŁOŚCI
@@ -417,6 +420,20 @@ def grant_owner_autonomy_auth(tmp_path, monkeypatch):
             "from": False, "pin_verified": True}) + "\n", encoding="utf-8")
         monkeypatch.setattr(executor_module, "COORDINATOR_AUDIT_PATH", str(path))
         monkeypatch.setenv("AUTO_ASSIGN_OWNER_AUTH_TTL_SEC", str(100 * 365 * 24 * 3600))
+        if hasattr(executor_module, "_authority_card_gate"):
+            monkeypatch.setattr(
+                executor_module,
+                "_authority_card_gate",
+                lambda *args, **kwargs: (
+                    True,
+                    "ok",
+                    {
+                        "state": {},
+                        "state_path": None,
+                        "enforced": False,
+                    },
+                ),
+            )
         return path
 
     return _grant

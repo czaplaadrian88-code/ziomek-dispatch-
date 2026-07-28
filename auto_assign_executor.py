@@ -40,6 +40,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable, Dict, Optional, Tuple
 
 from dispatch_v2 import common as C
+from dispatch_v2 import authority_card as AC
 
 log = logging.getLogger("auto_assign_executor")
 
@@ -82,6 +83,14 @@ AUTO_ASSIGN_OWNER_AUTH_TTL_SEC = 86400.0  # karta canary może zacieśnić (flag
 _OWNER_AUTH_CLOCK_SKEW_SEC = 120.0
 _OWNER_AUTH_WARN_THROTTLE_SEC = 300.0
 _last_owner_auth_warn: Dict[str, float] = {}
+
+# AUTON-02 / T5: podpisana karta ownera jest bezwarunkowym krokiem 1c wewnątrz
+# ścieżki AUTO. Nie jest flagą ani profilem jakościowym.
+AUTHORITY_CARD_PATH = AC.CARD_PATH
+AUTHORITY_CARD_STATE_PATH = AC.STATE_PATH
+AUTHORITY_BUILD_SHA_PATH = AC.BUILD_SHA_PATH
+_AUTHORITY_WARN_THROTTLE_SEC = 300.0
+_last_authority_warn: Dict[str, float] = {}
 
 # AUDYT 2.0 Blocker-2 — pokrętła operacyjne (env/flags-overridable W MODULE
 # executora; common.py poza tym pasem). Domyślne wartości = dokumentacja.
@@ -307,6 +316,88 @@ def _warn_owner_auth(reason: str, now_ts: float) -> None:
         f"albo wyłącz flagę.")
 
 
+def _warn_authority_card(reason: str, now_ts: float) -> None:
+    """Dławiony WARN kroku 1c — jeden komunikat per przyczyna na pięć minut."""
+    last = _last_authority_warn.get(reason, 0.0)
+    if now_ts - last < _AUTHORITY_WARN_THROTTLE_SEC:
+        return
+    _last_authority_warn[reason] = now_ts
+    log.warning(
+        f"AUTO_ASSIGN blocked authority_card reason={reason} class_id={AC.CLASS_ID} "
+        f"— podpisana karta execution authority nie potwierdza tego wykonania "
+        f"(ODR-002).")
+
+
+def _authority_card_gate(
+    record: Dict[str, Any],
+    result: Any,
+    payload: Optional[Dict[str, Any]],
+    now: datetime,
+    card_path: str,
+    audit_path: str,
+    state_path: str,
+    code_git_sha: Optional[str],
+    flag_fp: Optional[str],
+) -> Tuple[bool, str, Dict[str, Any]]:
+    """Krok 1c: latch → podpis → scope → limity. Każdy błąd jest odmową."""
+    state = AC.load_state(state_path)
+    if state.get("auto_off_latch") is True:
+        return False, "latch_on", {
+            "state": state,
+            "state_path": state_path,
+            "enforced": True,
+        }
+
+    verdict = AC.verify_card(
+        card_path=card_path,
+        audit_path=audit_path,
+        now=now,
+        code_git_sha=code_git_sha,
+        flag_fp=flag_fp,
+    )
+    if not verdict.valid:
+        try:
+            AC.latch_auto_off(state_path, verdict.reason, now)
+        except Exception as latch_error:
+            log.warning(
+                f"AUTO_ASSIGN authority latch write fail reason={verdict.reason}: "
+                f"{type(latch_error).__name__}: {latch_error}")
+        return False, verdict.reason, {
+            "state": state,
+            "state_path": state_path,
+            "enforced": True,
+        }
+
+    body = verdict.body or {}
+    scope_ok, scope_reason = AC.check_scope(
+        record, result, payload, body.get("scope") or {})
+    if not scope_ok:
+        return False, scope_reason, {
+            "state": state,
+            "state_path": state_path,
+            "card_sha256": verdict.card_sha256,
+            "enforced": True,
+        }
+    limits = body.get("limits") or {}
+    limits_ok, limits_reason = AC.check_limits(
+        state, now.timestamp(), limits)
+    if not limits_ok:
+        return False, limits_reason, {
+            "state": state,
+            "state_path": state_path,
+            "card_sha256": verdict.card_sha256,
+            "limits": limits,
+            "enforced": True,
+        }
+    return True, "ok", {
+        "state": state,
+        "state_path": state_path,
+        "card_sha256": verdict.card_sha256,
+        "limits": limits,
+        "enforced": True,
+    }
+
+
 def _recent_auto_assign(state: Dict[str, Any], oid: str, now_ts: float, ttl_sec: float) -> bool:
     """True gdy oid już auto-przypisany w ostatnich ttl_sec (idempotencja per-order:
     reconcile-lag panelu 15-90 s + 2. event z innym event_id = podwójny assign)."""
@@ -389,6 +480,11 @@ def maybe_execute(
     assign_runner: Optional[Callable[[str, str, int], Tuple[bool, str]]] = None,
     notifier: Optional[Callable[[str], None]] = None,
     state_path: str = STATE_PATH,
+    authority_card_path: str = AUTHORITY_CARD_PATH,
+    authority_audit_path: str = COORDINATOR_AUDIT_PATH,
+    authority_state_path: str = AUTHORITY_CARD_STATE_PATH,
+    code_git_sha: Optional[str] = None,
+    flag_fp: Optional[str] = None,
 ) -> Optional[Dict[str, Any]]:
     """Punkt wejścia z shadow_dispatcher. Przy ENABLE_AUTO_ASSIGN=false → None.
 
@@ -408,6 +504,32 @@ def maybe_execute(
         if not _auth_ok:
             _warn_owner_auth(_auth_reason, now.timestamp())
             return {"blocked": "owner_auth_missing", "reason": _auth_reason}
+        # 1c. AUTON-02/T5: karta klasy per wykonanie. Git SHA pochodzi wyłącznie
+        # z BUILD_SHA wbitego przy deployu — hot-path nigdy nie uruchamia gita.
+        if code_git_sha is None:
+            code_git_sha = AC.read_code_git_sha(AUTHORITY_BUILD_SHA_PATH)
+        if flag_fp is None:
+            try:
+                flag_fp = C.flag_fingerprint()
+            except Exception:
+                flag_fp = None
+        _card_ok, _card_reason, _card_ctx = _authority_card_gate(
+            record=record,
+            result=result,
+            payload=payload,
+            now=now,
+            card_path=authority_card_path,
+            audit_path=authority_audit_path,
+            state_path=authority_state_path,
+            code_git_sha=code_git_sha,
+            flag_fp=flag_fp,
+        )
+        if not _card_ok:
+            _warn_authority_card(_card_reason, now.timestamp())
+            return {
+                "blocked": f"authority_card_{_card_reason}",
+                "reason": _card_reason,
+            }
         # 2. Bramka jakościowa (czysta, policzona w dispatch_pipeline).
         if not getattr(result, "would_auto_assign", False):
             return None
@@ -443,7 +565,12 @@ def maybe_execute(
             log.warning(f"AUTO_ASSIGN blocked idempotent oid={oid} (już auto-przypisany <{idem_ttl:.0f}s)")
             return {"blocked": "idempotent_recent", "order_id": oid}
 
-        if _rate_cap_exceeded(state, now_ts, _numeric("AUTO_ASSIGN_MAX_PER_HOUR")):
+        # T5: na prawdziwej ścieżce karty limit godzinowy został już oceniony
+        # z podpisanego body. Stary flags.json rate-cap zostaje wyłącznie dla
+        # izolowanych testów starszych warstw, które jawnie bypassują krok 1c.
+        if (not _card_ctx.get("enforced")
+                and _rate_cap_exceeded(
+                    state, now_ts, _numeric("AUTO_ASSIGN_MAX_PER_HOUR"))):
             log.warning(f"AUTO_ASSIGN blocked rate_cap oid={oid}")
             return {"blocked": "rate_cap"}
 
@@ -459,6 +586,27 @@ def maybe_execute(
             log.info(f"AUTO_ASSIGN aborted flag_off_at_execution oid={oid}")
             return {"blocked": "flag_off_at_execution", "order_id": oid}
 
+        # Karta jest capability odwoływalnym w każdej chwili. Pierwszy check
+        # ustala kolejność 1c przed quality gate; ten drugi zamyka TOCTOU
+        # card/audit/latch/state tuż przed nieodwracalnym subprocess-em.
+        _card_ok, _card_reason, _card_ctx = _authority_card_gate(
+            record=record,
+            result=result,
+            payload=payload,
+            now=now,
+            card_path=authority_card_path,
+            audit_path=authority_audit_path,
+            state_path=authority_state_path,
+            code_git_sha=code_git_sha,
+            flag_fp=flag_fp,
+        )
+        if not _card_ok:
+            _warn_authority_card(_card_reason, now_ts)
+            return {
+                "blocked": f"authority_card_{_card_reason}",
+                "reason": _card_reason,
+            }
+
         # 5. Wykonanie (ścieżka ASSIGN_DIRECT — subprocess gastro_assign).
         time_minutes = _time_minutes_from_record(record, now)
         runner = assign_runner or _default_assign_runner
@@ -473,6 +621,32 @@ def maybe_execute(
             "runner_msg": msg,
         }
         if ok:
+            _authority_state_path = _card_ctx.get("state_path")
+            if _authority_state_path:
+                try:
+                    AC.record_success(
+                        str(_authority_state_path),
+                        _card_ctx["state"],
+                        oid,
+                        now,
+                    )
+                    outcome["authority_card_sha256"] = _card_ctx.get(
+                        "card_sha256")
+                except Exception as card_state_error:
+                    outcome["authority_state_recorded"] = False
+                    log.warning(
+                        f"AUTO_ASSIGN authority state write fail oid={oid}: "
+                        f"{type(card_state_error).__name__}: {card_state_error}")
+                    try:
+                        AC.latch_auto_off(
+                            str(_authority_state_path),
+                            "state_write_failed_after_execution",
+                            now,
+                        )
+                    except Exception as latch_error:
+                        log.warning(
+                            f"AUTO_ASSIGN post-exec latch write fail oid={oid}: "
+                            f"{type(latch_error).__name__}: {latch_error}")
             state.setdefault("executed", []).append(now_ts)
             _record_auto_assign(state, oid, now_ts, idem_ttl)  # idempotencja per-order
             _save_state(state_path, state)

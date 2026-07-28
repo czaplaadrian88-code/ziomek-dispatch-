@@ -31,6 +31,21 @@ from dispatch_v2 import common as C
 NOW = datetime(2026, 7, 29, 9, 0, tzinfo=timezone.utc)
 
 
+@pytest.fixture(autouse=True)
+def _isolate_t5_card_gate(monkeypatch):
+    """Ten plik izoluje krok 1b; parser/hash/scope/liczniki kroku 1c mają
+    własne testy w ``test_authority_card.py``."""
+    monkeypatch.setattr(
+        E,
+        "_authority_card_gate",
+        lambda *args, **kwargs: (
+            True,
+            "ok",
+            {"state": {}, "state_path": None, "enforced": False},
+        ),
+    )
+
+
 def _record(verdict="PROPOSE", oid="480300", cid="101", name="Kurier Testowy",
             target_min=12):
     tgt = (NOW + timedelta(minutes=target_min)).isoformat()
