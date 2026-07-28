@@ -102,22 +102,24 @@ def _load_json(path: str) -> dict:
 
 def _shadow_rows(path: str, cutoff: datetime) -> Iterator[dict]:
     if os.path.abspath(path) == os.path.abspath(SHADOW_PATH):
+        # Kanoniczny rotation-aware reader pomija nieczytelne pliki. Monitor
+        # wykonania musi najpierw potwierdzić, że żywe źródło istnieje i daje
+        # się otworzyć, bo inaczej „0 receiptów” byłoby wynikiem fail-open.
+        with open(path, "rb"):
+            pass
         yield from ledger_io.iter_shadow_decisions(
             cutoff, max_bytes=2 * 1024 * 1024, include_observations=True
         )
         return
-    try:
-        with open(path, encoding="utf-8", errors="replace") as stream:
-            for line in stream:
-                try:
-                    row = json.loads(line)
-                except (TypeError, ValueError):
-                    continue
-                ts = _parse_ts(row.get("ts")) if isinstance(row, dict) else None
-                if ts is not None and ts >= cutoff:
-                    yield row
-    except OSError:
-        return
+    with open(path, encoding="utf-8", errors="replace") as stream:
+        for line in stream:
+            try:
+                row = json.loads(line)
+            except (TypeError, ValueError):
+                continue
+            ts = _parse_ts(row.get("ts")) if isinstance(row, dict) else None
+            if ts is not None and ts >= cutoff:
+                yield row
 
 
 def run_cycle(
@@ -152,11 +154,15 @@ def run_cycle(
             str(oid) for oid in (auto_state.get("executed_order_ids") or [])
         }
         cutoff = now - timedelta(seconds=SHADOW_LOOKBACK_SECONDS)
-        receipts = [
-            row for row in _shadow_rows(shadow_path, cutoff)
-            if row.get("record_type") == "auto_executed"
-            or row.get("auto_executed") is True
-        ]
+        try:
+            receipts = [
+                row for row in _shadow_rows(shadow_path, cutoff)
+                if row.get("record_type") == "auto_executed"
+                or row.get("auto_executed") is True
+            ]
+        except OSError:
+            receipts = []
+            reasons.append("shadow_source_unreadable")
         uncovered = sorted({
             str(row.get("order_id"))
             for row in receipts
@@ -167,10 +173,17 @@ def run_cycle(
             reasons.append("auto_executed_uncovered")
         if card_state.get("auto_off_latch") is True:
             reasons.append("latch_on")
-        if reasons and card_state.get("auto_off_latch") is not True:
+        latch_reason = next(
+            (
+                reason for reason in reasons
+                if reason in {"counter_divergence", "auto_executed_uncovered"}
+            ),
+            None,
+        )
+        if latch_reason is not None and card_state.get("auto_off_latch") is not True:
             AC.latch_auto_off(
                 authority_state_path,
-                "monitor_" + reasons[0],
+                "monitor_" + latch_reason,
                 now,
             )
 

@@ -242,6 +242,35 @@ def test_monitor_clean_cycle_always_publishes_explicit_ok_verdict(tmp_path):
     assert published == result
 
 
+def test_monitor_missing_shadow_source_is_alarm_without_latch(
+    tmp_path, monkeypatch
+):
+    """K1: brak źródła nie może udawać pustej listy receiptów."""
+    card_state = tmp_path / "card-state.json"
+    auto_state = tmp_path / "auto-state.json"
+    heartbeat = tmp_path / "monitor-heartbeat.json"
+    missing_shadow = tmp_path / "missing-shadow.jsonl"
+    AC.save_state(str(card_state), AC.empty_state())
+    auto_state.write_text(
+        json.dumps({"executed_total": 0, "executed_order_ids": []}),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(M, "SHADOW_PATH", str(missing_shadow))
+
+    result = M.run_cycle(
+        now=NOW,
+        heartbeat_path=str(heartbeat),
+        authority_state_path=str(card_state),
+        auto_state_path=str(auto_state),
+        shadow_path=str(missing_shadow),
+    )
+
+    assert result["checks"]["verdict"] == "ALARM"
+    assert result["checks"]["reasons"] == ["shadow_source_unreadable"]
+    assert result["checks"]["auto_executed_receipts"] == 0
+    assert AC.load_state(str(card_state))["auto_off_latch"] is False
+
+
 def test_monitor_accepts_correlated_unknown_execution_budget(tmp_path):
     """F7: unknown konsumuje oba liczniki, więc nie tworzy fałszywej dywergencji."""
     card_state = tmp_path / "card-state.json"

@@ -147,6 +147,16 @@ dzisiejszym rekordzie pierwszą odmową w kolejności gate'u jest dokładnie
 
 Kod nie uruchamia `git` w hot-path. Odczytuje SHA wyłącznie z `BUILD_SHA`.
 
+## Granice nieusuwalne w tym zakresie
+
+1. `pin_verified` i audyt dają **tamper-evidence**, nie kryptograficzną
+   niepodrabialność wobec roota. To granica 2D karty; pełny fix wymaga klucza
+   ownera poza hostem i osobnej bramki ODR-002 po 36 h.
+2. Między ostatnią walidacją karty a spawnem subprocessu pozostaje niezerowe
+   okno. Fixpacki 2/4/5 ściskają je, ale nie usuwają bez wykonania walidacji
+   w samym runnerze. Kompensacją są trwała rezerwacja przed spawnem, latch
+   i monitor.
+
 ## Ograniczenia poświadczenia buildu
 
 `tools/write_build_sha.py` przy zapisie i `--verify` odmawia, jeżeli
