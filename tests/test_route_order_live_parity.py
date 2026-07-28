@@ -111,6 +111,39 @@ def test_tristate_ok_oracle():
     assert (result["verdict"], exit_code) == ("OK", MON.EXIT_OK)
     assert result["heartbeat"]["coverage"]["coverage_ratio"] == 1.0
 
+    order_ids = ("A", "B")
+    canonical = [
+        ["pickup", ["A", "B"]],
+        ["dropoff", ["A"]],
+        ["dropoff", ["B"]],
+    ]
+    dto = _dto(order_ids, coords=(53.121879, 23.146168))
+    # Same pickup point, but the app projection keeps two pickup steps because
+    # its legacy ten-minute grouping window is exceeded.
+    dto["orders"][1]["pickup_time"] = "12:11"
+    result, exit_code = _evaluate(
+        {"501": [{"order_id": order_id} for order_id in order_ids]},
+        lambda _cid, _orders, _plans, _config: dto,
+        canonical,
+    )
+    client_raw = [
+        ["pickup", ["A"]],
+        ["pickup", ["B"]],
+        ["dropoff", ["A"]],
+        ["dropoff", ["B"]],
+    ]
+    assert (result["verdict"], exit_code) == ("OK", MON.EXIT_OK)
+    assert result["heartbeat"]["coverage"]["mismatch_bags"] == 0
+    assert result["heartbeat"]["coverage"]["grouping_only_difference_bags"] == 1
+    assert result["mismatches"] == [
+        {
+            "courier_ref": MON._safe_id("501"),
+            "canonical": MON._redact_projection(canonical),
+            "client": MON._redact_projection(client_raw),
+            "grouping_only_difference": True,
+        }
+    ]
+
 
 def test_mutation_probe_zero_work_to_ok_is_rejected():
     result, exit_code = _evaluate(
@@ -146,6 +179,38 @@ def test_mutation_probe_bypassed_kotlin_projection_is_broken():
     assert "501" not in serialized
     assert order_id not in serialized  # identifiers are hashed in artifacts
 
+    order_ids = ("A", "B")
+    canonical = [
+        ["pickup", ["A", "B"]],
+        ["dropoff", ["A"]],
+        ["dropoff", ["B"]],
+    ]
+    dto = _dto(
+        order_ids,
+        stops=[
+            {"order_id": "B", "kind": "pickup"},
+            {"order_id": "A", "kind": "pickup"},
+            {"order_id": "A", "kind": "dropoff"},
+            {"order_id": "B", "kind": "dropoff"},
+        ],
+        coords=(53.121879, 23.146168),
+    )
+    dto["orders"][1]["pickup_time"] = "12:11"
+
+    result, exit_code = _evaluate(
+        {"501": [{"order_id": order_id} for order_id in order_ids]},
+        lambda _cid, _orders, _plans, _config: dto,
+        canonical,
+    )
+
+    assert (result["verdict"], exit_code) == (
+        "BROKEN",
+        MON.EXIT_PARITY_BROKEN,
+    )
+    assert result["heartbeat"]["coverage"]["mismatch_bags"] == 1
+    assert result["heartbeat"]["coverage"]["grouping_only_difference_bags"] == 0
+    assert result["mismatches"][0]["grouping_only_difference"] is False
+
 
 def test_qualifying_bag_backend_error_is_broken_not_no_data():
     def fail(_cid, _orders, _plans, _config):
@@ -163,6 +228,7 @@ def test_qualifying_bag_backend_error_is_broken_not_no_data():
         "checked_bags": 0,
         "coverage_ratio": 0.0,
         "mismatch_bags": 0,
+        "grouping_only_difference_bags": 0,
         "error_bags": 1,
     }
 
@@ -312,6 +378,24 @@ def test_kotlin_projection_real_dto_structures():
         ["pickup", ["1"]],
         ["pickup", ["2"]],
     ]
+
+    grouped = [["pickup", ["B", "A"]], ["dropoff", ["B"]]]
+    split_same_order = [
+        ["pickup", ["B"]],
+        ["pickup", ["A"]],
+        ["dropoff", ["B"]],
+    ]
+    split_other_order = [
+        ["pickup", ["A"]],
+        ["pickup", ["B"]],
+        ["dropoff", ["B"]],
+    ]
+    assert MON._flatten_projection(grouped) == MON._flatten_projection(
+        split_same_order
+    )
+    assert MON._flatten_projection(grouped) != MON._flatten_projection(
+        split_other_order
+    )
 
 
 def _dto_from_corpus_case(case):
