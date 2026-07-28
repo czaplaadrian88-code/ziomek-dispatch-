@@ -11739,6 +11739,43 @@
     "engine"
    ]
   },
+  "ENABLE_PROPOSAL_CLAIM_PERSISTENCE": {
+   "carriers": [
+    "common.py:ETAP4_DECISION_FLAGS",
+    "dispatch_v2/common.py-const"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/shadow_dispatcher.py"
+   ],
+   "curated_at": "2026-07-28",
+   "current_snapshot": {
+    "default": false
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_PROPOSAL_CLAIM_PERSISTENCE",
+   "notes": "Etap 1: pending_proposals.json jako jedyne źródło miękkich claimów między tickami; wyłącznie dispatch-shadow _tick, default OFF.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-shadow.service"
+   },
+   "removal_condition": "po zastąpieniu przez kanoniczny proposal_assignment Etapu 2 albo retire za ACK",
+   "review_date": "2026-08-10",
+   "rollback": "flags.json false/brak klucza (hot-reload, bez restartu)",
+   "source_of_truth": "flags.json",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
   "ENABLE_PROPOSAL_ETA_FLOOR_TO_COMMITTED": {
    "carriers": [
     "flags.json"
@@ -17947,6 +17984,44 @@
    "removal_condition": "n/d dopóki live",
    "review_date": "2026-10-10",
    "rollback": "flags.json OFF hot-reload (bez restartu)",
+   "source_of_truth": "flags.json",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
+  "PROPOSAL_CLAIM_TTL_SEC": {
+   "carriers": [
+    "flags.json",
+    "dispatch_v2/common.py-const",
+    "common.py:FLAGS_JSON_NUMERIC_OVERRIDES"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/shadow_dispatcher.py"
+   ],
+   "curated_at": "2026-07-28",
+   "current_snapshot": {
+    "default": 240
+   },
+   "default": 240,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "PROPOSAL_CLAIM_TTL_SEC",
+   "notes": "Etap 1: limit wieku sent_at dla miękkiego claimu; 240 s na podstawie p90 reakcji koordynatora 4,27 min.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-shadow.service"
+   },
+   "removal_condition": "razem z ENABLE_PROPOSAL_CLAIM_PERSISTENCE przy przejściu na proposal_assignment Etapu 2",
+   "review_date": "2026-08-10",
+   "rollback": "usunąć klucz z flags.json; fallback 240 s hot-reload",
    "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [
