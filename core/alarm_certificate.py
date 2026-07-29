@@ -19,11 +19,29 @@ from dispatch_v2 import common as C
 SCHEMA = "alarm_certificate.v1"
 SNAPSHOT_PATH = str(C.STATE_DIR / "alarm_certificate.json")
 TTL_SECONDS = 120.0
+EVIDENCE_SCHEMA = "alarm_certificate_evidence.v1"
 _THERMAL_REASONS = (
     "R6_per_order_",
     "R6_picked_up_delta_",
     "sla_violation",
 )
+
+
+class _VerifiedCertificate(dict):
+    """Certyfikat odczytany razem z hash-bound evidence jedynego writera."""
+
+    def __init__(
+        self,
+        value: Dict[str, Any],
+        *,
+        pool_fingerprint: str,
+        strategy2_probe_fingerprint: Optional[str],
+    ):
+        super().__init__(value)
+        self.verified_pool_fingerprint = pool_fingerprint
+        self.verified_strategy2_probe_fingerprint = (
+            strategy2_probe_fingerprint
+        )
 
 
 def _utc(value: Any) -> Optional[datetime]:
@@ -61,13 +79,9 @@ def _passes_other_hards(candidate: Any) -> bool:
     return any(reason.startswith(prefix) for prefix in _THERMAL_REASONS)
 
 
-def build(
+def _pool_counterfactual(
     candidates: Iterable[Any],
-    *,
-    decision_order_id: str,
-    now: datetime,
-) -> Dict[str, Any]:
-    now = _utc(now) or datetime.now(timezone.utc)
+) -> tuple[Dict[str, Any], str]:
     normal = []
     alarm = []
     over_40 = []
@@ -77,8 +91,12 @@ def build(
     for candidate in candidates:
         cid = str(getattr(candidate, "courier_id", "") or "")
         value = _candidate_carry(candidate)
-        fingerprint_rows.append((cid, value, getattr(
-            candidate, "feasibility_verdict", None)))
+        fingerprint_rows.append((
+            cid,
+            value,
+            getattr(candidate, "feasibility_verdict", None),
+            getattr(candidate, "feasibility_reason", None),
+        ))
         if not _passes_other_hards(candidate):
             excluded_other_hard.append(cid)
             continue
@@ -91,22 +109,6 @@ def build(
         else:
             over_40.append(cid)
 
-    if normal:
-        classification = "NORMAL"
-        alarm_on = False
-    elif unknown:
-        # Brak pomiaru choć jednego kandydata po pozostałych HARD-ach oznacza,
-        # że nie umiemy udowodnić kontrfaktu „zero <=35”. Nigdy nie awansuj
-        # niewiedzy do Alarmu ani do twardego braku.
-        classification = "UNEVALUABLE"
-        alarm_on = False
-    elif alarm:
-        classification = "ALARM_CANDIDATE"
-        alarm_on = True
-    else:
-        classification = "HARD_NO_CANDIDATE"
-        alarm_on = False
-
     counterfactual = {
         "le_35_count": len(normal),
         "between_35_40_count": len(alarm),
@@ -116,9 +118,74 @@ def build(
         "le_35_cids": normal,
         "between_35_40_cids": alarm,
     }
-    fp = hashlib.sha256(json.dumps(
-        fingerprint_rows, sort_keys=True, separators=(",", ":"),
+    fingerprint = hashlib.sha256(json.dumps(
+        {
+            "counterfactual": counterfactual,
+            "rows": fingerprint_rows,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
     ).encode("utf-8")).hexdigest()[:20]
+    return counterfactual, fingerprint
+
+
+def _strategy2_fingerprint(
+    strategy2_probe: Any,
+    *,
+    decision_order_id: str,
+) -> tuple[Optional[str], Optional[bool]]:
+    if (
+        not isinstance(strategy2_probe, dict)
+        or strategy2_probe.get("schema") != "strategy2_probe.v1"
+        or strategy2_probe.get("status") != "EVALUATED"
+        or str(strategy2_probe.get("order_id")) != str(decision_order_id)
+        or not isinstance(strategy2_probe.get("found"), bool)
+    ):
+        return None, None
+    fingerprint = hashlib.sha256(json.dumps(
+        strategy2_probe, sort_keys=True, separators=(",", ":"),
+    ).encode("utf-8")).hexdigest()[:20]
+    return fingerprint, strategy2_probe["found"]
+
+
+def build(
+    candidates: Iterable[Any],
+    *,
+    decision_order_id: str,
+    now: datetime,
+    strategy2_probe: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    now = _utc(now) or datetime.now(timezone.utc)
+    pool = list(candidates)
+    counterfactual, pool_fingerprint = _pool_counterfactual(pool)
+    s2_fingerprint, s2_found = _strategy2_fingerprint(
+        strategy2_probe, decision_order_id=str(decision_order_id))
+
+    if counterfactual["le_35_count"]:
+        classification = "NORMAL"
+        alarm_on = False
+    elif s2_found is True:
+        # S1 nie znalazła planu <=35, ale S2 znalazła bezpieczny przyszły slot.
+        # Kanon S1 -> S2 -> S3: taki wynik definitywnie unieważnia Alarm.
+        classification = "NORMAL_STRATEGY2"
+        alarm_on = False
+    elif counterfactual["unknown_count"]:
+        # Brak pomiaru choć jednego kandydata po pozostałych HARD-ach oznacza,
+        # że nie umiemy udowodnić kontrfaktu „zero <=35”. Nigdy nie awansuj
+        # niewiedzy do Alarmu ani do twardego braku.
+        classification = "UNEVALUABLE"
+        alarm_on = False
+    elif s2_found is None:
+        # Bez zakończonej sondy S2 nie istnieje dowód „zero ratującego S2”.
+        classification = "UNEVALUABLE_STRATEGY2"
+        alarm_on = False
+    elif counterfactual["between_35_40_count"]:
+        classification = "ALARM_CANDIDATE"
+        alarm_on = True
+    else:
+        classification = "HARD_NO_CANDIDATE"
+        alarm_on = False
+
     return {
         "schema": SCHEMA,
         "decision_order_id": str(decision_order_id),
@@ -127,7 +194,9 @@ def build(
         "classification": classification,
         "alarm": alarm_on,
         "counterfactual": counterfactual,
-        "pool_fingerprint": fp,
+        "pool_fingerprint": pool_fingerprint,
+        "strategy2_probe_fingerprint": s2_fingerprint,
+        "strategy2_found": s2_found,
         "scope_order_ids": [],
     }
 
@@ -147,6 +216,10 @@ def validate(
     *,
     decision_order_id: Optional[str] = None,
     scope_order_ids: Optional[Iterable[str]] = None,
+    candidates: Optional[Iterable[Any]] = None,
+    strategy2_probe: Optional[Dict[str, Any]] = None,
+    verified_pool_fingerprint: Optional[str] = None,
+    verified_strategy2_probe_fingerprint: Optional[str] = None,
 ) -> bool:
     if not isinstance(certificate, dict) or certificate.get("schema") != SCHEMA:
         return False
@@ -178,6 +251,15 @@ def validate(
         or any(ch not in "0123456789abcdef" for ch in fingerprint)
     ):
         return False
+    s2_fingerprint = certificate.get("strategy2_probe_fingerprint")
+    if s2_fingerprint is not None and (
+        not isinstance(s2_fingerprint, str)
+        or len(s2_fingerprint) != 20
+        or any(ch not in "0123456789abcdef" for ch in s2_fingerprint)
+    ):
+        return False
+    if certificate.get("strategy2_found") not in (True, False, None):
+        return False
     if not isinstance(certificate.get("scope_order_ids"), list):
         return False
     observed = _utc(certificate.get("observed_at"))
@@ -198,51 +280,101 @@ def validate(
         if certificate.get("scope_order_ids") != expected:
             return False
 
-    alarm = certificate.get("alarm") is True
-    classification = certificate.get("classification")
-    if alarm:
-        return (
-            classification == "ALARM_CANDIDATE"
-            and cf["le_35_count"] == 0
-            and cf["between_35_40_count"] >= 1
-            and cf["unknown_count"] == 0
+    # F4: publiczna walidacja nigdy nie ufa licznikom ani fingerprintowi
+    # dostarczonym przez certyfikat. Musi dostać realną pulę i przeliczyć oba.
+    if candidates is not None:
+        pool = list(candidates)
+        expected = build(
+            pool,
+            decision_order_id=str(certificate.get("decision_order_id")),
+            now=observed,
+            strategy2_probe=strategy2_probe,
         )
-    if classification == "NORMAL":
-        return cf["le_35_count"] >= 1
-    if classification == "UNEVALUABLE":
-        return (
-            cf["le_35_count"] == 0
-            and cf["unknown_count"] >= 1
+        return all(
+            certificate.get(key) == expected.get(key)
+            for key in (
+                "classification",
+                "alarm",
+                "counterfactual",
+                "pool_fingerprint",
+                "strategy2_probe_fingerprint",
+                "strategy2_found",
+            )
         )
-    if classification == "HARD_NO_CANDIDATE":
-        return (
-            cf["le_35_count"] == 0
-            and cf["between_35_40_count"] == 0
-            and cf["unknown_count"] == 0
-        )
-    return False
+
+    if (
+        verified_pool_fingerprint != certificate.get("pool_fingerprint")
+        or verified_strategy2_probe_fingerprint
+        != certificate.get("strategy2_probe_fingerprint")
+    ):
+        return False
+    s2_found = certificate.get("strategy2_found")
+    if cf["le_35_count"]:
+        expected_classification, expected_alarm = "NORMAL", False
+    elif s2_found is True:
+        expected_classification, expected_alarm = "NORMAL_STRATEGY2", False
+    elif cf["unknown_count"]:
+        expected_classification, expected_alarm = "UNEVALUABLE", False
+    elif s2_found is None:
+        expected_classification, expected_alarm = (
+            "UNEVALUABLE_STRATEGY2", False)
+    elif cf["between_35_40_count"]:
+        expected_classification, expected_alarm = "ALARM_CANDIDATE", True
+    else:
+        expected_classification, expected_alarm = "HARD_NO_CANDIDATE", False
+    return (
+        certificate.get("classification") == expected_classification
+        and (certificate.get("alarm") is True) == expected_alarm
+    )
 
 
-def is_alarm(certificate: Any, now: Optional[datetime] = None) -> bool:
-    check_now = now or datetime.now(timezone.utc)
-    return validate(certificate, check_now) and certificate.get("alarm") is True
-
-
-def publish(certificate: Dict[str, Any], *, path: Optional[str] = None) -> str:
+def is_alarm(
+    certificate: Any,
+    now: Optional[datetime] = None,
+    *,
+    candidates: Optional[Iterable[Any]] = None,
+    strategy2_probe: Optional[Dict[str, Any]] = None,
+) -> bool:
     if not C.decision_flag("ENABLE_ALARM_CERTIFICATE_SHADOW"):
-        return "flag_off"
-    now = _utc(certificate.get("observed_at"))
-    if now is None or not validate(certificate, now):
-        return "invalid"
-    target = path or SNAPSHOT_PATH
+        return False
+    check_now = now or datetime.now(timezone.utc)
+    verified_pool = getattr(
+        certificate, "verified_pool_fingerprint", None)
+    verified_s2 = getattr(
+        certificate, "verified_strategy2_probe_fingerprint", None)
+    return (
+        validate(
+            certificate,
+            check_now,
+            candidates=candidates,
+            strategy2_probe=strategy2_probe,
+            verified_pool_fingerprint=verified_pool,
+            verified_strategy2_probe_fingerprint=verified_s2,
+        )
+        and certificate.get("alarm") is True
+    )
+
+
+def _canonical_bytes(value: Dict[str, Any]) -> bytes:
+    return json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+
+
+def _atomic_write_json(target: str, value: Dict[str, Any]) -> None:
     directory = os.path.dirname(target) or "."
     os.makedirs(directory, exist_ok=True)
     fd, tmp = tempfile.mkstemp(
-        dir=directory, prefix=".alarm_certificate_", suffix=".tmp"
+        dir=directory,
+        prefix=f".{os.path.basename(target)}_",
+        suffix=".tmp",
     )
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(certificate, fh, ensure_ascii=False, sort_keys=True)
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(_canonical_bytes(value))
             fh.flush()
             os.fsync(fh.fileno())
         os.chmod(tmp, 0o644)
@@ -258,6 +390,38 @@ def publish(certificate: Dict[str, Any], *, path: Optional[str] = None) -> str:
         except FileNotFoundError:
             pass
         raise
+
+
+def publish(
+    certificate: Dict[str, Any],
+    *,
+    path: Optional[str] = None,
+    candidates: Optional[Iterable[Any]] = None,
+    strategy2_probe: Optional[Dict[str, Any]] = None,
+) -> str:
+    if not C.decision_flag("ENABLE_ALARM_CERTIFICATE_SHADOW"):
+        return "flag_off"
+    now = _utc(certificate.get("observed_at"))
+    if now is None or not validate(
+        certificate,
+        now,
+        candidates=candidates,
+        strategy2_probe=strategy2_probe,
+    ):
+        return "invalid"
+    target = path or SNAPSHOT_PATH
+    evidence = {
+        "schema": EVIDENCE_SCHEMA,
+        "certificate_sha256": hashlib.sha256(
+            _canonical_bytes(certificate)).hexdigest(),
+        "pool_fingerprint": certificate["pool_fingerprint"],
+        "strategy2_probe_fingerprint": certificate[
+            "strategy2_probe_fingerprint"],
+    }
+    # Evidence pierwsze, certyfikat drugi. Crash między rename'ami daje mismatch
+    # i read fail-closed; nigdy parę starego hash-a z nowym certyfikatem.
+    _atomic_write_json(f"{target}.evidence", evidence)
+    _atomic_write_json(target, certificate)
     return "published"
 
 
@@ -266,6 +430,8 @@ def read(
     *,
     path: Optional[str] = None,
     scope_order_ids: Optional[Iterable[str]] = None,
+    candidates: Optional[Iterable[Any]] = None,
+    strategy2_probe: Optional[Dict[str, Any]] = None,
 ) -> Optional[Dict[str, Any]]:
     if not C.decision_flag("ENABLE_ALARM_CERTIFICATE_SHADOW"):
         return None
@@ -274,17 +440,53 @@ def read(
             certificate = json.load(fh)
     except (OSError, ValueError, TypeError):
         return None
+    verified_pool = None
+    verified_s2 = None
+    if candidates is None:
+        try:
+            with open(
+                f"{path or SNAPSHOT_PATH}.evidence",
+                "r",
+                encoding="utf-8",
+            ) as fh:
+                evidence = json.load(fh)
+        except (OSError, ValueError, TypeError):
+            return None
+        if (
+            not isinstance(evidence, dict)
+            or evidence.get("schema") != EVIDENCE_SCHEMA
+            or evidence.get("certificate_sha256")
+            != hashlib.sha256(_canonical_bytes(certificate)).hexdigest()
+        ):
+            return None
+        verified_pool = evidence.get("pool_fingerprint")
+        verified_s2 = evidence.get("strategy2_probe_fingerprint")
     if not validate(
-        certificate, now, scope_order_ids=scope_order_ids
+        certificate,
+        now,
+        scope_order_ids=scope_order_ids,
+        candidates=candidates,
+        strategy2_probe=strategy2_probe,
+        verified_pool_fingerprint=verified_pool,
+        verified_strategy2_probe_fingerprint=verified_s2,
     ):
         return None
-    return certificate
+    if candidates is not None:
+        verified_pool = certificate["pool_fingerprint"]
+        verified_s2 = certificate["strategy2_probe_fingerprint"]
+    return _VerifiedCertificate(
+        certificate,
+        pool_fingerprint=verified_pool,
+        strategy2_probe_fingerprint=verified_s2,
+    )
 
 
 def hard35_best_effort_choice(
     candidates: Iterable[Any],
     *,
     alarm_certificate: Optional[Dict[str, Any]],
+    validation_candidates: Optional[Iterable[Any]] = None,
+    strategy2_probe: Optional[Dict[str, Any]] = None,
 ) -> tuple[list, Optional[Any], Dict[str, Any]]:
     """Filtr HARD35 dla best-effort; nigdy nie ukrywa least-damage.
 
@@ -292,7 +494,16 @@ def hard35_best_effort_choice(
     kandydata jako `alert`, ale nie jako feasible/proposal.
     """
     pool = list(candidates)
-    alarm_on = is_alarm(alarm_certificate)
+    validation_pool = (
+        list(validation_candidates)
+        if validation_candidates is not None
+        else pool
+    )
+    alarm_on = is_alarm(
+        alarm_certificate,
+        candidates=validation_pool,
+        strategy2_probe=strategy2_probe,
+    )
     cap = 40.0 if alarm_on else 35.0
     allowed = []
     known = []

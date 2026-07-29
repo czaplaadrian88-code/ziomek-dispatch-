@@ -2968,7 +2968,7 @@ def _gate_score_excluding_ranking_deltas(cand):
     return sc
 
 
-def _soon_free_probe(cid, bag_raw, now):
+def _soon_free_probe(cid, bag_raw, now, *, pure_read=False):
     """SP-B2-ZARAZWOLNY (2026-06-11, B2): czy busy kurier kończy ≤12 min.
 
     61% busy-picków człowieka = kurier kończący ≤12 min — Ziomek karze
@@ -2987,7 +2987,14 @@ def _soon_free_probe(cid, bag_raw, now):
             return None
         saved = _pm_sf.load_plan(
             str(cid), active_bag_oids=_bag_oids,
-            invalidate_on_mismatch=not C.flag("ENABLE_LOAD_PLAN_PURE_READ"))
+            # The Strategy-2 shadow probe must not warm or rewrite the
+            # process-local plan cache.  The strict read path bypasses it.
+            _raise_on_corrupt=pure_read,
+            invalidate_on_mismatch=(
+                False
+                if pure_read
+                else not C.flag("ENABLE_LOAD_PLAN_PURE_READ")
+            ))
         if saved is None:
             return None
         drops = [
@@ -5339,20 +5346,6 @@ def _assess_order_impl(
         if _af_single_source_on:
             _l4_floor_candidate_eta(c)
 
-    # B — kontrfaktyczny certyfikat bieżącej puli. Czysty rachunek powstaje
-    # przed selekcją z PEŁNEJ puli, nie z samego zwycięzcy ani z EWMA.
-    _alarm_certificate = None
-    if C.decision_flag("ENABLE_ALARM_CERTIFICATE_SHADOW"):
-        try:
-            from dispatch_v2.core import alarm_certificate as _alarm
-            _alarm_certificate = _alarm.build(
-                candidates, decision_order_id=order_id, now=now)
-        except Exception as _alarm_exc:
-            log.warning(
-                "ALARM_CERTIFICATE build fail-safe order=%s: %s: %s",
-                order_id, type(_alarm_exc).__name__, _alarm_exc,
-            )
-
     # C — sonda S2 wyłącznie po zerze feasible S1. Każdy slot przechodzi przez
     # TEN SAM core.candidates/check_feasibility_v2 na CAŁEJ flocie. Context
     # `shadow_probe` wycina pomocnicze writery/capture; wynik nie mutuje decyzji.
@@ -5451,6 +5444,25 @@ def _assess_order_impl(
                 order_id, type(_s2_exc).__name__, _s2_exc,
             )
 
+    # B/S3 — certyfikat powstaje DOPIERO po S2. Alarm wymaga równocześnie
+    # zera planów <=35 w bieżącej puli S1 i zakończonego wyniku S2 bez planu
+    # ratunkowego. Brak/awaria/HOLD S2 pozostawia certyfikat niealarmowy.
+    _alarm_certificate = None
+    if C.decision_flag("ENABLE_ALARM_CERTIFICATE_SHADOW"):
+        try:
+            from dispatch_v2.core import alarm_certificate as _alarm
+            _alarm_certificate = _alarm.build(
+                candidates,
+                decision_order_id=order_id,
+                now=now,
+                strategy2_probe=_strategy2_probe,
+            )
+        except Exception as _alarm_exc:
+            log.warning(
+                "ALARM_CERTIFICATE build fail-safe order=%s: %s: %s",
+                order_id, type(_alarm_exc).__name__, _alarm_exc,
+            )
+
     # Feasible (MAYBE) → rank by score.
     # R2 Bartek Gold Standard tie-breaker: przy równym score, preferuj
     # kandydata o niższej corridor deviation (bundle_level3_dev).
@@ -5470,6 +5482,7 @@ def _assess_order_impl(
             plan_versions=_plan_versions_snapshot,
             position_model_mode=("explicit" if _explicit_unknown_effective else "legacy"),
             alarm_certificate=_alarm_certificate,
+            strategy2_probe=_strategy2_probe,
         )
     # C7 normal-path instrument: snapshot PEŁNEJ ocenionej puli dokładnie tutaj,
     # przed kanonicznym select_and_emit i jego top[:16]. Kill-switch hot, default
@@ -5526,6 +5539,10 @@ def _assess_order_impl(
             _alarm_certificate = None
     _selected.alarm_certificate = _alarm_certificate
     _selected.strategy2_probe = _strategy2_probe
+    if _alarm_certificate is not None:
+        # Prywatny, nieserializowany materiał do ponownej walidacji F4 przez
+        # jedynego writera snapshotu w dispatch-shadow.
+        _selected.alarm_validation_candidates = candidates
     if C.decision_flag("ENABLE_STRATEGY2_PROBE_SHADOW"):
         _selected.order_created_at = getattr(
             new_order, "created_at_utc", None)

@@ -97,7 +97,9 @@ def read_snapshot(now: datetime,
 
 
 def window_tol_min(now: datetime, *, snapshot: Optional[Dict[str, Any]] = None,
-                   alarm_certificate: Optional[Dict[str, Any]] = None) -> Tuple[float, str]:
+                   alarm_certificate: Optional[Dict[str, Any]] = None,
+                   alarm_candidates=None,
+                   strategy2_probe: Optional[Dict[str, Any]] = None) -> Tuple[float, str]:
     """Efektywna tolerancja okna odbioru + powód. Dziś ZAWSZE strict.
 
     Loose (10) wymaga JEDNOCZEŚNIE ważnego snapshotu z EWMA ≥ progu ORAZ
@@ -110,7 +112,11 @@ def window_tol_min(now: datetime, *, snapshot: Optional[Dict[str, Any]] = None,
     threshold = float(getattr(_C, "OBJ_COMMITTED_PICKUP_LOAD_THRESHOLD", 4.5))
     if snapshot is None:
         return strict, "strict_no_snapshot"
-    if not alarm_certified(alarm_certificate):
+    if not alarm_certified(
+        alarm_certificate,
+        candidates=alarm_candidates,
+        strategy2_probe=strategy2_probe,
+    ):
         # EWMA ani dowolny dict NIE uprawniają do poluzowania (OD-04).
         # Ta sama walidacja kontrfaktu otwiera carry-cap i tolerancję okna.
         return strict, "strict_no_alarm_certificate"
@@ -123,7 +129,12 @@ def window_tol_min(now: datetime, *, snapshot: Optional[Dict[str, Any]] = None,
     return loose, "loose_alarm_certified"
 
 
-def alarm_certified(alarm_certificate: Optional[Dict[str, Any]] = None) -> bool:
+def alarm_certified(
+    alarm_certificate: Optional[Dict[str, Any]] = None,
+    *,
+    candidates=None,
+    strategy2_probe: Optional[Dict[str, Any]] = None,
+) -> bool:
     """Czy zachodzi kanoniczny Alarm (jedyna przesłanka capa 40 zamiast 35).
 
     Osobna funkcja, bo cap świeżości i tolerancja okna to DWIE różne polityki
@@ -133,6 +144,10 @@ def alarm_certified(alarm_certificate: Optional[Dict[str, Any]] = None) -> bool:
         return False
     try:
         from dispatch_v2.core import alarm_certificate as _alarm
-        return _alarm.is_alarm(alarm_certificate)
+        return _alarm.is_alarm(
+            alarm_certificate,
+            candidates=candidates,
+            strategy2_probe=strategy2_probe,
+        )
     except Exception:
         return False

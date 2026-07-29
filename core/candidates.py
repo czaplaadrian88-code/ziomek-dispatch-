@@ -247,7 +247,8 @@ def eval_courier_inner(ctx: EvalContext, cid, cs):
     # przy ≤12 min do końca worka wartość interleave jest marginalna —
     # substytucja zamiast drugiego kandydata (ten sam cid w mapach
     # downstream nie może wystąpić 2×).
-    soon_free_probe = _soon_free_probe(cid, bag_raw, now)
+    soon_free_probe = _soon_free_probe(
+        cid, bag_raw, now, pure_read=shadow_probe)
     soon_free_applied = False
     if (soon_free_probe is not None and soon_free_probe.get("eligible")
             and C.decision_flag("ENABLE_SOON_FREE_CANDIDATE")):

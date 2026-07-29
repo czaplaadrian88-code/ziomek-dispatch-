@@ -62,7 +62,12 @@ class Thresholds:
     alarm: bool = False       # czy cap pochodzi z kanonicznego Alarmu
 
 
-def load_thresholds(*, alarm_certificate: Optional[Dict[str, Any]] = None) -> Thresholds:
+def load_thresholds(
+    *,
+    alarm_certificate: Optional[Dict[str, Any]] = None,
+    alarm_candidates=None,
+    strategy2_probe: Optional[Dict[str, Any]] = None,
+) -> Thresholds:
     """Progi z `flags.json` (hot-reload), fallback = stałe `common.py`.
 
     Świadomie NIE przez `os.environ`: wymóg 13.2 p.8 („progi decyzyjne przez
@@ -75,7 +80,11 @@ def load_thresholds(*, alarm_certificate: Optional[Dict[str, Any]] = None) -> Th
         fl = _C.load_flags()
     except Exception:
         fl = {}
-    alarm = _lg.alarm_certified(alarm_certificate)
+    alarm = _lg.alarm_certified(
+        alarm_certificate,
+        candidates=alarm_candidates,
+        strategy2_probe=strategy2_probe,
+    )
     cap_key = ("LEX_WINDOW_CARRY_CAP_ALARM_MIN" if alarm
                else "LEX_WINDOW_CARRY_CAP_MIN")
     cap_default = float(getattr(_C, cap_key, 40.0 if alarm else 35.0))

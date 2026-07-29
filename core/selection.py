@@ -43,6 +43,7 @@ class SelectionContext:
     # path, therefore zero behavior/serialization change for ordinary calls.
     selection_trace: Optional[Dict[str, Optional[str]]] = None
     alarm_certificate: Optional[Dict[str, Any]] = None
+    strategy2_probe: Optional[Dict[str, Any]] = None
 
 
 def select_and_emit(ctx: SelectionContext, candidates: list):
@@ -105,6 +106,55 @@ def select_and_emit(ctx: SelectionContext, candidates: list):
     haversine = _dp.haversine
     log = _dp.log
     # ── koniec prologu; poniżej ciało bajt-w-bajt z impl ──
+
+    def _hard35_proposal_boundary(result, proposal_pool):
+        """Jedyny lejek HARD35 dla feasible, best-effort i solo PROPOSE."""
+        if (
+            result.verdict != "PROPOSE"
+            or not C.decision_flag("ENABLE_HARD35_ENFORCE")
+            or result.best is None
+            or result.best.plan is None
+        ):
+            return result
+        from dispatch_v2.core import alarm_certificate as _alarm
+        pool = list(proposal_pool)
+        within_cap, least_damage, meta = _alarm.hard35_best_effort_choice(
+            pool,
+            alarm_certificate=ctx.alarm_certificate,
+            validation_candidates=candidates,
+            strategy2_probe=ctx.strategy2_probe,
+        )
+        result.hard35_enforcement = meta
+        if within_cap:
+            result.best = within_cap[0]
+            result.candidates = within_cap[:TOP_N_CANDIDATES]
+            metrics = getattr(result.best, "metrics", None)
+            if isinstance(metrics, dict):
+                metrics["hard35_enforcement"] = meta
+            return result
+
+        if least_damage is not None:
+            least_damage.best_effort = True
+        blocked = PipelineResult(
+            order_id=order_id,
+            verdict="KOORD",
+            reason=(
+                f"hard35_least_damage_alert "
+                f"(cap={meta['cap_min']:.0f}; 0 within cap; "
+                f"visible_cid={getattr(least_damage, 'courier_id', None)})"
+            ),
+            best=least_damage,
+            candidates=pool[:TOP_N_CANDIDATES],
+            full_pool_candidates=candidates,
+            pickup_ready_at=pickup_ready_at,
+            restaurant=restaurant,
+            delivery_address=delivery_address,
+            pool_total_count=len(candidates),
+            pool_feasible_count=0,
+        )
+        blocked.hard35_enforcement = meta
+        return blocked
+
     feasible = [c for c in candidates if c.feasibility_verdict == "MAYBE"]
     feasible.sort(key=lambda c: (-c.score, c.metrics.get("bundle_level3_dev") if c.metrics.get("bundle_level3_dev") is not None else 999.0))
 
@@ -955,6 +1005,7 @@ def select_and_emit(ctx: SelectionContext, candidates: list):
         _result_pf.r6_danger_shadow = r6_danger_shadow
         # Load-aware distribution counterfactual (2026-06-07) — shadow only.
         _result_pf.loadaware_shadow = loadaware_shadow
+        _result_pf = _hard35_proposal_boundary(_result_pf, feasible)
         _classify_and_set_auto_route(_result_pf, fleet_snapshot, order_event, now=now, v328_fail_causes=_v328_fail_causes)
         return _result_pf
 
@@ -997,45 +1048,6 @@ def select_and_emit(ctx: SelectionContext, candidates: list):
         with_plan.sort(key=_best_effort_sort_key)
     else:
         with_plan.sort(key=lambda c: (_r6_pov_count(c), c.plan.sla_violations, c.plan.total_duration_min))
-    # D (noc 28.07): ostatni hak HARD35. Dotychczas ALWAYS_PROPOSE omijał
-    # redirect i ponownie wybierał plan >35. ON filtruje pełny best-effort pool
-    # wspólnym carry_eval; jeśli nie istnieje plan w capie, zachowuje least-
-    # damage jako widoczny ALERT/KOORD, nigdy jako feasible PROPOSE.
-    if with_plan and C.decision_flag("ENABLE_HARD35_ENFORCE"):
-        from dispatch_v2.core import alarm_certificate as _alarm
-        _within_cap, _least_damage, _hard35_meta = (
-            _alarm.hard35_best_effort_choice(
-                with_plan, alarm_certificate=ctx.alarm_certificate))
-        if _within_cap:
-            with_plan = _within_cap
-            if isinstance(getattr(with_plan[0], "metrics", None), dict):
-                with_plan[0].metrics["hard35_enforcement"] = _hard35_meta
-        else:
-            _alert_best = _least_damage
-            if _alert_best is not None:
-                _alert_best.best_effort = True
-            _result_h35 = PipelineResult(
-                order_id=order_id,
-                verdict="KOORD",
-                reason=(
-                    f"hard35_least_damage_alert "
-                    f"(cap={_hard35_meta['cap_min']:.0f}; 0 within cap; "
-                    f"visible_cid={getattr(_alert_best, 'courier_id', None)})"
-                ),
-                best=_alert_best,
-                candidates=with_plan[:TOP_N_CANDIDATES],
-                full_pool_candidates=candidates,
-                pickup_ready_at=pickup_ready_at,
-                restaurant=restaurant,
-                delivery_address=delivery_address,
-                pool_total_count=len(candidates),
-                pool_feasible_count=0,
-            )
-            _result_h35.hard35_enforcement = _hard35_meta
-            _classify_and_set_auto_route(
-                _result_h35, fleet_snapshot, order_event, now=now,
-                v328_fail_causes=_v328_fail_causes)
-            return _result_h35
     if with_plan:
         best = with_plan[0]
         best.best_effort = True
@@ -1246,6 +1258,7 @@ def select_and_emit(ctx: SelectionContext, candidates: list):
             pool_total_count=len(candidates),
             pool_feasible_count=0,
         )
+        _result_be = _hard35_proposal_boundary(_result_be, with_plan)
         _classify_and_set_auto_route(_result_be, fleet_snapshot, order_event, now=now, v328_fail_causes=_v328_fail_causes)
         return _result_be
 
@@ -1325,6 +1338,8 @@ def select_and_emit(ctx: SelectionContext, candidates: list):
             pool_total_count=len(candidates),
             pool_feasible_count=0,
         )
+        _result_solo = _hard35_proposal_boundary(
+            _result_solo, [solo_best])
         _classify_and_set_auto_route(_result_solo, fleet_snapshot, order_event, now=now, v328_fail_causes=_v328_fail_causes)
         return _result_solo
 

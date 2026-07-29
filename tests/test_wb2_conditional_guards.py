@@ -475,7 +475,7 @@ def test_G5_ratchet_bez_certyfikatu_alarmu_nigdy_loose(tmp_path):
     assert LG.alarm_certified(None) is False
 
 
-def test_cap_alarmowy_40_tylko_z_certyfikatem():
+def test_cap_alarmowy_40_tylko_z_certyfikatem(monkeypatch):
     assert G.load_thresholds().carry_cap_min == 35.0
     candidate = SimpleNamespace(
         courier_id="c37",
@@ -488,9 +488,34 @@ def test_cap_alarmowy_40_tylko_z_certyfikatem():
             "unknown_count": 0,
         }},
     )
+    cert_now = datetime.now(timezone.utc)
+    s2 = {
+        "schema": "strategy2_probe.v1",
+        "status": "EVALUATED",
+        "order_id": "o",
+        "found": False,
+    }
     cert = AC.build(
-        [candidate], decision_order_id="o", now=datetime.now(timezone.utc))
-    assert G.load_thresholds(alarm_certificate=cert).carry_cap_min == 40.0
+        [candidate],
+        decision_order_id="o",
+        now=cert_now,
+        strategy2_probe=s2,
+    )
+    original_decision_flag = C.decision_flag
+    monkeypatch.setattr(
+        C,
+        "decision_flag",
+        lambda name: (
+            True
+            if name == "ENABLE_ALARM_CERTIFICATE_SHADOW"
+            else original_decision_flag(name)
+        ),
+    )
+    assert G.load_thresholds(
+        alarm_certificate=cert,
+        alarm_candidates=[candidate],
+        strategy2_probe=s2,
+    ).carry_cap_min == 40.0
     # Mutation/forgery ratchet: dowolny dict już nie otwiera capa.
     assert G.load_thresholds(alarm_certificate={"id": "x"}).carry_cap_min == 35.0
 

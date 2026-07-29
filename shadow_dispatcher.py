@@ -286,8 +286,10 @@ def _serialize_dt_map(m):
 # KONTRAKT ⑤ „prawda przyrządów" (ZIOMEK_ARCHITECTURE): KAŻDY klucz
 # `metrics` JEST serializowany (LOCATION A alternatives + LOCATION B best —
 # wspólny helper `_propagate_prefixed_metrics`), CHYBA ŻE jawnie wykluczony
-# Z POWODEM w `_METRICS_EXCLUDE`. Nowa metryka = widoczna w ledgerze od
-# urodzenia; świadome pominięcie = wpis z powodem, nie cicha dziura.
+# Z POWODEM w `_METRICS_EXCLUDE` albo przypisany do feature-ownera w
+# `_METRICS_FLAG_OWNERS` i jego flaga jest OFF. Nowa metryka = widoczna w
+# ledgerze od urodzenia; świadome pominięcie = wpis z powodem/ownerem, nie
+# cicha dziura.
 # Klucz explicit-read w serializerze nadal wygrywa (skip gdy `k in base`).
 # Decyzyjnie-NEUTRALNE: serializer tylko LOGUJE — zero wpływu na werdykt.
 _METRICS_EXCLUDE = {
@@ -299,6 +301,15 @@ _METRICS_EXCLUDE = {
     "strategy": "REDUND = plan.strategy",
     "total_duration_min": "REDUND = plan.total_duration_min",
     "osrm_fallback_used": "REDUND = plan.osrm_fallback_used",
+}
+
+# Feature-owned metrics must not rely only on their producer being well
+# behaved.  Replays, stale PipelineResult instances and future callers can
+# carry populated artifacts while the owning flag is OFF; the shared A+B
+# serializer is the final byte-parity boundary.
+_METRICS_FLAG_OWNERS = {
+    "carry_eval": "ENABLE_CARRY_CANON_V2",
+    "hard35_enforcement": "ENABLE_HARD35_ENFORCE",
 }
 
 
@@ -325,8 +336,9 @@ def _json_safe(v, _depth: int = 0):
 
 def _propagate_prefixed_metrics(base: dict, metrics) -> None:
     """L1.1: propaguje WSZYSTKIE klucze `metrics` do serializowanego dictu
-    poza jawnie wykluczonymi (`_METRICS_EXCLUDE`, z powodem). Nazwa
-    historyczna (mechanizm prefiksowy zastąpiony deny-listą) — te same
+    poza jawnie wykluczonymi (`_METRICS_EXCLUDE`, z powodem) i artefaktami
+    przypisanymi do wyłączonego feature-ownera (`_METRICS_FLAG_OWNERS`).
+    Nazwa historyczna (mechanizm prefiksowy zastąpiony deny-listą) — te same
     2 call-site'y LOCATION A (_serialize_candidate) + B (best)."""
     if not metrics:
         return
@@ -334,6 +346,9 @@ def _propagate_prefixed_metrics(base: dict, metrics) -> None:
         if k in base:
             continue
         if k in _METRICS_EXCLUDE:
+            continue
+        owner_flag = _METRICS_FLAG_OWNERS.get(k)
+        if owner_flag is not None and not C.decision_flag(owner_flag):
             continue
         base[k] = _json_safe(v)
 
@@ -1202,19 +1217,29 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
     # Noc 28.07: pola istnieją wyłącznie przy aktywnych nowych flagach.
     # OFF nie emituje nawet `null`, więc kształt i kolejność baseline zostają.
     _carry_eval = getattr(result, "carry_eval", None)
-    if isinstance(_carry_eval, dict):
+    if (
+        C.decision_flag("ENABLE_CARRY_CANON_V2")
+        and isinstance(_carry_eval, dict)
+    ):
         out["carry_eval"] = _json_safe(_carry_eval)
     _alarm_certificate = getattr(result, "alarm_certificate", None)
-    if isinstance(_alarm_certificate, dict):
+    if (
+        C.decision_flag("ENABLE_ALARM_CERTIFICATE_SHADOW")
+        and isinstance(_alarm_certificate, dict)
+    ):
         out["alarm_certificate"] = _json_safe(_alarm_certificate)
     _strategy2_probe = getattr(result, "strategy2_probe", None)
-    if isinstance(_strategy2_probe, dict):
+    _strategy2_on = C.decision_flag("ENABLE_STRATEGY2_PROBE_SHADOW")
+    if _strategy2_on and isinstance(_strategy2_probe, dict):
         out["strategy2_probe"] = _json_safe(_strategy2_probe)
     _order_created_at = getattr(result, "order_created_at", None)
-    if _order_created_at is not None:
+    if _strategy2_on and _order_created_at is not None:
         out["order_created_at"] = str(_order_created_at)
     _hard35 = getattr(result, "hard35_enforcement", None)
-    if isinstance(_hard35, dict):
+    if (
+        C.decision_flag("ENABLE_HARD35_ENFORCE")
+        and isinstance(_hard35, dict)
+    ):
         out["hard35_enforcement"] = _json_safe(_hard35)
     # CHOICE-SET: OFF zachowuje legacy shape bajt-w-bajt (klucza nie ma).
     # ON zapisuje pełną pulę sprzed top-N, bez ciężkich planów/metrics.
@@ -2072,7 +2097,13 @@ def _tick(shadow_log_path: str, meta: Optional[dict], *,
                 _alarm_cert = getattr(result, "alarm_certificate", None)
                 if isinstance(_alarm_cert, dict):
                     from dispatch_v2.core import alarm_certificate as _alarm
-                    _alarm_status = _alarm.publish(_alarm_cert)
+                    _alarm_status = _alarm.publish(
+                        _alarm_cert,
+                        candidates=getattr(
+                            result, "alarm_validation_candidates", None),
+                        strategy2_probe=getattr(
+                            result, "strategy2_probe", None),
+                    )
                     if _alarm_status not in ("published", "flag_off"):
                         _log.warning(
                             "alarm certificate not published order=%s status=%s",

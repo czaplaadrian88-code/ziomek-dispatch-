@@ -45,6 +45,14 @@ from typing import Any, Callable, Dict, Iterable, Optional
 #: którakolwiek warstwa wróci do liczenia świeżości na czasie przyjazdu.
 HANDOFF_INCLUDES_DROPOFF_DWELL = True
 CARRY_EVAL_SCHEMA = "carry_eval.v1"
+# Jawna allowlista dowodów fizycznego possession. Sam niepusty opis źródła
+# nie jest provenance: panel/click/plan pozostają proxy nawet wtedy, gdy niosą
+# poprawnie sformatowany timestamp.
+BOUND_POSSESSION_SOURCES = frozenset({
+    "gps_bag_sensor",
+    "physical_handoff_event",
+    "restaurant_handoff_event",
+})
 
 
 def handoff_min(arrival_min: Optional[float],
@@ -140,8 +148,13 @@ def _possession(order: Any, plan: Any) -> tuple[Optional[datetime], str, str]:
     physical_source = str(
         getattr(order, "physical_possession_source", "") or ""
     ).strip()
-    if physical is not None and physical_source:
-        return physical, "bound", physical_source
+    if physical is not None:
+        binding = (
+            "bound"
+            if physical_source in BOUND_POSSESSION_SOURCES
+            else "proxy"
+        )
+        return physical, binding, physical_source or "unbound_physical_source"
 
     picked = _as_utc(getattr(order, "picked_up_at", None))
     if picked is not None:
@@ -178,17 +191,17 @@ def evaluate_plan(
         possession, binding, possession_source = _possession(order, plan)
         value = None
         if handoff is not None and possession is not None:
-            value = round(
-                (handoff - possession).total_seconds() / 60.0, 2
-            )
-            evaluated.append(value)
+            raw_value = (handoff - possession).total_seconds() / 60.0
+            value = round(raw_value, 2)
+            evaluated.append(raw_value)
         else:
+            raw_value = None
             unknown += 1
         rows.append({
             "order_id": oid,
             "carry_min": value,
-            "le_35": None if value is None else value <= 35.0,
-            "le_40": None if value is None else value <= 40.0,
+            "le_35": None if raw_value is None else raw_value <= 35.0,
+            "le_40": None if raw_value is None else raw_value <= 40.0,
             "source": binding,
             "possession_source": possession_source,
             "handoff_source": "predicted_delivery_with_dropoff_dwell",
