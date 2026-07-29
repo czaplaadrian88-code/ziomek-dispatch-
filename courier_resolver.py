@@ -1548,22 +1548,67 @@ def effective_shift_end(wo_entry: Optional[dict], grafik_entry: Optional[dict],
     return _shift_end_dt(grafik_entry)
 
 
+def _operator_on_shift_window(
+    availability,
+    _is_on_shift_fn,
+    cap_enabled: bool,
+) -> Tuple[Optional[datetime], Optional[datetime]]:
+    """Projektuje czas OPERATOR_ON bez zmiany authority dostępności.
+
+    - dokładny grafik wygrywa czasowo tylko wtedy, gdy kurier jest na nim TERAZ;
+    - jawne okno konsoli poza realną zmianą zachowuje istniejący working-override
+      i przechodzi przez jedyny owner GRAFIK-CAP/second-shift;
+    - assignment_event nie deklaruje końca pracy. Poza aktywnym grafikiem jego
+      początek to dokładny ``updated_at``, a koniec pozostaje nieznany zamiast
+      fabrykowania polityki 24:00 albo kopiowania minionego/przyszłego grafiku.
+    """
+    grafik_entry = availability.schedule_entry
+    real_on_shift_now = availability.real_on_shift_now
+
+    # Baseline precedence (owner-ACKed working override): gdy grafik jest aktywny
+    # TERAZ, jego start/end wygrywają niezależnie od explicit/default operator
+    # window. Zmiana tej relacji dotknęłaby HARD Gate 2/3 i wymaga osobnego ACK.
+    if real_on_shift_now:
+        return (
+            _shift_start_dt(grafik_entry),
+            effective_shift_end(None, grafik_entry, True, cap_enabled),
+        )
+
+    if availability.operator_interval is not None:
+        return (
+            availability.operator_interval.start_at,
+            effective_shift_end(
+                availability.operator_window,
+                grafik_entry,
+                False,
+                cap_enabled,
+            ),
+        )
+
+    return availability.operator_since, None
+
+
 def resolve_effective_shift_end_by_cid(
-    cid: Any, name: Optional[str] = None, schedule: Optional[dict] = None,
+    cid: Any,
+    name: Optional[str] = None,
+    schedule: Optional[dict] = None,
+    now: Optional[datetime] = None,
 ) -> Optional[datetime]:
-    """EFEKTYWNY koniec zmiany po CID — TO SAMO okno, które feasibility dostaje
-    jako `cs.shift_end` z dispatchable_fleet (working-override 'pracuje' z
-    GRAFIK-CAP w FALLBACK, realny grafik gdy kurier na zmianie): te same wejścia
-    (courier_tiers name, schedule_utils, manual_overrides.get_working, te same
-    flagi hot) i ta sama funkcja `effective_shift_end`. Fail-soft None.
-    Konsument: `plan_recheck._operator_pin_hard_report` (breach `grafik`)."""
+    """Efektywny koniec zmiany z tego samego store/ownera co feasibility.
+
+    Przy kontrakcie ON używa dokładnie ``AvailabilityContext`` +
+    ``_operator_on_shift_window`` jak ``dispatchable_fleet``. Przy OFF legacy
+    rollback projection pochodzi z tego samego snapshotu store, bez drugiego
+    modułowego czytnika working override. Konsument:
+    ``plan_recheck._operator_pin_hard_report``.
+    """
     try:
+        now_utc = now or datetime.now(timezone.utc)
+        if now_utc.tzinfo is None:
+            now_utc = now_utc.replace(tzinfo=timezone.utc)
+        else:
+            now_utc = now_utc.astimezone(timezone.utc)
         if not name:
-            # v5/v6 (r4+r5 Sola): TEN SAM łańcuch cid→nazwa co cs.name we flocie
-            # (build_fleet_snapshot ~:1203): _load_courier_names (merge kurier_ids
-            # + courier_names) → normalizacja zer wiodących → legacy-fallback
-            # _load_kurier_piny (str-klucz, potem int-klucz po isdigit; tylko
-            # wynik str). NIE courier_tiers (bywa stale ⇒ brak matchu grafiku).
             try:
                 _names = _load_courier_names()
                 _kid = str(cid)
@@ -1598,21 +1643,64 @@ def resolve_effective_shift_end_by_cid(
                     real_on_shift_now = bool(_ros)
         try:
             from dispatch_v2 import common as _C_ef
+            _contract_on = bool(
+                _C_ef.decision_flag("ENABLE_CID_AVAILABILITY_CONTRACT")
+            )
             _wo_on = bool(_C_ef.flag(
                 "ENABLE_WORKING_OVERRIDE",
                 default=bool(getattr(_C_ef, "ENABLE_WORKING_OVERRIDE", True))))
             _cap_on = bool(_C_ef.flag(
                 "ENABLE_WORKING_OVERRIDE_GRAFIK_CAP",
                 default=bool(getattr(_C_ef, "ENABLE_WORKING_OVERRIDE_GRAFIK_CAP", True))))
+            _pre_shift_window = (
+                _C_ef.PRE_SHIFT_WINDOW_MAX_MIN
+                if _C_ef.ENABLE_V324A_SCHEDULE_INTEGRATION
+                else PRE_SHIFT_WINDOW_MIN
+            )
         except Exception:
-            _wo_on, _cap_on = True, True
-        wo_entry = None
-        if _wo_on:
-            try:
-                from dispatch_v2 import manual_overrides as _MO
-                wo_entry = (_MO.get_working() or {}).get(str(cid))
-            except Exception:
-                wo_entry = None
+            _contract_on, _wo_on, _cap_on = False, True, True
+            _pre_shift_window = PRE_SHIFT_WINDOW_MIN
+
+        from dispatch_v2 import courier_availability as _availability
+
+        context = _availability.load_context(
+            schedule,
+            overrides_path=_availability.effective_overrides_path(),
+            grafik_names_path=GRAFIK_FULL_NAMES_PATH,
+            now=now_utc,
+        )
+        if _contract_on:
+            availability = _availability.resolve(
+                context,
+                cid,
+                is_on_shift=_ios,
+                mins_to_shift_start=_mins_to_shift_start,
+                pre_shift_window_min=_pre_shift_window,
+            )
+            if not availability.dispatchable:
+                return None
+            if (
+                availability.state
+                is _availability.AvailabilityState.OPERATOR_ON
+            ):
+                _shift_start, shift_end = _operator_on_shift_window(
+                    availability,
+                    _ios,
+                    _cap_on,
+                )
+                return shift_end
+            return effective_shift_end(
+                None,
+                availability.schedule_entry,
+                True,
+                _cap_on,
+            )
+
+        wo_entry = (
+            context.legacy_working_by_cid.get(str(cid))
+            if _wo_on and context.legacy_error is None
+            else None
+        )
         return effective_shift_end(wo_entry, grafik_entry, real_on_shift_now, _cap_on)
     except Exception:
         return None
@@ -1873,13 +1961,43 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
                 })
                 continue
 
+            entry = availability.schedule_entry
             if availability.state is _availability.AvailabilityState.OPERATOR_ON:
-                if cs.pos is None:
+                # Authority pozostaje w CID OPERATOR_ON, ale okno ma semantykę
+                # istniejącego working override. Przyszły/miniony grafik nie
+                # może podmienić jawnego startu ani drugiej zmiany operatora.
+                cs.shift_start, cs.shift_end = _operator_on_shift_window(
+                    availability,
+                    is_on_shift,
+                    _wo_grafik_cap_enabled,
+                )
+                _operator_start_min = None
+                if cs.shift_start is not None:
+                    _operator_start_utc = (
+                        cs.shift_start.replace(tzinfo=timezone.utc)
+                        if cs.shift_start.tzinfo is None
+                        else cs.shift_start.astimezone(timezone.utc)
+                    )
+                    _operator_start_min = (
+                        _operator_start_utc - _now_utc_fleet
+                    ).total_seconds() / 60.0
+                # Parytet rollback OFF: jawne „pracuje od <future>” niesie
+                # istniejący gradient pre_shift (w tym shift_start_min), nie
+                # zwykły working_override_synthetic.
+                if (
+                    _operator_start_min is not None
+                    and _operator_start_min > 0
+                ):
+                    _synthetic_pos_fallback(
+                        cs,
+                        "pre_shift",
+                        shift_start_min=_operator_start_min,
+                    )
+                elif cs.pos is None:
                     _synthetic_pos_fallback(
                         cs, "working_override_synthetic"
                     )
             else:
-                entry = availability.schedule_entry
                 cs.shift_start = _shift_start_dt(entry)
                 cs.shift_end = effective_shift_end(
                     None, entry, True, _wo_grafik_cap_enabled

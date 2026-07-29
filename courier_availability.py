@@ -20,12 +20,19 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, Mapping, Optional
 from zoneinfo import ZoneInfo
 
+from dispatch_v2.shift_interval import (
+    ShiftInterval,
+    canonical_operator_window,
+    parse_shift_interval,
+)
+
 
 OVERRIDES_PATH = "/root/.openclaw/workspace/dispatch_state/manual_overrides.json"
 GRAFIK_FULL_NAMES_PATH = (
     "/root/.openclaw/workspace/dispatch_state/grafik_full_names.json"
 )
 STORE_KEY = "availability_by_cid"
+LEGACY_REVISION_KEY = "legacy_updated_at"
 
 # R4: granica doby operacyjnej. DOKŁADNIE ta sama, na której bliźniaczy
 # `manual_overrides_daily_reset.py` (timer `dispatch-overrides-reset.timer`,
@@ -66,6 +73,20 @@ class AvailabilityDecision:
     dispatchable: bool
     schedule_name: Optional[str] = None
     schedule_entry: Optional[dict] = None
+    # Dokładny stempel kanonicznego rekordu operatora. To metadata, nie nowy
+    # zegar ani writer; resolver puli może dzięki niemu nie brać początku
+    # przyszłego grafiku dla OPERATOR_ON bez jawnego okna konsoli.
+    operator_since: Optional[datetime] = None
+    # Kanoniczna projekcja tej samej decyzji „pracuje od/do", którą przy
+    # wyłączonym kontrakcie niesie legacy `working`. Field-level provenance
+    # pozwala zachować ten fakt po późniejszym assignment_event.
+    operator_window: Optional[dict] = None
+    # Jedyny sparsowany, Warsaw-aware przedział. Writer i reader używają tego
+    # samego parsera; konsumenci nie interpretują ponownie surowych HH:MM.
+    operator_interval: Optional[ShiftInterval] = None
+    # Exact CID->schedule evaluation frozen in this decision. Consumers must
+    # not re-run schedule matching with a different name or clock.
+    real_on_shift_now: bool = False
     detail: Optional[str] = None
     # R4: rekord operatorski BYŁ, ale wygasł — decyzję podjął grafik. Wyłącznie
     # obserwowalność (konsument stempluje log puli); nie wchodzi do polityki.
@@ -76,6 +97,11 @@ class AvailabilityDecision:
 class AvailabilityContext:
     operator_records: Mapping[str, dict]
     operator_error: Optional[str]
+    # Legacy rollback projection loaded from the exact same file snapshot as
+    # operator_records. It is consulted only while the behavior flag is OFF,
+    # but sharing the read prevents HARD-report/fleet split-brain.
+    legacy_working_by_cid: Mapping[str, dict]
+    legacy_error: Optional[str]
     schedule: Mapping[str, Any]
     schedule_error: Optional[str]
     schedule_names_by_cid: Mapping[str, str]
@@ -128,6 +154,33 @@ def _parse_store_ts(value: Any) -> Optional[datetime]:
     return parsed.astimezone(timezone.utc)
 
 
+def _operator_window_fields(
+    value: Any,
+    *,
+    added_at: Optional[str] = None,
+    provenance: Optional[str] = None,
+) -> Optional[dict]:
+    """Waliduje writer/read-side przez jeden typed parser.
+
+    ``provenance`` należy do faktu okna, nie do całego rekordu authority.
+    Dzięki temu późniejszy assignment może zmienić źródło ON, ale nie kasuje
+    nadal obowiązującego jawnego końca koordynatora.
+    """
+
+    field_provenance = (
+        provenance
+        if provenance is not None
+        else value.get("provenance") if isinstance(value, Mapping) else None
+    )
+    if field_provenance != AvailabilityProvenance.COORDINATOR_CONSOLE.value:
+        return None
+    return canonical_operator_window(
+        value,
+        added_at=added_at,
+        provenance=field_provenance,
+    )
+
+
 def _operational_day_start_after(moment: datetime) -> datetime:
     """Pierwsza granica doby operacyjnej ŚCIŚLE po ``moment`` (UTC-aware).
 
@@ -176,8 +229,10 @@ def _read_json_dict(path: str) -> tuple[dict, Optional[str]]:
     return data, None
 
 
-def _operator_records(path: str) -> tuple[dict, Optional[str]]:
-    data, error = _read_json_dict(path)
+def _validated_operator_records(
+    data: Mapping[str, Any],
+    error: Optional[str] = None,
+) -> tuple[dict, Optional[str]]:
     if error:
         return {}, error
     records = data.get(STORE_KEY, {})
@@ -205,6 +260,11 @@ def _operator_records(path: str) -> tuple[dict, Optional[str]]:
             return {}, "availability_store_invalid_provenance"
         clean[cid] = dict(raw_record)
     return clean, None
+
+
+def _operator_records(path: str) -> tuple[dict, Optional[str]]:
+    data, error = _read_json_dict(path)
+    return _validated_operator_records(data, error)
 
 
 def _schedule_names(path: str) -> tuple[dict, Optional[str]]:
@@ -251,7 +311,19 @@ def load_context(
     flagi i jednym znaczniku czasu. Hot-reload działa MIĘDZY wywołaniami, tak samo
     jak dla pozostałych flag czytanych w ``dispatchable_fleet``.
     """
-    records, operator_error = _operator_records(overrides_path)
+    store, store_error = _read_json_dict(overrides_path)
+    records, operator_error = _validated_operator_records(store, store_error)
+    raw_working = store.get("working", {}) if store_error is None else {}
+    legacy_error = None
+    if not isinstance(raw_working, dict):
+        legacy_working: Dict[str, dict] = {}
+        legacy_error = "working_store_not_object"
+    else:
+        legacy_working = {
+            str(raw_cid): dict(raw_entry)
+            for raw_cid, raw_entry in raw_working.items()
+            if isinstance(raw_entry, dict)
+        }
     names, identity_error = _schedule_names(grafik_names_path)
     schedule_map: Mapping[str, Any] = schedule if isinstance(schedule, Mapping) else {}
     if schedule is not None and not isinstance(schedule, Mapping):
@@ -261,6 +333,8 @@ def load_context(
     return AvailabilityContext(
         operator_records=records,
         operator_error=operator_error,
+        legacy_working_by_cid=legacy_working,
+        legacy_error=legacy_error or store_error,
         schedule=schedule_map,
         schedule_error=schedule_error,
         schedule_names_by_cid=names,
@@ -308,11 +382,99 @@ def resolve(
 
     if operator:
         state = AvailabilityState(operator["state"])
+        provenance = AvailabilityProvenance(operator["provenance"])
+        operator_since = _parse_store_ts(operator.get("updated_at"))
+        operator_window = None
+        operator_interval = None
+        if state is AvailabilityState.OPERATOR_ON and "operator_window" in operator:
+            operator_window = _operator_window_fields(operator.get("operator_window"))
+            if operator_window is None:
+                return AvailabilityDecision(
+                    key,
+                    state,
+                    provenance,
+                    False,
+                    operator_since=operator_since,
+                    detail="operator_window_invalid",
+                )
+            operator_interval = parse_shift_interval(
+                operator_window,
+                require_metadata=True,
+                expected_provenance=(
+                    AvailabilityProvenance.COORDINATOR_CONSOLE.value
+                ),
+            )
+            if operator_interval is None:
+                return AvailabilityDecision(
+                    key,
+                    state,
+                    provenance,
+                    False,
+                    operator_since=operator_since,
+                    detail="operator_window_invalid",
+                )
+        # Availability authority and schedule time metadata are separate facts.
+        # OPERATOR_ON still wins the dispatchable decision, but an exact
+        # CID->schedule-name match enriches it with the schedule-owned window.
+        # OPERATOR_OFF is not consumed by the fleet and remains byte-compatible.
+        # Do not fuzzy-match or fabricate an entry when exact data is absent.
+        schedule_name = None
+        schedule_entry = None
+        if (
+            state is AvailabilityState.OPERATOR_ON
+            and context.schedule_error is None
+            and context.identity_error is None
+        ):
+            schedule_name = context.schedule_names_by_cid.get(key)
+            raw_schedule_entry = (
+                context.schedule.get(schedule_name)
+                if schedule_name is not None and schedule_name in context.schedule
+                else None
+            )
+            schedule_entry = (
+                raw_schedule_entry if isinstance(raw_schedule_entry, dict) else None
+            )
+        real_on_shift_now = False
+        if schedule_name is not None and schedule_entry is not None:
+            try:
+                real_on_shift_now = bool(
+                    is_on_shift(
+                        schedule_name,
+                        {schedule_name: schedule_entry},
+                    )[0]
+                )
+            except Exception:
+                real_on_shift_now = False
+        if operator_interval is not None:
+            now = context.now or datetime.now(timezone.utc)
+            # Baseline precedence: an active exact schedule wins over the
+            # console projection even when its explicit window has just ended.
+            # Outside an active schedule, ended OPERATOR_ON remains fail-closed.
+            if operator_interval.ended(now) and not real_on_shift_now:
+                return AvailabilityDecision(
+                    key,
+                    state,
+                    provenance,
+                    False,
+                    schedule_name=schedule_name,
+                    schedule_entry=schedule_entry,
+                    operator_since=operator_since,
+                    operator_window=operator_window,
+                    operator_interval=operator_interval,
+                    real_on_shift_now=real_on_shift_now,
+                    detail="operator_window_ended",
+                )
         return AvailabilityDecision(
             key,
             state,
-            AvailabilityProvenance(operator["provenance"]),
+            provenance,
             state is AvailabilityState.OPERATOR_ON,
+            schedule_name=schedule_name,
+            schedule_entry=schedule_entry,
+            operator_since=operator_since,
+            operator_window=operator_window,
+            operator_interval=operator_interval,
+            real_on_shift_now=real_on_shift_now,
         )
 
     decision = _resolve_from_schedule(
@@ -459,7 +621,11 @@ def _atomic_write(path: str, data: dict) -> None:
             os.unlink(tmp_path)
 
 
-def save_legacy_payload(data: dict, *, path: str = OVERRIDES_PATH) -> None:
+def save_legacy_payload(
+    data: dict,
+    *,
+    path: Optional[str] = None,
+) -> None:
     """Zapis legacy pól bez prawa nadpisania kanonicznego kontraktu.
 
     ``manual_overrides`` może rozpocząć RMW przed równoległym assignmentem. Pod
@@ -468,17 +634,256 @@ def save_legacy_payload(data: dict, *, path: str = OVERRIDES_PATH) -> None:
     """
     if not isinstance(data, dict):
         raise ValueError("manual overrides payload must be an object")
-    with _store_lock(path):
-        current, error = _read_json_dict(path)
+    effective_path = _effective_overrides_path(path)
+    expected_revision = data.get(LEGACY_REVISION_KEY, "")
+    with _store_lock(effective_path):
+        current, error = _read_json_dict(effective_path)
         if error:
             raise RuntimeError(f"availability store unreadable: {error}")
+        current_revision = current.get(LEGACY_REVISION_KEY, "")
+        if current_revision != expected_revision:
+            raise RuntimeError(
+                "concurrent manual overrides update; retry command"
+            )
         merged = dict(data)
         current_records = current.get(STORE_KEY, {})
         if not isinstance(current_records, dict):
             raise RuntimeError("availability store is not an object")
         merged[STORE_KEY] = current_records
-        merged["updated_at"] = datetime.now(timezone.utc).isoformat()
-        _atomic_write(path, merged)
+        updated_at = datetime.now(timezone.utc).isoformat()
+        merged["updated_at"] = updated_at
+        merged[LEGACY_REVISION_KEY] = updated_at
+        _atomic_write(effective_path, merged)
+
+
+def reset_legacy_fields(*, path: Optional[str] = None) -> Dict[str, int]:
+    """Czyści lifecycle legacy jednym RMW pod kanonicznym lockiem.
+
+    CID authority jest zachowane. Zwracamy wyłącznie liczności, żeby entrypoint
+    resetu nie logował nazw ani CID-ów.
+    """
+
+    effective_path = _effective_overrides_path(path)
+    with _store_lock(effective_path):
+        current, error = _read_json_dict(effective_path)
+        if error:
+            raise RuntimeError(f"availability store unreadable: {error}")
+        records = current.get(STORE_KEY, {})
+        if not isinstance(records, dict):
+            raise RuntimeError("availability store is not an object")
+        counts = {
+            "excluded": len(current.get("excluded", []) or []),
+            "excluded_cids": len(current.get("excluded_cids", []) or []),
+            "working": len(current.get("working", {}) or {}),
+        }
+        updated_at = datetime.now(timezone.utc).isoformat()
+        merged = dict(current)
+        merged["excluded"] = []
+        merged["excluded_cids"] = []
+        merged["working"] = {}
+        merged[STORE_KEY] = records
+        merged["updated_at"] = updated_at
+        merged[LEGACY_REVISION_KEY] = updated_at
+        _atomic_write(effective_path, merged)
+    return counts
+
+
+def _normalized_event_time(at: Optional[datetime]) -> tuple[datetime, str]:
+    when = at or datetime.now(timezone.utc)
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    when = when.astimezone(timezone.utc)
+    return when, when.isoformat()
+
+
+def _new_operator_record(
+    state: Optional[AvailabilityState],
+    provenance: AvailabilityProvenance,
+    updated_at: str,
+    operator_window: Optional[Mapping[str, Any]],
+) -> Optional[dict]:
+    if state is None:
+        return None
+    record = {
+        "state": state.value,
+        "provenance": provenance.value,
+        "updated_at": updated_at,
+    }
+    if operator_window is not None:
+        canonical_window = _operator_window_fields(
+            operator_window,
+            added_at=updated_at,
+            provenance=AvailabilityProvenance.COORDINATOR_CONSOLE.value,
+        )
+        if canonical_window is None:
+            raise ValueError("invalid operator window")
+        record["operator_window"] = canonical_window
+    return record
+
+
+def _merge_operator_record(
+    records: Mapping[str, Any],
+    key: str,
+    incoming: Optional[dict],
+    provenance: AvailabilityProvenance,
+    when: datetime,
+) -> tuple[dict, Optional[dict], bool]:
+    """Łączy niezależne fakty authority i okna w jednym ownerze.
+
+    Root ``provenance/updated_at`` opisuje ostatni fakt ON/OFF.  Zagnieżdżone
+    ``operator_window.provenance/added_at`` opisuje osobny jawny fakt czasu.
+    Assignment nie ma prawa deklarować końca, dlatego zachowuje poprawne okno
+    konsoli zamiast zastępować cały rekord.
+    """
+
+    updated = dict(records)
+    if incoming is None:
+        updated.pop(key, None)
+        return updated, None, True
+
+    existing = updated.get(key)
+    if (
+        provenance is AvailabilityProvenance.ASSIGNMENT_EVENT
+        and isinstance(existing, dict)
+    ):
+        existing_ts = _parse_store_ts(existing.get("updated_at"))
+        if existing_ts is not None and existing_ts >= when:
+            return updated, existing, False
+        if (
+            incoming.get("state") == AvailabilityState.OPERATOR_ON.value
+            and existing.get("state") == AvailabilityState.OPERATOR_ON.value
+            and "operator_window" in existing
+        ):
+            preserved_window = _operator_window_fields(
+                existing.get("operator_window")
+            )
+            if preserved_window is None:
+                raise ValueError("existing operator window is invalid")
+            incoming = dict(incoming)
+            incoming["operator_window"] = preserved_window
+
+    updated[key] = incoming
+    return updated, incoming, True
+
+
+def commit_console_projection(
+    legacy_payload: Mapping[str, Any],
+    cid: Any,
+    state: Optional[AvailabilityState],
+    *,
+    base_payload: Optional[Mapping[str, Any]] = None,
+    path: Optional[str] = None,
+    at: Optional[datetime] = None,
+    operator_window: Optional[Mapping[str, Any]] = None,
+) -> Optional[dict]:
+    """Atomowo zapisuje obie projekcje jednej komendy konsoli.
+
+    Legacy ``working/excluded`` jest rollback projection, a CID record jest
+    ownerem kontraktu ON.  Oba trafiają do jednego RMW pod tym samym lockiem i
+    jednego ``fsync+rename``; żaden obserwator nie zobaczy połowy komendy.
+    """
+
+    if not isinstance(legacy_payload, Mapping):
+        raise ValueError("manual overrides payload must be an object")
+    if state is not None and state not in {
+        AvailabilityState.OPERATOR_ON,
+        AvailabilityState.OPERATOR_OFF,
+    }:
+        raise ValueError("persistent availability accepts only OPERATOR_ON/OFF")
+    if operator_window is not None and state is not AvailabilityState.OPERATOR_ON:
+        raise ValueError("operator window requires coordinator_console OPERATOR_ON")
+
+    effective_path = _effective_overrides_path(path)
+    key = _canon_cid(cid)
+    when, updated_at = _normalized_event_time(at)
+    incoming = _new_operator_record(
+        state,
+        AvailabilityProvenance.COORDINATOR_CONSOLE,
+        updated_at,
+        operator_window,
+    )
+    with _store_lock(effective_path):
+        current, error = _read_json_dict(effective_path)
+        if error:
+            raise RuntimeError(f"availability store unreadable: {error}")
+        current_records = current.get(STORE_KEY, {})
+        if not isinstance(current_records, dict):
+            raise RuntimeError("availability store is not an object")
+        merged_records, stored, _changed = _merge_operator_record(
+            current_records,
+            key,
+            incoming,
+            AvailabilityProvenance.COORDINATOR_CONSOLE,
+            when,
+        )
+        merged = dict(current)
+        if base_payload is None:
+            # Backward-compatible direct caller: pełna projekcja. Konsola
+            # przekazuje base_payload i dostaje CAS per zmienione pole.
+            merged.update(
+                {
+                    key: value
+                    for key, value in legacy_payload.items()
+                    if key not in {
+                        STORE_KEY,
+                        "updated_at",
+                        LEGACY_REVISION_KEY,
+                    }
+                }
+            )
+            changed_keys = {
+                key
+                for key in legacy_payload
+                if key not in {
+                    STORE_KEY,
+                    "updated_at",
+                    LEGACY_REVISION_KEY,
+                }
+            }
+        else:
+            if current.get(LEGACY_REVISION_KEY, "") != base_payload.get(
+                LEGACY_REVISION_KEY, ""
+            ):
+                raise RuntimeError(
+                    "concurrent manual overrides update; retry command"
+                )
+            changed_keys = {
+                key
+                for key in set(base_payload) | set(legacy_payload)
+                if key not in {
+                    STORE_KEY,
+                    "updated_at",
+                    LEGACY_REVISION_KEY,
+                }
+                and base_payload.get(key) != legacy_payload.get(key)
+            }
+            defaults = {
+                "excluded": [],
+                "excluded_cids": [],
+                "working": {},
+            }
+            for changed_key in changed_keys:
+                expected = base_payload.get(
+                    changed_key, defaults.get(changed_key)
+                )
+                current_value = current.get(
+                    changed_key, defaults.get(changed_key)
+                )
+                if current_value != expected:
+                    raise RuntimeError(
+                        "concurrent manual overrides update; retry command"
+                    )
+            for changed_key in changed_keys:
+                if changed_key in legacy_payload:
+                    merged[changed_key] = legacy_payload[changed_key]
+                else:
+                    merged.pop(changed_key, None)
+        merged[STORE_KEY] = merged_records
+        merged["updated_at"] = updated_at
+        if changed_keys:
+            merged[LEGACY_REVISION_KEY] = updated_at
+        _atomic_write(effective_path, merged)
+    return stored
 
 
 def set_operator_availability(
@@ -488,6 +893,7 @@ def set_operator_availability(
     *,
     path: Optional[str] = None,
     at: Optional[datetime] = None,
+    operator_window: Optional[Mapping[str, Any]] = None,
 ) -> Optional[dict]:
     """Jedyny writer ``availability_by_cid``.
 
@@ -506,15 +912,20 @@ def set_operator_availability(
         AvailabilityProvenance.ASSIGNMENT_EVENT,
     }:
         raise ValueError("invalid persistent availability provenance")
-    when = at or datetime.now(timezone.utc)
-    if when.tzinfo is None:
-        when = when.replace(tzinfo=timezone.utc)
-    updated_at = when.astimezone(timezone.utc).isoformat()
-    record = None if state is None else {
-        "state": state.value,
-        "provenance": provenance.value,
-        "updated_at": updated_at,
-    }
+    if operator_window is not None and not (
+        state is AvailabilityState.OPERATOR_ON
+        and provenance is AvailabilityProvenance.COORDINATOR_CONSOLE
+    ):
+        raise ValueError(
+            "operator window requires coordinator_console OPERATOR_ON"
+        )
+    when, updated_at = _normalized_event_time(at)
+    record = _new_operator_record(
+        state,
+        provenance,
+        updated_at,
+        operator_window,
+    )
     with _store_lock(path):
         data, error = _read_json_dict(path)
         if error:
@@ -522,24 +933,18 @@ def set_operator_availability(
         records = data.get(STORE_KEY, {})
         if not isinstance(records, dict):
             raise RuntimeError("availability store is not an object")
-        records = dict(records)
-        if record is None:
-            records.pop(key, None)
-        else:
-            # R-POOL-TRUTH precedencja: opóźniony ``COURIER_ASSIGNED`` (starszy w
-            # czasie zdarzenia) NIE może wskrzesić/nadpisać nowszej jawnej decyzji
-            # (np. koordynatorskiego OFF). O zwycięstwie decyduje czas zdarzenia,
-            # nie kolejność przetworzenia. Jawny COORDINATOR_CONSOLE wygrywa remis.
-            existing = records.get(key)
-            if (
-                provenance is AvailabilityProvenance.ASSIGNMENT_EVENT
-                and isinstance(existing, dict)
-            ):
-                existing_ts = _parse_store_ts(existing.get("updated_at"))
-                if existing_ts is not None and existing_ts >= when:
-                    return existing
-            records[key] = record
+        # R-POOL-TRUTH precedencja + field-level merge żyją w jednym helperze,
+        # więc assignment i konsola nie mają bliźniaczych polityk.
+        records, stored, changed = _merge_operator_record(
+            records,
+            key,
+            record,
+            provenance,
+            when,
+        )
+        if not changed:
+            return stored
         data[STORE_KEY] = records
         data["updated_at"] = updated_at
         _atomic_write(path, data)
-    return record
+    return stored

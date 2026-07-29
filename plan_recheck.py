@@ -2500,9 +2500,9 @@ def _operator_pin_hard_report(cid, final_stops, orders_state,
     no_return = detektor Z-RULE `_detect_departed_pickup_revisit` (ta sama
     semantyka co F6, bez seedu carried — parytet z detekcją inwariantów);
     grafik (v4) = SEMANTYKA 1:1 z feasibility: okno = EFEKTYWNE cs.shift_end
-    (`courier_resolver.resolve_effective_shift_end_by_cid` — working-override
-    'pracuje' z GRAFIK-CAP; fleet i raport delegują do wspólnego
-    `effective_shift_end`, zero trzeciej kopii); PICKUP po shift_end = breach
+    (`courier_resolver.resolve_effective_shift_end_by_cid` — ten sam
+    AvailabilityContext/working rollback i zamrożone ``now`` co ewaluacja;
+    fleet i raport delegują do wspólnego window ownera); PICKUP po shift_end = breach
     BEZ tolerancji (parytet V3.25 Gate, pod tą samą flagą
     ENABLE_V325_SCHEDULE_HARDENING); DROPOFF > shift_end +
     V324_HARD_REJECT_DROPOFF_AFTER_SHIFT_MIN = breach (parytet V3.24-A, flaga
@@ -2534,7 +2534,10 @@ def _operator_pin_hard_report(cid, final_stops, orders_state,
                              "first_oid": (str(_oids[0]) if _oids[0] is not None else None)})
         try:
             from dispatch_v2 import courier_resolver as _CR_g
-            _sh_end = _CR_g.resolve_effective_shift_end_by_cid(cid)
+            _sh_end = _CR_g.resolve_effective_shift_end_by_cid(
+                cid,
+                now=now,
+            )
         except Exception:
             _sh_end = None
         if _sh_end is not None:

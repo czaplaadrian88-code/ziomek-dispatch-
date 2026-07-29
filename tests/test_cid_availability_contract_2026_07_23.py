@@ -295,6 +295,7 @@ def test_ratchet_single_store_writer_and_single_pool_consumer():
     assert store_owners == ["courier_availability.py"]
 
     writer_calls = []
+    console_transaction_calls = []
     resolver_calls = []
     for path in production_files:
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
@@ -305,11 +306,18 @@ def test_ratchet_single_store_writer_and_single_pool_consumer():
             if isinstance(func, ast.Attribute):
                 if func.attr == "set_operator_availability":
                     writer_calls.append(path.relative_to(ROOT).as_posix())
+                if func.attr == "commit_console_projection":
+                    console_transaction_calls.append(
+                        path.relative_to(ROOT).as_posix()
+                    )
                 if func.attr == "resolve" and isinstance(func.value, ast.Name):
                     if func.value.id == "_availability":
                         resolver_calls.append(path.relative_to(ROOT).as_posix())
-    assert set(writer_calls) == {"manual_overrides.py", "state_machine.py"}
-    assert resolver_calls == ["courier_resolver.py"]
+    assert writer_calls == ["state_machine.py"]
+    assert set(console_transaction_calls) == {"manual_overrides.py"}
+    # Fleet feasibility and the plan HARD report are the two approved
+    # consumers; both delegate to the same CID resolver in one module.
+    assert resolver_calls == ["courier_resolver.py", "courier_resolver.py"]
 
 
 def test_flag_contract_is_etap4_off_default():

@@ -8,8 +8,8 @@ Lifecycle: do końca dnia (reset codziennie rano przez cron lub ręcznie "reset"
 import json
 import os
 import re
+from copy import deepcopy
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
 
@@ -26,6 +26,7 @@ KURIER_IDS_PATH = "/root/.openclaw/workspace/dispatch_state/kurier_ids.json"  # 
 # zapisany tutaj (np. "Mateusz O" ≠ "Mateusz Ostapczuk"). Czytamy ten plik, by
 # zmapować dowolną formę nazwy → cid (get_excluded_cids → match po cid).
 GRAFIK_FULL_NAMES_PATH = "/root/.openclaw/workspace/dispatch_state/grafik_full_names.json"
+_LEGACY_REVISION_KEY = "legacy_updated_at"
 
 EXCLUDE_KEYWORDS = ("nie pracuje", "wyklucz", "choruje", "nie ma")
 INCLUDE_KEYWORDS = ("wrócił", "wrocil", "wróciła", "wrocila", "wraca", "pracuje", "jest", "dodaj")
@@ -63,22 +64,20 @@ def load() -> dict:
     if not isinstance(d["working"], dict):
         d["working"] = {}
     d.setdefault("updated_at", "")
+    d.setdefault(_LEGACY_REVISION_KEY, "")
     return d
 
 
 def save(data: dict) -> None:
-    if _availability_contract_enabled():
-        from dispatch_v2 import courier_availability as _availability
-        _availability.save_legacy_payload(data, path=OVERRIDES_PATH)
-        return
-    data["updated_at"] = datetime.now(timezone.utc).isoformat()
-    Path(OVERRIDES_PATH).parent.mkdir(parents=True, exist_ok=True)
-    tmp = OVERRIDES_PATH + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, OVERRIDES_PATH)
+    """Compatibility writer delegating unconditionally to the store owner.
+
+    Safety (lock/CAS/preserve CID authority) is independent of the behavior
+    kill-switch. A stale caller is rejected rather than losing another writer.
+    """
+
+    from dispatch_v2 import courier_availability as _availability
+
+    _availability.save_legacy_payload(data, path=OVERRIDES_PATH)
 
 
 def get_excluded() -> List[str]:
@@ -279,8 +278,11 @@ def _resolve_cid(name: str) -> str:
         return "?"
 
 
-def _now_warsaw_hhmm() -> str:
-    return datetime.now(_WAW).strftime("%H:%M")
+def _now_warsaw_hhmm(at: Optional[datetime] = None) -> str:
+    moment = at or datetime.now(_WAW)
+    if moment.tzinfo is None:
+        moment = moment.replace(tzinfo=timezone.utc)
+    return moment.astimezone(_WAW).strftime("%H:%M")
 
 
 def _default_end() -> str:
@@ -289,7 +291,11 @@ def _default_end() -> str:
     return os.environ.get("WORKING_OVERRIDE_DEFAULT_END", "24:00")
 
 
-def _parse_shift_bounds(text: str) -> Tuple[str, str, bool]:
+def _parse_shift_bounds(
+    text: str,
+    *,
+    at: Optional[datetime] = None,
+) -> Tuple[str, str, bool]:
     """Free-text → (start_hhmm, end_hhmm, end_explicit). Default start=teraz (Warsaw),
     end=DEFAULT_END, end_explicit=False.
 
@@ -301,7 +307,7 @@ def _parse_shift_bounds(text: str) -> Tuple[str, str, bool]:
     courier_resolver GRAFIK-CAP (2026-06-07) używa tego flagu, by NIE przycinać jawnego
     końca do końca realnego grafiku — domyślny 24:00 jest przycinany, jawny respektowany."""
     low = (text or "").lower()
-    start = _now_warsaw_hhmm()
+    start = _now_warsaw_hhmm(at)
     end = _default_end()
     end_explicit = False
     m_od = re.search(r"\bod\s+(\d{1,2})(?::(\d{2}))?", low)
@@ -323,14 +329,25 @@ def _parse_shift_bounds(text: str) -> Tuple[str, str, bool]:
     return start, end, end_explicit
 
 
-def _add_working(data: dict, courier: str, text: str) -> Optional[Tuple[str, str, str]]:
+def _add_working(
+    data: dict,
+    courier: str,
+    text: str,
+    *,
+    at: Optional[datetime] = None,
+    resolved_cid: Optional[str] = None,
+) -> Optional[Tuple[str, str, str]]:
     """Dodaj cid-keyed working entry dla 'X pracuje'. Returns (cid_str, start, end) lub
     None gdy cid nieznany (bez cid nie da się zakotwiczyć override'a → caller informuje
     operatora żeby użył /dopisz). Mutuje data (caller zapisuje przez save)."""
-    cid = _resolve_cid(courier)
+    cid = resolved_cid if resolved_cid is not None else _resolve_cid(courier)
     if cid == "?":
         return None
-    start, end, end_explicit = _parse_shift_bounds(text)
+    when = at or datetime.now(timezone.utc)
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=timezone.utc)
+    when = when.astimezone(timezone.utc)
+    start, end, end_explicit = _parse_shift_bounds(text, at=when)
     working = data.setdefault("working", {})
     if not isinstance(working, dict):
         working = {}
@@ -340,7 +357,7 @@ def _add_working(data: dict, courier: str, text: str) -> Optional[Tuple[str, str
         "end": end,
         "end_explicit": end_explicit,
         "name": courier,
-        "added_at": datetime.now(timezone.utc).isoformat(),
+        "added_at": when.isoformat(),
     }
     return cid, start, end
 
@@ -351,7 +368,30 @@ def _do_include(data: dict, courier: str, text: str, add_to_grafik: bool = True)
     → dodaj working override (spoza grafiku / zaczyna teraz). Working jest FALLBACKIEM —
     courier_resolver użyje go tylko gdy kurier NIE jest na realnej zmianie (nie rozszerza
     godzin powracającego, który jest w grafiku). Uczciwe potwierdzenie."""
-    excluded = data.get("excluded", [])
+    availability_contract_on = _availability_contract_enabled()
+    # Identity jest precondition całej transakcji, nie walidacją po legacy
+    # mutacji. Dwa historyczne resolvery muszą wskazać ten sam CID; dopóki
+    # istnieją oba, rozjazd kończy się byte-preserving fail-closed.
+    try:
+        name_to_cid = _all_name_to_cid()
+    except Exception:
+        name_to_cid = {}
+    _inc_cid = name_to_cid.get(courier)
+    legacy_cid = _resolve_cid(courier)
+    if availability_contract_on and (
+        _inc_cid is None
+        or legacy_cid == "?"
+        or str(_inc_cid) != str(legacy_cid)
+    ):
+        return "include", (
+            f"⚠️ {courier}: nie znam cid jednoznacznie — stan bez zmian. "
+            "Użyj /dopisz <cid> <imię>"
+        )
+
+    # Caller mógł przekazać obiekt pochodzący z load(). Mutujemy kopię i
+    # publikujemy ją dopiero po udanym atomowym commicie.
+    candidate = deepcopy(data)
+    excluded = candidate.get("excluded", [])
     was_excluded = courier in excluded
     if was_excluded:
         excluded.remove(courier)
@@ -359,38 +399,73 @@ def _do_include(data: dict, courier: str, text: str, add_to_grafik: bool = True)
     # ze STOP po cid — usuń WSZYSTKIE nazwy mapujące na ten cid (desync nick/full)
     # oraz cid z excluded_cids. Dzięki temu "X wrócił" pełnym imieniem zdejmuje też
     # wpis zapisany skrótem (i odwrotnie).
-    try:
-        _inc_cid = _all_name_to_cid().get(courier)
-    except Exception:
-        _inc_cid = None
     if _inc_cid is not None:
-        try:
-            _n2c = _all_name_to_cid()
-        except Exception:
-            _n2c = {}
+        _n2c = name_to_cid
         before = len(excluded)
         excluded = [n for n in excluded if _n2c.get(n) != _inc_cid]
         if len(excluded) != before:
             was_excluded = True
-        ec = data.get("excluded_cids", [])
+        ec = candidate.get("excluded_cids", [])
         if isinstance(ec, list) and str(_inc_cid) in [str(c) for c in ec]:
-            data["excluded_cids"] = [c for c in ec if str(c) != str(_inc_cid)]
+            candidate["excluded_cids"] = [
+                c for c in ec if str(c) != str(_inc_cid)
+            ]
             was_excluded = True
-    data["excluded"] = excluded
-    added = _add_working(data, courier, text) if add_to_grafik else None
-    save(data)
-    # R-POOL-TRUTH: konsola jest legalnym writerem WYŁĄCZNIE przez jeden
-    # CID-keyed owner. OFF-flaga pozostawia stary zapis bajt-w-bajt. ``neutral``
-    # czyści ręczny stan i oddaje decyzję grafikowi; zielony zapisuje trwałe ON.
-    if _availability_contract_enabled() and _inc_cid is not None:
+    candidate["excluded"] = excluded
+    # Jeden stempel dla obu projekcji tej samej decyzji. Legacy `working`
+    # pozostaje ścieżką rollback OFF, a CID record jest ownerem przy kontrakcie
+    # ON; wspólne ``at`` gwarantuje parytet startu i GRAFIK-CAP/second-shift.
+    operator_at = datetime.now(timezone.utc) if add_to_grafik else None
+    added = (
+        _add_working(
+            candidate,
+            courier,
+            text,
+            at=operator_at,
+            resolved_cid=(
+                str(_inc_cid)
+                if availability_contract_on and _inc_cid is not None
+                else None
+            ),
+        )
+        if add_to_grafik
+        else None
+    )
+    if availability_contract_on:
+        if add_to_grafik and added is None:
+            return "include", (
+                f"⚠️ {courier}: nie znam cid jednoznacznie — stan bez zmian. "
+                "Użyj /dopisz <cid> <imię>"
+            )
         from dispatch_v2 import courier_availability as _availability
-        _availability.set_operator_availability(
+
+        operator_window = None
+        if added is not None:
+            added_cid = added[0]
+            raw_window = candidate.get("working", {}).get(added_cid)
+            if isinstance(raw_window, dict):
+                operator_window = {
+                    "start": raw_window.get("start"),
+                    "end": raw_window.get("end"),
+                    "end_explicit": raw_window.get("end_explicit"),
+                }
+        _availability.commit_console_projection(
+            candidate,
             _inc_cid,
             (_availability.AvailabilityState.OPERATOR_ON
              if add_to_grafik else None),
-            _availability.AvailabilityProvenance.COORDINATOR_CONSOLE,
+            base_payload=data,
             path=OVERRIDES_PATH,
+            at=operator_at,
+            operator_window=operator_window,
         )
+    else:
+        from dispatch_v2 import courier_availability as _availability
+
+        _availability.save_legacy_payload(candidate, path=OVERRIDES_PATH)
+
+    data.clear()
+    data.update(candidate)
     if added is not None:
         cid, start, end = added
         end_disp = "końca dnia" if end == "24:00" else end
@@ -413,35 +488,55 @@ def _do_include(data: dict, courier: str, text: str, add_to_grafik: bool = True)
 def _do_exclude(data: dict, courier: str) -> Tuple[str, str]:
     """Wspólna ścieżka 'nie pracuje/wyklucz/choruje' + /stop. Dodaj do excluded ORAZ
     usuń ewentualny working override (operator zatrzymał kuriera — czyść stan)."""
-    excluded = data.get("excluded", [])
+    availability_contract_on = _availability_contract_enabled()
+    cid = _resolve_cid(courier)
+    try:
+        canonical_cid = _all_name_to_cid().get(courier)
+    except Exception:
+        canonical_cid = None
+    if availability_contract_on and (
+        cid == "?"
+        or canonical_cid is None
+        or str(canonical_cid) != str(cid)
+    ):
+        return "exclude", (
+            f"⚠️ {courier}: nie znam cid jednoznacznie — STOP nie został zapisany"
+        )
+
+    candidate = deepcopy(data)
+    excluded = candidate.get("excluded", [])
     if courier not in excluded:
         excluded.append(courier)
-        data["excluded"] = excluded
-    cid = _resolve_cid(courier)
+        candidate["excluded"] = excluded
     # zalążek B (2026-06-10): zapisz cid jawnie → egzekucja po cid w dispatchable_fleet
     # odporna na desync nazw (panel-nick 'Mateusz O' vs grafik 'Mateusz Ostapczuk').
     if cid != "?":
-        ec = data.get("excluded_cids", [])
+        ec = candidate.get("excluded_cids", [])
         if not isinstance(ec, list):
             ec = []
         if cid not in ec:
             ec.append(cid)
-        data["excluded_cids"] = ec
-    working = data.get("working", {})
+        candidate["excluded_cids"] = ec
+    working = candidate.get("working", {})
     if isinstance(working, dict):
         working.pop(cid, None)
-        data["working"] = working
-    save(data)
-    # R-POOL-TRUTH: jawny czerwony przycisk jest trwałym OFF do kolejnego
-    # jawnego ON/neutral. Brak zapisu nowego kontraktu przy OFF-fladze.
-    if _availability_contract_enabled() and cid != "?":
+        candidate["working"] = working
+    if availability_contract_on:
         from dispatch_v2 import courier_availability as _availability
-        _availability.set_operator_availability(
+
+        _availability.commit_console_projection(
+            candidate,
             cid,
             _availability.AvailabilityState.OPERATOR_OFF,
-            _availability.AvailabilityProvenance.COORDINATOR_CONSOLE,
+            base_payload=data,
             path=OVERRIDES_PATH,
         )
+    else:
+        from dispatch_v2 import courier_availability as _availability
+
+        _availability.save_legacy_payload(candidate, path=OVERRIDES_PATH)
+    data.clear()
+    data.update(candidate)
     return "exclude", f"🛑 {courier} (cid={cid}) STOP — wykluczony do końca dnia"
 
 
@@ -484,11 +579,9 @@ def parse_command(text: str) -> Tuple[str, str]:
         return _do_include(load(), courier, raw)
 
     if low in ("reset", "reset overrides"):
-        data = load()
-        data["excluded"] = []
-        data["excluded_cids"] = []
-        data["working"] = {}
-        save(data)
+        from dispatch_v2 import courier_availability as _availability
+
+        _availability.reset_legacy_fields(path=OVERRIDES_PATH)
         return "reset", "✅ Reset — wszyscy kurierzy aktywni"
 
     has_exclude = any(kw in low for kw in EXCLUDE_KEYWORDS)

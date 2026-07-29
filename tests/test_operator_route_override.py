@@ -678,9 +678,19 @@ def test_grafik_breach_logged_in_applied(env, monkeypatch):
     monkeypatch.setattr(C, "ENABLE_V324A_SCHEDULE_INTEGRATION", True, raising=False)
     _save_base()
     _write_override(env, ["B", "A"])
-    monkeypatch.setattr(CR, "resolve_effective_shift_end_by_cid",
-                        lambda cid, **k: NOW)  # zmiana kończy się „teraz"
+    resolved_at = []
+
+    def _frozen_shift_end(_cid, **kwargs):
+        resolved_at.append(kwargs.get("now"))
+        return NOW
+
+    monkeypatch.setattr(
+        CR,
+        "resolve_effective_shift_end_by_cid",
+        _frozen_shift_end,
+    )  # zmiana kończy się „teraz"
     assert P.recanon_courier(CID, now=NOW) is True
+    assert resolved_at == [NOW]
     applied = [e for e in _events(env)
                if e["event"] == "operator_route_override_applied"]
     assert applied
