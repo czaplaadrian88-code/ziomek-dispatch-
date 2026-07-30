@@ -690,7 +690,13 @@ def test_r5_01_carry_writer_round_trips_raw_value_into_alarm_consumer():
     assert AC._candidate_carry(candidate) == raw_minutes
 
 
-def _r5_sla_candidate(monkeypatch, *, fail_later_hard: bool):
+def _r5_sla_candidate(
+    monkeypatch,
+    *,
+    fail_later_hard: bool,
+    shadow_probe: bool = True,
+    r6_shadow_log: bool = False,
+):
     """Realny writer feasibility: SLA i canonical carry ready→drop = 40."""
     order = RS.OrderSim(
         order_id="food",
@@ -730,6 +736,10 @@ def _r5_sla_candidate(monkeypatch, *, fail_later_hard: bool):
                 "ENABLE_SLA_ANCHOR_UNIFIED",
                 "ENABLE_SLA_GATE_READY_ANCHOR",
             }
+            or (
+                name == "ENABLE_R6_BREACH_SHADOW_LOG"
+                and r6_shadow_log
+            )
         ),
     )
 
@@ -741,8 +751,37 @@ def _r5_sla_candidate(monkeypatch, *, fail_later_hard: bool):
         shift_end=shift_end,
         now=NOW,
         pickup_ready_at=NOW,
-        shadow_probe=True,
+        shadow_probe=shadow_probe,
     )
+
+
+def test_enable_r6_breach_shadow_log_prod_probe_on_off_matrix(
+    monkeypatch,
+):
+    """Side-effect tylko dla produkcyjnego ON; probe i OFF są zawsze czyste."""
+    from dispatch_v2 import obj_replay_capture as ORC
+
+    emitted = []
+    monkeypatch.setattr(ORC, "capture", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        FV,
+        "_emit_r6_breach_shadow",
+        lambda *_a, **_k: emitted.append("ENABLE_R6_BREACH_SHADOW_LOG"),
+    )
+
+    for shadow_probe in (False, True):
+        for enabled in (False, True):
+            before = len(emitted)
+            verdict, reason, _metrics, _plan = _r5_sla_candidate(
+                monkeypatch,
+                fail_later_hard=False,
+                shadow_probe=shadow_probe,
+                r6_shadow_log=enabled,
+            )
+            assert verdict == "NO"
+            assert reason.startswith("sla_violation")
+            expected_delta = int(enabled and not shadow_probe)
+            assert len(emitted) - before == expected_delta
 
 
 def test_r5_02_sla_thermal_reject_marks_other_hards_only_after_full_pass(

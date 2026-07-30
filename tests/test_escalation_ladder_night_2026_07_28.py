@@ -520,6 +520,54 @@ def test_F5_strategy2_soon_free_read_is_byte_pure(tmp_path, monkeypatch):
     assert PM._perf_plans_cache == cache_before
 
 
+def test_F5_enable_load_plan_pure_read_reader_and_probe_matrix(monkeypatch):
+    """ON/OFF starego read-path + strict Strategy-2 muszą mieć jeden kontrakt.
+
+    ``ENABLE_LOAD_PLAN_PURE_READ`` steruje wyłącznie zwykłym readerem:
+    ON zabrania invalidacji, OFF zachowuje legacy invalidation. Strategy-2
+    ``pure_read=True`` jest zawsze strict/pure i nie może nawet czytać flagi.
+    """
+    from dispatch_v2 import plan_manager as PM
+
+    calls = []
+
+    def _load_plan(_cid, **kwargs):
+        calls.append(kwargs)
+        return {
+            "stops": [{
+                "order_id": "current",
+                "type": "dropoff",
+                "predicted_at": (NOW + timedelta(minutes=5)).isoformat(),
+                "coords": {"lat": 53.13, "lng": 23.16},
+            }],
+        }
+
+    monkeypatch.setattr(PM, "load_plan", _load_plan)
+    for pure_read in (False, True):
+        for reader_enabled in (False, True):
+            flag_reads = []
+
+            def _flag(name, default=False):
+                flag_reads.append((name, default))
+                assert name == "ENABLE_LOAD_PLAN_PURE_READ"
+                return reader_enabled
+
+            monkeypatch.setattr(C, "flag", _flag)
+            result = DP._soon_free_probe(
+                "7", [{"order_id": "current"}], NOW, pure_read=pure_read
+            )
+
+            assert result["eligible"] is True
+            assert calls[-1]["_raise_on_corrupt"] is pure_read
+            assert calls[-1]["invalidate_on_mismatch"] is (
+                False if pure_read else not reader_enabled
+            )
+            assert flag_reads == (
+                [] if pure_read
+                else [("ENABLE_LOAD_PLAN_PURE_READ", False)]
+            )
+
+
 # D — zamknięcie best-effort
 
 
