@@ -1,6 +1,6 @@
 {
-  "base_sha": "ff0ceccc5248a8caf11e2a4e9fe5b646817d0a0b",
-  "manifest_version": 34,
+  "base_sha": "c16253b90af33d427a72c51befa3b54136f21caf",
+  "manifest_version": 35,
   "nodeids": [
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix1_kurier_ids_load_fail_logs_error_and_dedups",
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix2_bag_not_stale_dedup_same_input",
@@ -2396,12 +2396,20 @@
     "tests/test_flag_lifecycle_zp107.py::test_catches_missing_field",
     "tests/test_flag_lifecycle_zp107.py::test_checker_green_on_consistent",
     "tests/test_flag_lifecycle_zp107.py::test_checker_green_skip_external",
+    "tests/test_flag_lifecycle_zp107.py::test_committed_engine_consumer_paths_have_canonical_root",
+    "tests/test_flag_lifecycle_zp107.py::test_committed_explicit_dynamic_sources_have_ast_proof",
+    "tests/test_flag_lifecycle_zp107.py::test_committed_registry_reconciles_every_absent_curated_entry",
+    "tests/test_flag_lifecycle_zp107.py::test_consumer_paths_are_stable_in_renamed_worktree",
     "tests/test_flag_lifecycle_zp107.py::test_corrupt_registry_nonzero_exit",
     "tests/test_flag_lifecycle_zp107.py::test_cross_repo_skip_safe",
     "tests/test_flag_lifecycle_zp107.py::test_curation_complete_on_committed_registry",
     "tests/test_flag_lifecycle_zp107.py::test_engine_coverage_independent",
+    "tests/test_flag_lifecycle_zp107.py::test_explicit_absent_transition_becomes_dead_tombstone",
+    "tests/test_flag_lifecycle_zp107.py::test_explicit_dynamic_key_default_mutation_is_hold",
+    "tests/test_flag_lifecycle_zp107.py::test_explicit_dynamic_literal_default_mutation_is_hold",
     "tests/test_flag_lifecycle_zp107.py::test_generic_known_drift_is_reported_not_error",
     "tests/test_flag_lifecycle_zp107.py::test_reseed_merge_preserves_curation_pure",
+    "tests/test_flag_lifecycle_zp107.py::test_reseed_merge_rejects_absent_curated_nondead",
     "tests/test_flag_lifecycle_zp107.py::test_structure_complete",
     "tests/test_flag_lifecycle_zp107.py::test_twins_bidirectional",
     "tests/test_flag_lifecycle_zp107.py::test_use_v2_parser_historical_drift_is_closed",
@@ -5219,6 +5227,7 @@
     "tests/test_route_order_golden.py::test_pickup_merge_min_pinned_to_corpus",
     "tests/test_route_order_golden.py::test_plan_docs_use_stops_key",
     "tests/test_route_order_live_parity.py::test_backend_contract_requires_snapshot_builder_and_explicit_config",
+    "tests/test_route_order_live_parity.py::test_backend_loader_prefers_courier_api_over_worktree_config_namespace",
     "tests/test_route_order_live_parity.py::test_corpus_pins_all_four_courier_api_route_flags",
     "tests/test_route_order_live_parity.py::test_kotlin_projection_real_dto_structures",
     "tests/test_route_order_live_parity.py::test_kotlin_projection_reuses_existing_route_order_golden_min_three_cases",
@@ -6387,7 +6396,7 @@
     "tests/test_zombie01_pickup_guard.py::test_picked_up_recent_kept",
     "tests/test_zombie01_pickup_guard.py::test_zombie_assigned_with_stale_pickup_filtered"
   ],
-  "nodeids_sha256": "dfa4a9ca06824a4777a550afe029212dc4685f3e359882326c2a1bac1f5346c9",
+  "nodeids_sha256": "fcc268e23ee071d497f411b191d00f1f916451aae8a51db49a36280da25af704",
   "outcome_contracts": {
     "tests/test_canon_static_check_a1.py::test_defer_completion_guard_armed_when_defer_exists": [
       "skipped"
@@ -6406,21 +6415,6 @@
     ],
     "tests/test_demote_tier_bucket_p4.py::test_offmode_preserves_demote_across_tiers": [
       "xfailed"
-    ],
-    "tests/test_eta_residual_infer.py::test_logger_flag_on_populates_and_consistent": [
-      "skipped"
-    ],
-    "tests/test_flag_registry_f3.py::test_build_registry_smoke_live": [
-      "skipped"
-    ],
-    "tests/test_geo05_district_adjacency.py::test_intra_city_adjacency_centroid_sanity": [
-      "skipped"
-    ],
-    "tests/test_health_all_aggregator.py::test_build_all_snapshot_healthy": [
-      "skipped"
-    ],
-    "tests/test_health_all_aggregator.py::test_build_all_snapshot_no_worker_heartbeat": [
-      "skipped"
     ],
     "tests/test_invariant_slots_l04.py::test_inv_coh_r_declared_tripwire_exists": [
       "xfailed"
@@ -6479,39 +6473,6 @@
     "tests/test_parser_v2_property_based.py::test_backward_compat_real_fixture": [
       "skipped"
     ],
-    "tests/test_pin_gps_commands.py::TestGpsInstructionHandler::test_ambiguous_courier_returns_disambig": [
-      "skipped"
-    ],
-    "tests/test_pin_gps_commands.py::TestGpsInstructionHandler::test_with_name_personalized": [
-      "skipped"
-    ],
-    "tests/test_pin_gps_commands.py::TestPinCommandHandler::test_pin_ambiguous_lists_options": [
-      "skipped"
-    ],
-    "tests/test_pin_gps_commands.py::TestPinCommandHandler::test_pin_with_cid": [
-      "skipped"
-    ],
-    "tests/test_pin_gps_commands.py::TestPinCommandHandler::test_pin_with_name": [
-      "skipped"
-    ],
-    "tests/test_pin_gps_commands.py::TestResolveCourier::test_ambiguous_partial": [
-      "skipped"
-    ],
-    "tests/test_pin_gps_commands.py::TestResolveCourier::test_canonical_dotless_match": [
-      "skipped"
-    ],
-    "tests/test_pin_gps_commands.py::TestResolveCourier::test_cid_lookup": [
-      "skipped"
-    ],
-    "tests/test_pin_gps_commands.py::TestResolveCourier::test_dotted_legacy_query_normalizes": [
-      "skipped"
-    ],
-    "tests/test_prep_bias.py::test_real_log_smoke_if_present": [
-      "skipped"
-    ],
-    "tests/test_prep_variance_anomaly_fail04.py::test_real_meta_loads_and_has_high_variance": [
-      "skipped"
-    ],
     "tests/test_preshift_window_penalty_2026_06_24.py::test_beyond_window_excluded": [
       "passed",
       "skipped"
@@ -6548,123 +6509,21 @@
       "passed",
       "skipped"
     ],
-    "tests/test_r04_v2_evaluator.py::TestR04SchemaIntegrity::test_gold_promotion_blocked": [
-      "skipped"
-    ],
-    "tests/test_r04_v2_evaluator.py::TestR04SchemaIntegrity::test_peak_window_hours": [
-      "skipped"
-    ],
-    "tests/test_r04_v2_evaluator.py::TestR04SchemaIntegrity::test_schema_loadable": [
-      "skipped"
-    ],
-    "tests/test_r04_v2_evaluator.py::TestR04V2Evaluator::test_A_bartek_gold_candidate": [
-      "skipped"
-    ],
-    "tests/test_r04_v2_evaluator.py::TestR04V2Evaluator::test_B_mateusz_o_gold_part_time": [
-      "skipped"
-    ],
-    "tests/test_r04_v2_evaluator.py::TestR04V2Evaluator::test_C_gabriel_gold": [
-      "skipped"
-    ],
-    "tests/test_r04_v2_evaluator.py::TestR04V2Evaluator::test_D_adrian_r_std_plus_maintained": [
-      "skipped"
-    ],
-    "tests/test_r04_v2_evaluator.py::TestR04V2Evaluator::test_E_dariusz_m_std_to_std_plus_promotion": [
-      "skipped"
-    ],
-    "tests/test_r04_v2_evaluator.py::TestR04V2Evaluator::test_F_andrei_k_std_sustained_suppressed": [
-      "skipped"
-    ],
-    "tests/test_r04_v2_evaluator.py::TestR04V2Evaluator::test_G_albert_dec_insufficient_data": [
-      "skipped"
-    ],
-    "tests/test_r04_v2_evaluator.py::TestR04V2Evaluator::test_H_szymon_sa_new_insufficient": [
-      "skipped"
-    ],
-    "tests/test_r04_v2_evaluator.py::TestR04V2Evaluator::test_I_michal_li_slow_to_std_promotion": [
-      "skipped"
-    ],
-    "tests/test_r04_v2_evaluator.py::TestR04V2Evaluator::test_J_low_volume_insufficient": [
-      "skipped"
-    ],
-    "tests/test_r04_v2_evaluator.py::TestR04V2Evaluator::test_K_speed_completeness_gate": [
-      "skipped"
-    ],
     "tests/test_reconcile_dry_run.py::script_run": [
       "xfailed"
     ],
-    "tests/test_roadfactor_gap.py::test_real_log_runs_and_drops_outliers": [
-      "skipped"
-    ],
-    "tests/test_route_order_live_parity.py::test_live_route_order_parity_read_only_smoke": [
-      "skipped"
-    ],
     "tests/test_scoring_scenarios.py::test_scoring_scenarios_legacy_check_feasibility_removed": [
-      "skipped"
-    ],
-    "tests/test_state_schema_validator.py::test_live_state_no_drift_summary": [
-      "skipped"
-    ],
-    "tests/test_state_schema_validator.py::test_live_state_passes": [
-      "skipped"
-    ],
-    "tests/test_state_schema_validator.py::test_synthetic_drift_dict_of_entries_fails": [
       "skipped"
     ],
     "tests/test_v319d_read_integration.py::script_run": [
       "xfailed"
     ],
-    "tests/test_v325_pin_leak_defense.py::script_run": [
-      "skipped"
-    ],
     "tests/test_v3273_wait_courier.py::test_integration_468945_andrei_wait_12_6_min_real_log": [
-      "skipped"
-    ],
-    "tests/test_working_override_2026_06_01.py::test_10_synthetic_pos_when_no_gps": [
-      "skipped"
-    ],
-    "tests/test_working_override_2026_06_01.py::test_11_flag_off_ignores_working": [
-      "skipped"
-    ],
-    "tests/test_working_override_2026_06_01.py::test_12_working_ended_skipped": [
-      "skipped"
-    ],
-    "tests/test_working_override_2026_06_01.py::test_13_real_shift_wins_over_working": [
-      "skipped"
-    ],
-    "tests/test_working_override_2026_06_01.py::test_14_jest_only_no_grafik_add": [
-      "skipped"
-    ],
-    "tests/test_working_override_2026_06_01.py::test_1_pracuje_adds_working": [
-      "skipped"
-    ],
-    "tests/test_working_override_2026_06_01.py::test_2_nie_pracuje_removes_working": [
-      "skipped"
-    ],
-    "tests/test_working_override_2026_06_01.py::test_3_pracuje_do_hour": [
-      "skipped"
-    ],
-    "tests/test_working_override_2026_06_01.py::test_4_parse_bounds": [
-      "skipped"
-    ],
-    "tests/test_working_override_2026_06_01.py::test_5_reset_clears_working": [
-      "skipped"
-    ],
-    "tests/test_working_override_2026_06_01.py::test_6_unknown_cid_no_grafik_add": [
-      "skipped"
-    ],
-    "tests/test_working_override_2026_06_01.py::test_7_offgrafik_with_working_dispatchable": [
-      "skipped"
-    ],
-    "tests/test_working_override_2026_06_01.py::test_8_offgrafik_no_working_excluded": [
-      "skipped"
-    ],
-    "tests/test_working_override_2026_06_01.py::test_9_cidkeyed_no_leak_to_other_courier": [
       "skipped"
     ]
   },
   "owner": "Adrian",
-  "reason": "Integracja S275 typed shift-end status z R16d escalation contract; exact green hermetic suite",
+  "reason": "Q5 release root closure: lifecycle source-proof fail-closed, curated tombstones, route parity canonical import, independent regression closure",
   "schema_version": 1,
-  "updated_at_utc": "2026-07-30T11:46:44+00:00"
+  "updated_at_utc": "2026-07-30T16:20:08+00:00"
 }
