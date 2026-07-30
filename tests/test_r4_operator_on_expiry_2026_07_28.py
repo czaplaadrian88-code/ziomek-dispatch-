@@ -578,4 +578,6 @@ def test_flag_is_etap4_and_defaults_to_off():
     )
     entry = registry["flags"]["ENABLE_OPERATOR_AVAILABILITY_EXPIRY"]
     assert entry["default"] is False
-    assert entry["current_snapshot"]["flags.json"] in (False, None)
+    # Default bezpieczeństwa nadal OFF; snapshot rejestru dokumentuje osobno
+    # stan efektywnego nośnika, aktywowany już w żywym flags.json.
+    assert entry["current_snapshot"]["flags.json"] is True

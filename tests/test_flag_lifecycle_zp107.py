@@ -153,10 +153,38 @@ def test_catches_broken_twin(tmp_path):
 
 def test_catches_missing_field(tmp_path):
     def m(f):
-        f["ENABLE_FROZEN_PICKUP_ETA"].pop("rollback", None)
+        # Aktywna, kanoniczna flaga źródła; poprzedni target był martwym wpisem
+        # panelowym i znikał po prawidłowym re-seedzie z bieżących nośników.
+        f["ENABLE_CID_AVAILABILITY_CONTRACT"].pop("rollback", None)
     p = _corrupt_registry(tmp_path, m)
     errs = CHK.check_structure(_load_json(p))
-    assert any("POLA" in e and "ENABLE_FROZEN_PICKUP_ETA" in e for e in errs)
+    assert any("POLA" in e and "ENABLE_CID_AVAILABILITY_CONTRACT" in e for e in errs)
+
+
+def test_consumer_paths_are_stable_in_renamed_worktree(tmp_path, monkeypatch):
+    """Oracle regresji: nazwa worktree nie może wejść do kontraktu consumers[]."""
+    engine_root = tmp_path / "session284-q5-contract-fix"
+    engine_root.mkdir()
+    worker = engine_root / "worker.py"
+    worker.write_text("ENABLE_CID_AVAILABILITY_CONTRACT = True\n", encoding="utf-8")
+    monkeypatch.setattr(SD, "DISPATCH_V2", str(engine_root))
+
+    assert SD._pkg_relpath(str(worker)) == "dispatch_v2/worker.py"
+    index = SD._build_consumer_index([str(worker)])
+    assert index["ENABLE_CID_AVAILABILITY_CONTRACT"] == {"dispatch_v2/worker.py"}
+
+
+def test_committed_engine_consumer_paths_have_canonical_root():
+    """Ratchet: żaden kolejny re-seed nie zapisze nazwy sesji/worktree do rejestru."""
+    reg = _registry()
+    bad = [
+        (name, consumer)
+        for name, entry in reg["flags"].items()
+        for consumer in entry.get("consumers", [])
+        if consumer.endswith(".py")
+        and not consumer.startswith(("dispatch_v2/", "panel:", "courier_api"))
+    ]
+    assert bad == []
 
 
 def test_catches_flags_json_orphan(tmp_path):

@@ -1,17 +1,17 @@
 {
  "_meta": {
   "counts": {
-   "apka": 27,
-   "engine": 421,
+   "apka": 22,
+   "engine": 430,
    "engine_1b_units": 12,
-   "etap4": 147,
-   "flags_json_keys": 247,
+   "etap4": 154,
+   "flags_json_keys": 267,
    "fp_extra": 35,
    "known_drift": 0,
-   "numeric": 30,
-   "panel": 86,
-   "test_isolated": 6,
-   "total": 534,
+   "numeric": 36,
+   "panel": 84,
+   "test_isolated": 8,
+   "total": 536,
    "twins_concepts": 5
   },
   "generator": "tools/flag_lifecycle_seed.py",
@@ -2783,7 +2783,7 @@
    "current_snapshot": {
     "nadajesz-panel.service": true
    },
-   "default": false,
+   "default": null,
    "intentional_per_process": {
     "reason": "",
     "value": false
@@ -2840,6 +2840,41 @@
    "review_date": "2026-10-10",
    "rollback": "PANEL_FLAG_DISPATCH_PUSH_LIVE w flags.systemd.env + restart nadajesz-panel.service",
    "source_of_truth": "flags.systemd.env",
+   "twin_of": [],
+   "worlds": [
+    "panel"
+   ]
+  },
+  "DISPATCH_PUSH_STRICT": {
+   "carriers": [
+    "DEFAULT_FLAGS"
+   ],
+   "consumers": [
+    "panel:app/core/flags.py:DISPATCH_PUSH_STRICT"
+   ],
+   "curated_at": "2026-07-30",
+   "current_snapshot": {
+    "nadajesz-panel.service": false
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "DISPATCH_PUSH_STRICT",
+   "notes": "",
+   "owner": {
+    "business": "Adrian",
+    "service": "nadajesz-panel.service"
+   },
+   "removal_condition": "jeśli nie wpięta do 2026-12 → retire (ACK Adrian)",
+   "review_date": "2026-09-10",
+   "rollback": "DEFAULT_FLAGS w app/core/flags.py (deploy panelu)",
+   "source_of_truth": "DEFAULT_FLAGS",
    "twin_of": [],
    "worlds": [
     "panel"
@@ -3064,9 +3099,9 @@
   },
   "ENABLE_A360_D1_OD07_FIREWALL_EXEMPT_TRUTH": {
    "carriers": [
+    "flags.json",
     "common.py:_FINGERPRINT_EXTRA_FLAGS",
-    "common.py:TEST_ISOLATED_INFRA_FLAGS",
-    "dispatch_v2/common.py-const"
+    "common.py:TEST_ISOLATED_INFRA_FLAGS"
    ],
    "consumers": [
     "dispatch_v2/common.py",
@@ -3076,11 +3111,11 @@
    ],
    "curated_at": "2026-07-20",
    "current_snapshot": {
-    "default": false
+    "flags.json": true
    },
    "default": false,
    "intentional_per_process": {
-    "reason": "wspolny wersjonowany verdict w hooku i serializerze",
+    "reason": "",
     "value": false
    },
    "known_drift": false,
@@ -3096,7 +3131,7 @@
    "removal_condition": "po migracji konsumentow rule_verdict.v1 i zamknieciu H1",
    "review_date": "2026-08-21",
    "rollback": "flags.json OFF hot-reload (bez restartu)",
-   "source_of_truth": "common.py-const",
+   "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [
     "engine"
@@ -3173,6 +3208,44 @@
    "review_date": "2026-08-10",
    "rollback": "flags.json OFF hot-reload (bez restartu)",
    "source_of_truth": "flags.json",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
+  "ENABLE_ALARM_CERTIFICATE_SHADOW": {
+   "carriers": [
+    "common.py:ETAP4_DECISION_FLAGS"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/core/alarm_certificate.py",
+    "dispatch_v2/dispatch_pipeline.py",
+    "dispatch_v2/shadow_dispatcher.py"
+   ],
+   "curated_at": "2026-07-28",
+   "current_snapshot": {
+    "default": false
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "shadow",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_ALARM_CERTIFICATE_SHADOW",
+   "notes": "B noc 28.07: kontrfaktyczny certyfikat per decyzja. Alarm tylko gdy zero kandydatów <=35 po pozostałych HARD-ach i co najmniej jeden w (35,40]. Atomowy single-writer dispatch-shadow; scope worka+TTL. Ta sama flaga gate'uje producer i konsumentów; OFF=strict 35 i brak snapshotu.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-shadow.service"
+   },
+   "removal_condition": "po minimum 2 dniach shadow owner wybiera promocję albo retire; certyfikat pozostaje wersjonowany",
+   "review_date": "2026-08-04",
+   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "source_of_truth": "common.py-const",
    "twin_of": [],
    "worlds": [
     "engine"
@@ -3291,17 +3364,16 @@
   },
   "ENABLE_ASSIGNMENT_EPISODE_LOG": {
    "carriers": [
-    "common.py:ETAP4_DECISION_FLAGS",
-    "dispatch_v2/common.py-const"
+    "flags.json",
+    "common.py:ETAP4_DECISION_FLAGS"
    ],
    "consumers": [
     "dispatch_v2/common.py",
-    "dispatch_v2/panel_watcher.py",
     "dispatch_v2/proposal_freshness.py"
    ],
    "curated_at": "2026-07-28",
    "current_snapshot": {
-    "default": false
+    "flags.json": true
    },
    "default": false,
    "intentional_per_process": {
@@ -3320,7 +3392,7 @@
    },
    "removal_condition": "po ustaleniu stałego kontraktu pomiaru albo retire za ACK",
    "review_date": "2026-08-10",
-   "rollback": "flags.json false/brak klucza (hot-reload, bez restartu)",
+   "rollback": "flags.json OFF hot-reload (bez restartu)",
    "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [
@@ -3604,7 +3676,8 @@
    "consumers": [
     "dispatch_v2/common.py",
     "dispatch_v2/common.py:ENABLE_BAG_TIME_FAIRNESS_SCORING",
-    "dispatch_v2/core/candidates.py"
+    "dispatch_v2/core/candidates.py",
+    "dispatch_v2/dispatch_pipeline.py"
    ],
    "curated_at": "2026-07-10",
    "current_snapshot": {
@@ -3636,19 +3709,16 @@
   },
   "ENABLE_BEST_EFFORT_ESC_TRUSTED_ETA": {
    "carriers": [
-    "common.py:ETAP4_DECISION_FLAGS",
-    "dispatch_v2/common.py-const"
+    "flags.json",
+    "common.py:ETAP4_DECISION_FLAGS"
    ],
    "consumers": [
     "dispatch_v2/common.py",
-    "dispatch_v2/dispatch_pipeline.py",
-    "dispatch_v2/eta_trust.py",
-    "dispatch_v2/shadow_dispatcher.py",
-    "dispatch_v2/tools/best_effort_escalation_report.py"
+    "dispatch_v2/dispatch_pipeline.py"
    ],
    "curated_at": "2026-07-21",
    "current_snapshot": {
-    "default": false
+    "flags.json": false
    },
    "default": false,
    "intentional_per_process": {
@@ -3667,7 +3737,7 @@
    },
    "removal_condition": "po minimum 2 dniach cienia: flip/retire za ACK ownera",
    "review_date": "2026-08-21",
-   "rollback": "flags.json: klucz false lub brak klucza (hot-reload, bez restartu)",
+   "rollback": "flags.json OFF hot-reload (bez restartu)",
    "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [
@@ -4274,6 +4344,43 @@
     "engine"
    ]
   },
+  "ENABLE_C7_NORMAL_PATH_LOG": {
+   "carriers": [
+    "flags.json",
+    "common.py:ETAP4_DECISION_FLAGS"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/dispatch_pipeline.py"
+   ],
+   "curated_at": "2026-07-27",
+   "current_snapshot": {
+    "flags.json": true
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "live",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_C7_NORMAL_PATH_LOG",
+   "notes": "Log-only dualny selektor C7 OFF/ON na pełnej puli przed top[:16]; aktywacja dopiero po review benchmarku i ACK. | 2026-07-27 kuracja: flip ownera na true (LIVE). Instrument log-only, warunek wstepny flipu C7 wg pomiaru K1. Doc: ZIOMEK_LOGIC_REFERENCE.md sekcja 'Sprint WB1 + C7 (2026-07-27)'.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-shadow.service"
+   },
+   "removal_condition": "po zamknięciu decyzji o flipie C7 albo osobnym ACK retire",
+   "review_date": "2026-08-10",
+   "rollback": "flags.json OFF hot-reload (bez restartu)",
+   "source_of_truth": "flags.json",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
   "ENABLE_CARRIED_AGE_TZ_FIX": {
    "carriers": [
     "flags.json",
@@ -4388,56 +4495,12 @@
     "engine"
    ]
   },
-  "ENABLE_ALARM_CERTIFICATE_SHADOW": {
-   "carriers": [
-    "common.py:ETAP4_DECISION_FLAGS",
-    "dispatch_v2/common.py-const"
-   ],
-   "consumers": [
-    "dispatch_v2/common.py",
-    "dispatch_v2/core/alarm_certificate.py",
-    "dispatch_v2/core/lex_window_guards.py",
-    "dispatch_v2/core/loadgov_snapshot.py",
-    "dispatch_v2/dispatch_pipeline.py",
-    "dispatch_v2/plan_recheck.py",
-    "dispatch_v2/shadow_dispatcher.py"
-   ],
-   "curated_at": "2026-07-28",
-   "current_snapshot": {
-    "default": false
-   },
-   "default": false,
-   "intentional_per_process": {
-    "reason": "",
-    "value": false
-   },
-   "known_drift": false,
-   "known_drift_note": "",
-   "lifecycle": "shadow",
-   "lifecycle_seeded": false,
-   "name": "ENABLE_ALARM_CERTIFICATE_SHADOW",
-   "notes": "B noc 28.07: kontrfaktyczny certyfikat per decyzja. Alarm tylko gdy zero kandydatów <=35 po pozostałych HARD-ach i co najmniej jeden w (35,40]. Atomowy single-writer dispatch-shadow; scope worka+TTL. Ta sama flaga gate'uje producer i konsumentów; OFF=strict 35 i brak snapshotu.",
-   "owner": {
-    "business": "Adrian",
-    "service": "dispatch-shadow.service"
-   },
-   "removal_condition": "po minimum 2 dniach shadow owner wybiera promocję albo retire; certyfikat pozostaje wersjonowany",
-   "review_date": "2026-08-04",
-   "rollback": "flags.json ENABLE_ALARM_CERTIFICATE_SHADOW=false hot-reload; plan-recheck i selection wracają strict 35",
-   "source_of_truth": "flags.json",
-   "twin_of": [],
-   "worlds": [
-    "engine"
-   ]
-  },
   "ENABLE_CARRY_CANON_V2": {
    "carriers": [
-    "common.py:ETAP4_DECISION_FLAGS",
-    "dispatch_v2/common.py-const"
+    "common.py:ETAP4_DECISION_FLAGS"
    ],
    "consumers": [
     "dispatch_v2/common.py",
-    "dispatch_v2/core/carry_freshness.py",
     "dispatch_v2/dispatch_pipeline.py",
     "dispatch_v2/feasibility_v2.py",
     "dispatch_v2/plan_recheck.py",
@@ -4465,89 +4528,8 @@
    },
    "removal_condition": "po związaniu physical possession i zatwierdzeniu migracji wszystkich konsumentów owner może utrwalić evaluator bez flagi",
    "review_date": "2026-08-04",
-   "rollback": "flags.json ENABLE_CARRY_CANON_V2=false hot-reload; brak carry_eval.v1, legacy R6 bez zmian, zależny ENABLE_HARD35_ENFORCE jest inert nawet jeśli jego klucz pozostał true",
-   "source_of_truth": "flags.json",
-   "twin_of": [],
-   "worlds": [
-    "engine"
-   ]
-  },
-  "ENABLE_HARD35_ENFORCE": {
-   "carriers": [
-    "common.py:ETAP4_DECISION_FLAGS",
-    "dispatch_v2/common.py-const"
-   ],
-   "consumers": [
-    "dispatch_v2/common.py",
-    "dispatch_v2/core/alarm_certificate.py",
-    "dispatch_v2/core/lex_window_guards.py",
-    "dispatch_v2/core/selection.py",
-    "dispatch_v2/shadow_dispatcher.py"
-   ],
-   "curated_at": "2026-07-28",
-   "current_snapshot": {
-    "default": false
-   },
-   "default": false,
-   "intentional_per_process": {
-    "reason": "",
-    "value": false
-   },
-   "known_drift": false,
-   "known_drift_note": "",
-   "lifecycle": "planned",
-   "lifecycle_seeded": false,
-   "name": "ENABLE_HARD35_ENFORCE",
-   "notes": "D noc 28.07: domyka obejście best-effort/ALWAYS_PROPOSE. ON filtruje carry>35 poza ważnym Alarmem wyłącznie przy ENABLE_CARRY_CANON_V2=ON; CARRY_CANON=OFF czyni filtr inert dla niezależnego hot rollbacku. Gdy brak planu w capie pokazuje least-damage jako KOORD/ALERT, nigdy jako feasible PROPOSE. Flip wyłącznie jako ostatni krok po S2+Alarm i ACK ownera.",
-   "owner": {
-    "business": "Adrian",
-    "service": "dispatch-shadow.service"
-   },
-   "removal_condition": "po trwałym zatwierdzeniu HARD35 owner może usunąć flagę i zachować enforcement",
-   "review_date": "2026-08-04",
-   "rollback": "flags.json ENABLE_HARD35_ENFORCE=false hot-reload; wraca legacy best-effort/ALWAYS_PROPOSE",
-   "source_of_truth": "flags.json",
-   "twin_of": [],
-   "worlds": [
-    "engine"
-   ]
-  },
-  "ENABLE_STRATEGY2_PROBE_SHADOW": {
-   "carriers": [
-    "common.py:ETAP4_DECISION_FLAGS",
-    "dispatch_v2/common.py-const"
-   ],
-   "consumers": [
-    "dispatch_v2/common.py",
-    "dispatch_v2/core/candidates.py",
-    "dispatch_v2/core/strategy2_probe.py",
-    "dispatch_v2/dispatch_pipeline.py",
-    "dispatch_v2/feasibility_v2.py",
-    "dispatch_v2/shadow_dispatcher.py"
-   ],
-   "curated_at": "2026-07-28",
-   "current_snapshot": {
-    "default": false
-   },
-   "default": false,
-   "intentional_per_process": {
-    "reason": "",
-    "value": false
-   },
-   "known_drift": false,
-   "known_drift_note": "",
-   "lifecycle": "shadow",
-   "lifecycle_seeded": false,
-   "name": "ENABLE_STRATEGY2_PROBE_SHADOW",
-   "notes": "C noc 28.07: po zero feasible S1 skanuje sloty +5 do created_at+90 na całej flocie przez ten sam candidate evaluator i pełne HARD-y. Tylko strategy2_probe.v1 w shadow; zero propozycji/writera restauracji.",
-   "owner": {
-    "business": "Adrian",
-    "service": "dispatch-shadow.service"
-   },
-   "removal_condition": "po minimum 2 dniach shadow i decyzji ownera: zbudować osobną flagę pełnego S2 albo retire",
-   "review_date": "2026-08-04",
-   "rollback": "flags.json ENABLE_STRATEGY2_PROBE_SHADOW=false hot-reload; brak dodatkowych solve i pola strategy2_probe.v1",
-   "source_of_truth": "flags.json",
+   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "source_of_truth": "common.py-const",
    "twin_of": [],
    "worlds": [
     "engine"
@@ -4585,46 +4567,6 @@
    "removal_condition": "jeśli nie wpięta do 2026-12 → retire (ACK Adrian)",
    "review_date": "2026-09-10",
    "rollback": "env OFF w flags.json + restart dispatch-shadow.service ZA ACK",
-   "source_of_truth": "flags.json",
-   "twin_of": [],
-   "worlds": [
-    "engine"
-   ]
-  },
-  "ENABLE_C7_NORMAL_PATH_LOG": {
-   "carriers": [
-    "common.py:ETAP4_DECISION_FLAGS",
-    "dispatch_v2/common.py-const",
-    "flags.json"
-   ],
-   "consumers": [
-    "dispatch_v2/c7_normal_path.py",
-    "dispatch_v2/common.py",
-    "dispatch_v2/dispatch_pipeline.py",
-    "dispatch_v2/shadow_dispatcher.py"
-   ],
-   "curated_at": "2026-07-27",
-   "current_snapshot": {
-    "flags.json": true
-   },
-   "default": false,
-   "intentional_per_process": {
-    "reason": "",
-    "value": false
-   },
-   "known_drift": false,
-   "known_drift_note": "",
-   "lifecycle": "live",
-   "lifecycle_seeded": false,
-   "name": "ENABLE_C7_NORMAL_PATH_LOG",
-   "notes": "Log-only dualny selektor C7 OFF/ON na pełnej puli przed top[:16]; aktywacja dopiero po review benchmarku i ACK. | 2026-07-27 kuracja: flip ownera na true (LIVE). Instrument log-only, warunek wstepny flipu C7 wg pomiaru K1. Doc: ZIOMEK_LOGIC_REFERENCE.md sekcja 'Sprint WB1 + C7 (2026-07-27)'.",
-   "owner": {
-    "business": "Adrian",
-    "service": "dispatch-shadow.service"
-   },
-   "removal_condition": "po zamknięciu decyzji o flipie C7 albo osobnym ACK retire",
-   "review_date": "2026-08-10",
-   "rollback": "flags.json false/brak klucza (hot-reload, bez restartu)",
    "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [
@@ -4683,7 +4625,7 @@
    ],
    "curated_at": "2026-07-23",
    "current_snapshot": {
-    "flags.json": false
+    "flags.json": true
    },
    "default": false,
    "intentional_per_process": {
@@ -4750,6 +4692,7 @@
   },
   "ENABLE_CLAIM_LEDGER_INVARIANT_HARD": {
    "carriers": [
+    "flags.json",
     "common.py:ETAP4_DECISION_FLAGS",
     "dispatch_v2/common.py-const"
    ],
@@ -4760,7 +4703,7 @@
    ],
    "curated_at": "2026-07-10",
    "current_snapshot": {
-    "default": false
+    "flags.json": true
    },
    "default": false,
    "intentional_per_process": {
@@ -4779,44 +4722,8 @@
    },
    "removal_condition": "jeśli nie wpięta do 2026-12 → retire (ACK Adrian)",
    "review_date": "2026-09-10",
-   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
-   "source_of_truth": "common.py-const",
-   "twin_of": [],
-   "worlds": [
-    "engine"
-   ]
-  },
-  "ENABLE_COMMITTED_INVALIDATES_VIEW": {
-   "carriers": [
-    "dispatch_v2/panel_watcher.py:flag-default-True"
-   ],
-   "consumers": [
-    "dispatch_v2/dispatch_pipeline.py",
-    "dispatch_v2/panel_watcher.py"
-   ],
-   "curated_at": "2026-07-20",
-   "current_snapshot": {
-    "default": true
-   },
-   "default": true,
-   "intentional_per_process": {
-    "reason": "",
-    "value": false
-   },
-   "known_drift": false,
-   "known_drift_note": "",
-   "lifecycle": "live",
-   "lifecycle_seeded": false,
-   "name": "ENABLE_COMMITTED_INVALIDATES_VIEW",
-   "notes": "Istniejacy FIX-E kill-switch: po zmianie committed czasu bump plan_version, aby aplikacja pobrala swieze /orders. CK manual pre-recheck uzywa tego samego kontraktu.",
-   "owner": {
-    "business": "Adrian",
-    "service": "dispatch-panel-watcher.service + dispatch-shadow.service"
-   },
-   "removal_condition": "n/d dopoki aplikacja odswieza /orders po plan_version",
-   "review_date": "2026-10-20",
-   "rollback": "flags.json: klucz false (hot-reload, bez restartu)",
-   "source_of_truth": "code-default + flags.json override",
+   "rollback": "flags.json OFF hot-reload (bez restartu)",
+   "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [
     "engine"
@@ -5081,17 +4988,17 @@
   },
   "ENABLE_CZASOWKA_CK_MANUAL_EDIT_PASSTHROUGH": {
    "carriers": [
+    "flags.json",
     "common.py:ETAP4_DECISION_FLAGS"
    ],
    "consumers": [
     "dispatch_v2/common.py",
     "dispatch_v2/dispatch_pipeline.py",
-    "dispatch_v2/panel_watcher.py",
     "dispatch_v2/state_machine.py"
    ],
    "curated_at": "2026-07-20",
    "current_snapshot": {
-    "default": false
+    "flags.json": true
    },
    "default": false,
    "intentional_per_process": {
@@ -5110,7 +5017,7 @@
    },
    "removal_condition": "po walidacji markerow gastro i stabilnym oknie obserwacji albo retire do 2026-10",
    "review_date": "2026-08-20",
-   "rollback": "flags.json: klucz false lub brak klucza (hot-reload, bez restartu)",
+   "rollback": "flags.json OFF hot-reload (bez restartu)",
    "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [
@@ -5160,8 +5067,7 @@
    "consumers": [
     "dispatch_v2/common.py",
     "dispatch_v2/czasowka_reclaim.py",
-    "dispatch_v2/event_bus.py",
-    "dispatch_v2/order_fsm.py",
+    "dispatch_v2/durable_event_apply.py",
     "dispatch_v2/state_machine.py"
    ],
    "curated_at": "2026-07-21",
@@ -5185,29 +5091,26 @@
    },
    "removal_condition": "osobna implementacja etapu LIVE albo odrzucenie po karcie ownera",
    "review_date": "2026-08-21",
-   "rollback": "flags.json: klucz false lub brak klucza; kod etapu SHADOW nie emituje eventu LIVE",
-   "source_of_truth": "flags.json",
-   "twin_of": [
-    "ENABLE_CZASOWKA_RECLAIM_SHADOW"
-   ],
+   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "source_of_truth": "common.py-const",
+   "twin_of": [],
    "worlds": [
     "engine"
    ]
   },
   "ENABLE_CZASOWKA_RECLAIM_SHADOW": {
    "carriers": [
+    "flags.json",
     "common.py:ETAP4_DECISION_FLAGS"
    ],
    "consumers": [
     "dispatch_v2/common.py",
     "dispatch_v2/czasowka_reclaim.py",
-    "dispatch_v2/durable_event_apply.py",
-    "dispatch_v2/lifecycle_downstream.py",
-    "dispatch_v2/tools/czasowka_reclaim_shadow_report.py"
+    "dispatch_v2/durable_event_apply.py"
    ],
    "curated_at": "2026-07-21",
    "current_snapshot": {
-    "default": false
+    "flags.json": true
    },
    "default": false,
    "intentional_per_process": {
@@ -5226,11 +5129,9 @@
    },
    "removal_condition": "werdykt po co najmniej 2 dniach obserwacji: karta LIVE albo reject",
    "review_date": "2026-08-21",
-   "rollback": "flags.json OFF/brak klucza: zero I/O shadow, bez restartu po hot-reload",
+   "rollback": "flags.json OFF hot-reload (bez restartu)",
    "source_of_truth": "flags.json",
-   "twin_of": [
-    "ENABLE_CZASOWKA_RECLAIM_LIVE"
-   ],
+   "twin_of": [],
    "worlds": [
     "engine"
    ]
@@ -5387,25 +5288,20 @@
   },
   "ENABLE_DECISION_ETA_LOG": {
    "carriers": [
-    "common.py:ETAP4_DECISION_FLAGS",
-    "dispatch_v2/common.py-const"
+    "flags.json",
+    "common.py:ETAP4_DECISION_FLAGS"
    ],
    "consumers": [
     "dispatch_v2/common.py",
-    "dispatch_v2/decision_eta_log.py",
-    "dispatch_v2/shadow_dispatcher.py",
-    "dispatch_v2/czasowka_scheduler.py",
-    "dispatch_v2/plan_manager.py",
-    "dispatch_v2/tools/reassignment_forward_shadow.py",
-    "dispatch_v2/tools/pending_global_resweep.py"
+    "dispatch_v2/decision_eta_log.py"
    ],
    "curated_at": "2026-07-21",
    "current_snapshot": {
-    "default": false
+    "flags.json": true
    },
    "default": false,
    "intentional_per_process": {
-    "reason": "Wspólny append-lock; każdy writer czyta ten sam engine flags.json.",
+    "reason": "",
     "value": false
    },
    "known_drift": false,
@@ -5420,8 +5316,8 @@
    },
    "removal_condition": "Po zastąpieniu wersjonowanym event storem decision-time ETA.",
    "review_date": "2026-08-21",
-   "rollback": "flags.json ENABLE_DECISION_ETA_LOG=false hot-reload (bez restartu)",
-   "source_of_truth": "common.py-const do osobnego rolloutu flags.json",
+   "rollback": "flags.json OFF hot-reload (bez restartu)",
+   "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [
     "engine"
@@ -5502,17 +5398,14 @@
   },
   "ENABLE_DELIVERY_DASH_WHEN_NO_PLAN": {
    "carriers": [
-    "courier_api/config.py",
     "drop-in:courier-api.service.d/delivery-dash-no-plan.conf"
    ],
-   "consumers": [
-    "courier_api/config.py:DELIVERY_DASH_WHEN_NO_PLAN"
-   ],
+   "consumers": [],
    "curated_at": "2026-07-10",
    "current_snapshot": {
     "courier-api.service": true
    },
-   "default": false,
+   "default": null,
    "intentional_per_process": {
     "reason": "",
     "value": false
@@ -6129,37 +6022,6 @@
     "engine"
    ]
   },
-  "ENABLE_ETA_QUANTILE_R6_BAGCAP": {
-   "carriers": [
-    "removed:2026-07-20 (kod galezi usuniety — marker historyczny, zadnego zywego nosnika)"
-   ],
-   "consumers": [],
-   "curated_at": "2026-07-20",
-   "current_snapshot": {},
-   "default": false,
-   "intentional_per_process": {
-    "reason": "",
-    "value": false
-   },
-   "known_drift": false,
-   "known_drift_note": "",
-   "lifecycle": "dead",
-   "lifecycle_seeded": false,
-   "name": "ENABLE_ETA_QUANTILE_R6_BAGCAP",
-   "notes": "FLIP OFF 2026-07-18 ~13:45 UTC (GO Adriana 'Dawaj D3-gold'): wdrozenie werdyktu D3 (29.06) + OD-07 OWNER_CONFIRMED (R6 35 dla kazdego, nigdy klasa kuriera). Pomiar live: 39 odzyskow/3d, odzysk na ZWYCIEZCY 0/39 -> flip nie zmienia zadnego wyniku na korpusie. Testy galezi ON!=OFF: tests/test_d3_gold_quantile_flip.py 4/4. Okno 2d: at#217 (sekcja D3). Po oknie: USUNIECIE kodu galezi (feasibility_v2 ~:1141 + ~:1254) za ACK = retire. || KOD GALEZI USUNIETY 2026-07-20 (gated apply po zielonym oknie at#217, pre-ACK Adriana 18.07 'Dawaj usuniecie kodu galezi po oknie'): feasibility_v2 obie galezie wyciete, wpis zdjety z ETAP4+common, klucz z flags.json; straznik post-removal: tests/test_d3_gold_quantile_flip.py (parytet klas + flaga-widmo inert).",
-   "owner": {
-    "business": "Adrian",
-    "service": "dispatch-shadow.service"
-   },
-   "removal_condition": "n/d dopóki live",
-   "review_date": "2026-07-20",
-   "rollback": "git revert commitu cleanup (kod galezi usuniety; flip-era rollback juz nieaktualny)",
-   "source_of_truth": "flags.json",
-   "twin_of": [],
-   "worlds": [
-    "engine"
-   ]
-  },
   "ENABLE_ETA_QUANTILE_SHADOW": {
    "carriers": [
     "flags.json",
@@ -6303,6 +6165,83 @@
    },
    "removal_condition": "n/d dopóki live",
    "review_date": "2026-10-10",
+   "rollback": "flags.json OFF hot-reload (bez restartu)",
+   "source_of_truth": "flags.json",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
+  "ENABLE_EXPLICIT_UNKNOWN_POSITION_MODEL": {
+   "carriers": [
+    "common.py:ETAP4_DECISION_FLAGS",
+    "dispatch_v2/common.py-const"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/common.py:ENABLE_EXPLICIT_UNKNOWN_POSITION_MODEL",
+    "dispatch_v2/dispatch_pipeline.py"
+   ],
+   "curated_at": "2026-07-22",
+   "current_snapshot": {
+    "default": false
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "shadow",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_EXPLICIT_UNKNOWN_POSITION_MODEL",
+   "notes": "Kandydat shadow-first: UNKNOWN Białystok v1 = 6.5 km SOFT, 15 min SOFT, 22 min HARD. Default OFF; flip wymaga osobnego ACK.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-shadow.service"
+   },
+   "removal_condition": "werdykt po min 300 decyzjach lub 7 dniach; target winner-share U0 45-55% G0",
+   "review_date": "2026-07-29",
+   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "source_of_truth": "common.py-const",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
+  "ENABLE_EXPLICIT_UNKNOWN_POSITION_SHADOW": {
+   "carriers": [
+    "flags.json",
+    "common.py:ETAP4_DECISION_FLAGS",
+    "dispatch_v2/common.py-const"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/common.py:ENABLE_EXPLICIT_UNKNOWN_POSITION_SHADOW",
+    "dispatch_v2/dispatch_pipeline.py"
+   ],
+   "curated_at": "2026-07-22",
+   "current_snapshot": {
+    "flags.json": true
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "shadow",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_EXPLICIT_UNKNOWN_POSITION_SHADOW",
+   "notes": "Kosztowny dual-eval legacy/explicit i drugi prawdziwy selektor. Default OFF; pomiar wyłącznie w kontrolowanym oknie.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-shadow.service"
+   },
+   "removal_condition": "po werdykcie okna shadow i decyzji adopt/reject głównej polityki",
+   "review_date": "2026-07-29",
    "rollback": "flags.json OFF hot-reload (bez restartu)",
    "source_of_truth": "flags.json",
    "twin_of": [],
@@ -6537,41 +6476,6 @@
     "engine"
    ]
   },
-  "ENABLE_FALLBACK_HONEST_OSRM_ETA": {
-   "carriers": [
-    "courier_api/config.py"
-   ],
-   "consumers": [
-    "courier_api/config.py:FALLBACK_HONEST_OSRM_ETA"
-   ],
-   "curated_at": "2026-07-10",
-   "current_snapshot": {
-    "courier-api.service": true
-   },
-   "default": true,
-   "intentional_per_process": {
-    "reason": "",
-    "value": false
-   },
-   "known_drift": false,
-   "known_drift_note": "",
-   "lifecycle": "live",
-   "lifecycle_seeded": false,
-   "name": "ENABLE_FALLBACK_HONEST_OSRM_ETA",
-   "notes": "",
-   "owner": {
-    "business": "Adrian",
-    "service": "courier-api.service"
-   },
-   "removal_condition": "n/d dopóki live",
-   "review_date": "2026-10-10",
-   "rollback": "env ENABLE_FALLBACK_HONEST_OSRM_ETA OFF + restart courier-api.service ZA ACK",
-   "source_of_truth": "courier_api/config.py",
-   "twin_of": [],
-   "worlds": [
-    "apka"
-   ]
-  },
   "ENABLE_FEAS_CARRY_BLIND_SHADOW": {
    "carriers": [
     "flags.json",
@@ -6793,9 +6697,7 @@
    "review_date": "2026-10-10",
    "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
    "source_of_truth": "common.py-const",
-   "twin_of": [
-    "ENABLE_UWAGI_BRIDGE_NADAWCA"
-   ],
+   "twin_of": [],
    "worlds": [
     "engine"
    ]
@@ -6920,6 +6822,7 @@
     "dispatch_v2/common.py",
     "dispatch_v2/common.py:ENABLE_FLEET_LOAD_GOVERNOR",
     "dispatch_v2/core/candidates.py",
+    "dispatch_v2/core/loadgov_ewma.py",
     "dispatch_v2/dispatch_pipeline.py"
    ],
    "curated_at": "2026-07-10",
@@ -6987,45 +6890,10 @@
     "engine"
    ]
   },
-  "ENABLE_FROZEN_PICKUP_ETA": {
-   "carriers": [
-    "courier_api/config.py"
-   ],
-   "consumers": [
-    "courier_api/config.py:FROZEN_PICKUP_ETA"
-   ],
-   "curated_at": "2026-07-10",
-   "current_snapshot": {
-    "courier-api.service": true
-   },
-   "default": true,
-   "intentional_per_process": {
-    "reason": "",
-    "value": false
-   },
-   "known_drift": false,
-   "known_drift_note": "",
-   "lifecycle": "live",
-   "lifecycle_seeded": false,
-   "name": "ENABLE_FROZEN_PICKUP_ETA",
-   "notes": "",
-   "owner": {
-    "business": "Adrian",
-    "service": "courier-api.service"
-   },
-   "removal_condition": "n/d dopóki live",
-   "review_date": "2026-10-10",
-   "rollback": "env ENABLE_FROZEN_PICKUP_ETA OFF + restart courier-api.service ZA ACK",
-   "source_of_truth": "courier_api/config.py",
-   "twin_of": [],
-   "worlds": [
-    "apka"
-   ]
-  },
   "ENABLE_FULL_CHOICE_SET_LOG": {
    "carriers": [
-    "common.py:ETAP4_DECISION_FLAGS",
-    "dispatch_v2/common.py-const"
+    "flags.json",
+    "common.py:ETAP4_DECISION_FLAGS"
    ],
    "consumers": [
     "dispatch_v2/common.py",
@@ -7033,11 +6901,11 @@
    ],
    "curated_at": "2026-07-21",
    "current_snapshot": {
-    "default": false
+    "flags.json": false
    },
    "default": false,
    "intentional_per_process": {
-    "reason": "wyłącznie writer shadow_decisions",
+    "reason": "",
     "value": false
    },
    "known_drift": false,
@@ -7053,7 +6921,7 @@
    "removal_condition": "po 2 dniach walidacji join coverage i decyzji o stałym schemacie ledgera",
    "review_date": "2026-08-21",
    "rollback": "flags.json OFF hot-reload (bez restartu)",
-   "source_of_truth": "common.py-const",
+   "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [
     "engine"
@@ -7909,6 +7777,42 @@
     "engine"
    ]
   },
+  "ENABLE_HARD35_ENFORCE": {
+   "carriers": [
+    "common.py:ETAP4_DECISION_FLAGS"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/shadow_dispatcher.py"
+   ],
+   "curated_at": "2026-07-28",
+   "current_snapshot": {
+    "default": false
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_HARD35_ENFORCE",
+   "notes": "D noc 28.07: domyka obejście best-effort/ALWAYS_PROPOSE. ON filtruje carry>35 poza ważnym Alarmem wyłącznie przy ENABLE_CARRY_CANON_V2=ON; CARRY_CANON=OFF czyni filtr inert dla niezależnego hot rollbacku. Gdy brak planu w capie pokazuje least-damage jako KOORD/ALERT, nigdy jako feasible PROPOSE. Flip wyłącznie jako ostatni krok po S2+Alarm i ACK ownera.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-shadow.service"
+   },
+   "removal_condition": "po trwałym zatwierdzeniu HARD35 owner może usunąć flagę i zachować enforcement",
+   "review_date": "2026-08-04",
+   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "source_of_truth": "common.py-const",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
   "ENABLE_HARD_TIER_BAG_CAP": {
    "carriers": [
     "flags.json",
@@ -7955,6 +7859,7 @@
    ],
    "consumers": [
     "dispatch_v2/common.py",
+    "dispatch_v2/durable_event_apply.py",
     "dispatch_v2/panel_watcher.py",
     "dispatch_v2/plan_recheck.py"
    ],
@@ -7993,6 +7898,7 @@
    ],
    "consumers": [
     "dispatch_v2/common.py",
+    "dispatch_v2/durable_event_apply.py",
     "dispatch_v2/panel_watcher.py",
     "dispatch_v2/plan_recheck.py"
    ],
@@ -8103,6 +8009,7 @@
     "flags.json"
    ],
    "consumers": [
+    "dispatch_v2/durable_event_apply.py",
     "dispatch_v2/panel_watcher.py"
    ],
    "curated_at": "2026-07-10",
@@ -8245,8 +8152,8 @@
   },
   "ENABLE_LEARNING_LOG_DECISION_JOIN": {
    "carriers": [
-    "common.py:ETAP4_DECISION_FLAGS",
-    "dispatch_v2/common.py-const"
+    "flags.json",
+    "common.py:ETAP4_DECISION_FLAGS"
    ],
    "consumers": [
     "dispatch_v2/common.py",
@@ -8254,11 +8161,11 @@
    ],
    "curated_at": "2026-07-21",
    "current_snapshot": {
-    "default": false
+    "flags.json": false
    },
    "default": false,
    "intentional_per_process": {
-    "reason": "writer learning_log działa w dispatch-panel-watcher",
+    "reason": "",
     "value": false
    },
    "known_drift": false,
@@ -8274,7 +8181,7 @@
    "removal_condition": "po 2 dniach pokrycia joinu i migracji wszystkich czytników na twardy klucz",
    "review_date": "2026-08-21",
    "rollback": "flags.json OFF hot-reload (bez restartu)",
-   "source_of_truth": "common.py-const",
+   "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [
     "engine"
@@ -8327,6 +8234,7 @@
    ],
    "consumers": [
     "dispatch_v2/common.py",
+    "dispatch_v2/core/lex_window_ledger.py",
     "dispatch_v2/plan_recheck.py"
    ],
    "curated_at": "2026-07-10",
@@ -8397,15 +8305,52 @@
     "engine"
    ]
   },
+  "ENABLE_LEX_WINDOW_GUARDS_V2": {
+   "carriers": [
+    "flags.json",
+    "common.py:ETAP4_DECISION_FLAGS"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/plan_recheck.py"
+   ],
+   "curated_at": "2026-07-27",
+   "current_snapshot": {
+    "flags.json": true
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_LEX_WINDOW_GUARDS_V2",
+   "notes": "WB2 (CZASY 492, owner ACK D1+D2 z 27.07). Guardy WARUNKOWE warstwy P-1 okna odbioru: G1 opoznienie KAZDEJ dostawy (assigned i carried), G2 swiezosc per sztuka + cap trybu 35/40, G3 minimalny zysk jazdy, z wyjatkiem D1 przy SCISLEJ poprawie okna (dviol<bviol). G4 = wspolna granica commitu (transform -> strict retime -> final validator -> CAS). OFF = warstwa bajt-w-bajt jak przed WB2. Hierarchia klucza lex (okno->jazda->swiezosc) NIETKNIETA. Spec docs/WB2_CONDITIONAL_GUARDS.md.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-plan-recheck.service"
+   },
+   "removal_condition": "n/d — guard trwaly; przeglad progow po kalibracji z ledgera v2",
+   "review_date": "2026-10-27",
+   "rollback": "flags.json OFF hot-reload (bez restartu)",
+   "source_of_truth": "flags.json",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
   "ENABLE_LEX_WINDOW_LEDGER_V2": {
    "carriers": [
     "flags.json",
-    "common.py:TEST_ISOLATED_INFRA_FLAGS",
-    "dispatch_v2/common.py-const"
+    "common.py:TEST_ISOLATED_INFRA_FLAGS"
    ],
    "consumers": [
-    "dispatch_v2/common.py:ENABLE_LEX_WINDOW_LEDGER_V2",
-    "dispatch_v2/core/lex_window_ledger.py"
+    "dispatch_v2/common.py",
+    "dispatch_v2/core/lex_window_ledger.py",
+    "dispatch_v2/core/loadgov_publisher.py"
    ],
    "curated_at": "2026-07-27",
    "current_snapshot": {
@@ -8428,7 +8373,7 @@
    },
    "removal_condition": "n/d dopoki zbieramy baseline WB2; po kalibracji progow -> przeglad",
    "review_date": "2026-10-27",
-   "rollback": "flags.json OFF hot-reload (bez restartu); OFF = sciezka v1 jak przed WB1",
+   "rollback": "env OFF w flags.json + restart dispatch-shadow.service ZA ACK",
    "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [
@@ -8594,17 +8539,14 @@
   },
   "ENABLE_LIVE_ETA_COURIER_GUARD": {
    "carriers": [
-    "courier_api/config.py",
     "drop-in:courier-api.service.d/plan-aware-podjazdy.conf"
    ],
-   "consumers": [
-    "courier_api/config.py:LIVE_ETA_COURIER_GUARD"
-   ],
+   "consumers": [],
    "curated_at": "2026-07-10",
    "current_snapshot": {
     "courier-api.service": true
    },
-   "default": false,
+   "default": null,
    "intentional_per_process": {
     "reason": "",
     "value": false
@@ -8630,55 +8572,18 @@
     "apka"
    ]
   },
-  "ENABLE_LIVE_ETA_FRESH_OVERRIDE_ONLY": {
-   "carriers": [
-    "courier_api/config.py"
-   ],
-   "consumers": [
-    "courier_api/config.py:LIVE_ETA_FRESH_OVERRIDE_ONLY"
-   ],
-   "curated_at": "2026-07-10",
-   "current_snapshot": {
-    "courier-api.service": true
-   },
-   "default": true,
-   "intentional_per_process": {
-    "reason": "",
-    "value": false
-   },
-   "known_drift": false,
-   "known_drift_note": "",
-   "lifecycle": "live",
-   "lifecycle_seeded": false,
-   "name": "ENABLE_LIVE_ETA_FRESH_OVERRIDE_ONLY",
-   "notes": "",
-   "owner": {
-    "business": "Adrian",
-    "service": "courier-api.service"
-   },
-   "removal_condition": "n/d dopóki live",
-   "review_date": "2026-10-10",
-   "rollback": "env ENABLE_LIVE_ETA_FRESH_OVERRIDE_ONLY OFF + restart courier-api.service ZA ACK",
-   "source_of_truth": "courier_api/config.py",
-   "twin_of": [
-    "LIVE_ETA_FRESH_OVERRIDE_ONLY"
-   ],
-   "worlds": [
-   "apka"
-   ]
-  },
   "ENABLE_LIVE_ETA_WARM_SOURCE": {
    "carriers": [
-    "common.py:ETAP4_DECISION_FLAGS",
-    "dispatch_v2/common.py-const"
+    "flags.json",
+    "common.py:ETAP4_DECISION_FLAGS"
    ],
    "consumers": [
-    "dispatch_v2/common.py:ENABLE_LIVE_ETA_WARM_SOURCE",
+    "dispatch_v2/common.py",
     "dispatch_v2/live_eta_daemon.py"
    ],
    "curated_at": "2026-07-28",
    "current_snapshot": {
-    "default": false
+    "flags.json": true
    },
    "default": false,
    "intentional_per_process": {
@@ -8697,43 +8602,7 @@
    },
    "removal_condition": "po stabilizacji kontraktu źródeł i minimum 2 dniach obserwacji decyzja ownera: utrwalić albo retire",
    "review_date": "2026-08-04",
-   "rollback": "flags.json ENABLE_LIVE_ETA_WARM_SOURCE=false hot-reload; revert commita R3",
-   "source_of_truth": "common.py-const",
-   "twin_of": [],
-   "worlds": [
-    "engine"
-   ]
-  },
-  "ENABLE_LOADGOV_SNAPSHOT_PUBLISH": {
-   "carriers": [
-    "dispatch_v2/common.py-const"
-   ],
-   "consumers": [
-    "dispatch_v2/common.py:ENABLE_LOADGOV_SNAPSHOT_PUBLISH",
-    "dispatch_v2/core/loadgov_publisher.py",
-    "dispatch_v2/dispatch_pipeline.py",
-    "dispatch_v2/shadow_dispatcher.py"
-   ],
-   "curated_at": "2026-07-27",
-   "current_snapshot": {},
-   "default": false,
-   "intentional_per_process": {
-    "reason": "Publikuje WYLACZNIE proces, ktory zglosil sie przez loadgov_publisher.claim_producer_role(LOADGOV_SNAPSHOT_PRODUCER_ROLE) — dzis tylko shadow_dispatcher.run. Czasowka/plan-recheck/panel-quote wolaja te sama sciezke assess_order, ale ich EWMA po pierwszej probce ROWNA SIE obciazeniu chwilowemu, wiec publikacja stamtad utworzylaby drugi niestabilny governor (RUN3-b sekcja 3, G5).",
-    "value": false
-   },
-   "known_drift": false,
-   "known_drift_note": "",
-   "lifecycle": "planned",
-   "lifecycle_seeded": false,
-   "name": "ENABLE_LOADGOV_SNAPSHOT_PUBLISH",
-   "notes": "G5 planu v4 (CZASY 492). Niedecyzyjny kill-switch KANONICZNEGO PRODUCENTA snapshotu loadgov (spec docs/G5_LOADGOV_SNAPSHOT.md). OFF = plik snapshotu nie powstaje, czytnik WB2 (core/loadgov_snapshot.py) widzi 'absent' i bierze STRICT 5 — stan sprzed G5. ON = shadow publikuje atomowy snapshot z mianownikiem EQUAL-TREATMENT (kurierzy z GPS i bez liczeni rownorzednie). Poza ETAP4_DECISION_FLAGS, bo dopoki nie istnieje producent Alarm certificate (OD-04), window_tol_min zwraca strict niezaleznie od EWMA — publikacja nie zmienia ZADNEJ decyzji (ratchet: test_snapshot_ponad_progiem_NADAL_daje_strict). UWAGA: z dniem powstania producenta Alarm certificate flaga STAJE SIE decyzyjna i MUSI przeniesc sie do ETAP4_DECISION_FLAGS.",
-   "owner": {
-    "business": "Adrian",
-    "service": "dispatch-shadow.service"
-   },
-   "removal_condition": "n/d — kill-switch producenta zostaje jako rollback; przeglad razem z decyzja ownera o unifikacji mianownika serii legacy (rekalibracja progow LOADGOV 2.7/3.5/3.0)",
-   "review_date": "2026-10-27",
-   "rollback": "flags.json OFF hot-reload (bez restartu); OFF = brak pliku snapshotu, czytnik STRICT 5 jak przed G5",
+   "rollback": "flags.json OFF hot-reload (bez restartu)",
    "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [
@@ -8772,6 +8641,45 @@
    "review_date": "2026-08-10",
    "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
    "source_of_truth": "common.py-const",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
+  "ENABLE_LOADGOV_SNAPSHOT_PUBLISH": {
+   "carriers": [
+    "flags.json",
+    "common.py:TEST_ISOLATED_INFRA_FLAGS"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/core/loadgov_publisher.py",
+    "dispatch_v2/dispatch_pipeline.py",
+    "dispatch_v2/shadow_dispatcher.py"
+   ],
+   "curated_at": "2026-07-27",
+   "current_snapshot": {
+    "flags.json": true
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_LOADGOV_SNAPSHOT_PUBLISH",
+   "notes": "G5 planu v4 (CZASY 492). Niedecyzyjny kill-switch KANONICZNEGO PRODUCENTA snapshotu loadgov (spec docs/G5_LOADGOV_SNAPSHOT.md). OFF = plik snapshotu nie powstaje, czytnik WB2 (core/loadgov_snapshot.py) widzi 'absent' i bierze STRICT 5 — stan sprzed G5. ON = shadow publikuje atomowy snapshot z mianownikiem EQUAL-TREATMENT (kurierzy z GPS i bez liczeni rownorzednie). Poza ETAP4_DECISION_FLAGS, bo dopoki nie istnieje producent Alarm certificate (OD-04), window_tol_min zwraca strict niezaleznie od EWMA — publikacja nie zmienia ZADNEJ decyzji (ratchet: test_snapshot_ponad_progiem_NADAL_daje_strict). UWAGA: z dniem powstania producenta Alarm certificate flaga STAJE SIE decyzyjna i MUSI przeniesc sie do ETAP4_DECISION_FLAGS.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-shadow.service"
+   },
+   "removal_condition": "n/d — kill-switch producenta zostaje jako rollback; przeglad razem z decyzja ownera o unifikacji mianownika serii legacy (rekalibracja progow LOADGOV 2.7/3.5/3.0)",
+   "review_date": "2026-10-27",
+   "rollback": "env OFF w flags.json + restart dispatch-shadow.service ZA ACK",
+   "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [
     "engine"
@@ -9017,7 +8925,7 @@
    ],
    "curated_at": "2026-07-10",
    "current_snapshot": {
-    "flags.json": true
+    "flags.json": false
    },
    "default": null,
    "intentional_per_process": {
@@ -9121,16 +9029,20 @@
   },
   "ENABLE_NO_GPS_NEUTRAL_SCORE_DIST": {
    "carriers": [
+    "flags.json",
     "common.py:ETAP4_DECISION_FLAGS",
     "dispatch_v2/common.py-const"
    ],
    "consumers": [
+    "dispatch_v2/common.py",
     "dispatch_v2/common.py:ENABLE_NO_GPS_NEUTRAL_SCORE_DIST",
-    "dispatch_v2/dispatch_pipeline.py:_nogps_neutral_score_pass",
-    "dispatch_v2/core/candidates.py:road_km_from_synthetic_pos"
+    "dispatch_v2/core/candidates.py",
+    "dispatch_v2/dispatch_pipeline.py"
    ],
    "curated_at": "2026-07-19",
-   "current_snapshot": {},
+   "current_snapshot": {
+    "flags.json": true
+   },
    "default": false,
    "intentional_per_process": {
     "reason": "",
@@ -9148,89 +9060,9 @@
    },
    "removal_condition": "po werdykcie flip/reject cienia (winner-share no-GPS -> ~pula) + 2 dni obserwacji",
    "review_date": "2026-08-19",
-   "rollback": "flags.json OFF hot-reload (bez restartu); pre-flip kod inertny (OFF default)",
+   "rollback": "flags.json OFF hot-reload (bez restartu)",
    "source_of_truth": "flags.json",
-   "superseded_by": "ENABLE_EXPLICIT_UNKNOWN_POSITION_MODEL",
    "twin_of": [],
-   "worlds": [
-    "engine"
-   ]
-  },
-  "ENABLE_EXPLICIT_UNKNOWN_POSITION_MODEL": {
-   "carriers": [
-    "common.py:ETAP4_DECISION_FLAGS",
-    "dispatch_v2/common.py-const"
-   ],
-   "consumers": [
-    "dispatch_v2/dispatch_pipeline.py:_assess_order_impl",
-    "dispatch_v2/core/candidates.py:eval_courier",
-    "dispatch_v2/core/selection.py:select_and_emit",
-    "dispatch_v2/feasibility_v2.py:check_feasibility_v2",
-    "dispatch_v2/route_simulator_v2.py:simulate_bag_route_v2"
-   ],
-   "curated_at": "2026-07-22",
-   "current_snapshot": {},
-   "default": false,
-   "intentional_per_process": {
-    "reason": "",
-    "value": false
-   },
-   "known_drift": false,
-   "known_drift_note": "",
-   "lifecycle": "shadow",
-   "lifecycle_seeded": false,
-   "name": "ENABLE_EXPLICIT_UNKNOWN_POSITION_MODEL",
-   "notes": "Kandydat shadow-first: UNKNOWN Białystok v1 = 6.5 km SOFT, 15 min SOFT, 22 min HARD. Default OFF; flip wymaga osobnego ACK.",
-   "owner": {
-    "business": "Adrian",
-    "service": "dispatch-shadow.service"
-   },
-   "removal_condition": "werdykt po min 300 decyzjach lub 7 dniach; target winner-share U0 45-55% G0",
-   "review_date": "2026-07-29",
-   "rollback": "flaga OFF hot-reload; brak deployu/restartu w tym kandydacie",
-   "source_of_truth": "flags.json",
-   "twin_of": [
-    "ENABLE_EXPLICIT_UNKNOWN_POSITION_SHADOW"
-   ],
-   "worlds": [
-    "engine"
-   ]
-  },
-  "ENABLE_EXPLICIT_UNKNOWN_POSITION_SHADOW": {
-   "carriers": [
-    "common.py:ETAP4_DECISION_FLAGS",
-    "dispatch_v2/common.py-const"
-   ],
-   "consumers": [
-    "dispatch_v2/dispatch_pipeline.py:_assess_order_impl",
-    "dispatch_v2/core/candidates.py:eval_courier",
-    "dispatch_v2/dispatch_pipeline.py:_select_position_model",
-    "dispatch_v2/shadow_dispatcher.py:_serialize_result"
-   ],
-   "curated_at": "2026-07-22",
-   "current_snapshot": {},
-   "default": false,
-   "intentional_per_process": {
-    "reason": "",
-    "value": false
-   },
-   "known_drift": false,
-   "known_drift_note": "",
-   "lifecycle": "shadow",
-   "lifecycle_seeded": false,
-   "name": "ENABLE_EXPLICIT_UNKNOWN_POSITION_SHADOW",
-   "notes": "Kosztowny dual-eval legacy/explicit i drugi prawdziwy selektor. Default OFF; pomiar wyłącznie w kontrolowanym oknie.",
-   "owner": {
-    "business": "Adrian",
-    "service": "dispatch-shadow.service"
-   },
-   "removal_condition": "po werdykcie okna shadow i decyzji adopt/reject głównej polityki",
-   "review_date": "2026-07-29",
-   "rollback": "flaga OFF hot-reload: zero dual-eval i zero payloadu obu polityk",
-   "source_of_truth": "flags.json",
-   "twin_of": [
-    "ENABLE_EXPLICIT_UNKNOWN_POSITION_MODEL"
-   ],
    "worlds": [
     "engine"
    ]
@@ -9830,7 +9662,7 @@
    ],
    "curated_at": "2026-07-28",
    "current_snapshot": {
-    "flags.json": null
+    "flags.json": true
    },
    "default": false,
    "intentional_per_process": {
@@ -9886,8 +9718,8 @@
    },
    "removal_condition": "flip ON za ACK Adriana po oknie cienia (would_apply) albo retire kandydata",
    "review_date": "2026-08-10",
-   "rollback": "flags.json ENABLE_OPERATOR_ROUTE_ORDER_OVERRIDE=false (hot-reload, bez restartu); default OFF w common.py",
-   "source_of_truth": "flags.json (decision_flag; default common.py-const OFF)",
+   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "source_of_truth": "common.py-const",
    "twin_of": [],
    "worlds": [
     "engine"
@@ -10924,6 +10756,7 @@
   },
   "ENABLE_PLANNER_UNIFIED": {
    "carriers": [
+    "flags.json",
     "common.py:ETAP4_DECISION_FLAGS"
    ],
    "consumers": [
@@ -10933,7 +10766,7 @@
    ],
    "curated_at": "2026-07-10",
    "current_snapshot": {
-    "default": false
+    "flags.json": true
    },
    "default": false,
    "intentional_per_process": {
@@ -10952,8 +10785,8 @@
    },
    "removal_condition": "jeśli nie wpięta do 2026-12 → retire (ACK Adrian)",
    "review_date": "2026-09-10",
-   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
-   "source_of_truth": "common.py-const",
+   "rollback": "flags.json OFF hot-reload (bez restartu)",
+   "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [
     "engine"
@@ -11260,24 +11093,21 @@
   },
   "ENABLE_PLAN_RECHECK_LIVE_ETA_REFRESH": {
    "carriers": [
-    "dispatch_v2/plan_recheck.py-const",
     "drop-in:dispatch-b-route-shadow.service.d/route-flag-parity.conf",
     "drop-in:dispatch-carried-first-guard.service.d/engine-env-parity.conf",
     "drop-in:dispatch-plan-recheck.service.d/live-eta-refresh.conf"
    ],
-   "consumers": [
-    "brak — writer latest-wins usunięty przez kontrakt live_eta single-source"
-   ],
+   "consumers": [],
    "curated_at": "2026-07-10",
    "current_snapshot": {
     "dispatch-b-route-shadow.service": true,
     "dispatch-carried-first-guard.service": true,
     "dispatch-plan-recheck.service": true
    },
-   "default": false,
+   "default": null,
    "intentional_per_process": {
-    "reason": "deprecated/inert: trzy zastane drop-iny mają tę samą wartość, a kod nie ma już consumera ani writera; pozostają tylko do cleanupu przy deployu za ACK",
-    "value": true
+    "reason": "",
+    "value": false
    },
    "known_drift": false,
    "known_drift_note": "",
@@ -11291,7 +11121,7 @@
    },
    "removal_condition": "usunąć trzy inertne drop-iny w tym samym kontrolowanym deployu co live_eta single-source; potem lifecycle=dead",
    "review_date": "2026-08-10",
-   "rollback": "revert kandydata przed deployem; po deployu rollback kodu wymaga jawnego przywrócenia starego writera i drop-inu za ACK",
+   "rollback": "rm drop-in dispatch-plan-recheck.service.d/live-eta-refresh.conf + restart dispatch-b-route-shadow.service ZA ACK",
    "source_of_truth": "drop-in:dispatch-b-route-shadow.service",
    "twin_of": [],
    "worlds": [
@@ -11565,6 +11395,7 @@
     "dispatch_v2/common.py-const"
    ],
    "consumers": [
+    "dispatch_v2/c7_normal_path.py",
     "dispatch_v2/common.py",
     "dispatch_v2/common.py:ENABLE_POST_SHIFT_OVERRUN_PENALTY",
     "dispatch_v2/core/candidates.py",
@@ -11906,8 +11737,7 @@
   },
   "ENABLE_PROPOSAL_CLAIM_PERSISTENCE": {
    "carriers": [
-    "common.py:ETAP4_DECISION_FLAGS",
-    "dispatch_v2/common.py-const"
+    "common.py:ETAP4_DECISION_FLAGS"
    ],
    "consumers": [
     "dispatch_v2/common.py",
@@ -11934,8 +11764,8 @@
    },
    "removal_condition": "po zastąpieniu przez kanoniczny proposal_assignment Etapu 2 albo retire za ACK",
    "review_date": "2026-08-10",
-   "rollback": "flags.json false/brak klucza (hot-reload, bez restartu)",
-   "source_of_truth": "flags.json",
+   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "source_of_truth": "common.py-const",
    "twin_of": [],
    "worlds": [
     "engine"
@@ -12014,13 +11844,11 @@
   },
   "ENABLE_PROPOSAL_REFRESH": {
    "carriers": [
-    "common.py:ETAP4_DECISION_FLAGS",
-    "dispatch_v2/common.py-const"
+    "common.py:ETAP4_DECISION_FLAGS"
    ],
    "consumers": [
     "dispatch_v2/common.py",
-    "dispatch_v2/proposal_refresh.py",
-    "dispatch_v2/tools/pending_global_resweep.py"
+    "dispatch_v2/proposal_refresh.py"
    ],
    "curated_at": "2026-07-28",
    "current_snapshot": {
@@ -12043,8 +11871,8 @@
    },
    "removal_condition": "po werdykcie gate R2 i ustaleniu stałego odświeżania albo retire za ACK",
    "review_date": "2026-08-10",
-   "rollback": "flags.json false/brak klucza (hot-reload, bez restartu)",
-   "source_of_truth": "flags.json",
+   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "source_of_truth": "common.py-const",
    "twin_of": [],
    "worlds": [
     "engine"
@@ -12251,7 +12079,8 @@
    "consumers": [
     "dispatch_v2/common.py",
     "dispatch_v2/common.py:ENABLE_R5_PICKUP_DETOUR_PENALTY",
-    "dispatch_v2/core/candidates.py"
+    "dispatch_v2/core/candidates.py",
+    "dispatch_v2/dispatch_pipeline.py"
    ],
    "curated_at": "2026-07-10",
    "current_snapshot": {
@@ -12498,15 +12327,17 @@
   },
   "ENABLE_REASSIGN_OLD_PLAN_RELEASE": {
    "carriers": [
+    "flags.json",
     "common.py:ETAP4_DECISION_FLAGS"
    ],
    "consumers": [
     "dispatch_v2/common.py",
+    "dispatch_v2/durable_event_apply.py",
     "dispatch_v2/panel_watcher.py"
    ],
    "curated_at": "2026-07-19",
    "current_snapshot": {
-    "default": false
+    "flags.json": true
    },
    "default": false,
    "intentional_per_process": {
@@ -12525,7 +12356,7 @@
    },
    "removal_condition": "flip flags.json=true za ACK ownera (fix reassign-lag apki starego kuriera) lub retire, jeśli nie wpięta do 2026-10",
    "review_date": "2026-08-10",
-   "rollback": "flip ENABLE_REASSIGN_OLD_PLAN_RELEASE=false w flags.json (decision_flag hot-reload per-call, BEZ restartu); pelny = git revert + restart dispatch-panel-watcher.service ZA ACK",
+   "rollback": "flags.json OFF hot-reload (bez restartu)",
    "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [
@@ -12638,7 +12469,7 @@
    ],
    "consumers": [
     "dispatch_v2/common.py",
-    "dispatch_v2/panel_watcher.py",
+    "dispatch_v2/durable_event_apply.py",
     "dispatch_v2/plan_recheck.py"
    ],
    "curated_at": "2026-07-10",
@@ -13014,41 +12845,6 @@
     "engine"
    ]
   },
-  "ENABLE_SAME_DEST_DROPOFF_ONE_ETA": {
-   "carriers": [
-    "courier_api/config.py"
-   ],
-   "consumers": [
-    "courier_api/config.py:SAME_DEST_DROPOFF_ONE_ETA"
-   ],
-   "curated_at": "2026-07-10",
-   "current_snapshot": {
-    "courier-api.service": true
-   },
-   "default": true,
-   "intentional_per_process": {
-    "reason": "",
-    "value": false
-   },
-   "known_drift": false,
-   "known_drift_note": "",
-   "lifecycle": "live",
-   "lifecycle_seeded": false,
-   "name": "ENABLE_SAME_DEST_DROPOFF_ONE_ETA",
-   "notes": "",
-   "owner": {
-    "business": "Adrian",
-    "service": "courier-api.service"
-   },
-   "removal_condition": "n/d dopóki live",
-   "review_date": "2026-10-10",
-   "rollback": "env ENABLE_SAME_DEST_DROPOFF_ONE_ETA OFF + restart courier-api.service ZA ACK",
-   "source_of_truth": "courier_api/config.py",
-   "twin_of": [],
-   "worlds": [
-    "apka"
-   ]
-  },
   "ENABLE_SAME_RESTAURANT_RACE_PROBE": {
    "carriers": [
     "flags.json"
@@ -13091,6 +12887,9 @@
    "consumers": [
     "dispatch_v2/common.py",
     "dispatch_v2/common.py:ENABLE_SAVED_PLANS",
+    "dispatch_v2/dispatch_pipeline.py",
+    "dispatch_v2/durable_event_apply.py",
+    "dispatch_v2/lifecycle_downstream.py",
     "dispatch_v2/panel_watcher.py"
    ],
    "curated_at": "2026-07-10",
@@ -13395,6 +13194,7 @@
    ],
    "consumers": [
     "dispatch_v2/common.py",
+    "dispatch_v2/core/lex_window_ledger.py",
     "dispatch_v2/dispatch_pipeline.py",
     "dispatch_v2/observability/stage_timing.py",
     "dispatch_v2/shadow_dispatcher.py"
@@ -13429,6 +13229,7 @@
   },
   "ENABLE_STATE_OUTBOX_SWEEPER": {
    "carriers": [
+    "flags.json",
     "common.py:ETAP4_DECISION_FLAGS"
    ],
    "consumers": [
@@ -13438,7 +13239,7 @@
    ],
    "curated_at": "2026-07-20",
    "current_snapshot": {
-    "default": false
+    "flags.json": true
    },
    "default": false,
    "intentional_per_process": {
@@ -13457,7 +13258,7 @@
    },
    "removal_condition": "flip flags.json=true za ACK po merge i weryfikacji health albo retire po zastapieniu stalym recovery loopem",
    "review_date": "2026-08-10",
-   "rollback": "flip ENABLE_STATE_OUTBOX_SWEEPER=false w flags.json (hot-reload, bez restartu); pelny = git revert + restart dispatch-panel-watcher.service ZA ACK",
+   "rollback": "flags.json OFF hot-reload (bez restartu)",
    "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [
@@ -13569,6 +13370,43 @@
    "twin_of": [],
    "worlds": [
     "apka"
+   ]
+  },
+  "ENABLE_STRATEGY2_PROBE_SHADOW": {
+   "carriers": [
+    "common.py:ETAP4_DECISION_FLAGS"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/dispatch_pipeline.py",
+    "dispatch_v2/shadow_dispatcher.py"
+   ],
+   "curated_at": "2026-07-28",
+   "current_snapshot": {
+    "default": false
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "shadow",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_STRATEGY2_PROBE_SHADOW",
+   "notes": "C noc 28.07: po zero feasible S1 skanuje sloty +5 do created_at+90 na całej flocie przez ten sam candidate evaluator i pełne HARD-y. Tylko strategy2_probe.v1 w shadow; zero propozycji/writera restauracji.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-shadow.service"
+   },
+   "removal_condition": "po minimum 2 dniach shadow i decyzji ownera: zbudować osobną flagę pełnego S2 albo retire",
+   "review_date": "2026-08-04",
+   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "source_of_truth": "common.py-const",
+   "twin_of": [],
+   "worlds": [
+    "engine"
    ]
   },
   "ENABLE_TELEGRAM_FREETEXT_ASSIGN": {
@@ -13686,14 +13524,11 @@
   "ENABLE_UWAGI_BRIDGE_NADAWCA": {
    "carriers": [
     "flags.json",
-    "common.py:ETAP4_DECISION_FLAGS",
-    "dispatch_v2/common.py-const"
+    "common.py:ETAP4_DECISION_FLAGS"
    ],
    "consumers": [
-    "dispatch_v2/common.py:uwagi_bridge_flags_coherent",
-    "dispatch_v2/panel_watcher.py",
-    "dispatch_v2/uwagi_address_parser.py:inspect_bridge_nadawca",
-    "dispatch_v2/uwagi_bridge_envelope.py:verify_bridge_envelope"
+    "dispatch_v2/common.py",
+    "dispatch_v2/panel_watcher.py"
    ],
    "curated_at": "2026-07-21",
    "current_snapshot": {
@@ -13716,11 +13551,9 @@
    },
    "removal_condition": "n/d dopóki live",
    "review_date": "2026-10-10",
-   "rollback": "env OFF w flags.json + restart dispatch-shadow.service ZA ACK",
+   "rollback": "flags.json OFF hot-reload (bez restartu)",
    "source_of_truth": "flags.json",
-   "twin_of": [
-    "ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL"
-   ],
+   "twin_of": [],
    "worlds": [
     "engine"
    ]
@@ -14034,7 +13867,8 @@
     "dispatch_v2/core/candidates.py",
     "dispatch_v2/courier_resolver.py",
     "dispatch_v2/dispatch_pipeline.py",
-    "dispatch_v2/feasibility_v2.py"
+    "dispatch_v2/feasibility_v2.py",
+    "dispatch_v2/plan_recheck.py"
    ],
    "curated_at": "2026-07-10",
    "current_snapshot": {
@@ -14145,7 +13979,8 @@
    "consumers": [
     "dispatch_v2/common.py",
     "dispatch_v2/common.py:ENABLE_V325_SCHEDULE_HARDENING",
-    "dispatch_v2/feasibility_v2.py"
+    "dispatch_v2/feasibility_v2.py",
+    "dispatch_v2/plan_recheck.py"
    ],
    "curated_at": "2026-07-10",
    "current_snapshot": {
@@ -16440,6 +16275,151 @@
     "engine"
    ]
   },
+  "LEX_WINDOW_CARRY_CAP_ALARM_MIN": {
+   "carriers": [
+    "common.py:FLAGS_JSON_NUMERIC_OVERRIDES"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/core/lex_window_guards.py"
+   ],
+   "curated_at": "2026-07-27",
+   "current_snapshot": {
+    "default": 40.0
+   },
+   "default": 40.0,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "LEX_WINDOW_CARRY_CAP_ALARM_MIN",
+   "notes": "WB2 G2: cap swiezosci w KANONICZNYM Alarmie (poziom eskalacji 3). DZIS NIEOSIAGALNY: wymaga Alarm certificate (OD-04), ktorego nie produkuje zadna warstwa — `core/loadgov_snapshot.alarm_certified` zwraca False. Wpiecie producenta = OSOBNE zadanie i osobna decyzja.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-plan-recheck.service"
+   },
+   "removal_condition": "przeglad po wpieciu producenta Alarm certificate",
+   "review_date": "2026-10-27",
+   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "source_of_truth": "common.py-const",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
+  "LEX_WINDOW_CARRY_CAP_MIN": {
+   "carriers": [
+    "common.py:FLAGS_JSON_NUMERIC_OVERRIDES"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/core/lex_window_guards.py"
+   ],
+   "curated_at": "2026-07-27",
+   "current_snapshot": {
+    "default": 35.0
+   },
+   "default": 35.0,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "LEX_WINDOW_CARRY_CAP_MIN",
+   "notes": "WB2 G2: ABSOLUTNY cap swiezosci niesionego w trybie normalnym (= R6 BAG_TIME_HARD_MAX_MIN). Zastepuje stary sufit `carry_cap = max(35.0, bcarry)`, ktory byl absolutny i przez to pozwalal pogorszyc swiezosc 8 -> 34,8 min. Nie jest zawieszany wyjatkiem D1. Gdy baseline sam jest nad capem — dopuszczalne jest wylacznie niepogorszenie.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-plan-recheck.service"
+   },
+   "removal_condition": "n/d — prog decyzyjny",
+   "review_date": "2026-10-27",
+   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "source_of_truth": "common.py-const",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
+  "LEX_WINDOW_DELAY_TOL_MIN": {
+   "carriers": [
+    "common.py:FLAGS_JSON_NUMERIC_OVERRIDES"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/core/lex_window_guards.py",
+    "dispatch_v2/plan_recheck.py"
+   ],
+   "curated_at": "2026-07-27",
+   "current_snapshot": {
+    "default": "3"
+   },
+   "default": "3",
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "LEX_WINDOW_DELAY_TOL_MIN",
+   "notes": "WB2: WSPOLNY budzet delty dla G1 (opoznienie dostawy) i G2-delta (swiezosc niesionego) — matematycznie ten sam predykat, bo kotwica possession jest stala miedzy permutacjami (dowod: Sol RUN3-b sekcja 3). Wartosc startowa 3 min = decyzja ownera D2. Kalibracja z ledgera v2 po >=48 h czystego baseline'u.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-plan-recheck.service"
+   },
+   "removal_condition": "n/d — prog decyzyjny",
+   "review_date": "2026-10-27",
+   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "source_of_truth": "common.py-const",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
+  "LEX_WINDOW_MIN_GAIN_MIN": {
+   "carriers": [
+    "common.py:FLAGS_JSON_NUMERIC_OVERRIDES"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/core/lex_window_guards.py"
+   ],
+   "curated_at": "2026-07-27",
+   "current_snapshot": {
+    "default": 1.0
+   },
+   "default": 1.0,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "LEX_WINDOW_MIN_GAIN_MIN",
+   "notes": "WB2 G3: minimalny MATERIALNY zysk jazdy (surowe minuty, inclusive — 1,0 przechodzi). Nie obowiazuje przy scislej poprawie okna (wyjatek D1): bezwarunkowe G3 wycinalo 102/313 obserwowanych ScISLYCH napraw okna (symulacja Sol RUN3-b na 561 wierszach z 27.07). Wartosc startowa = decyzja ownera D2.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-plan-recheck.service"
+   },
+   "removal_condition": "n/d — prog decyzyjny",
+   "review_date": "2026-10-27",
+   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "source_of_truth": "common.py-const",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
   "LIVE_ETA_COURIER_GUARD": {
    "carriers": [
     "DEFAULT_FLAGS",
@@ -16452,7 +16432,7 @@
    "current_snapshot": {
     "nadajesz-panel.service": true
    },
-   "default": false,
+   "default": null,
    "intentional_per_process": {
     "reason": "",
     "value": false
@@ -16478,76 +16458,148 @@
     "panel"
    ]
   },
-  "LIVE_ETA_FRESH_OVERRIDE_ONLY": {
+  "LOADGOV_FLEET_STATS_MAX_AGE_S": {
    "carriers": [
-    "DEFAULT_FLAGS"
+    "common.py:FLAGS_JSON_NUMERIC_OVERRIDES"
    ],
    "consumers": [
-    "panel:app/core/flags.py:LIVE_ETA_FRESH_OVERRIDE_ONLY"
+    "dispatch_v2/common.py",
+    "dispatch_v2/core/loadgov_publisher.py"
    ],
-   "curated_at": "2026-07-10",
+   "curated_at": "2026-07-27",
    "current_snapshot": {
-    "nadajesz-panel.service": true
+    "default": 120.0
    },
-   "default": true,
+   "default": 120.0,
    "intentional_per_process": {
     "reason": "",
     "value": false
    },
    "known_drift": false,
    "known_drift_note": "",
-   "lifecycle": "live",
+   "lifecycle": "planned",
    "lifecycle_seeded": false,
-   "name": "LIVE_ETA_FRESH_OVERRIDE_ONLY",
-   "notes": "",
+   "name": "LOADGOV_FLEET_STATS_MAX_AGE_S",
+   "notes": "G5: maksymalny wiek migawki filtra puli (courier_resolver.last_fleet_filter_stats) akceptowanej jako mianownik EQUAL-TREATMENT. Starsza = mianownik z innego stanu swiata niz licznik -> producent NIE publikuje (fail-safe: brak snapshotu => czytnik STRICT 5).",
    "owner": {
     "business": "Adrian",
-    "service": "nadajesz-panel.service"
+    "service": "dispatch-shadow.service"
    },
-   "removal_condition": "n/d dopóki live",
-   "review_date": "2026-10-10",
-   "rollback": "DEFAULT_FLAGS w app/core/flags.py (deploy panelu)",
-   "source_of_truth": "DEFAULT_FLAGS",
-   "twin_of": [
-    "ENABLE_LIVE_ETA_FRESH_OVERRIDE_ONLY"
-   ],
-   "worlds": [
-    "panel"
-   ]
-  },
-  "LIVE_ETA_MAX_AGE_MIN": {
-   "carriers": [
-    "courier_api/config.py"
-   ],
-   "consumers": [
-    "courier_api/config.py:LIVE_ETA_MAX_AGE_MIN"
-   ],
-   "curated_at": "2026-07-10",
-   "current_snapshot": {
-    "courier-api.service": 8
-   },
-   "default": 8,
-   "intentional_per_process": {
-    "reason": "",
-    "value": false
-   },
-   "known_drift": false,
-   "known_drift_note": "",
-   "lifecycle": "live",
-   "lifecycle_seeded": false,
-   "name": "LIVE_ETA_MAX_AGE_MIN",
-   "notes": "",
-   "owner": {
-    "business": "Adrian",
-    "service": "courier-api.service"
-   },
-   "removal_condition": "n/d dopóki live",
-   "review_date": "2026-10-10",
-   "rollback": "env LIVE_ETA_MAX_AGE_MIN OFF + restart courier-api.service ZA ACK",
-   "source_of_truth": "courier_api/config.py",
+   "removal_condition": "n/d — parametr swiezosci snapshotu",
+   "review_date": "2026-10-27",
+   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "source_of_truth": "common.py-const",
    "twin_of": [],
    "worlds": [
-    "apka"
+    "engine"
+   ]
+  },
+  "LOADGOV_SNAPSHOT_MIN_INTERVAL_S": {
+   "carriers": [
+    "common.py:FLAGS_JSON_NUMERIC_OVERRIDES"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/core/loadgov_publisher.py"
+   ],
+   "curated_at": "2026-07-27",
+   "current_snapshot": {
+    "default": 30.0
+   },
+   "default": 30.0,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "LOADGOV_SNAPSHOT_MIN_INTERVAL_S",
+   "notes": "G5: dlawienie ZAPISU snapshotu (seria EWMA konsumuje KAZDA probke — dlawiony jest wylacznie plik, zeby fsync nie stal w sciezce decyzji czesciej niz trzeba). LOADGOV_SNAPSHOT_TTL_S jest przycinany od dolu do 2x tej wartosci.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-shadow.service"
+   },
+   "removal_condition": "n/d — parametr swiezosci snapshotu",
+   "review_date": "2026-10-27",
+   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "source_of_truth": "common.py-const",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
+  "LOADGOV_SNAPSHOT_MIN_SAMPLES": {
+   "carriers": [
+    "common.py:FLAGS_JSON_NUMERIC_OVERRIDES"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/core/loadgov_publisher.py"
+   ],
+   "curated_at": "2026-07-27",
+   "current_snapshot": {
+    "default": 2
+   },
+   "default": 2,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "LOADGOV_SNAPSHOT_MIN_SAMPLES",
+   "notes": "G5: rozgrzewka serii przed pierwsza publikacja. Po JEDNEJ probce 'EWMA' jest doslownie obciazeniem chwilowym — publikowanie jej jako miary wygladzonej byloby tym samym klamstwem, przed ktorym broni zakaz recompute w oneshocie (RUN3-b sekcja 3, G5).",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-shadow.service"
+   },
+   "removal_condition": "n/d — parametr swiezosci snapshotu",
+   "review_date": "2026-10-27",
+   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "source_of_truth": "common.py-const",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
+  "LOADGOV_SNAPSHOT_TTL_S": {
+   "carriers": [
+    "common.py:FLAGS_JSON_NUMERIC_OVERRIDES"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/core/loadgov_publisher.py"
+   ],
+   "curated_at": "2026-07-27",
+   "current_snapshot": {
+    "default": 180.0
+   },
+   "default": 180.0,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "LOADGOV_SNAPSHOT_TTL_S",
+   "notes": "G5: waznosc snapshotu (valid_until = observed_at + TTL). Czytnik WB2 NIE MA wlasnego progu staleness — bierze now>valid_until wprost z pliku, wiec cala polityke swiezosci definiuje producent. Przycinany od dolu do 2x LOADGOV_SNAPSHOT_MIN_INTERVAL_S, zeby zdrowy producent nie zostawial dziury, w ktorej konsument widzi 'expired' w srodku normalnej pracy.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-shadow.service"
+   },
+   "removal_condition": "n/d — parametr swiezosci snapshotu",
+   "review_date": "2026-10-27",
+   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "source_of_truth": "common.py-const",
+   "twin_of": [],
+   "worlds": [
+    "engine"
    ]
   },
   "MANUAL_KONIEC_COMMAND_ENABLED": {
@@ -16728,41 +16780,6 @@
    "twin_of": [],
    "worlds": [
     "engine"
-   ]
-  },
-  "MONOTONIC_ROUTE_TIMES": {
-   "carriers": [
-    "DEFAULT_FLAGS"
-   ],
-   "consumers": [
-    "panel:app/core/flags.py:MONOTONIC_ROUTE_TIMES"
-   ],
-   "curated_at": "2026-07-10",
-   "current_snapshot": {
-    "nadajesz-panel.service": true
-   },
-   "default": true,
-   "intentional_per_process": {
-    "reason": "",
-    "value": false
-   },
-   "known_drift": false,
-   "known_drift_note": "",
-   "lifecycle": "live",
-   "lifecycle_seeded": false,
-   "name": "MONOTONIC_ROUTE_TIMES",
-   "notes": "",
-   "owner": {
-    "business": "Adrian",
-    "service": "nadajesz-panel.service"
-   },
-   "removal_condition": "n/d dopóki live",
-   "review_date": "2026-10-10",
-   "rollback": "DEFAULT_FLAGS w app/core/flags.py (deploy panelu)",
-   "source_of_truth": "DEFAULT_FLAGS",
-   "twin_of": [],
-   "worlds": [
-    "panel"
    ]
   },
   "MUL01_MULTI_LOCATION": {
@@ -17829,44 +17846,6 @@
     "engine"
    ]
   },
-  "PENDING_RESWEEP_PINGPONG_COOLDOWN_MIN": {
-   "carriers": [
-    "flags.json",
-    "dispatch_v2/tools/pending_global_resweep.py"
-   ],
-   "consumers": [
-    "dispatch_v2/tools/pending_global_resweep.py"
-   ],
-   "curated_at": "2026-07-22",
-   "current_snapshot": {
-    "default": 10.0
-   },
-   "default": 10.0,
-   "intentional_per_process": {
-    "reason": "",
-    "value": false
-   },
-   "known_drift": false,
-   "known_drift_note": "",
-   "lifecycle": "live",
-   "lifecycle_seeded": false,
-   "name": "PENDING_RESWEEP_PINGPONG_COOLDOWN_MIN",
-   "notes": "G6: minimalny odstęp przed kontr-podmianą na poprzedniego kuriera; shadow telemetry przy LIVE=OFF",
-   "owner": {
-    "business": "Adrian",
-    "service": "dispatch-pending-resweep-shadow.service"
-   },
-   "removal_condition": "razem z guardem G6 po decyzji ownera",
-   "review_date": "2026-07-24",
-   "rollback": "git revert; brak klucza w flags.json zachowuje default 10 min",
-   "source_of_truth": "dispatch_v2/tools/pending_global_resweep.py",
-   "twin_of": [
-    "PENDING_RESWEEP_PINGPONG_MARGIN_MULTIPLIER"
-   ],
-   "worlds": [
-    "engine"
-   ]
-  },
   "PENDING_RESWEEP_LIVE": {
    "carriers": [
     "flags.json"
@@ -17931,44 +17910,6 @@
    "rollback": "env OFF w flags.json + restart dispatch-shadow.service ZA ACK",
    "source_of_truth": "flags.json",
    "twin_of": [],
-   "worlds": [
-    "engine"
-   ]
-  },
-  "PENDING_RESWEEP_PINGPONG_MARGIN_MULTIPLIER": {
-   "carriers": [
-    "flags.json",
-    "dispatch_v2/tools/pending_global_resweep.py"
-   ],
-   "consumers": [
-    "dispatch_v2/tools/pending_global_resweep.py"
-   ],
-   "curated_at": "2026-07-22",
-   "current_snapshot": {
-    "default": 2.0
-   },
-   "default": 2.0,
-   "intentional_per_process": {
-    "reason": "",
-    "value": false
-   },
-   "known_drift": false,
-   "known_drift_note": "",
-   "lifecycle": "live",
-   "lifecycle_seeded": false,
-   "name": "PENDING_RESWEEP_PINGPONG_MARGIN_MULTIPLIER",
-   "notes": "G6: kontr-podmiana wymaga 2x zwykłego marginu oraz cooldownu",
-   "owner": {
-    "business": "Adrian",
-    "service": "dispatch-pending-resweep-shadow.service"
-   },
-   "removal_condition": "razem z guardem G6 po decyzji ownera",
-   "review_date": "2026-07-24",
-   "rollback": "git revert; brak klucza w flags.json zachowuje default 2.0",
-   "source_of_truth": "dispatch_v2/tools/pending_global_resweep.py",
-   "twin_of": [
-    "PENDING_RESWEEP_PINGPONG_COOLDOWN_MIN"
-   ],
    "worlds": [
     "engine"
    ]
@@ -18040,41 +17981,6 @@
    "review_date": "2026-10-10",
    "rollback": "PANEL_FLAG_PICKUP_DELAY_NOTICE w flags.systemd.env + restart nadajesz-panel.service",
    "source_of_truth": "flags.systemd.env",
-   "twin_of": [],
-   "worlds": [
-    "panel"
-   ]
-  },
-  "PIN_AGREED_PICKUP_TIME": {
-   "carriers": [
-    "DEFAULT_FLAGS"
-   ],
-   "consumers": [
-    "panel:app/core/flags.py:PIN_AGREED_PICKUP_TIME"
-   ],
-   "curated_at": "2026-07-10",
-   "current_snapshot": {
-    "nadajesz-panel.service": true
-   },
-   "default": true,
-   "intentional_per_process": {
-    "reason": "",
-    "value": false
-   },
-   "known_drift": false,
-   "known_drift_note": "",
-   "lifecycle": "live",
-   "lifecycle_seeded": false,
-   "name": "PIN_AGREED_PICKUP_TIME",
-   "notes": "",
-   "owner": {
-    "business": "Adrian",
-    "service": "nadajesz-panel.service"
-   },
-   "removal_condition": "n/d dopóki live",
-   "review_date": "2026-10-10",
-   "rollback": "DEFAULT_FLAGS w app/core/flags.py (deploy panelu)",
-   "source_of_truth": "DEFAULT_FLAGS",
    "twin_of": [],
    "worlds": [
     "panel"
@@ -18157,8 +18063,6 @@
   },
   "PROPOSAL_CLAIM_TTL_SEC": {
    "carriers": [
-    "flags.json",
-    "dispatch_v2/common.py-const",
     "common.py:FLAGS_JSON_NUMERIC_OVERRIDES"
    ],
    "consumers": [
@@ -18186,8 +18090,8 @@
    },
    "removal_condition": "razem z ENABLE_PROPOSAL_CLAIM_PERSISTENCE przy przejściu na proposal_assignment Etapu 2",
    "review_date": "2026-08-10",
-   "rollback": "usunąć klucz z flags.json; fallback 240 s hot-reload",
-   "source_of_truth": "flags.json",
+   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "source_of_truth": "common.py-const",
    "twin_of": [],
    "worlds": [
     "engine"
@@ -18924,18 +18828,19 @@
     "panel"
    ]
   },
-  "SEED_PICKUP_TIME_FROM_AGREED": {
+  "ROUTE_REORDER": {
    "carriers": [
-    "DEFAULT_FLAGS"
+    "DEFAULT_FLAGS",
+    "flags.systemd.env"
    ],
    "consumers": [
-    "panel:app/core/flags.py:SEED_PICKUP_TIME_FROM_AGREED"
+    "panel:app/core/flags.py:ROUTE_REORDER"
    ],
-   "curated_at": "2026-07-10",
+   "curated_at": "2026-07-30",
    "current_snapshot": {
     "nadajesz-panel.service": true
    },
-   "default": true,
+   "default": false,
    "intentional_per_process": {
     "reason": "",
     "value": false
@@ -18944,7 +18849,7 @@
    "known_drift_note": "",
    "lifecycle": "live",
    "lifecycle_seeded": false,
-   "name": "SEED_PICKUP_TIME_FROM_AGREED",
+   "name": "ROUTE_REORDER",
    "notes": "",
    "owner": {
     "business": "Adrian",
@@ -18952,8 +18857,8 @@
    },
    "removal_condition": "n/d dopóki live",
    "review_date": "2026-10-10",
-   "rollback": "DEFAULT_FLAGS w app/core/flags.py (deploy panelu)",
-   "source_of_truth": "DEFAULT_FLAGS",
+   "rollback": "PANEL_FLAG_ROUTE_REORDER w flags.systemd.env + restart nadajesz-panel.service",
+   "source_of_truth": "flags.systemd.env",
    "twin_of": [],
    "worlds": [
     "panel"
@@ -19811,332 +19716,6 @@
    "removal_condition": "n/d dopóki live",
    "review_date": "2026-10-10",
    "rollback": "env OFF w flags.json + restart dispatch-shadow.service ZA ACK",
-   "source_of_truth": "flags.json",
-   "twin_of": [],
-   "worlds": [
-    "engine"
-   ]
-  },
-  "ENABLE_LEX_WINDOW_GUARDS_V2": {
-   "carriers": [
-    "common.py:ETAP4_DECISION_FLAGS",
-    "dispatch_v2/common.py-const"
-   ],
-   "consumers": [
-    "dispatch_v2/common.py:ENABLE_LEX_WINDOW_GUARDS_V2",
-    "dispatch_v2/plan_recheck.py",
-    "dispatch_v2/core/lex_window_guards.py"
-   ],
-   "curated_at": "2026-07-27",
-   "current_snapshot": {},
-   "default": false,
-   "intentional_per_process": {
-    "reason": "",
-    "value": false
-   },
-   "known_drift": false,
-   "known_drift_note": "",
-   "lifecycle": "planned",
-   "lifecycle_seeded": false,
-   "name": "ENABLE_LEX_WINDOW_GUARDS_V2",
-   "notes": "WB2 (CZASY 492, owner ACK D1+D2 z 27.07). Guardy WARUNKOWE warstwy P-1 okna odbioru: G1 opoznienie KAZDEJ dostawy (assigned i carried), G2 swiezosc per sztuka + cap trybu 35/40, G3 minimalny zysk jazdy, z wyjatkiem D1 przy SCISLEJ poprawie okna (dviol<bviol). G4 = wspolna granica commitu (transform -> strict retime -> final validator -> CAS). OFF = warstwa bajt-w-bajt jak przed WB2. Hierarchia klucza lex (okno->jazda->swiezosc) NIETKNIETA. Spec docs/WB2_CONDITIONAL_GUARDS.md.",
-   "owner": {
-    "business": "Adrian",
-    "service": "dispatch-plan-recheck.service"
-   },
-   "removal_condition": "n/d — guard trwaly; przeglad progow po kalibracji z ledgera v2",
-   "review_date": "2026-10-27",
-   "rollback": "flags.json OFF (hot-reload przez _D3_FALA_A_FLAGS, bez restartu)",
-   "source_of_truth": "flags.json",
-   "twin_of": [],
-   "worlds": [
-    "engine"
-   ]
-  },
-  "LOADGOV_SNAPSHOT_MIN_INTERVAL_S": {
-   "carriers": [
-    "flags.json",
-    "common.py:FLAGS_JSON_NUMERIC_OVERRIDES",
-    "dispatch_v2/common.py-const"
-   ],
-   "consumers": [
-    "dispatch_v2/common.py",
-    "dispatch_v2/core/loadgov_publisher.py"
-   ],
-   "curated_at": "2026-07-27",
-   "current_snapshot": {},
-   "default": "30.0",
-   "intentional_per_process": {
-    "reason": "",
-    "value": false
-   },
-   "known_drift": false,
-   "known_drift_note": "",
-   "lifecycle": "planned",
-   "lifecycle_seeded": false,
-   "name": "LOADGOV_SNAPSHOT_MIN_INTERVAL_S",
-   "notes": "G5: dlawienie ZAPISU snapshotu (seria EWMA konsumuje KAZDA probke — dlawiony jest wylacznie plik, zeby fsync nie stal w sciezce decyzji czesciej niz trzeba). LOADGOV_SNAPSHOT_TTL_S jest przycinany od dolu do 2x tej wartosci.",
-   "owner": {
-    "business": "Adrian",
-    "service": "dispatch-shadow.service"
-   },
-   "removal_condition": "n/d — parametr swiezosci snapshotu",
-   "review_date": "2026-10-27",
-   "rollback": "flags.json na wartosc sprzed zmiany (hot-reload)",
-   "source_of_truth": "flags.json",
-   "twin_of": [],
-   "worlds": [
-    "engine"
-   ]
-  },
-  "LOADGOV_SNAPSHOT_TTL_S": {
-   "carriers": [
-    "flags.json",
-    "common.py:FLAGS_JSON_NUMERIC_OVERRIDES",
-    "dispatch_v2/common.py-const"
-   ],
-   "consumers": [
-    "dispatch_v2/common.py",
-    "dispatch_v2/core/loadgov_publisher.py"
-   ],
-   "curated_at": "2026-07-27",
-   "current_snapshot": {},
-   "default": "180.0",
-   "intentional_per_process": {
-    "reason": "",
-    "value": false
-   },
-   "known_drift": false,
-   "known_drift_note": "",
-   "lifecycle": "planned",
-   "lifecycle_seeded": false,
-   "name": "LOADGOV_SNAPSHOT_TTL_S",
-   "notes": "G5: waznosc snapshotu (valid_until = observed_at + TTL). Czytnik WB2 NIE MA wlasnego progu staleness — bierze now>valid_until wprost z pliku, wiec cala polityke swiezosci definiuje producent. Przycinany od dolu do 2x LOADGOV_SNAPSHOT_MIN_INTERVAL_S, zeby zdrowy producent nie zostawial dziury, w ktorej konsument widzi 'expired' w srodku normalnej pracy.",
-   "owner": {
-    "business": "Adrian",
-    "service": "dispatch-shadow.service"
-   },
-   "removal_condition": "n/d — parametr swiezosci snapshotu",
-   "review_date": "2026-10-27",
-   "rollback": "flags.json na wartosc sprzed zmiany (hot-reload)",
-   "source_of_truth": "flags.json",
-   "twin_of": [],
-   "worlds": [
-    "engine"
-   ]
-  },
-  "LOADGOV_SNAPSHOT_MIN_SAMPLES": {
-   "carriers": [
-    "flags.json",
-    "common.py:FLAGS_JSON_NUMERIC_OVERRIDES",
-    "dispatch_v2/common.py-const"
-   ],
-   "consumers": [
-    "dispatch_v2/common.py",
-    "dispatch_v2/core/loadgov_publisher.py"
-   ],
-   "curated_at": "2026-07-27",
-   "current_snapshot": {},
-   "default": "2",
-   "intentional_per_process": {
-    "reason": "",
-    "value": false
-   },
-   "known_drift": false,
-   "known_drift_note": "",
-   "lifecycle": "planned",
-   "lifecycle_seeded": false,
-   "name": "LOADGOV_SNAPSHOT_MIN_SAMPLES",
-   "notes": "G5: rozgrzewka serii przed pierwsza publikacja. Po JEDNEJ probce 'EWMA' jest doslownie obciazeniem chwilowym — publikowanie jej jako miary wygladzonej byloby tym samym klamstwem, przed ktorym broni zakaz recompute w oneshocie (RUN3-b sekcja 3, G5).",
-   "owner": {
-    "business": "Adrian",
-    "service": "dispatch-shadow.service"
-   },
-   "removal_condition": "n/d — parametr swiezosci snapshotu",
-   "review_date": "2026-10-27",
-   "rollback": "flags.json na wartosc sprzed zmiany (hot-reload)",
-   "source_of_truth": "flags.json",
-   "twin_of": [],
-   "worlds": [
-    "engine"
-   ]
-  },
-  "LOADGOV_FLEET_STATS_MAX_AGE_S": {
-   "carriers": [
-    "flags.json",
-    "common.py:FLAGS_JSON_NUMERIC_OVERRIDES",
-    "dispatch_v2/common.py-const"
-   ],
-   "consumers": [
-    "dispatch_v2/common.py",
-    "dispatch_v2/core/loadgov_publisher.py"
-   ],
-   "curated_at": "2026-07-27",
-   "current_snapshot": {},
-   "default": "120.0",
-   "intentional_per_process": {
-    "reason": "",
-    "value": false
-   },
-   "known_drift": false,
-   "known_drift_note": "",
-   "lifecycle": "planned",
-   "lifecycle_seeded": false,
-   "name": "LOADGOV_FLEET_STATS_MAX_AGE_S",
-   "notes": "G5: maksymalny wiek migawki filtra puli (courier_resolver.last_fleet_filter_stats) akceptowanej jako mianownik EQUAL-TREATMENT. Starsza = mianownik z innego stanu swiata niz licznik -> producent NIE publikuje (fail-safe: brak snapshotu => czytnik STRICT 5).",
-   "owner": {
-    "business": "Adrian",
-    "service": "dispatch-shadow.service"
-   },
-   "removal_condition": "n/d — parametr swiezosci snapshotu",
-   "review_date": "2026-10-27",
-   "rollback": "flags.json na wartosc sprzed zmiany (hot-reload)",
-   "source_of_truth": "flags.json",
-   "twin_of": [],
-   "worlds": [
-    "engine"
-   ]
-  },
-  "LEX_WINDOW_DELAY_TOL_MIN": {
-   "carriers": [
-    "flags.json",
-    "common.py:FLAGS_JSON_NUMERIC_OVERRIDES",
-    "dispatch_v2/common.py-const"
-   ],
-   "consumers": [
-    "dispatch_v2/common.py",
-    "dispatch_v2/plan_recheck.py",
-    "dispatch_v2/core/lex_window_guards.py"
-   ],
-   "curated_at": "2026-07-27",
-   "current_snapshot": {},
-   "default": "3.0",
-   "intentional_per_process": {
-    "reason": "",
-    "value": false
-   },
-   "known_drift": false,
-   "known_drift_note": "",
-   "lifecycle": "planned",
-   "lifecycle_seeded": false,
-   "name": "LEX_WINDOW_DELAY_TOL_MIN",
-   "notes": "WB2: WSPOLNY budzet delty dla G1 (opoznienie dostawy) i G2-delta (swiezosc niesionego) — matematycznie ten sam predykat, bo kotwica possession jest stala miedzy permutacjami (dowod: Sol RUN3-b sekcja 3). Wartosc startowa 3 min = decyzja ownera D2. Kalibracja z ledgera v2 po >=48 h czystego baseline'u.",
-   "owner": {
-    "business": "Adrian",
-    "service": "dispatch-plan-recheck.service"
-   },
-   "removal_condition": "n/d — prog decyzyjny",
-   "review_date": "2026-10-27",
-   "rollback": "flags.json na wartosc sprzed zmiany (hot-reload)",
-   "source_of_truth": "flags.json",
-   "twin_of": [],
-   "worlds": [
-    "engine"
-   ]
-  },
-  "LEX_WINDOW_CARRY_CAP_MIN": {
-   "carriers": [
-    "flags.json",
-    "common.py:FLAGS_JSON_NUMERIC_OVERRIDES",
-    "dispatch_v2/common.py-const"
-   ],
-   "consumers": [
-    "dispatch_v2/common.py",
-    "dispatch_v2/plan_recheck.py",
-    "dispatch_v2/core/lex_window_guards.py"
-   ],
-   "curated_at": "2026-07-27",
-   "current_snapshot": {},
-   "default": "35.0",
-   "intentional_per_process": {
-    "reason": "",
-    "value": false
-   },
-   "known_drift": false,
-   "known_drift_note": "",
-   "lifecycle": "planned",
-   "lifecycle_seeded": false,
-   "name": "LEX_WINDOW_CARRY_CAP_MIN",
-   "notes": "WB2 G2: ABSOLUTNY cap swiezosci niesionego w trybie normalnym (= R6 BAG_TIME_HARD_MAX_MIN). Zastepuje stary sufit `carry_cap = max(35.0, bcarry)`, ktory byl absolutny i przez to pozwalal pogorszyc swiezosc 8 -> 34,8 min. Nie jest zawieszany wyjatkiem D1. Gdy baseline sam jest nad capem — dopuszczalne jest wylacznie niepogorszenie.",
-   "owner": {
-    "business": "Adrian",
-    "service": "dispatch-plan-recheck.service"
-   },
-   "removal_condition": "n/d — prog decyzyjny",
-   "review_date": "2026-10-27",
-   "rollback": "flags.json na wartosc sprzed zmiany (hot-reload)",
-   "source_of_truth": "flags.json",
-   "twin_of": [],
-   "worlds": [
-    "engine"
-   ]
-  },
-  "LEX_WINDOW_CARRY_CAP_ALARM_MIN": {
-   "carriers": [
-    "flags.json",
-    "common.py:FLAGS_JSON_NUMERIC_OVERRIDES",
-    "dispatch_v2/common.py-const"
-   ],
-   "consumers": [
-    "dispatch_v2/common.py",
-    "dispatch_v2/core/lex_window_guards.py"
-   ],
-   "curated_at": "2026-07-27",
-   "current_snapshot": {},
-   "default": "40.0",
-   "intentional_per_process": {
-    "reason": "",
-    "value": false
-   },
-   "known_drift": false,
-   "known_drift_note": "",
-   "lifecycle": "planned",
-   "lifecycle_seeded": false,
-   "name": "LEX_WINDOW_CARRY_CAP_ALARM_MIN",
-   "notes": "WB2 G2: cap swiezosci w KANONICZNYM Alarmie (poziom eskalacji 3). DZIS NIEOSIAGALNY: wymaga Alarm certificate (OD-04), ktorego nie produkuje zadna warstwa — `core/loadgov_snapshot.alarm_certified` zwraca False. Wpiecie producenta = OSOBNE zadanie i osobna decyzja.",
-   "owner": {
-    "business": "Adrian",
-    "service": "dispatch-plan-recheck.service"
-   },
-   "removal_condition": "przeglad po wpieciu producenta Alarm certificate",
-   "review_date": "2026-10-27",
-   "rollback": "flags.json na wartosc sprzed zmiany (hot-reload)",
-   "source_of_truth": "flags.json",
-   "twin_of": [],
-   "worlds": [
-    "engine"
-   ]
-  },
-  "LEX_WINDOW_MIN_GAIN_MIN": {
-   "carriers": [
-    "flags.json",
-    "common.py:FLAGS_JSON_NUMERIC_OVERRIDES",
-    "dispatch_v2/common.py-const"
-   ],
-   "consumers": [
-    "dispatch_v2/common.py",
-    "dispatch_v2/core/lex_window_guards.py"
-   ],
-   "curated_at": "2026-07-27",
-   "current_snapshot": {},
-   "default": "1.0",
-   "intentional_per_process": {
-    "reason": "",
-    "value": false
-   },
-   "known_drift": false,
-   "known_drift_note": "",
-   "lifecycle": "planned",
-   "lifecycle_seeded": false,
-   "name": "LEX_WINDOW_MIN_GAIN_MIN",
-   "notes": "WB2 G3: minimalny MATERIALNY zysk jazdy (surowe minuty, inclusive — 1,0 przechodzi). Nie obowiazuje przy scislej poprawie okna (wyjatek D1): bezwarunkowe G3 wycinalo 102/313 obserwowanych ScISLYCH napraw okna (symulacja Sol RUN3-b na 561 wierszach z 27.07). Wartosc startowa = decyzja ownera D2.",
-   "owner": {
-    "business": "Adrian",
-    "service": "dispatch-plan-recheck.service"
-   },
-   "removal_condition": "n/d — prog decyzyjny",
-   "review_date": "2026-10-27",
-   "rollback": "flags.json na wartosc sprzed zmiany (hot-reload)",
    "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [

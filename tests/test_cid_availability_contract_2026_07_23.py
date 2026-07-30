@@ -329,7 +329,9 @@ def test_flag_contract_is_etap4_off_default():
         )
     )
     entry = registry["flags"]["ENABLE_CID_AVAILABILITY_CONTRACT"]
-    assert entry["current_snapshot"]["flags.json"] is False
+    # Stała/default kodu pozostaje OFF, ale commitowany lifecycle snapshot
+    # odzwierciedla jawnie aktywowany żywy nośnik flags.json.
+    assert entry["current_snapshot"]["flags.json"] is True
     assert entry["lifecycle"] == "planned"
     # Review-only cross-check: review_artifacts/flags.json to artefakt REVIEW, którego
     # NIE ma (i nie powinno być) w produkcji. Hermetyczny guard — w live po prostu pomija

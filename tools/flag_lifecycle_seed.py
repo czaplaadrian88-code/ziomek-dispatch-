@@ -213,7 +213,17 @@ _PKG_SEGMENTS = ("dispatch_v2", "courier_api_panelsync", "courier_api")
 
 
 def _pkg_relpath(p: str) -> str:
-    parts = os.path.abspath(p).split(os.sep)
+    abs_p = os.path.abspath(p)
+    # Worktree może mieć dowolną nazwę (np. session284-q5-contract-fix), więc
+    # sama heurystyka szukająca segmentu ``dispatch_v2`` nie jest wystarczająca.
+    # Kod silnika zawsze kotwiczymy względem faktycznie załadowanego DISPATCH_V2,
+    # dzięki czemu consumers[] pozostaje kanoniczne i niezależne od lokalizacji
+    # worktree: ``dispatch_v2/<plik>``.
+    rel_engine = os.path.relpath(abs_p, DISPATCH_V2)
+    if rel_engine != os.pardir and not rel_engine.startswith(os.pardir + os.sep):
+        return "dispatch_v2/" + rel_engine.replace(os.sep, "/")
+
+    parts = abs_p.split(os.sep)
     for pkg in _PKG_SEGMENTS:
         if pkg in parts:
             i = len(parts) - 1 - parts[::-1].index(pkg)  # ostatnie wystąpienie
@@ -278,7 +288,7 @@ def _build_consumer_index(py_files):
             src = open(f, encoding="utf-8", errors="replace").read()
         except OSError:
             continue
-        rel = os.path.relpath(f, SCRIPTS_ROOT)
+        rel = _pkg_relpath(f)
         for t in set(tok_re.findall(src)):
             idx.setdefault(t, set()).add(rel)
     return idx
@@ -788,7 +798,9 @@ def _dedup(seq):
 
 
 def dumps(reg) -> str:
-    return json.dumps(reg, indent=2, ensure_ascii=False, sort_keys=True) + "\n"
+    # Commitowany rejestr używa jednego wcięcia; zachowanie tego formatu sprawia,
+    # że re-seed pokazuje zmianę kontraktu, a nie dziesiątki tysięcy linii szumu.
+    return json.dumps(reg, indent=1, ensure_ascii=False, sort_keys=True) + "\n"
 
 
 def _curated_count(path):
