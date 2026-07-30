@@ -463,6 +463,7 @@ def eval_courier_inner(ctx: EvalContext, cid, cs):
         bag=bag_sim,
         new_order=new_order,
         shift_end=getattr(cs, "shift_end", None),
+        shift_end_status=getattr(cs, "shift_end_status", None),
         shift_start=getattr(cs, "shift_start", None),  # V3.25 STEP B (R-01)
         now=now,
         pickup_ready_at=pickup_ready_at,

@@ -18,6 +18,13 @@ from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from dispatch_v2.identity.normalize import norm
 from dispatch_v2.position_model import resolve_courier_position
+from dispatch_v2.shift_interval import (
+    EffectiveShiftWindow,
+    ShiftEndStatus,
+    ShiftInterval,
+    ShiftWindowSource,
+    parse_shift_interval,
+)
 
 from dispatch_v2.common import (
     setup_logger, now_iso, parse_panel_timestamp, DT_MIN_UTC, flag,
@@ -122,10 +129,17 @@ def _synthetic_pos_fallback(cs, source: str, shift_start_min=None) -> None:
     który nie patrzy na source; klasa bliźniaków ①). Ten helper WYMUSZA parę
     pos+pos_source razem; labele i logi call-site'ów bez zmian (bajt-parytet).
     Downstream traktuje fikcję po pos_source (F1.7 score-neutral, equal-treatment)."""
-    cs.pos = BIALYSTOK_CENTER
-    cs.pos_source = source
     if shift_start_min is not None:
         cs.shift_start_min = shift_start_min
+    # Metadata czasu jest niezależna od pochodzenia pozycji. Realny
+    # GPS/provenance nigdy nie jest degradowany do ``pre_shift``. Istniejący
+    # sentinel BIALYSTOK_CENTER z nieznanym źródłem (np. wcześniejsze
+    # ``no_gps``) nadal jest jednak syntetykiem i MUSI dostać aktualną
+    # semantykę call-site'u zamiast zachować stale ``no_gps``.
+    if cs.pos is not None and is_position_known(cs.pos_source):
+        return
+    cs.pos = BIALYSTOK_CENTER
+    cs.pos_source = source
 
 
 # ── Persistent last-known-position store (FIX 2026-06-08) ────────────────────
@@ -359,6 +373,12 @@ class CourierState:
     bag: List[Dict] = field(default_factory=list)    # ordery w bagu (jako dict z state)
     shift_end: Optional[datetime] = None             # koniec zmiany (None = nieznane)
     shift_start: Optional[datetime] = None           # V3.25: początek zmiany (Warsaw aware) dla R-01 PRE-CHECK
+    shift_end_status: ShiftEndStatus = ShiftEndStatus.UNKNOWN_NO_WINDOW
+    effective_shift_window: EffectiveShiftWindow = field(
+        default_factory=lambda: EffectiveShiftWindow.unknown(
+            ShiftEndStatus.UNKNOWN_NO_WINDOW
+        )
+    )
     shift_start_min: Optional[float] = None          # minuty od now do startu zmiany (pre_shift)
     name: Optional[str] = None                       # czytelna nazwa z kurier_piny
     # V3.19h BUG-4: tier info z courier_tiers.json (None gdy cid nieznany).
@@ -1389,38 +1409,42 @@ def build_fleet_snapshot(
     return fleet
 
 
+def _typed_schedule_interval(
+    entry: Optional[dict],
+    *,
+    anchor: Optional[datetime] = None,
+) -> Optional[ShiftInterval]:
+    """Kompatybilnościowy adapter legacy do jedynego parsera typed.
+
+    CID path nie wywołuje tego adaptera — konsumuje instancję sparsowaną raz w
+    ``AvailabilityDecision``. Uzupełnienia brakującej granicy służą wyłącznie
+    starym unit-callom helperów; trwały/schedule kontrakt wymaga obu pól.
+    """
+
+    if not isinstance(entry, dict):
+        return None
+    candidate = dict(entry)
+    candidate.setdefault("start", "00:00")
+    candidate.setdefault("end", "24:00")
+    moment = anchor or datetime.now(timezone.utc)
+    return parse_shift_interval(candidate, anchor=moment)
+
+
 def _mins_to_shift_start(entry: Optional[dict]) -> Optional[float]:
-    """Z entry grafiku → minuty od now (Warsaw) do startu zmiany.
-    Dodatnie = jeszcze nie zaczął, ujemne = już po. None = brak danych."""
-    start_str = (entry or {}).get("start")
-    if not start_str or ":" not in start_str:
+    """Legacy adapter; nowych konsumentów zasila gotowy EffectiveShiftWindow."""
+
+    now = datetime.now(timezone.utc)
+    interval = _typed_schedule_interval(entry, anchor=now)
+    if interval is None:
         return None
-    try:
-        from zoneinfo import ZoneInfo
-        WAW = ZoneInfo("Europe/Warsaw")
-        now_w = datetime.now(WAW)
-        h, m = start_str.split(":")
-        start_dt = now_w.replace(hour=int(h), minute=int(m), second=0, microsecond=0)
-        return (start_dt - now_w).total_seconds() / 60.0
-    except Exception:
-        return None
+    return (interval.start_at - now).total_seconds() / 60.0
 
 
 def _shift_start_dt(entry: Optional[dict]) -> Optional[datetime]:
-    """V3.25: z entry grafiku → datetime startu zmiany (Warsaw aware).
-    Mirror _shift_end_dt — używane w dispatchable_fleet do set cs.shift_start
-    dla V3.25 R-01 SCHEDULE-HARDENING PRE-CHECK."""
-    start_str = (entry or {}).get("start")
-    if not start_str or ":" not in start_str:
-        return None
-    try:
-        from zoneinfo import ZoneInfo
-        WAW = ZoneInfo("Europe/Warsaw")
-        now_w = datetime.now(WAW)
-        h, m = start_str.split(":")
-        return now_w.replace(hour=int(h), minute=int(m), second=0, microsecond=0)
-    except Exception:
-        return None
+    """Legacy adapter startu do jedynego parsera ShiftInterval."""
+
+    interval = _typed_schedule_interval(entry)
+    return interval.start_at if interval is not None else None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1534,18 +1558,51 @@ def resolve_available_from_by_cid(
     return available_from_from_shift_start(ss, now_utc)
 
 
-def effective_shift_end(wo_entry: Optional[dict], grafik_entry: Optional[dict],
-                        real_on_shift_now: bool, cap_enabled: bool) -> Optional[datetime]:
-    """JEDYNE źródło EFEKTYWNEGO końca zmiany (v4, re-review Sola): working-
-    override w gałęzi FALLBACK (kurier NIE jest na realnej zmianie teraz) →
-    `_effective_working_override_shift_end` (GRAFIK-CAP); inaczej koniec z
-    realnego grafiku (`_shift_end_dt`). Delegują tu OBA konsumenci: pętla
-    `dispatchable_fleet` (→ cs.shift_end, które dostaje feasibility) oraz
-    `resolve_effective_shift_end_by_cid` (raport HARD pinu operatora) —
-    parytet okna feasibility↔raport z konstrukcji, zero trzeciej kopii."""
+def _legacy_effective_shift_window(
+    wo_entry: Optional[dict],
+    grafik_entry: Optional[dict],
+    real_on_shift_now: bool,
+    cap_enabled: bool,
+) -> EffectiveShiftWindow:
+    """Typed adapter wyłącznie dla rollbackowej ścieżki flagi OFF."""
+
+    schedule_interval = _typed_schedule_interval(grafik_entry)
     if wo_entry is not None and not real_on_shift_now:
-        return _effective_working_override_shift_end(wo_entry, grafik_entry, cap_enabled)
-    return _shift_end_dt(grafik_entry)
+        operator_interval = _typed_schedule_interval(wo_entry)
+        if operator_interval is None:
+            return EffectiveShiftWindow.unknown(
+                ShiftEndStatus.UNKNOWN_DATA_ERROR
+            )
+        from dispatch_v2 import courier_availability as _availability
+
+        interval, source = _availability._operator_interval_with_schedule_cap(
+            operator_interval,
+            schedule_interval,
+            cap_enabled and _parse_added_at(wo_entry) is not None,
+        )
+        return EffectiveShiftWindow.known(interval, source)
+    if schedule_interval is not None:
+        return EffectiveShiftWindow.known(
+            schedule_interval,
+            ShiftWindowSource.SCHEDULE,
+        )
+    return EffectiveShiftWindow.unknown(ShiftEndStatus.UNKNOWN_NO_WINDOW)
+
+
+def effective_shift_end(
+    wo_entry: Optional[dict],
+    grafik_entry: Optional[dict],
+    real_on_shift_now: bool,
+    cap_enabled: bool,
+) -> Optional[datetime]:
+    """Compatibility endpoint; jedyny typed owner zwraca jego ``end_at``."""
+
+    return _legacy_effective_shift_window(
+        wo_entry,
+        grafik_entry,
+        real_on_shift_now,
+        cap_enabled,
+    ).end_at
 
 
 def _operator_on_shift_window(
@@ -1553,51 +1610,28 @@ def _operator_on_shift_window(
     _is_on_shift_fn,
     cap_enabled: bool,
 ) -> Tuple[Optional[datetime], Optional[datetime]]:
-    """Projektuje czas OPERATOR_ON bez zmiany authority dostępności.
+    """Kompatybilnościowa projekcja gotowego typed okna decyzji.
 
-    - dokładny grafik wygrywa czasowo tylko wtedy, gdy kurier jest na nim TERAZ;
-    - jawne okno konsoli poza realną zmianą zachowuje istniejący working-override
-      i przechodzi przez jedyny owner GRAFIK-CAP/second-shift;
-    - assignment_event nie deklaruje końca pracy. Poza aktywnym grafikiem jego
-      początek to dokładny ``updated_at``, a koniec pozostaje nieznany zamiast
-      fabrykowania polityki 24:00 albo kopiowania minionego/przyszłego grafiku.
+    Argumenty hostowego boola i capu nie są ponownie konsumowane: oba zostały
+    rozstrzygnięte przy jednorazowym tworzeniu ``AvailabilityDecision``.
     """
-    grafik_entry = availability.schedule_entry
-    real_on_shift_now = availability.real_on_shift_now
 
-    # Baseline precedence (owner-ACKed working override): gdy grafik jest aktywny
-    # TERAZ, jego start/end wygrywają niezależnie od explicit/default operator
-    # window. Zmiana tej relacji dotknęłaby HARD Gate 2/3 i wymaga osobnego ACK.
-    if real_on_shift_now:
-        return (
-            _shift_start_dt(grafik_entry),
-            effective_shift_end(None, grafik_entry, True, cap_enabled),
-        )
-
-    if availability.operator_interval is not None:
-        return (
-            availability.operator_interval.start_at,
-            effective_shift_end(
-                availability.operator_window,
-                grafik_entry,
-                False,
-                cap_enabled,
-            ),
-        )
-
-    return availability.operator_since, None
+    del _is_on_shift_fn, cap_enabled
+    window = availability.effective_shift_window
+    return window.start_at, window.end_at
 
 
-def resolve_effective_shift_end_by_cid(
+def resolve_effective_shift_window_by_cid(
     cid: Any,
     name: Optional[str] = None,
     schedule: Optional[dict] = None,
     now: Optional[datetime] = None,
-) -> Optional[datetime]:
-    """Efektywny koniec zmiany z tego samego store/ownera co feasibility.
+) -> EffectiveShiftWindow:
+    """Efektywne typed okno z tego samego store/ownera co feasibility.
 
     Przy kontrakcie ON używa dokładnie ``AvailabilityContext`` +
-    ``_operator_on_shift_window`` jak ``dispatchable_fleet``. Przy OFF legacy
+    ``AvailabilityDecision.effective_shift_window`` jak ``dispatchable_fleet``.
+    Znany grafik jest zwracany niezależnie od dispatchability. Przy OFF legacy
     rollback projection pochodzi z tego samego snapshotu store, bez drugiego
     modułowego czytnika working override. Konsument:
     ``plan_recheck._operator_pin_hard_report``.
@@ -1676,55 +1710,46 @@ def resolve_effective_shift_end_by_cid(
                 is_on_shift=_ios,
                 mins_to_shift_start=_mins_to_shift_start,
                 pre_shift_window_min=_pre_shift_window,
+                cap_enabled=_cap_on,
             )
-            if not availability.dispatchable:
-                return None
-            if (
-                availability.state
-                is _availability.AvailabilityState.OPERATOR_ON
-            ):
-                _shift_start, shift_end = _operator_on_shift_window(
-                    availability,
-                    _ios,
-                    _cap_on,
-                )
-                return shift_end
-            return effective_shift_end(
-                None,
-                availability.schedule_entry,
-                True,
-                _cap_on,
-            )
+            return availability.effective_shift_window
 
         wo_entry = (
             context.legacy_working_by_cid.get(str(cid))
             if _wo_on and context.legacy_error is None
             else None
         )
-        return effective_shift_end(wo_entry, grafik_entry, real_on_shift_now, _cap_on)
+        return _legacy_effective_shift_window(
+            wo_entry,
+            grafik_entry,
+            real_on_shift_now,
+            _cap_on,
+        )
     except Exception:
-        return None
+        return EffectiveShiftWindow.unknown(ShiftEndStatus.UNKNOWN_DATA_ERROR)
+
+
+def resolve_effective_shift_end_by_cid(
+    cid: Any,
+    name: Optional[str] = None,
+    schedule: Optional[dict] = None,
+    now: Optional[datetime] = None,
+) -> Optional[datetime]:
+    """Compatibility projection; nowe consumery używają typed window."""
+
+    return resolve_effective_shift_window_by_cid(
+        cid,
+        name=name,
+        schedule=schedule,
+        now=now,
+    ).end_at
 
 
 def _shift_end_dt(entry: Optional[dict]) -> Optional[datetime]:
-    """Z entry grafiku → datetime końca zmiany (Warsaw aware)."""
-    end_str = (entry or {}).get("end")
-    if not end_str or ":" not in end_str:
-        return None
-    try:
-        from zoneinfo import ZoneInfo
-        WAW = ZoneInfo("Europe/Warsaw")
-        now_w = datetime.now(WAW)
-        if end_str == "24:00":
-            base = now_w.replace(hour=0, minute=0, second=0, microsecond=0)
-            return base + timedelta(days=1)
-        h, m = end_str.split(":")
-        end_dt = now_w.replace(hour=int(h), minute=int(m), second=0, microsecond=0)
-        # Jeśli zmiana skończyła się "wczoraj" (np. now=01:00, end=23:00), nadal
-        # interpretujemy jako today (przeszłość — feasibility wykluczy)
-        return end_dt
-    except Exception:
-        return None
+    """Legacy adapter końca do jedynego parsera ShiftInterval."""
+
+    interval = _typed_schedule_interval(entry)
+    return interval.end_at if interval is not None else None
 
 
 def _parse_added_at(entry: Optional[dict]) -> Optional[datetime]:
@@ -1762,20 +1787,12 @@ def _effective_working_override_shift_end(
       - grafik_end lub added_at nie do sparsowania,
       - added_at > grafik_end (override dodany PO zmianie = realna druga/wieczorna zmiana).
     """
-    wo_end = _shift_end_dt(wo_entry)
-    if not cap_enabled:
-        return wo_end
-    if bool((wo_entry or {}).get("end_explicit", False)):
-        return wo_end
-    if not grafik_entry:
-        return wo_end
-    grafik_end = _shift_end_dt(grafik_entry)
-    added_at = _parse_added_at(wo_entry)
-    if grafik_end is None or added_at is None:
-        return wo_end
-    if added_at <= grafik_end:
-        return min(wo_end, grafik_end) if wo_end is not None else grafik_end
-    return wo_end
+    return _legacy_effective_shift_window(
+        wo_entry,
+        grafik_entry,
+        False,
+        cap_enabled,
+    ).end_at
 
 
 def _post_shift_start_synthetic_eligible(
@@ -1947,7 +1964,14 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
                 is_on_shift=is_on_shift,
                 mins_to_shift_start=_mins_to_shift_start,
                 pre_shift_window_min=_pre_shift_window,
+                cap_enabled=_wo_grafik_cap_enabled,
             )
+            # Czas jest niezależnym faktem od dispatchability. Projekcja pól
+            # kompatybilności pochodzi wyłącznie z jednego typed window.
+            cs.effective_shift_window = availability.effective_shift_window
+            cs.shift_start = availability.effective_shift_window.start_at
+            cs.shift_end = availability.effective_shift_window.end_at
+            cs.shift_end_status = availability.effective_shift_window.end_status
             if not availability.dispatchable:
                 _rejected_for_log.append({
                     "cid": availability.cid,
@@ -1998,15 +2022,15 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
                         cs, "working_override_synthetic"
                     )
             else:
-                cs.shift_start = _shift_start_dt(entry)
-                cs.shift_end = effective_shift_end(
-                    None, entry, True, _wo_grafik_cap_enabled
-                )
                 if (
                     availability.provenance
                     is _availability.AvailabilityProvenance.SCHEDULE_PRE_SHIFT
                 ):
-                    _mins = _mins_to_shift_start(entry)
+                    _mins = (
+                        (cs.shift_start - _now_utc_fleet).total_seconds() / 60.0
+                        if cs.shift_start is not None
+                        else None
+                    )
                     _synthetic_pos_fallback(
                         cs, "pre_shift", shift_start_min=_mins
                     )
@@ -2060,10 +2084,27 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
         # w working set. Daj syntetyczną pozycję (BIALYSTOK_CENTER, jak pre_shift) gdy brak
         # GPS, żeby kurier spoza grafiku był dispatchowalny od razu. Realny GPS wygrywa
         # (granted tylko gdy cs.pos is None). Flag-gated ENABLE_WORKING_OVERRIDE.
+        _wo_entry = (
+            working.get(str(cs.courier_id or ""))
+            if (_working_override_enabled and working)
+            else None
+        )
+        _wo_start_min = (
+            _mins_to_shift_start(_wo_entry)
+            if _wo_entry is not None
+            else None
+        )
         if (_working_override_enabled and cs.pos is None and working
                 and str(cs.courier_id or "") in working):
-            _synthetic_pos_fallback(cs, "working_override_synthetic")
-            _log.debug(f"working_override synthetic pos {cs.name} ({cs.courier_id})")
+            if _wo_start_min is not None and _wo_start_min > 0:
+                _synthetic_pos_fallback(
+                    cs,
+                    "pre_shift",
+                    shift_start_min=_wo_start_min,
+                )
+            else:
+                _synthetic_pos_fallback(cs, "working_override_synthetic")
+                _log.debug(f"working_override synthetic pos {cs.name} ({cs.courier_id})")
         if cs.pos is None:
             _rejected_for_log.append({"cid": str(cs.courier_id or ""), "panel_name": cs.name,
                                       "reason": "no_position", "pos_source": cs.pos_source})
@@ -2085,8 +2126,6 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
         # pokrywa "brak w grafiku" (spoza), "zmiana skończona", "przed zmianą". Gdy kurier
         # JEST na realnej zmianie → realny grafik wygrywa (zachowuje realne godziny, by NIE
         # rozszerzać powracającemu po /stop zmiany do końca dnia). Flag ENABLE_WORKING_OVERRIDE.
-        _wo_entry = (working.get(str(cs.courier_id or ""))
-                     if (_working_override_enabled and working) else None)
         if _wo_entry is not None:
             _real_on_shift_now = False
             _real_grafik_entry = None
@@ -2097,19 +2136,26 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
                     _ros, _ = is_on_shift(cs.name, schedule)
                     _real_on_shift_now = bool(_ros)
             if not _real_on_shift_now:
-                cs.shift_start = _shift_start_dt(_wo_entry)
                 # GRAFIK-CAP (2026-06-07): domyślny koniec "pracuje" (24:00) wpisany w trakcie/
                 # przed realnym grafikiem NIE wskrzesza kuriera po realnym końcu zmiany —
                 # przycina shift_end do min(override_end, grafik_end). Patrz helper docstring.
-                cs.shift_end = effective_shift_end(
-                    _wo_entry, _real_grafik_entry, False, _wo_grafik_cap_enabled)
+                _legacy_window = _legacy_effective_shift_window(
+                    _wo_entry,
+                    _real_grafik_entry,
+                    False,
+                    _wo_grafik_cap_enabled,
+                )
+                cs.effective_shift_window = _legacy_window
+                cs.shift_start = _legacy_window.start_at
+                cs.shift_end = _legacy_window.end_at
+                cs.shift_end_status = _legacy_window.end_status
                 if cs.shift_end is not None and _now_utc_fleet >= cs.shift_end:
                     # override (po ew. cap'ie do grafiku) już minął → po zmianie, pomiń (off-shift).
                     _log.debug(f"skip {cs.name} ({cs.courier_id}): working_override po zmianie (grafik-cap)")
                     _rejected_for_log.append({"cid": str(cs.courier_id or ""), "panel_name": cs.name,
                                               "reason": "working_override_ended"})
                     continue
-                _wo_mins = _mins_to_shift_start(_wo_entry)
+                _wo_mins = _wo_start_min
                 if _wo_mins is not None and _wo_mins > 0:
                     # MANUALNY working-override koordynatora — NIE capujemy oknem pre-shift
                     # (jawna decyzja człowieka ma pierwszeństwo, Lekcja #26). Cap 60 min
@@ -2142,8 +2188,16 @@ def dispatchable_fleet(fleet: Optional[Dict[str, CourierState]] = None) -> List[
             # Set shift_end + shift_start z grafiku (V3.25 R-01 R-NO-WASTE PRE-CHECK
             # potrzebuje obu — dropoff vs end, pickup vs start). Delegacja do
             # effective_shift_end (wo=None ⇒ czysty grafik, bajt-identycznie).
-            cs.shift_end = effective_shift_end(None, entry, True, _wo_grafik_cap_enabled)
-            cs.shift_start = _shift_start_dt(entry)
+            _legacy_window = _legacy_effective_shift_window(
+                None,
+                entry,
+                True,
+                _wo_grafik_cap_enabled,
+            )
+            cs.effective_shift_window = _legacy_window
+            cs.shift_start = _legacy_window.start_at
+            cs.shift_end = _legacy_window.end_at
+            cs.shift_end_status = _legacy_window.end_status
             if not on_shift:
                 # Pre-shift: kurier z dzisiejszą zmianą — dopuszczamy z synthetic
                 # pos. V3.24-A: brak 50min gate (extension_penalty + dropoff

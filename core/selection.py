@@ -1234,6 +1234,7 @@ def select_and_emit(ctx: SelectionContext, candidates: list):
                 bag=[],  # pusty bag = solo
                 new_order=new_order,
                 shift_end=getattr(cs, "shift_end", None),
+                shift_end_status=getattr(cs, "shift_end_status", None),
                 shift_start=getattr(cs, "shift_start", None),
                 now=now,
                 sla_minutes=35,

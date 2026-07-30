@@ -21,6 +21,7 @@ from dispatch_v2 import common as C
 from dispatch_v2 import prep_bias_anchor
 from dispatch_v2 import effects_buffer as _EB  # K08 refaktoru: zapis shadow PO decyzji
 from dispatch_v2.position_model import OriginTravelEstimate
+from dispatch_v2.shift_interval import ShiftEndStatus
 from dispatch_v2.common import (
     ENABLE_C2_SHADOW_LOG,
     HAVERSINE_ROAD_FACTOR_BIALYSTOK,
@@ -461,6 +462,7 @@ def check_feasibility_v2(
     schedule_source_stale: bool = False,  # D2 (audyt 2026-05-28) — grafik STALE → soft-degrade Gate 1
     pos_from_store: bool = False,  # Z-06 (audyt 2026-06-10) — pozycja odtworzona z last-known-pos store (≤25 min), NIE świeży fix tego ticku
     origin_travel: Optional[OriginTravelEstimate] = None,
+    shift_end_status: Optional[ShiftEndStatus] = None,
 ) -> Tuple[str, str, Dict, Optional[RoutePlanV2]]:
     if now is None:
         now = datetime.now(timezone.utc)
@@ -468,6 +470,36 @@ def check_feasibility_v2(
         now = now.replace(tzinfo=timezone.utc)
 
     metrics: Dict = {"bag_size_before": len(bag)}
+    try:
+        typed_shift_end_status = (
+            shift_end_status
+            if isinstance(shift_end_status, ShiftEndStatus)
+            else ShiftEndStatus(shift_end_status)
+            if shift_end_status is not None
+            else None
+        )
+    except (TypeError, ValueError):
+        typed_shift_end_status = ShiftEndStatus.UNKNOWN_DATA_ERROR
+    if typed_shift_end_status is not None:
+        metrics["shift_end_status"] = typed_shift_end_status.value
+    if (
+        shift_end is None
+        and typed_shift_end_status
+        is ShiftEndStatus.UNKNOWN_WINDOWLESS_ASSIGNMENT
+    ):
+        # Typed assignment to nie awaria grafiku i nie kandydat do FAIL12.
+        # Authority zachowuje istniejący bag w fleet, lecz brak deklarowanego
+        # końca zawsze blokuje NOWĄ obietnicę — niezależnie od historycznej
+        # flagi V3.25 schedule hardening.
+        metrics["grafik_unknown"] = True
+        metrics["v325_reject_reason"] = "GRAFIK_UNKNOWN"
+        return (
+            "NO",
+            "v325_GRAFIK_UNKNOWN "
+            "(windowless assignment has no declared shift end)",
+            metrics,
+            None,
+        )
     if origin_travel is not None:
         metrics.update({
             "origin_travel_provenance": origin_travel.provenance,

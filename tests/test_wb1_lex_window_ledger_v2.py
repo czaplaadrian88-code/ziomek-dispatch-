@@ -24,6 +24,7 @@ from dispatch_v2 import common as C
 from dispatch_v2 import osrm_client
 from dispatch_v2 import plan_recheck as P
 from dispatch_v2.core import lex_window_ledger as LWL
+from dispatch_v2.core import lex_window_guards as LWG
 
 
 # ── scenariusz: dokładnie ten sam bag co bramka P-1 (rozjazd gwarantowany) ──
@@ -94,6 +95,7 @@ def _isolate(monkeypatch, tmp_path):
     monkeypatch.setattr(LWL, "OBSERVATION_PATH", str(tmp_path / "obs.jsonl"))
     monkeypatch.setattr(LWL, "LEGACY_V1_PATH", str(tmp_path / "v1.jsonl"))
     monkeypatch.setattr(P, "ENABLE_LEX_COMMITTED_WINDOW", True)
+    monkeypatch.setattr(P, "ENABLE_LEX_WINDOW_GUARDS_V2", False)
     monkeypatch.setattr(P, "LEX_WINDOW_TOL_MIN", 5.0)
     monkeypatch.setattr(C, "ENABLE_LEX_WINDOW_LEDGER_V2", False, raising=False)
     monkeypatch.setattr(
@@ -183,6 +185,24 @@ def test_kanon_zawiera_pola_wymagane_przez_kalibracje_wb2(v2_on):
     assert a_drop["raw_carry_min"] is not None
     assert by_oid[("B", "pickup")]["raw_W_min"] is not None
     assert r["flags"]["fingerprint_sha"] and r["flags"]["code_fingerprint"]
+
+
+def test_kanon_guard_on_zawiera_jawne_liczniki_wb2(v2_on, monkeypatch):
+    monkeypatch.setattr(P, "ENABLE_LEX_WINDOW_GUARDS_V2", True)
+    ctx = LWL.writer_context("plan_recheck.run_recheck", "tick").for_courier("492", 4)
+    _reorder(ctx)
+    r = _kind(LWL.CANONICAL_PATH, "decision")[0]
+
+    legacy = {
+        "precedence", "no_return", "metrics", "carry_cap", "breaches",
+        "delay_tol",
+    }
+    guard_keys = set(LWG.empty_rejection_counters())
+    expected = legacy | guard_keys
+    assert set(r["candidates"]["rejected"]) == expected
+    assert all(r["candidates"]["rejected"][key] == 0 for key in guard_keys)
+    assert set(r["guards"]) == {"G1", "G2", "G3", "G4", "G5"}
+    assert r["guards"]["G4"] is None
 
 
 # ── 2. SEMANTYKA decided / written / served — trzy ROZŁĄCZNE fakty ────────────

@@ -2499,8 +2499,8 @@ def _operator_pin_hard_report(cid, final_stops, orders_state,
     z L3 przez `_l3_bag_time_ages`; `alarm40` = przekroczony poziom Alarmu OD-07);
     no_return = detektor Z-RULE `_detect_departed_pickup_revisit` (ta sama
     semantyka co F6, bez seedu carried — parytet z detekcją inwariantów);
-    grafik (v4) = SEMANTYKA 1:1 z feasibility: okno = EFEKTYWNE cs.shift_end
-    (`courier_resolver.resolve_effective_shift_end_by_cid` — ten sam
+    grafik (v5) = SEMANTYKA 1:1 z feasibility: okno = typed EffectiveShiftWindow
+    (`courier_resolver.resolve_effective_shift_window_by_cid` — ten sam
     AvailabilityContext/working rollback i zamrożone ``now`` co ewaluacja;
     fleet i raport delegują do wspólnego window ownera); PICKUP po shift_end = breach
     BEZ tolerancji (parytet V3.25 Gate, pod tą samą flagą
@@ -2534,10 +2534,11 @@ def _operator_pin_hard_report(cid, final_stops, orders_state,
                              "first_oid": (str(_oids[0]) if _oids[0] is not None else None)})
         try:
             from dispatch_v2 import courier_resolver as _CR_g
-            _sh_end = _CR_g.resolve_effective_shift_end_by_cid(
+            _sh_window = _CR_g.resolve_effective_shift_window_by_cid(
                 cid,
                 now=now,
             )
+            _sh_end = _sh_window.end_at
         except Exception:
             _sh_end = None
         if _sh_end is not None:

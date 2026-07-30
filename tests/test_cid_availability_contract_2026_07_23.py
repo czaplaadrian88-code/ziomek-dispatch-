@@ -306,7 +306,7 @@ def test_ratchet_single_store_writer_and_single_pool_consumer():
             if isinstance(func, ast.Attribute):
                 if func.attr == "set_operator_availability":
                     writer_calls.append(path.relative_to(ROOT).as_posix())
-                if func.attr == "commit_console_projection":
+                if func.attr == "commit_console_mutation":
                     console_transaction_calls.append(
                         path.relative_to(ROOT).as_posix()
                     )

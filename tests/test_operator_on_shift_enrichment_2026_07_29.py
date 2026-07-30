@@ -517,7 +517,7 @@ def test_future_operator_window_preserves_legacy_pre_shift_metadata_on_off(
     )
 
 
-def test_global_schedule_helpers_keep_pre_candidate_overnight_semantics(
+def test_global_schedule_helpers_share_typed_overnight_semantics(
     monkeypatch,
 ):
     midnight_waw = datetime(2026, 7, 30, 0, 30, tzinfo=WAW)
@@ -532,11 +532,11 @@ def test_global_schedule_helpers_keep_pre_candidate_overnight_semantics(
     monkeypatch.setattr(CR, "datetime", _MidnightDateTime)
     entry = {"start": "20:00", "end": "02:00"}
 
-    assert CR._shift_start_dt(entry) == midnight_waw.replace(
-        hour=20, minute=0
+    assert CR._shift_start_dt(entry) == datetime(
+        2026, 7, 29, 20, 0, tzinfo=WAW
     )
     assert CR._shift_end_dt(entry) == midnight_waw.replace(hour=2, minute=0)
-    assert CR._mins_to_shift_start(entry) == 1170.0
+    assert CR._mins_to_shift_start(entry) == -270.0
 
 
 @pytest.mark.parametrize(
@@ -1232,11 +1232,31 @@ def test_mutation_bypassing_grafik_cap_recreates_ended_gate2_bug(
     real = CR.dispatchable_fleet(_fleet())[0]
     assert real.shift_end > FROZEN_WAW
 
-    monkeypatch.setattr(
-        CR,
-        "effective_shift_end",
-        lambda _operator, schedule, _on_shift, _cap: CR._shift_end_dt(schedule),
-    )
+    real_owner = CA._operator_effective_window
+
+    def ended_schedule_first(
+        provenance,
+        operator_since,
+        operator_interval,
+        schedule_interval,
+        now,
+        cap_enabled,
+    ):
+        if schedule_interval is not None:
+            return CA.EffectiveShiftWindow.known(
+                schedule_interval,
+                CA.ShiftWindowSource.SCHEDULE,
+            )
+        return real_owner(
+            provenance,
+            operator_since,
+            operator_interval,
+            schedule_interval,
+            now,
+            cap_enabled,
+        )
+
+    monkeypatch.setattr(CA, "_operator_effective_window", ended_schedule_first)
     mutant = CR.dispatchable_fleet(_fleet())[0]
     verdict, _reason, metrics, _plan = _feasibility(
         monkeypatch,
@@ -1300,19 +1320,17 @@ def test_structural_ratchet_one_window_owner_no_parser_or_legacy_reader():
     resolver_source = (ROOT / "courier_resolver.py").read_text(encoding="utf-8")
     assert resolver_source.count("def _operator_on_shift_window(") == 1
     assert "def _entry_shift_interval(" not in resolver_source
-    assert "parse_shift_interval" not in resolver_source
-    assert "availability.operator_window" in resolver_source
-    assert "availability.operator_since" in resolver_source
+    assert "availability.effective_shift_window" in resolver_source
     hard_report_start = resolver_source.index(
-        "def resolve_effective_shift_end_by_cid("
+        "def resolve_effective_shift_window_by_cid("
     )
     hard_report_end = resolver_source.index(
-        "\ndef _shift_end_dt(", hard_report_start
+        "\ndef resolve_effective_shift_end_by_cid(", hard_report_start
     )
     hard_report_source = resolver_source[hard_report_start:hard_report_end]
     assert "manual_overrides" not in hard_report_source
     assert "get_working" not in hard_report_source
-    assert "_operator_on_shift_window(" in hard_report_source
+    assert "availability.effective_shift_window" in hard_report_source
 
     manual_source = (ROOT / "manual_overrides.py").read_text(encoding="utf-8")
     assert "os.replace(" not in manual_source
@@ -1321,12 +1339,12 @@ def test_structural_ratchet_one_window_owner_no_parser_or_legacy_reader():
     include_source = manual_source[include_start:include_end]
     assert "operator_window=" in include_source
     assert "at=" in include_source
-    assert include_source.count("commit_console_projection(") == 1
+    assert include_source.count("commit_console_mutation(") == 1
     assert "set_operator_availability(" not in include_source
     assert "save(data)" not in include_source
 
     exclude_source = manual_source[include_end:]
-    assert exclude_source.count("commit_console_projection(") == 1
+    assert exclude_source.count("commit_console_mutation(") == 1
     assert "reset_legacy_fields(" in manual_source
 
     reset_source = (ROOT / "manual_overrides_daily_reset.py").read_text(
@@ -1346,19 +1364,24 @@ def test_external_daily_reset_writer_must_join_canonical_store_owner():
     assert reset_path.is_file()
     assert os.access(reset_path, os.R_OK)
     raw = reset_path.read_bytes()
-    assert hashlib.sha256(raw).hexdigest() == (
+    digest = hashlib.sha256(raw).hexdigest()
+    legacy_digest = (
         "12e4161424ccb16b2b5cb61b4dbc74904dfe3e442fc32f1da1efeb512444d462"
     )
+    canonical_digest = (
+        "f92382956f3320c65408cff1a6f13d3fb5fb81f7201f35cd4852896e78c28510"
+    )
+    assert digest in {legacy_digest, canonical_digest}
     source = raw.decode("utf-8")
-    if (
-        "reset_legacy_fields(" not in source
-        or "os.replace(" in source
-    ):
+    canonical_owner = (
+        "reset_legacy_fields(" in source
+        and "os.replace(" not in source
+    )
+    if digest == legacy_digest:
+        assert canonical_owner is False
         pytest.xfail(
             "HOLD_LIVE: exact attested host reset writer still bypasses "
             "the shared availability lock"
         )
-    assert (
-        "reset_legacy_fields(" in source
-        and "os.replace(" not in source
-    )
+    assert digest == canonical_digest
+    assert canonical_owner is True

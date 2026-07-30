@@ -8,7 +8,6 @@ Lifecycle: do końca dnia (reset codziennie rano przez cron lub ręcznie "reset"
 import json
 import os
 import re
-from copy import deepcopy
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 from zoneinfo import ZoneInfo
@@ -388,84 +387,86 @@ def _do_include(data: dict, courier: str, text: str, add_to_grafik: bool = True)
             "Użyj /dopisz <cid> <imię>"
         )
 
-    # Caller mógł przekazać obiekt pochodzący z load(). Mutujemy kopię i
-    # publikujemy ją dopiero po udanym atomowym commicie.
-    candidate = deepcopy(data)
-    excluded = candidate.get("excluded", [])
-    was_excluded = courier in excluded
-    if was_excluded:
-        excluded.remove(courier)
-    # zalążek B (2026-06-10): rozwiąż cid odpornie (skrót LUB pełne imię) i zdejmij
-    # ze STOP po cid — usuń WSZYSTKIE nazwy mapujące na ten cid (desync nick/full)
-    # oraz cid z excluded_cids. Dzięki temu "X wrócił" pełnym imieniem zdejmuje też
-    # wpis zapisany skrótem (i odwrotnie).
-    if _inc_cid is not None:
-        _n2c = name_to_cid
-        before = len(excluded)
-        excluded = [n for n in excluded if _n2c.get(n) != _inc_cid]
-        if len(excluded) != before:
-            was_excluded = True
-        ec = candidate.get("excluded_cids", [])
-        if isinstance(ec, list) and str(_inc_cid) in [str(c) for c in ec]:
-            candidate["excluded_cids"] = [
-                c for c in ec if str(c) != str(_inc_cid)
-            ]
-            was_excluded = True
-    candidate["excluded"] = excluded
-    # Jeden stempel dla obu projekcji tej samej decyzji. Legacy `working`
-    # pozostaje ścieżką rollback OFF, a CID record jest ownerem przy kontrakcie
-    # ON; wspólne ``at`` gwarantuje parytet startu i GRAFIK-CAP/second-shift.
-    operator_at = datetime.now(timezone.utc) if add_to_grafik else None
-    added = (
-        _add_working(
-            candidate,
+    from dispatch_v2 import courier_availability as _availability
+
+    # Komenda niesie wyłącznie intencję. Nie publikujemy kopii ``data``:
+    # owner store'u odczyta świeży snapshot już pod canonical lockiem.
+    operator_at = datetime.now(timezone.utc)
+    aliases = tuple(
+        name
+        for name, mapped_cid in name_to_cid.items()
+        if _inc_cid is not None and mapped_cid == _inc_cid
+    )
+    mutation_cid = (
+        str(_inc_cid)
+        if availability_contract_on and _inc_cid is not None
+        else legacy_cid
+    )
+    added = None
+    working_entry = None
+    operator_window = None
+    if add_to_grafik:
+        scratch = {"working": {}}
+        added = _add_working(
+            scratch,
             courier,
             text,
             at=operator_at,
             resolved_cid=(
-                str(_inc_cid)
-                if availability_contract_on and _inc_cid is not None
-                else None
+                mutation_cid if mutation_cid != "?" else None
             ),
         )
-        if add_to_grafik
-        else None
-    )
-    if availability_contract_on:
-        if add_to_grafik and added is None:
+        if added is None:
             return "include", (
                 f"⚠️ {courier}: nie znam cid jednoznacznie — stan bez zmian. "
                 "Użyj /dopisz <cid> <imię>"
             )
-        from dispatch_v2 import courier_availability as _availability
-
-        operator_window = None
-        if added is not None:
-            added_cid = added[0]
-            raw_window = candidate.get("working", {}).get(added_cid)
-            if isinstance(raw_window, dict):
-                operator_window = {
-                    "start": raw_window.get("start"),
-                    "end": raw_window.get("end"),
-                    "end_explicit": raw_window.get("end_explicit"),
-                }
-        _availability.commit_console_projection(
-            candidate,
-            _inc_cid,
-            (_availability.AvailabilityState.OPERATOR_ON
-             if add_to_grafik else None),
-            base_payload=data,
-            path=OVERRIDES_PATH,
-            at=operator_at,
+        working_entry = scratch["working"][added[0]]
+        operator_window = {
+            "start": working_entry.get("start"),
+            "end": working_entry.get("end"),
+            "end_explicit": working_entry.get("end_explicit"),
+        }
+        mutation = _availability.ConsoleAvailabilityMutation.on(
+            added[0],
+            courier,
+            working_entry=working_entry,
             operator_window=operator_window,
+            aliases=aliases,
+            at=operator_at,
+            project_operator=availability_contract_on,
         )
     else:
-        from dispatch_v2 import courier_availability as _availability
-
-        _availability.save_legacy_payload(candidate, path=OVERRIDES_PATH)
-
+        mutation = _availability.ConsoleAvailabilityMutation.clear(
+            mutation_cid,
+            courier,
+            aliases=aliases,
+            at=operator_at,
+            project_operator=availability_contract_on,
+        )
+    committed = _availability.commit_console_mutation(
+        mutation,
+        path=OVERRIDES_PATH,
+    )
+    before = committed.before_payload
+    before_excluded = set(before.get("excluded", []) or [])
+    before_excluded_cids = {
+        str(value) for value in before.get("excluded_cids", []) or []
+    }
+    was_excluded = bool(
+        before_excluded.intersection(set(mutation.aliases))
+        or (
+            mutation.cid is not None
+            and mutation.cid in before_excluded_cids
+        )
+    )
     data.clear()
-    data.update(candidate)
+    data.update(committed.payload)
+    if not committed.applied:
+        return "include", (
+            f"⚠️ {courier}: nowsza komenda dostępności już obowiązuje — "
+            "starszy zapis został pominięty"
+        )
     if added is not None:
         cid, start, end = added
         end_disp = "końca dnia" if end == "24:00" else end
@@ -503,40 +504,25 @@ def _do_exclude(data: dict, courier: str) -> Tuple[str, str]:
             f"⚠️ {courier}: nie znam cid jednoznacznie — STOP nie został zapisany"
         )
 
-    candidate = deepcopy(data)
-    excluded = candidate.get("excluded", [])
-    if courier not in excluded:
-        excluded.append(courier)
-        candidate["excluded"] = excluded
-    # zalążek B (2026-06-10): zapisz cid jawnie → egzekucja po cid w dispatchable_fleet
-    # odporna na desync nazw (panel-nick 'Mateusz O' vs grafik 'Mateusz Ostapczuk').
-    if cid != "?":
-        ec = candidate.get("excluded_cids", [])
-        if not isinstance(ec, list):
-            ec = []
-        if cid not in ec:
-            ec.append(cid)
-        candidate["excluded_cids"] = ec
-    working = candidate.get("working", {})
-    if isinstance(working, dict):
-        working.pop(cid, None)
-        candidate["working"] = working
-    if availability_contract_on:
-        from dispatch_v2 import courier_availability as _availability
+    from dispatch_v2 import courier_availability as _availability
 
-        _availability.commit_console_projection(
-            candidate,
-            cid,
-            _availability.AvailabilityState.OPERATOR_OFF,
-            base_payload=data,
-            path=OVERRIDES_PATH,
-        )
-    else:
-        from dispatch_v2 import courier_availability as _availability
-
-        _availability.save_legacy_payload(candidate, path=OVERRIDES_PATH)
+    mutation = _availability.ConsoleAvailabilityMutation.off(
+        cid,
+        courier,
+        at=datetime.now(timezone.utc),
+        project_operator=availability_contract_on,
+    )
+    committed = _availability.commit_console_mutation(
+        mutation,
+        path=OVERRIDES_PATH,
+    )
     data.clear()
-    data.update(candidate)
+    data.update(committed.payload)
+    if not committed.applied:
+        return "exclude", (
+            f"⚠️ {courier}: nowsza komenda dostępności już obowiązuje — "
+            "starszy STOP został pominięty"
+        )
     return "exclude", f"🛑 {courier} (cid={cid}) STOP — wykluczony do końca dnia"
 
 

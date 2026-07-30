@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
+from enum import Enum
 from typing import Any, Mapping, Optional
 from zoneinfo import ZoneInfo
 
@@ -34,6 +35,83 @@ class ShiftInterval:
 
     def ended(self, moment: datetime) -> bool:
         return _aware(moment).astimezone(WARSAW) >= self.end_at
+
+
+class ShiftEndStatus(str, Enum):
+    """Dlaczego efektywny koniec jest znany albo świadomie nieznany."""
+
+    KNOWN = "KNOWN"
+    UNKNOWN_WINDOWLESS_ASSIGNMENT = "UNKNOWN_WINDOWLESS_ASSIGNMENT"
+    UNKNOWN_NO_WINDOW = "UNKNOWN_NO_WINDOW"
+    UNKNOWN_DATA_ERROR = "UNKNOWN_DATA_ERROR"
+
+
+class ShiftWindowSource(str, Enum):
+    """Typed provenance efektywnego okna, niezależna od authority dostępności."""
+
+    SCHEDULE = "SCHEDULE"
+    OPERATOR_WINDOW = "OPERATOR_WINDOW"
+    OPERATOR_WINDOW_GRAFIK_CAP = "OPERATOR_WINDOW_GRAFIK_CAP"
+    ASSIGNMENT_EVENT = "ASSIGNMENT_EVENT"
+    NONE = "NONE"
+
+
+@dataclass(frozen=True)
+class EffectiveShiftWindow:
+    """Jedyny kontrakt czasu pracy konsumowany przez pool i HARD-gates.
+
+    Brak końca nie jest kodowany fikcyjną datą.  ``interval`` istnieje wyłącznie
+    dla statusu ``KNOWN``; bezokienny assignment zachowuje prawdziwy start
+    zdarzenia w ``start_at`` i jawny typed status.
+    """
+
+    start_at: Optional[datetime]
+    interval: Optional[ShiftInterval]
+    end_status: ShiftEndStatus
+    source: ShiftWindowSource
+
+    def __post_init__(self) -> None:
+        if self.end_status is ShiftEndStatus.KNOWN:
+            if self.interval is None:
+                raise ValueError("KNOWN effective shift window requires interval")
+            if self.start_at != self.interval.start_at:
+                raise ValueError("effective shift start must come from its interval")
+        elif self.interval is not None:
+            raise ValueError("unknown effective shift window cannot carry interval")
+
+    @property
+    def end_at(self) -> Optional[datetime]:
+        return self.interval.end_at if self.interval is not None else None
+
+    @classmethod
+    def known(
+        cls,
+        interval: ShiftInterval,
+        source: ShiftWindowSource,
+    ) -> "EffectiveShiftWindow":
+        return cls(
+            start_at=interval.start_at,
+            interval=interval,
+            end_status=ShiftEndStatus.KNOWN,
+            source=source,
+        )
+
+    @classmethod
+    def unknown(
+        cls,
+        status: ShiftEndStatus,
+        source: ShiftWindowSource = ShiftWindowSource.NONE,
+        *,
+        start_at: Optional[datetime] = None,
+    ) -> "EffectiveShiftWindow":
+        if status is ShiftEndStatus.KNOWN:
+            raise ValueError("use EffectiveShiftWindow.known for known interval")
+        return cls(
+            start_at=start_at,
+            interval=None,
+            end_status=status,
+            source=source,
+        )
 
 
 def parse_aware_timestamp(value: Any) -> Optional[datetime]:

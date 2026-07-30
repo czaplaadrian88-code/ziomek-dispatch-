@@ -20,6 +20,7 @@ import pytest
 from dispatch_v2 import plan_recheck as P
 from dispatch_v2 import plan_manager as PM
 from dispatch_v2 import osrm_client
+from dispatch_v2.core import lex_window_ledger as LWL
 
 
 def _hav_m(a, b):
@@ -35,13 +36,18 @@ def _fake_table(pts_a, pts_b):
 
 
 CID = "9999"
-NOW = datetime(2026, 6, 23, 14, 49, 0, tzinfo=timezone.utc)
+NOW = datetime(2026, 6, 23, 12, 49, 0, tzinfo=timezone.utc)
+STALE_NOW = datetime(2026, 6, 23, 14, 49, 0, tzinfo=timezone.utc)
 
 # C = niesione 53 min temu, daleki odbiór N committed za >2h → carried-first (dowóz pierwszy)
 ORDERS = {
     "C": {"courier_id": CID, "status": "picked_up",
-          "picked_up_at": "2026-06-23 13:56:00", "czas_kuriera_warsaw": "2026-06-23T13:51:00+02:00",
-          "pickup_coords": [53.128, 23.155], "delivery_coords": [53.1375, 23.158], "restaurant": "Pruszynka"},
+          "picked_up_at": "2026-06-23T11:56:00+00:00",
+          "czas_kuriera_warsaw": "2026-06-23T13:51:00+02:00",
+          "pickup_coords": [53.128, 23.155], "delivery_coords": [53.1375, 23.158],
+          "restaurant": "Pruszynka",
+          "history": [{"event": "COURIER_PICKED_UP",
+                       "at": "2026-06-23T11:56:00+00:00"}]},
     "N": {"courier_id": CID, "status": "assigned",
           "czas_kuriera_warsaw": "2026-06-23T17:02:00+02:00",
           "pickup_coords": [53.131, 23.150], "delivery_coords": [53.120, 23.170], "restaurant": "Toriko"},
@@ -67,10 +73,14 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(PM, "LOCK_FILE", pathlib.Path(tmp_path / "courier_plans.lock"))
     monkeypatch.setattr(osrm_client, "table", _fake_table)
     monkeypatch.setattr(P, "_load_gps_positions", lambda: {})
+    monkeypatch.setattr(LWL, "CANONICAL_PATH", str(tmp_path / "lex_canon.jsonl"))
+    monkeypatch.setattr(LWL, "OBSERVATION_PATH", str(tmp_path / "lex_obs.jsonl"))
+    monkeypatch.setattr(LWL, "LEGACY_V1_PATH", str(tmp_path / "lex_v1.jsonl"))
     monkeypatch.setattr(P, "ENABLE_RECANON_ON_WRITE", True)
     monkeypatch.setattr(P, "ENABLE_PLAN_CANON_ORDER_INVARIANTS", True)
     monkeypatch.setattr(P, "ENABLE_CARRIED_FIRST_RELAX", True)
     monkeypatch.setattr(P, "ENABLE_GPS_FREE_ANCHOR", True)
+    monkeypatch.setattr(P, "ENABLE_LEX_WINDOW_GUARDS_V2", False)
     return tmp_path
 
 
@@ -84,11 +94,39 @@ def _order():
     return [(s["type"], s["order_id"]) for s in PM.load_plan(CID)["stops"]]
 
 
-def test_recanon_floors_carried_at_event_time(env):
+@pytest.mark.parametrize("guards_enabled", [False, True])
+def test_recanon_floors_carried_at_event_time(env, monkeypatch, guards_enabled):
+    monkeypatch.setattr(P, "ENABLE_LEX_WINDOW_GUARDS_V2", guards_enabled)
     _save_bad()
     assert _order()[0] == ("pickup", "N")              # przed: niesione NIE na froncie
     assert P.recanon_courier(CID, now=NOW, reason="pickup") is True
     assert _order()[0] == ("dropoff", "C")             # po: niesione (53 min, daleki odbiór) na #1
+
+
+def test_recanon_g4_rejects_stale_clock_without_writing(env, monkeypatch):
+    monkeypatch.setattr(P, "ENABLE_LEX_WINDOW_GUARDS_V2", True)
+    seen = []
+    real_validator = P._g4_final_validator
+
+    def _capture(*args, **kwargs):
+        result = real_validator(*args, **kwargs)
+        seen.append(result)
+        return result
+
+    monkeypatch.setattr(P, "_g4_final_validator", _capture)
+    _save_bad()
+    before = PM.load_plan(CID)
+
+    assert P.recanon_courier(CID, now=STALE_NOW, reason="pickup") is False
+    after = PM.load_plan(CID)
+    assert after["plan_version"] == before["plan_version"]
+    assert _order()[0] == ("pickup", "N")
+    assert seen and seen[-1]["reason"] == "freshness_envelope"
+
+
+def test_picked_up_timestamp_has_explicit_utc_contract():
+    parsed = P._parse_dt(ORDERS["C"]["picked_up_at"])
+    assert parsed == datetime(2026, 6, 23, 11, 56, 0, tzinfo=timezone.utc)
 
 
 def test_flag_off_is_noop(env, monkeypatch):

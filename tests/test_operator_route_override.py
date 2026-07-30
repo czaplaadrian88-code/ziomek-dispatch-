@@ -16,7 +16,7 @@ import logging
 import math
 import os
 import pathlib
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -29,6 +29,11 @@ from dispatch_v2 import route_order
 from dispatch_v2 import common as C
 from dispatch_v2 import dispatch_pipeline as D
 from dispatch_v2 import shadow_dispatcher as SD
+from dispatch_v2.shift_interval import (
+    EffectiveShiftWindow,
+    ShiftInterval,
+    ShiftWindowSource,
+)
 
 
 def _hav_m(a, b):
@@ -45,6 +50,23 @@ def _fake_table(pts_a, pts_b):
 
 CID = "7777"
 NOW = datetime(2026, 7, 19, 12, 0, 0, tzinfo=timezone.utc)  # 14:00 Warsaw
+
+
+def _typed_window_ending(end_at):
+    """Minimalny typed fixture dla HARD-report mutation probes."""
+
+    start_at = end_at - timedelta(hours=1)
+    interval = ShiftInterval(
+        start_at=start_at,
+        end_at=end_at,
+        added_at=start_at,
+        start=start_at.strftime("%H:%M"),
+        end=end_at.strftime("%H:%M"),
+        end_explicit=True,
+        provenance="test_fixture",
+    )
+    return EffectiveShiftWindow.known(interval, ShiftWindowSource.SCHEDULE)
+
 
 ORDERS = {
     "A": {"courier_id": CID, "status": "assigned",
@@ -672,7 +694,7 @@ def test_missing_osrm_cell_vetoes_pin(env, monkeypatch):
 def test_grafik_breach_logged_in_applied(env, monkeypatch):
     """Pin wypycha stopy za EFEKTYWNY koniec zmiany kuriera → breach `grafik`
     w hard_breaches (okno 1:1 z feasibility — delegacja do
-    courier_resolver.resolve_effective_shift_end_by_cid), bez veta."""
+    courier_resolver.resolve_effective_shift_window_by_cid), bez veta."""
     from dispatch_v2 import courier_resolver as CR
     _flag_on(monkeypatch)
     monkeypatch.setattr(C, "ENABLE_V324A_SCHEDULE_INTEGRATION", True, raising=False)
@@ -680,14 +702,14 @@ def test_grafik_breach_logged_in_applied(env, monkeypatch):
     _write_override(env, ["B", "A"])
     resolved_at = []
 
-    def _frozen_shift_end(_cid, **kwargs):
+    def _frozen_shift_window(_cid, **kwargs):
         resolved_at.append(kwargs.get("now"))
-        return NOW
+        return _typed_window_ending(NOW)
 
     monkeypatch.setattr(
         CR,
-        "resolve_effective_shift_end_by_cid",
-        _frozen_shift_end,
+        "resolve_effective_shift_window_by_cid",
+        _frozen_shift_window,
     )  # zmiana kończy się „teraz"
     assert P.recanon_courier(CID, now=NOW) is True
     assert resolved_at == [NOW]
@@ -712,8 +734,13 @@ def test_grafik_pickup_no_tolerance(env, monkeypatch):
     _write_override(env, ["B", "A"])
     # odbiór B po pinie ~12:13Z; koniec zmiany 12:09:30Z ⇒ excess B ~3.8 min —
     # strefa, którą 5-min tolerancja dropoffów by przemilczała
-    monkeypatch.setattr(CR, "resolve_effective_shift_end_by_cid",
-                        lambda cid, **k: NOW + timedelta(minutes=9.5))
+    monkeypatch.setattr(
+        CR,
+        "resolve_effective_shift_window_by_cid",
+        lambda cid, **k: _typed_window_ending(
+            NOW + timedelta(minutes=9.5)
+        ),
+    )
     assert P.recanon_courier(CID, now=NOW) is True
     hb = [e for e in _events(env)
           if e["event"] == "operator_route_override_applied"][-1]["hard_breaches"]
@@ -737,8 +764,13 @@ def test_grafik_salvage_suppresses_dropoff_breach(env, monkeypatch):
     assert F._end_of_day_salvage(NOW) == (True, NOW + timedelta(minutes=30))
     _save_base()
     _write_override(env, ["B", "A"])
-    monkeypatch.setattr(CR, "resolve_effective_shift_end_by_cid",
-                        lambda cid, **k: NOW - timedelta(minutes=60))
+    monkeypatch.setattr(
+        CR,
+        "resolve_effective_shift_window_by_cid",
+        lambda cid, **k: _typed_window_ending(
+            NOW - timedelta(minutes=60)
+        ),
+    )
     assert P.recanon_courier(CID, now=NOW) is True
     hb = [e for e in _events(env)
           if e["event"] == "operator_route_override_applied"][-1]["hard_breaches"]
@@ -788,8 +820,13 @@ def test_grafik_pickup_salvage_suppressed(env, monkeypatch):
     assert F._end_of_day_salvage(NOW)[0] is True  # realny helper, okno aktywne
     _save_base()
     _write_override(env, ["B", "A"])
-    monkeypatch.setattr(CR, "resolve_effective_shift_end_by_cid",
-                        lambda cid, **k: NOW + timedelta(minutes=4))
+    monkeypatch.setattr(
+        CR,
+        "resolve_effective_shift_window_by_cid",
+        lambda cid, **k: _typed_window_ending(
+            NOW + timedelta(minutes=4)
+        ),
+    )
     assert P.recanon_courier(CID, now=NOW) is True
     hb = [e for e in _events(env)
           if e["event"] == "operator_route_override_applied"][-1]["hard_breaches"]
@@ -812,8 +849,11 @@ def test_grafik_pickup_after_close_breaches_despite_salvage(env, monkeypatch):
     assert F._end_of_day_salvage(NOW)[0] is True  # okno aktywne (close-60 ≤ now < close)
     _save_base()
     _write_override(env, ["B", "A"])
-    monkeypatch.setattr(CR, "resolve_effective_shift_end_by_cid",
-                        lambda cid, **k: NOW)  # koniec zmiany „teraz"
+    monkeypatch.setattr(
+        CR,
+        "resolve_effective_shift_window_by_cid",
+        lambda cid, **k: _typed_window_ending(NOW),
+    )  # koniec zmiany „teraz"
     assert P.recanon_courier(CID, now=NOW) is True
     hb = [e for e in _events(env)
           if e["event"] == "operator_route_override_applied"][-1]["hard_breaches"]

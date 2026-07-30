@@ -13,15 +13,19 @@ import json
 import os
 import tempfile
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, time, timedelta, timezone
 from enum import Enum
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any, Callable, Dict, Iterator, Mapping, Optional
 from zoneinfo import ZoneInfo
 
 from dispatch_v2.shift_interval import (
+    EffectiveShiftWindow,
     ShiftInterval,
+    ShiftEndStatus,
+    ShiftWindowSource,
     canonical_operator_window,
     parse_shift_interval,
 )
@@ -91,6 +95,17 @@ class AvailabilityDecision:
     # R4: rekord operatorski BYŁ, ale wygasł — decyzję podjął grafik. Wyłącznie
     # obserwowalność (konsument stempluje log puli); nie wchodzi do polityki.
     operator_expired: bool = False
+    # Grafik parsowany dokładnie raz na zamrożonym ``context.now``. Pole istnieje
+    # niezależnie od dispatchability/authority, żeby żaden konsument nie wracał
+    # do surowego HH:MM ani do hostowego boola ``is_on_shift``.
+    schedule_interval: Optional[ShiftInterval] = None
+    # Kanoniczny kontrakt czasu pool→feasibility→HARD report. Brak końca ma typed
+    # status; nigdy nie jest maskowany datą-sentinelem.
+    effective_shift_window: EffectiveShiftWindow = field(
+        default_factory=lambda: EffectiveShiftWindow.unknown(
+            ShiftEndStatus.UNKNOWN_NO_WINDOW
+        )
+    )
 
 
 @dataclass(frozen=True)
@@ -110,6 +125,148 @@ class AvailabilityContext:
     # kurierzy z tej samej pętli mogliby wygasać na różnych znacznikach czasu.
     now: Optional[datetime] = None
     expiry_enabled: bool = False
+
+
+class ConsoleMutationKind(str, Enum):
+    ON = "ON"
+    OFF = "OFF"
+    CLEAR = "CLEAR"
+
+
+@dataclass(frozen=True)
+class ConsoleAvailabilityMutation:
+    """Czysta komenda konsoli, nie snapshot store'u.
+
+    Mutation opisuje intencję. Dopiero owner store'u aplikuje ją do świeżo
+    odczytanego payloadu pod canonical lockiem, więc caller nie może nadpisać
+    równoległej komendy starym pełnym JSON-em.
+    """
+
+    kind: ConsoleMutationKind
+    cid: Optional[str]
+    courier_name: str
+    aliases: tuple[str, ...]
+    at: datetime
+    project_operator: bool = True
+    working_entry: Optional[Mapping[str, Any]] = None
+    operator_window: Optional[Mapping[str, Any]] = None
+
+    @classmethod
+    def on(
+        cls,
+        cid: Any,
+        courier_name: str,
+        *,
+        working_entry: Mapping[str, Any],
+        operator_window: Mapping[str, Any],
+        aliases: tuple[str, ...] = (),
+        at: datetime,
+        project_operator: bool = True,
+    ) -> "ConsoleAvailabilityMutation":
+        return cls(
+            kind=ConsoleMutationKind.ON,
+            cid=_canon_cid(cid),
+            courier_name=str(courier_name),
+            aliases=tuple(dict.fromkeys((str(courier_name), *aliases))),
+            at=at,
+            project_operator=project_operator,
+            working_entry=MappingProxyType(dict(working_entry)),
+            operator_window=MappingProxyType(dict(operator_window)),
+        )
+
+    @classmethod
+    def off(
+        cls,
+        cid: Any,
+        courier_name: str,
+        *,
+        at: datetime,
+        project_operator: bool = True,
+    ) -> "ConsoleAvailabilityMutation":
+        try:
+            key = _canon_cid(cid)
+        except ValueError:
+            if project_operator:
+                raise
+            key = None
+        return cls(
+            kind=ConsoleMutationKind.OFF,
+            cid=key,
+            courier_name=str(courier_name),
+            aliases=(str(courier_name),),
+            at=at,
+            project_operator=project_operator,
+        )
+
+    @classmethod
+    def clear(
+        cls,
+        cid: Any,
+        courier_name: str,
+        *,
+        aliases: tuple[str, ...] = (),
+        at: datetime,
+        project_operator: bool = True,
+    ) -> "ConsoleAvailabilityMutation":
+        try:
+            key = _canon_cid(cid)
+        except ValueError:
+            if project_operator:
+                raise
+            key = None
+        return cls(
+            kind=ConsoleMutationKind.CLEAR,
+            cid=key,
+            courier_name=str(courier_name),
+            aliases=tuple(dict.fromkeys((str(courier_name), *aliases))),
+            at=at,
+            project_operator=project_operator,
+        )
+
+    def apply_legacy(self, payload: Mapping[str, Any]) -> dict:
+        """Pure: zwraca nową projekcję bez mutacji ``payload`` ani self."""
+
+        merged = dict(payload)
+        excluded = list(payload.get("excluded", []) or [])
+        excluded_cids = list(payload.get("excluded_cids", []) or [])
+        working_raw = payload.get("working", {})
+        working = dict(working_raw) if isinstance(working_raw, Mapping) else {}
+
+        if self.kind in {ConsoleMutationKind.ON, ConsoleMutationKind.CLEAR}:
+            aliases = set(self.aliases)
+            excluded = [name for name in excluded if name not in aliases]
+            if self.cid is not None:
+                excluded_cids = [
+                    value for value in excluded_cids if str(value) != self.cid
+                ]
+            if self.kind is ConsoleMutationKind.ON:
+                if self.working_entry is None:
+                    raise ValueError("ON mutation requires working entry")
+                working[self.cid] = dict(self.working_entry)
+        elif self.kind is ConsoleMutationKind.OFF:
+            if self.courier_name not in excluded:
+                excluded.append(self.courier_name)
+            if (
+                self.cid is not None
+                and self.cid not in [str(value) for value in excluded_cids]
+            ):
+                excluded_cids.append(self.cid)
+            if self.cid is not None:
+                working.pop(self.cid, None)
+
+        merged["excluded"] = excluded
+        merged["excluded_cids"] = excluded_cids
+        merged["working"] = working
+        return merged
+
+
+@dataclass(frozen=True)
+class ConsoleMutationResult:
+    before_payload: Mapping[str, Any]
+    payload: Mapping[str, Any]
+    stored_record: Optional[Mapping[str, Any]]
+    applied: bool
+    attempts: int
 
 
 def _canon_cid(cid: Any) -> str:
@@ -178,6 +335,82 @@ def _operator_window_fields(
         value,
         added_at=added_at,
         provenance=field_provenance,
+    )
+
+
+def _schedule_interval(
+    entry: Optional[Mapping[str, Any]],
+    now: datetime,
+) -> Optional[ShiftInterval]:
+    """Jedyny read-side parser grafiku dla kontraktu CID."""
+
+    if not isinstance(entry, Mapping):
+        return None
+    return parse_shift_interval(entry, anchor=now)
+
+
+def _operator_interval_with_schedule_cap(
+    operator_interval: ShiftInterval,
+    schedule_interval: Optional[ShiftInterval],
+    cap_enabled: bool,
+) -> tuple[ShiftInterval, ShiftWindowSource]:
+    """Nakłada istniejący GRAFIK-CAP bez ponownego parsowania zegarów."""
+
+    if (
+        not cap_enabled
+        or operator_interval.end_explicit
+        or schedule_interval is None
+        or operator_interval.added_at > schedule_interval.end_at
+        or operator_interval.end_at <= schedule_interval.end_at
+    ):
+        return operator_interval, ShiftWindowSource.OPERATOR_WINDOW
+    return (
+        replace(
+            operator_interval,
+            end_at=schedule_interval.end_at,
+            end=schedule_interval.end,
+            provenance=ShiftWindowSource.OPERATOR_WINDOW_GRAFIK_CAP.value,
+        ),
+        ShiftWindowSource.OPERATOR_WINDOW_GRAFIK_CAP,
+    )
+
+
+def _operator_effective_window(
+    provenance: AvailabilityProvenance,
+    operator_since: Optional[datetime],
+    operator_interval: Optional[ShiftInterval],
+    schedule_interval: Optional[ShiftInterval],
+    now: datetime,
+    cap_enabled: bool,
+) -> EffectiveShiftWindow:
+    """Łączy authority i czas w jeden typed kontrakt.
+
+    Aktywny dokładny grafik wygrywa czasowo. Poza nim jawne okno konsoli niesie
+    swój przedział (z istniejącym GRAFIK-CAP). Assignment bez okna zachowuje
+    jedynie prawdziwy stempel początku i jawny brak końca.
+    """
+
+    if schedule_interval is not None and schedule_interval.contains(now):
+        return EffectiveShiftWindow.known(
+            schedule_interval,
+            ShiftWindowSource.SCHEDULE,
+        )
+    if operator_interval is not None:
+        interval, source = _operator_interval_with_schedule_cap(
+            operator_interval,
+            schedule_interval,
+            cap_enabled,
+        )
+        return EffectiveShiftWindow.known(interval, source)
+    if provenance is AvailabilityProvenance.ASSIGNMENT_EVENT:
+        return EffectiveShiftWindow.unknown(
+            ShiftEndStatus.UNKNOWN_WINDOWLESS_ASSIGNMENT,
+            ShiftWindowSource.ASSIGNMENT_EVENT,
+            start_at=operator_since,
+        )
+    return EffectiveShiftWindow.unknown(
+        ShiftEndStatus.UNKNOWN_NO_WINDOW,
+        start_at=operator_since,
     )
 
 
@@ -353,6 +586,7 @@ def resolve(
     is_on_shift: Callable[[str, Mapping[str, Any]], tuple[bool, str]],
     mins_to_shift_start: Callable[[dict], Optional[float]],
     pre_shift_window_min: float,
+    cap_enabled: bool = True,
 ) -> AvailabilityDecision:
     """Rozstrzyga jedną dostępność. Nie używa nazw floty ani fuzzy fallbacków.
 
@@ -360,8 +594,14 @@ def resolve(
     granicy jest traktowany jak nieobecny, więc decyzja spada na grafik — czyli
     dokładnie ta sama ścieżka, którą już dziś realizuje ``None`` (neutral) z konsoli.
     Żadnego nowego stanu ani gałęzi u konsumenta. Flaga OFF = zachowanie sprzed R4.
+
+    ``is_on_shift`` i ``mins_to_shift_start`` pozostają w sygnaturze wyłącznie
+    dla kompatybilności callerów. CID path nie ufa ich hostowej implementacji:
+    prawdę czasu wyznacza jeden ``ShiftInterval`` zakotwiczony w ``context.now``.
     """
+    del is_on_shift, mins_to_shift_start
     key = _canon_cid(cid)
+    now = context.now or datetime.now(timezone.utc)
     if context.operator_error:
         return AvailabilityDecision(
             key,
@@ -369,14 +609,15 @@ def resolve(
             AvailabilityProvenance.OPERATOR_STORE_ERROR,
             False,
             detail=context.operator_error,
+            effective_shift_window=EffectiveShiftWindow.unknown(
+                ShiftEndStatus.UNKNOWN_DATA_ERROR
+            ),
         )
 
     operator = context.operator_records.get(key)
     expired = False
     if operator and context.expiry_enabled:
-        expired = _operator_record_expired(
-            operator, context.now or datetime.now(timezone.utc)
-        )
+        expired = _operator_record_expired(operator, now)
         if expired:
             operator = None
 
@@ -396,6 +637,10 @@ def resolve(
                     False,
                     operator_since=operator_since,
                     detail="operator_window_invalid",
+                    effective_shift_window=EffectiveShiftWindow.unknown(
+                        ShiftEndStatus.UNKNOWN_DATA_ERROR,
+                        start_at=operator_since,
+                    ),
                 )
             operator_interval = parse_shift_interval(
                 operator_window,
@@ -412,17 +657,20 @@ def resolve(
                     False,
                     operator_since=operator_since,
                     detail="operator_window_invalid",
+                    effective_shift_window=EffectiveShiftWindow.unknown(
+                        ShiftEndStatus.UNKNOWN_DATA_ERROR,
+                        start_at=operator_since,
+                    ),
                 )
         # Availability authority and schedule time metadata are separate facts.
-        # OPERATOR_ON still wins the dispatchable decision, but an exact
-        # CID->schedule-name match enriches it with the schedule-owned window.
-        # OPERATOR_OFF is not consumed by the fleet and remains byte-compatible.
-        # Do not fuzzy-match or fabricate an entry when exact data is absent.
+        # Exact CID->schedule metadata is parsed independently of dispatchable:
+        # także OPERATOR_OFF i OUTSIDE_WINDOW zachowują znany koniec dla raportu
+        # HARD. Nie fuzzy-matchujemy i nie fabrykujemy brakującego wpisu.
         schedule_name = None
         schedule_entry = None
+        schedule_interval = None
         if (
-            state is AvailabilityState.OPERATOR_ON
-            and context.schedule_error is None
+            context.schedule_error is None
             and context.identity_error is None
         ):
             schedule_name = context.schedule_names_by_cid.get(key)
@@ -434,19 +682,31 @@ def resolve(
             schedule_entry = (
                 raw_schedule_entry if isinstance(raw_schedule_entry, dict) else None
             )
-        real_on_shift_now = False
-        if schedule_name is not None and schedule_entry is not None:
-            try:
-                real_on_shift_now = bool(
-                    is_on_shift(
-                        schedule_name,
-                        {schedule_name: schedule_entry},
-                    )[0]
-                )
-            except Exception:
-                real_on_shift_now = False
+            schedule_interval = _schedule_interval(schedule_entry, now)
+        real_on_shift_now = (
+            schedule_interval.contains(now)
+            if schedule_interval is not None
+            else False
+        )
+        if state is AvailabilityState.OPERATOR_ON:
+            effective_window = _operator_effective_window(
+                provenance,
+                operator_since,
+                operator_interval,
+                schedule_interval,
+                now,
+                cap_enabled,
+            )
+        elif schedule_interval is not None:
+            effective_window = EffectiveShiftWindow.known(
+                schedule_interval,
+                ShiftWindowSource.SCHEDULE,
+            )
+        else:
+            effective_window = EffectiveShiftWindow.unknown(
+                ShiftEndStatus.UNKNOWN_NO_WINDOW
+            )
         if operator_interval is not None:
-            now = context.now or datetime.now(timezone.utc)
             # Baseline precedence: an active exact schedule wins over the
             # console projection even when its explicit window has just ended.
             # Outside an active schedule, ended OPERATOR_ON remains fail-closed.
@@ -463,6 +723,8 @@ def resolve(
                     operator_interval=operator_interval,
                     real_on_shift_now=real_on_shift_now,
                     detail="operator_window_ended",
+                    schedule_interval=schedule_interval,
+                    effective_shift_window=effective_window,
                 )
         return AvailabilityDecision(
             key,
@@ -475,13 +737,13 @@ def resolve(
             operator_window=operator_window,
             operator_interval=operator_interval,
             real_on_shift_now=real_on_shift_now,
+            schedule_interval=schedule_interval,
+            effective_shift_window=effective_window,
         )
 
     decision = _resolve_from_schedule(
         context,
         key,
-        is_on_shift=is_on_shift,
-        mins_to_shift_start=mins_to_shift_start,
         pre_shift_window_min=pre_shift_window_min,
     )
     return replace(decision, operator_expired=True) if expired else decision
@@ -491,11 +753,12 @@ def _resolve_from_schedule(
     context: AvailabilityContext,
     key: str,
     *,
-    is_on_shift: Callable[[str, Mapping[str, Any]], tuple[bool, str]],
-    mins_to_shift_start: Callable[[dict], Optional[float]],
     pre_shift_window_min: float,
 ) -> AvailabilityDecision:
-    """Grafikowa część :func:`resolve` — bez zmian względem stanu sprzed R4."""
+    """Grafikowa część :func:`resolve` oparta wyłącznie o typed interval."""
+    unknown_data = EffectiveShiftWindow.unknown(
+        ShiftEndStatus.UNKNOWN_DATA_ERROR
+    )
     if context.schedule_error:
         return AvailabilityDecision(
             key,
@@ -503,6 +766,7 @@ def _resolve_from_schedule(
             AvailabilityProvenance.SCHEDULE_LOAD_ERROR,
             False,
             detail=context.schedule_error,
+            effective_shift_window=unknown_data,
         )
     if context.identity_error:
         return AvailabilityDecision(
@@ -511,6 +775,7 @@ def _resolve_from_schedule(
             AvailabilityProvenance.SCHEDULE_IDENTITY_ERROR,
             False,
             detail=context.identity_error,
+            effective_shift_window=unknown_data,
         )
 
     schedule_name = context.schedule_names_by_cid.get(key)
@@ -522,6 +787,7 @@ def _resolve_from_schedule(
             False,
             schedule_name=schedule_name,
             detail="cid_has_no_exact_schedule_entry",
+            effective_shift_window=unknown_data,
         )
 
     entry = context.schedule[schedule_name]
@@ -532,6 +798,9 @@ def _resolve_from_schedule(
             AvailabilityProvenance.SCHEDULE_EMPTY_DAY,
             False,
             schedule_name=schedule_name,
+            effective_shift_window=EffectiveShiftWindow.unknown(
+                ShiftEndStatus.UNKNOWN_NO_WINDOW
+            ),
         )
     if not isinstance(entry, dict):
         return AvailabilityDecision(
@@ -541,21 +810,12 @@ def _resolve_from_schedule(
             False,
             schedule_name=schedule_name,
             detail="schedule_entry_not_object",
+            effective_shift_window=unknown_data,
         )
 
-    try:
-        on_shift, _reason = is_on_shift(schedule_name, context.schedule)
-        if on_shift:
-            return AvailabilityDecision(
-                key,
-                AvailabilityState.SCHEDULED_ON,
-                AvailabilityProvenance.SCHEDULE_ON_SHIFT,
-                True,
-                schedule_name=schedule_name,
-                schedule_entry=entry,
-            )
-        mins = mins_to_shift_start(entry)
-    except Exception as exc:
+    now = context.now or datetime.now(timezone.utc)
+    schedule_interval = _schedule_interval(entry, now)
+    if schedule_interval is None:
         return AvailabilityDecision(
             key,
             AvailabilityState.UNKNOWN_DATA_ERROR,
@@ -563,8 +823,26 @@ def _resolve_from_schedule(
             False,
             schedule_name=schedule_name,
             schedule_entry=entry,
-            detail=type(exc).__name__,
+            detail="schedule_interval_invalid",
+            effective_shift_window=unknown_data,
         )
+    effective_window = EffectiveShiftWindow.known(
+        schedule_interval,
+        ShiftWindowSource.SCHEDULE,
+    )
+    if schedule_interval.contains(now):
+        return AvailabilityDecision(
+            key,
+            AvailabilityState.SCHEDULED_ON,
+            AvailabilityProvenance.SCHEDULE_ON_SHIFT,
+            True,
+            schedule_name=schedule_name,
+            schedule_entry=entry,
+            real_on_shift_now=True,
+            schedule_interval=schedule_interval,
+            effective_shift_window=effective_window,
+        )
+    mins = (schedule_interval.start_at - now).total_seconds() / 60.0
     if mins is not None and 0 < mins <= pre_shift_window_min:
         return AvailabilityDecision(
             key,
@@ -573,6 +851,8 @@ def _resolve_from_schedule(
             True,
             schedule_name=schedule_name,
             schedule_entry=entry,
+            schedule_interval=schedule_interval,
+            effective_shift_window=effective_window,
         )
     return AvailabilityDecision(
         key,
@@ -581,6 +861,8 @@ def _resolve_from_schedule(
         False,
         schedule_name=schedule_name,
         schedule_entry=entry,
+        schedule_interval=schedule_interval,
+        effective_shift_window=effective_window,
     )
 
 
@@ -764,6 +1046,149 @@ def _merge_operator_record(
 
     updated[key] = incoming
     return updated, incoming, True
+
+
+class _RetryableConsoleMutationConflict(RuntimeError):
+    pass
+
+
+def _console_mutation_incoming(
+    mutation: ConsoleAvailabilityMutation,
+    updated_at: str,
+) -> Optional[dict]:
+    if not mutation.project_operator:
+        return None
+    if mutation.kind is ConsoleMutationKind.ON:
+        return _new_operator_record(
+            AvailabilityState.OPERATOR_ON,
+            AvailabilityProvenance.COORDINATOR_CONSOLE,
+            updated_at,
+            mutation.operator_window,
+        )
+    if mutation.kind is ConsoleMutationKind.OFF:
+        return _new_operator_record(
+            AvailabilityState.OPERATOR_OFF,
+            AvailabilityProvenance.COORDINATOR_CONSOLE,
+            updated_at,
+            None,
+        )
+    return None
+
+
+def _commit_console_mutation_once(
+    mutation: ConsoleAvailabilityMutation,
+    effective_path: str,
+    attempt: int,
+) -> ConsoleMutationResult:
+    when, updated_at = _normalized_event_time(mutation.at)
+    if mutation.project_operator and mutation.cid is None:
+        raise ValueError("operator projection requires numeric cid")
+    if mutation.kind is ConsoleMutationKind.ON:
+        if mutation.working_entry is None or mutation.operator_window is None:
+            raise ValueError("ON mutation requires both projections")
+        if parse_shift_interval(mutation.working_entry, anchor=when) is None:
+            raise ValueError("invalid legacy working interval")
+    incoming = _console_mutation_incoming(mutation, updated_at)
+
+    with _store_lock(effective_path):
+        current, error = _read_json_dict(effective_path)
+        if error:
+            raise RuntimeError(f"availability store unreadable: {error}")
+        records = current.get(STORE_KEY, {})
+        if not isinstance(records, dict):
+            raise RuntimeError("availability store is not an object")
+
+        # Causal ordering is event-time, not lock-acquisition order. Dzięki temu
+        # opóźniony ON nie odwróci nowszego STOP, nawet jeśli wejdzie do locka po nim.
+        existing = records.get(mutation.cid)
+        existing_at = (
+            _parse_store_ts(existing.get("updated_at"))
+            if mutation.project_operator and isinstance(existing, Mapping)
+            else None
+        )
+        if existing_at is not None and existing_at > when:
+            return ConsoleMutationResult(
+                before_payload=current,
+                payload=current,
+                stored_record=existing,
+                applied=False,
+                attempts=attempt,
+            )
+
+        projected = mutation.apply_legacy(current)
+        if mutation.project_operator:
+            merged_records, stored, _changed = _merge_operator_record(
+                records,
+                mutation.cid,
+                incoming,
+                AvailabilityProvenance.COORDINATOR_CONSOLE,
+                when,
+            )
+        else:
+            merged_records = dict(records)
+            stored = records.get(mutation.cid)
+
+        # External writer, który nie respektuje locka, może podmienić plik w
+        # czasie czystej projekcji. Ponowny odczyt wykrywa tę klasę i uruchamia
+        # bounded retry na świeżym snapshotcie. Okno po tej sondzie pozostaje
+        # hostowym HOLD-em aż zewnętrzny writer dołączy do locka.
+        latest, latest_error = _read_json_dict(effective_path)
+        if latest_error:
+            raise RuntimeError(f"availability store unreadable: {latest_error}")
+        if latest != current:
+            raise _RetryableConsoleMutationConflict(
+                "store changed outside canonical lock"
+            )
+
+        merged = dict(projected)
+        merged[STORE_KEY] = merged_records
+        merged["updated_at"] = updated_at
+        legacy_changed = any(
+            projected.get(key) != current.get(key)
+            for key in ("excluded", "excluded_cids", "working")
+        )
+        if legacy_changed:
+            merged[LEGACY_REVISION_KEY] = updated_at
+        _atomic_write(effective_path, merged)
+        return ConsoleMutationResult(
+            before_payload=current,
+            payload=merged,
+            stored_record=stored,
+            applied=True,
+            attempts=attempt,
+        )
+
+
+def commit_console_mutation(
+    mutation: ConsoleAvailabilityMutation,
+    *,
+    path: Optional[str] = None,
+    max_attempts: int = 3,
+) -> ConsoleMutationResult:
+    """Aplikuje typed mutation do świeżego snapshotu z ograniczonym retry."""
+
+    if not isinstance(mutation, ConsoleAvailabilityMutation):
+        raise TypeError("console writer requires ConsoleAvailabilityMutation")
+    if (
+        not isinstance(max_attempts, int)
+        or isinstance(max_attempts, bool)
+        or not 1 <= max_attempts <= 5
+    ):
+        raise ValueError("max_attempts must be an integer in 1..5")
+    effective_path = _effective_overrides_path(path)
+    last_conflict: Optional[Exception] = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return _commit_console_mutation_once(
+                mutation,
+                effective_path,
+                attempt,
+            )
+        except _RetryableConsoleMutationConflict as exc:
+            last_conflict = exc
+    raise RuntimeError(
+        f"concurrent manual overrides update after {max_attempts} attempts"
+    ) from last_conflict
 
 
 def commit_console_projection(
