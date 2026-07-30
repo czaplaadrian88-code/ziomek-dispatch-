@@ -272,6 +272,57 @@ def test_curation_complete_on_committed_registry():
     assert not missing, f"wpisy bez pełnej kuracji: {missing[:10]} (+{max(0, len(missing)-10)})"
 
 
+def test_committed_registry_reconciles_every_absent_curated_entry():
+    """Ratchet: current≠tombstone≠history; żadnego stale LIVE fallbacku."""
+    reg = _registry()
+    assert reg["_meta"]["counts"]["total"] == len(reg["flags"])
+    assert set(reg["_meta"]["merge_absent_dead_preserved"]) == {
+        "ENABLE_ETA_QUANTILE_R6_BAGCAP",
+    }
+    expected_tombstones = {
+        "ENABLE_FALLBACK_HONEST_OSRM_ETA",
+        "ENABLE_FROZEN_PICKUP_ETA",
+        "ENABLE_LIVE_ETA_FRESH_OVERRIDE_ONLY",
+        "ENABLE_SAME_DEST_DROPOFF_ONE_ETA",
+        "LIVE_ETA_MAX_AGE_MIN",
+        "LIVE_ETA_FRESH_OVERRIDE_ONLY",
+        "MONOTONIC_ROUTE_TIMES",
+        "PIN_AGREED_PICKUP_TIME",
+        "SEED_PICKUP_TIME_FROM_AGREED",
+    }
+    assert set(SD.ABSENT_CURATED_DEAD_TRANSITIONS) == expected_tombstones
+    transitioned = set(reg["_meta"]["merge_absent_transitioned_dead"])
+    assert transitioned == expected_tombstones
+    for name in expected_tombstones:
+        entry = reg["flags"][name]
+        assert entry["lifecycle"] == "dead"
+        assert entry["current_snapshot"] == {}
+        assert entry["consumers"] == []
+        assert entry["carriers"] == [
+            f"removed:2026-07-30 ({SD.ABSENT_CURATED_DEAD_TRANSITIONS[name]})"
+        ]
+    panel_tombstones = {
+        "LIVE_ETA_FRESH_OVERRIDE_ONLY",
+        "MONOTONIC_ROUTE_TIMES",
+        "PIN_AGREED_PICKUP_TIME",
+        "SEED_PICKUP_TIME_FROM_AGREED",
+    }
+    assert set(SD.ABSENT_CURATED_SUPERSEDED_BY) == panel_tombstones
+    assert all(reg["flags"][name]["superseded_by"]
+               == "canonical live ETA single-source (nadajesz bacfab19)"
+               for name in panel_tombstones)
+    current_dynamic = {
+        "ENABLE_COMMITTED_INVALIDATES_VIEW",
+        "PENDING_RESWEEP_PINGPONG_COOLDOWN_MIN",
+        "PENDING_RESWEEP_PINGPONG_MARGIN_MULTIPLIER",
+    }
+    for name in current_dynamic:
+        entry = reg["flags"][name]
+        assert "explicit-dynamic-source-scan" in entry["carriers"]
+        assert entry["consumers"]
+        assert name not in transitioned
+
+
 def test_reseed_merge_preserves_curation_pure():
     """RE-SEED --merge nie może zabić kuracji: pola kuracji ze STAREGO wpisu
     (curated_at) wygrywają, pola DERYWOWANE (snapshot/default) idą ze świeżego
@@ -298,9 +349,25 @@ def test_reseed_merge_preserves_curation_pure():
         # FLAG_B w starym BEZ kuracji → merge nie dotyka
         "FLAG_B": {"name": "FLAG_B", "lifecycle": "planned", "lifecycle_seeded": True,
                    "owner": {}, "notes": ""},
+        "FLAG_CURATED_ABSENT": {
+            "name": "FLAG_CURATED_ABSENT",
+            "curated_at": "2026-07-09",
+            "lifecycle": "dead",
+            "lifecycle_seeded": False,
+            "owner": {"service": "history", "business": "Adrian"},
+            "review_date": "2026-10-10",
+            "removal_condition": "historyczny marker",
+            "rollback": "n/d",
+            "notes": "nie usuwaj na podstawie samego braku w skanie",
+        },
+        "FLAG_UNCURATED_ABSENT": {
+            "name": "FLAG_UNCURATED_ABSENT",
+            "lifecycle": "planned",
+            "lifecycle_seeded": True,
+        },
     }
     preserved = SD.merge_curation(fresh, old)
-    assert preserved == 1
+    assert preserved == 2
     a = fresh["flags"]["FLAG_A"]
     # pola KURACJI ze starego:
     assert a["curated_at"] == "2026-07-10"
@@ -313,3 +380,90 @@ def test_reseed_merge_preserves_curation_pure():
     assert a["default"] is False and a["current_snapshot"] == {"flags.json": True}
     b = fresh["flags"]["FLAG_B"]
     assert b["lifecycle_seeded"] is True and not b.get("curated_at")
+    assert fresh["flags"]["FLAG_CURATED_ABSENT"] == old["FLAG_CURATED_ABSENT"]
+    assert "FLAG_UNCURATED_ABSENT" not in fresh["flags"]
+    assert fresh["_meta"]["merge_absent_dead_preserved"] == [
+        "FLAG_CURATED_ABSENT"
+    ]
+    assert fresh["_meta"]["merge_absent_transitioned_dead"] == []
+    assert fresh["_meta"]["counts"]["total"] == 3
+
+
+def test_reseed_merge_rejects_absent_curated_nondead():
+    fresh = {"_meta": {"counts": {}}, "flags": {}}
+    old = {
+        "FLAG_LIVE_ABSENT": {
+            "name": "FLAG_LIVE_ABSENT",
+            "curated_at": "2026-07-10",
+            "lifecycle": "live",
+        }
+    }
+    with pytest.raises(ValueError, match="CURATED_ABSENT_NONDEAD.*FLAG_LIVE_ABSENT"):
+        SD.merge_curation(fresh, old)
+
+
+def test_explicit_absent_transition_becomes_dead_tombstone():
+    name = "ENABLE_FROZEN_PICKUP_ETA"
+    fresh = {"_meta": {"counts": {}}, "flags": {}}
+    old = {
+        name: {
+            "name": name,
+            "curated_at": "2026-07-10",
+            "lifecycle": "live",
+            "lifecycle_seeded": False,
+            "worlds": ["apka"],
+            "carriers": ["courier_api/config.py"],
+            "consumers": ["courier_api/config.py:FROZEN_PICKUP_ETA"],
+            "current_snapshot": {"courier-api.service": True},
+        }
+    }
+    assert SD.merge_curation(fresh, old) == 1
+    entry = fresh["flags"][name]
+    assert entry["lifecycle"] == "dead"
+    assert entry["current_snapshot"] == {}
+    assert entry["consumers"] == []
+    assert fresh["_meta"]["merge_absent_transitioned_dead"] == [name]
+
+
+def test_committed_explicit_dynamic_sources_have_ast_proof():
+    assert SD._validate_explicit_dynamic_sources() is None
+
+
+def test_explicit_dynamic_literal_default_mutation_is_hold(tmp_path):
+    (tmp_path / "consumer.py").write_text(
+        "def run(flag):\n"
+        "    return flag('FLAG_DYNAMIC', False)\n",
+        encoding="utf-8",
+    )
+    specs = {
+        "FLAG_DYNAMIC": {
+            "default": True,
+            "consumers": ["dispatch_v2/consumer.py"],
+            "proof": {"kind": "literal_flag_calls"},
+        }
+    }
+    with pytest.raises(ValueError, match="EXPLICIT_DYNAMIC_SOURCE_DRIFT"):
+        SD._validate_explicit_dynamic_sources(str(tmp_path), specs)
+
+
+def test_explicit_dynamic_key_default_mutation_is_hold(tmp_path):
+    (tmp_path / "consumer.py").write_text(
+        "KEY = 'FLAG_NUMERIC'\n"
+        "DEFAULT = 11.0\n"
+        "def run(flags):\n"
+        "    return _positive_float(flags, KEY, DEFAULT)\n",
+        encoding="utf-8",
+    )
+    specs = {
+        "FLAG_NUMERIC": {
+            "default": 10.0,
+            "consumers": ["dispatch_v2/consumer.py"],
+            "proof": {
+                "kind": "keyed_positive_float",
+                "key_const": "KEY",
+                "default_const": "DEFAULT",
+            },
+        }
+    }
+    with pytest.raises(ValueError, match="DEFAULT mismatch 11.0"):
+        SD._validate_explicit_dynamic_sources(str(tmp_path), specs)

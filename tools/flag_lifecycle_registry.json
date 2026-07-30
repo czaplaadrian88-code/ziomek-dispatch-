@@ -1,20 +1,34 @@
 {
  "_meta": {
   "counts": {
-   "apka": 22,
-   "engine": 430,
+   "apka": 27,
+   "engine": 434,
    "engine_1b_units": 12,
    "etap4": 154,
    "flags_json_keys": 267,
    "fp_extra": 35,
    "known_drift": 0,
    "numeric": 36,
-   "panel": 84,
+   "panel": 88,
    "test_isolated": 8,
-   "total": 536,
+   "total": 549,
    "twins_concepts": 8
   },
   "generator": "tools/flag_lifecycle_seed.py",
+  "merge_absent_dead_preserved": [
+   "ENABLE_ETA_QUANTILE_R6_BAGCAP"
+  ],
+  "merge_absent_transitioned_dead": [
+   "ENABLE_FALLBACK_HONEST_OSRM_ETA",
+   "ENABLE_FROZEN_PICKUP_ETA",
+   "ENABLE_LIVE_ETA_FRESH_OVERRIDE_ONLY",
+   "ENABLE_SAME_DEST_DROPOFF_ONE_ETA",
+   "LIVE_ETA_FRESH_OVERRIDE_ONLY",
+   "LIVE_ETA_MAX_AGE_MIN",
+   "MONOTONIC_ROUTE_TIMES",
+   "PIN_AGREED_PICKUP_TIME",
+   "SEED_PICKUP_TIME_FROM_AGREED"
+  ],
   "note": "stan flag = 3 światy (ADR-004); wartości current_snapshot z żywych źródeł dnia 2026-07-10; lifecycle heurystyczny (lifecycle_seeded).",
   "review_date": "2026-08-10",
   "secret_lines_rejected": {
@@ -4729,6 +4743,43 @@
     "engine"
    ]
   },
+  "ENABLE_COMMITTED_INVALIDATES_VIEW": {
+   "carriers": [
+    "explicit-dynamic-source-scan"
+   ],
+   "consumers": [
+    "dispatch_v2/dispatch_pipeline.py",
+    "dispatch_v2/durable_event_apply.py",
+    "dispatch_v2/panel_watcher.py"
+   ],
+   "curated_at": "2026-07-20",
+   "current_snapshot": {
+    "default": true
+   },
+   "default": true,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "live",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_COMMITTED_INVALIDATES_VIEW",
+   "notes": "Istniejacy FIX-E kill-switch: po zmianie committed czasu bump plan_version, aby aplikacja pobrala swieze /orders. CK manual pre-recheck uzywa tego samego kontraktu.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-panel-watcher.service + dispatch-shadow.service"
+   },
+   "removal_condition": "n/d dopoki aplikacja odswieza /orders po plan_version",
+   "review_date": "2026-10-20",
+   "rollback": "flags.json: klucz false (hot-reload, bez restartu)",
+   "source_of_truth": "explicit-dynamic-source-scan",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
   "ENABLE_COMMIT_DIVERGENCE_VERDICT_GATE": {
    "carriers": [
     "flags.json",
@@ -6026,6 +6077,37 @@
     "engine"
    ]
   },
+  "ENABLE_ETA_QUANTILE_R6_BAGCAP": {
+   "carriers": [
+    "removed:2026-07-20 (kod galezi usuniety — marker historyczny, zadnego zywego nosnika)"
+   ],
+   "consumers": [],
+   "curated_at": "2026-07-20",
+   "current_snapshot": {},
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "dead",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_ETA_QUANTILE_R6_BAGCAP",
+   "notes": "FLIP OFF 2026-07-18 ~13:45 UTC (GO Adriana 'Dawaj D3-gold'): wdrozenie werdyktu D3 (29.06) + OD-07 OWNER_CONFIRMED (R6 35 dla kazdego, nigdy klasa kuriera). Pomiar live: 39 odzyskow/3d, odzysk na ZWYCIEZCY 0/39 -> flip nie zmienia zadnego wyniku na korpusie. Testy galezi ON!=OFF: tests/test_d3_gold_quantile_flip.py 4/4. Okno 2d: at#217 (sekcja D3). Po oknie: USUNIECIE kodu galezi (feasibility_v2 ~:1141 + ~:1254) za ACK = retire. || KOD GALEZI USUNIETY 2026-07-20 (gated apply po zielonym oknie at#217, pre-ACK Adriana 18.07 'Dawaj usuniecie kodu galezi po oknie'): feasibility_v2 obie galezie wyciete, wpis zdjety z ETAP4+common, klucz z flags.json; straznik post-removal: tests/test_d3_gold_quantile_flip.py (parytet klas + flaga-widmo inert).",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-shadow.service"
+   },
+   "removal_condition": "n/d dopóki live",
+   "review_date": "2026-07-20",
+   "rollback": "git revert commitu cleanup (kod galezi usuniety; flip-era rollback juz nieaktualny)",
+   "source_of_truth": "flags.json",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
   "ENABLE_ETA_QUANTILE_SHADOW": {
    "carriers": [
     "flags.json",
@@ -6484,6 +6566,37 @@
     "engine"
    ]
   },
+  "ENABLE_FALLBACK_HONEST_OSRM_ETA": {
+   "carriers": [
+    "removed:2026-07-30 (courier_api source absent)"
+   ],
+   "consumers": [],
+   "curated_at": "2026-07-30",
+   "current_snapshot": {},
+   "default": true,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "dead",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_FALLBACK_HONEST_OSRM_ETA",
+   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
+   "owner": {
+    "business": "Adrian",
+    "service": "courier-api.service"
+   },
+   "removal_condition": "historyczny tombstone; brak żywego nośnika",
+   "review_date": "2026-10-30",
+   "rollback": "n/d — odtworzenie wymaga przywrócenia realnego źródła za ACK",
+   "source_of_truth": "courier_api/config.py",
+   "twin_of": [],
+   "worlds": [
+    "apka"
+   ]
+  },
   "ENABLE_FEAS_CARRY_BLIND_SHADOW": {
    "carriers": [
     "flags.json",
@@ -6898,6 +7011,37 @@
    "twin_of": [],
    "worlds": [
     "engine"
+   ]
+  },
+  "ENABLE_FROZEN_PICKUP_ETA": {
+   "carriers": [
+    "removed:2026-07-30 (courier_api source absent)"
+   ],
+   "consumers": [],
+   "curated_at": "2026-07-30",
+   "current_snapshot": {},
+   "default": true,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "dead",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_FROZEN_PICKUP_ETA",
+   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
+   "owner": {
+    "business": "Adrian",
+    "service": "courier-api.service"
+   },
+   "removal_condition": "historyczny tombstone; brak żywego nośnika",
+   "review_date": "2026-10-30",
+   "rollback": "n/d — odtworzenie wymaga przywrócenia realnego źródła za ACK",
+   "source_of_truth": "courier_api/config.py",
+   "twin_of": [],
+   "worlds": [
+    "apka"
    ]
   },
   "ENABLE_FULL_CHOICE_SET_LOG": {
@@ -8577,6 +8721,39 @@
    "source_of_truth": "drop-in:courier-api.service.d/plan-aware-podjazdy.conf",
    "twin_of": [
     "LIVE_ETA_COURIER_GUARD"
+   ],
+   "worlds": [
+    "apka"
+   ]
+  },
+  "ENABLE_LIVE_ETA_FRESH_OVERRIDE_ONLY": {
+   "carriers": [
+    "removed:2026-07-30 (courier_api source absent)"
+   ],
+   "consumers": [],
+   "curated_at": "2026-07-30",
+   "current_snapshot": {},
+   "default": true,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "dead",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_LIVE_ETA_FRESH_OVERRIDE_ONLY",
+   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
+   "owner": {
+    "business": "Adrian",
+    "service": "courier-api.service"
+   },
+   "removal_condition": "historyczny tombstone; brak żywego nośnika",
+   "review_date": "2026-10-30",
+   "rollback": "n/d — odtworzenie wymaga przywrócenia realnego źródła za ACK",
+   "source_of_truth": "courier_api/config.py",
+   "twin_of": [
+    "LIVE_ETA_FRESH_OVERRIDE_ONLY"
    ],
    "worlds": [
     "apka"
@@ -12856,6 +13033,37 @@
     "engine"
    ]
   },
+  "ENABLE_SAME_DEST_DROPOFF_ONE_ETA": {
+   "carriers": [
+    "removed:2026-07-30 (courier_api source absent)"
+   ],
+   "consumers": [],
+   "curated_at": "2026-07-30",
+   "current_snapshot": {},
+   "default": true,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "dead",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_SAME_DEST_DROPOFF_ONE_ETA",
+   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
+   "owner": {
+    "business": "Adrian",
+    "service": "courier-api.service"
+   },
+   "removal_condition": "historyczny tombstone; brak żywego nośnika",
+   "review_date": "2026-10-30",
+   "rollback": "n/d — odtworzenie wymaga przywrócenia realnego źródła za ACK",
+   "source_of_truth": "courier_api/config.py",
+   "twin_of": [],
+   "worlds": [
+    "apka"
+   ]
+  },
   "ENABLE_SAME_RESTAURANT_RACE_PROBE": {
    "carriers": [
     "flags.json"
@@ -16471,6 +16679,71 @@
     "panel"
    ]
   },
+  "LIVE_ETA_FRESH_OVERRIDE_ONLY": {
+   "carriers": [
+    "removed:2026-07-30 (panel source absent)"
+   ],
+   "consumers": [],
+   "curated_at": "2026-07-30",
+   "current_snapshot": {},
+   "default": true,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "dead",
+   "lifecycle_seeded": false,
+   "name": "LIVE_ETA_FRESH_OVERRIDE_ONLY",
+   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
+   "owner": {
+    "business": "Adrian",
+    "service": "nadajesz-panel.service"
+   },
+   "removal_condition": "historyczny tombstone; brak żywego nośnika",
+   "review_date": "2026-10-30",
+   "rollback": "n/d — odtworzenie wymaga przywrócenia realnego źródła za ACK",
+   "source_of_truth": "DEFAULT_FLAGS",
+   "superseded_by": "canonical live ETA single-source (nadajesz bacfab19)",
+   "twin_of": [
+    "ENABLE_LIVE_ETA_FRESH_OVERRIDE_ONLY"
+   ],
+   "worlds": [
+    "panel"
+   ]
+  },
+  "LIVE_ETA_MAX_AGE_MIN": {
+   "carriers": [
+    "removed:2026-07-30 (courier_api source absent)"
+   ],
+   "consumers": [],
+   "curated_at": "2026-07-30",
+   "current_snapshot": {},
+   "default": 8,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "dead",
+   "lifecycle_seeded": false,
+   "name": "LIVE_ETA_MAX_AGE_MIN",
+   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
+   "owner": {
+    "business": "Adrian",
+    "service": "courier-api.service"
+   },
+   "removal_condition": "historyczny tombstone; brak żywego nośnika",
+   "review_date": "2026-10-30",
+   "rollback": "n/d — odtworzenie wymaga przywrócenia realnego źródła za ACK",
+   "source_of_truth": "courier_api/config.py",
+   "twin_of": [],
+   "worlds": [
+    "apka"
+   ]
+  },
   "LOADGOV_FLEET_STATS_MAX_AGE_S": {
    "carriers": [
     "common.py:FLAGS_JSON_NUMERIC_OVERRIDES"
@@ -16793,6 +17066,38 @@
    "twin_of": [],
    "worlds": [
     "engine"
+   ]
+  },
+  "MONOTONIC_ROUTE_TIMES": {
+   "carriers": [
+    "removed:2026-07-30 (panel source absent)"
+   ],
+   "consumers": [],
+   "curated_at": "2026-07-30",
+   "current_snapshot": {},
+   "default": true,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "dead",
+   "lifecycle_seeded": false,
+   "name": "MONOTONIC_ROUTE_TIMES",
+   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
+   "owner": {
+    "business": "Adrian",
+    "service": "nadajesz-panel.service"
+   },
+   "removal_condition": "historyczny tombstone; brak żywego nośnika",
+   "review_date": "2026-10-30",
+   "rollback": "n/d — odtworzenie wymaga przywrócenia realnego źródła za ACK",
+   "source_of_truth": "DEFAULT_FLAGS",
+   "superseded_by": "canonical live ETA single-source (nadajesz bacfab19)",
+   "twin_of": [],
+   "worlds": [
+    "panel"
    ]
   },
   "MUL01_MULTI_LOCATION": {
@@ -17927,6 +18232,76 @@
     "engine"
    ]
   },
+  "PENDING_RESWEEP_PINGPONG_COOLDOWN_MIN": {
+   "carriers": [
+    "explicit-dynamic-source-scan"
+   ],
+   "consumers": [
+    "dispatch_v2/tools/pending_global_resweep.py"
+   ],
+   "curated_at": "2026-07-22",
+   "current_snapshot": {
+    "default": 10.0
+   },
+   "default": 10.0,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "live",
+   "lifecycle_seeded": false,
+   "name": "PENDING_RESWEEP_PINGPONG_COOLDOWN_MIN",
+   "notes": "G6: minimalny odstęp przed kontr-podmianą na poprzedniego kuriera; shadow telemetry przy LIVE=OFF",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-pending-resweep-shadow.service"
+   },
+   "removal_condition": "razem z guardem G6 po decyzji ownera",
+   "review_date": "2026-07-24",
+   "rollback": "git revert; brak klucza w flags.json zachowuje default 10 min",
+   "source_of_truth": "explicit-dynamic-source-scan",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
+  "PENDING_RESWEEP_PINGPONG_MARGIN_MULTIPLIER": {
+   "carriers": [
+    "explicit-dynamic-source-scan"
+   ],
+   "consumers": [
+    "dispatch_v2/tools/pending_global_resweep.py"
+   ],
+   "curated_at": "2026-07-22",
+   "current_snapshot": {
+    "default": 2.0
+   },
+   "default": 2.0,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "live",
+   "lifecycle_seeded": false,
+   "name": "PENDING_RESWEEP_PINGPONG_MARGIN_MULTIPLIER",
+   "notes": "G6: kontr-podmiana wymaga 2x zwykłego marginu oraz cooldownu",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-pending-resweep-shadow.service"
+   },
+   "removal_condition": "razem z guardem G6 po decyzji ownera",
+   "review_date": "2026-07-24",
+   "rollback": "git revert; brak klucza w flags.json zachowuje default 2.0",
+   "source_of_truth": "explicit-dynamic-source-scan",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
   "PICKUP_COORDS_DRIFT_WARN_M": {
    "carriers": [
     "common.py:FLAGS_JSON_NUMERIC_OVERRIDES"
@@ -17994,6 +18369,38 @@
    "review_date": "2026-10-10",
    "rollback": "PANEL_FLAG_PICKUP_DELAY_NOTICE w flags.systemd.env + restart nadajesz-panel.service",
    "source_of_truth": "flags.systemd.env",
+   "twin_of": [],
+   "worlds": [
+    "panel"
+   ]
+  },
+  "PIN_AGREED_PICKUP_TIME": {
+   "carriers": [
+    "removed:2026-07-30 (panel source absent)"
+   ],
+   "consumers": [],
+   "curated_at": "2026-07-30",
+   "current_snapshot": {},
+   "default": true,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "dead",
+   "lifecycle_seeded": false,
+   "name": "PIN_AGREED_PICKUP_TIME",
+   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
+   "owner": {
+    "business": "Adrian",
+    "service": "nadajesz-panel.service"
+   },
+   "removal_condition": "historyczny tombstone; brak żywego nośnika",
+   "review_date": "2026-10-30",
+   "rollback": "n/d — odtworzenie wymaga przywrócenia realnego źródła za ACK",
+   "source_of_truth": "DEFAULT_FLAGS",
+   "superseded_by": "canonical live ETA single-source (nadajesz bacfab19)",
    "twin_of": [],
    "worlds": [
     "panel"
@@ -18872,6 +19279,38 @@
    "review_date": "2026-10-10",
    "rollback": "PANEL_FLAG_ROUTE_REORDER w flags.systemd.env + restart nadajesz-panel.service",
    "source_of_truth": "flags.systemd.env",
+   "twin_of": [],
+   "worlds": [
+    "panel"
+   ]
+  },
+  "SEED_PICKUP_TIME_FROM_AGREED": {
+   "carriers": [
+    "removed:2026-07-30 (panel source absent)"
+   ],
+   "consumers": [],
+   "curated_at": "2026-07-30",
+   "current_snapshot": {},
+   "default": true,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "dead",
+   "lifecycle_seeded": false,
+   "name": "SEED_PICKUP_TIME_FROM_AGREED",
+   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
+   "owner": {
+    "business": "Adrian",
+    "service": "nadajesz-panel.service"
+   },
+   "removal_condition": "historyczny tombstone; brak żywego nośnika",
+   "review_date": "2026-10-30",
+   "rollback": "n/d — odtworzenie wymaga przywrócenia realnego źródła za ACK",
+   "source_of_truth": "DEFAULT_FLAGS",
+   "superseded_by": "canonical live ETA single-source (nadajesz bacfab19)",
    "twin_of": [],
    "worlds": [
     "panel"

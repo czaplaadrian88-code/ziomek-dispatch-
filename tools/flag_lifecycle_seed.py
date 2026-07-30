@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import copy
 import glob
 import importlib.util
 import json
@@ -81,6 +82,66 @@ _INFRA_NAMES = {
     "TZ", "PYTHONUNBUFFERED", "PYTHONDONTWRITEBYTECODE", "VIRTUAL_ENV",
 }
 _FLAG_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+
+# Jawne dynamiczne wejścia, których nie da się wywnioskować z tupli common.py:
+# literalne C.flag(...) z defaultem oraz pośrednie KEY constants czytające
+# load_flags(). To nadal skan źródła z provenance, nie ręczny fallback snapshotu.
+ENGINE_EXPLICIT_DYNAMIC = {
+    "ENABLE_COMMITTED_INVALIDATES_VIEW": {
+        "default": True,
+        "consumers": [
+            "dispatch_v2/dispatch_pipeline.py",
+            "dispatch_v2/durable_event_apply.py",
+            "dispatch_v2/panel_watcher.py",
+        ],
+        "proof": {"kind": "literal_flag_calls"},
+    },
+    "PENDING_RESWEEP_PINGPONG_COOLDOWN_MIN": {
+        "default": 10.0,
+        "consumers": ["dispatch_v2/tools/pending_global_resweep.py"],
+        "proof": {
+            "kind": "keyed_positive_float",
+            "key_const": "PINGPONG_COOLDOWN_MIN_KEY",
+            "default_const": "DEFAULT_PINGPONG_COOLDOWN_MIN",
+        },
+    },
+    "PENDING_RESWEEP_PINGPONG_MARGIN_MULTIPLIER": {
+        "default": 2.0,
+        "consumers": ["dispatch_v2/tools/pending_global_resweep.py"],
+        "proof": {
+            "kind": "keyed_positive_float",
+            "key_const": "PINGPONG_MARGIN_MULTIPLIER_KEY",
+            "default_const": "DEFAULT_PINGPONG_MARGIN_MULTIPLIER",
+        },
+    },
+}
+
+# Jawna rekoncyliacja źródeł z 2026-07-30. Te nazwy były w starym registry jako
+# LIVE, lecz nie istnieją już ani w aktualnym courier_api/config.py, ani w
+# panelowym DEFAULT_FLAGS/env/drop-inach. Zamiast zachować fałszywy snapshot LIVE
+# tworzymy audytowalny tombstone. Przywrócenie wymaga ponownego dodania realnego
+# nośnika; sam historyczny wpis nie aktywuje zachowania.
+ABSENT_CURATED_DEAD_TRANSITIONS = {
+    "ENABLE_FALLBACK_HONEST_OSRM_ETA": "courier_api source absent",
+    "ENABLE_FROZEN_PICKUP_ETA": "courier_api source absent",
+    "ENABLE_LIVE_ETA_FRESH_OVERRIDE_ONLY": "courier_api source absent",
+    "ENABLE_SAME_DEST_DROPOFF_ONE_ETA": "courier_api source absent",
+    "LIVE_ETA_MAX_AGE_MIN": "courier_api source absent",
+    "LIVE_ETA_FRESH_OVERRIDE_ONLY": "panel source absent",
+    "MONOTONIC_ROUTE_TIMES": "panel source absent",
+    "PIN_AGREED_PICKUP_TIME": "panel source absent",
+    "SEED_PICKUP_TIME_FROM_AGREED": "panel source absent",
+}
+ABSENT_CURATED_SUPERSEDED_BY = {
+    "LIVE_ETA_FRESH_OVERRIDE_ONLY":
+        "canonical live ETA single-source (nadajesz bacfab19)",
+    "MONOTONIC_ROUTE_TIMES":
+        "canonical live ETA single-source (nadajesz bacfab19)",
+    "PIN_AGREED_PICKUP_TIME":
+        "canonical live ETA single-source (nadajesz bacfab19)",
+    "SEED_PICKUP_TIME_FROM_AGREED":
+        "canonical live ETA single-source (nadajesz bacfab19)",
+}
 
 # ── BLIŹNIAKI cross-world (koncept → nazwy w rejestrze; nazwy RÓŻNE bo panel gubi
 #    prefiks ENABLE_, a TRUST_CANON_ORDER↔BUILD_VIEW to głęboki rename). Seeder
@@ -496,12 +557,170 @@ def merge_curation(fresh, old_flags):
         # nie nadpisuje niepustej starej; niepusta świeża (żywy dryf) wygrywa.
         if oe.get("known_drift_note") and not e.get("known_drift_note"):
             e["known_drift_note"] = oe["known_drift_note"]
+
+    # Brak w bieżącym skanie NIE jest automatycznie ani retirementem, ani zgodą
+    # na zachowanie starego LIVE snapshotu. Dead/history można zachować.
+    # Non-dead musi mieć jawny tombstone albo wrócić do skanera; inaczej HOLD.
+    absent_dead_preserved = []
+    absent_transitioned_dead = []
+    absent_nondead = []
+    for name, oe in sorted(old_flags.items()):
+        if name in fresh["flags"] or not oe.get("curated_at"):
+            continue
+        if name in ABSENT_CURATED_DEAD_TRANSITIONS:
+            entry = copy.deepcopy(oe)
+            provenance = ABSENT_CURATED_DEAD_TRANSITIONS[name]
+            entry.update({
+                "lifecycle": "dead",
+                "lifecycle_seeded": False,
+                "curated_at": "2026-07-30",
+                "carriers": [f"removed:2026-07-30 ({provenance})"],
+                "consumers": [],
+                "current_snapshot": {},
+                "removal_condition": "historyczny tombstone; brak żywego nośnika",
+                "review_date": "2026-10-30",
+                "rollback": "n/d — odtworzenie wymaga przywrócenia realnego źródła za ACK",
+            })
+            if name in ABSENT_CURATED_SUPERSEDED_BY:
+                entry["superseded_by"] = ABSENT_CURATED_SUPERSEDED_BY[name]
+            note = entry.get("notes", "")
+            transition_note = (
+                "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot "
+                "zastąpiony audytowalnym tombstone."
+            )
+            entry["notes"] = f"{note} | {transition_note}" if note else transition_note
+            fresh["flags"][name] = entry
+            absent_transitioned_dead.append(name)
+            preserved += 1
+        elif oe.get("lifecycle") == "dead":
+            fresh["flags"][name] = copy.deepcopy(oe)
+            absent_dead_preserved.append(name)
+            preserved += 1
+        else:
+            absent_nondead.append(name)
+
+    if absent_nondead:
+        raise ValueError(
+            "CURATED_ABSENT_NONDEAD: " + ", ".join(absent_nondead)
+        )
+
+    counts = fresh.setdefault("_meta", {}).setdefault("counts", {})
+    counts["total"] = len(fresh["flags"])
+    for world in ("engine", "panel", "apka"):
+        counts[world] = sum(
+            1 for entry in fresh["flags"].values()
+            if world in (entry.get("worlds") or [])
+        )
+    fresh["_meta"]["merge_absent_dead_preserved"] = absent_dead_preserved
+    fresh["_meta"]["merge_absent_transitioned_dead"] = absent_transitioned_dead
     return preserved
+
+
+def _explicit_source_path(root: str, consumer: str) -> str:
+    prefix = "dispatch_v2/"
+    rel = consumer[len(prefix):] if consumer.startswith(prefix) else consumer
+    return os.path.join(root, *rel.split("/"))
+
+
+def _ast_constants(tree: ast.AST) -> dict[str, object]:
+    out = {}
+    for node in getattr(tree, "body", []):
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        try:
+            value = ast.literal_eval(node.value)
+        except (ValueError, TypeError):
+            continue
+        for target in targets:
+            if isinstance(target, ast.Name):
+                out[target.id] = value
+    return out
+
+
+def _validate_explicit_dynamic_sources(
+    root: str | None = None,
+    specs: dict | None = None,
+) -> None:
+    """Fail-closed proof that every explicit dynamic entry still exists in source."""
+    root = root or DISPATCH_V2
+    specs = specs or ENGINE_EXPLICIT_DYNAMIC
+    errors = []
+    for name, spec in sorted(specs.items()):
+        proof = spec["proof"]
+        kind = proof["kind"]
+        for consumer in spec["consumers"]:
+            path = _explicit_source_path(root, consumer)
+            try:
+                tree = ast.parse(open(path, encoding="utf-8").read(), filename=path)
+            except (OSError, SyntaxError) as ex:
+                errors.append(f"{name}@{consumer}: unreadable {type(ex).__name__}")
+                continue
+            if kind == "literal_flag_calls":
+                found = False
+                for node in ast.walk(tree):
+                    if not isinstance(node, ast.Call) or len(node.args) < 2:
+                        continue
+                    fn = node.func
+                    fn_name = (
+                        fn.id if isinstance(fn, ast.Name)
+                        else fn.attr if isinstance(fn, ast.Attribute)
+                        else ""
+                    )
+                    if fn_name != "flag":
+                        continue
+                    try:
+                        flag_name = ast.literal_eval(node.args[0])
+                        default = ast.literal_eval(node.args[1])
+                    except (ValueError, TypeError):
+                        continue
+                    if flag_name == name and default == spec["default"]:
+                        found = True
+                        break
+                if not found:
+                    errors.append(
+                        f"{name}@{consumer}: missing flag({name!r}, {spec['default']!r})"
+                    )
+            elif kind == "keyed_positive_float":
+                constants = _ast_constants(tree)
+                key_const = proof["key_const"]
+                default_const = proof["default_const"]
+                if constants.get(key_const) != name:
+                    errors.append(
+                        f"{name}@{consumer}: {key_const} mismatch "
+                        f"{constants.get(key_const)!r}"
+                    )
+                if constants.get(default_const) != spec["default"]:
+                    errors.append(
+                        f"{name}@{consumer}: {default_const} mismatch "
+                        f"{constants.get(default_const)!r}"
+                    )
+                found = any(
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "_positive_float"
+                    and len(node.args) >= 3
+                    and isinstance(node.args[1], ast.Name)
+                    and node.args[1].id == key_const
+                    and isinstance(node.args[2], ast.Name)
+                    and node.args[2].id == default_const
+                    for node in ast.walk(tree)
+                )
+                if not found:
+                    errors.append(
+                        f"{name}@{consumer}: missing _positive_float("
+                        f"..., {key_const}, {default_const})"
+                    )
+            else:
+                errors.append(f"{name}: unknown proof kind {kind!r}")
+    if errors:
+        raise ValueError("EXPLICIT_DYNAMIC_SOURCE_DRIFT: " + "; ".join(errors))
 
 
 def build_registry(flags_json=DEF_FLAGS_JSON, systemd_dir=DEF_SYSTEMD_DIR,
                    panel_dir=DEF_PANEL_DIR, courier_dir=DEF_COURIER_DIR,
                    panelsync_dir=DEF_PANELSYNC_DIR):
+    _validate_explicit_dynamic_sources()
     common_py = os.path.join(DISPATCH_V2, "common.py")
     src = open(common_py, encoding="utf-8").read()
     etap4 = _tuple_names(src, "ETAP4_DECISION_FLAGS")
@@ -550,6 +769,7 @@ def build_registry(flags_json=DEF_FLAGS_JSON, systemd_dir=DEF_SYSTEMD_DIR,
 
     # ── ENGINE: unia nazw z tupli ∪ flags.json ∪ env-frozen-module ∪ 1b-systemd ──
     engine_names = (decision_all | numeric_set | set(test_iso) | set(fjson)
+                    | set(ENGINE_EXPLICIT_DYNAMIC)
                     | set(envfrozen_engine)
                     | {n for env in engine_units_env.values() for n in env})
     for name in sorted(engine_names):
@@ -557,7 +777,8 @@ def build_registry(flags_json=DEF_FLAGS_JSON, systemd_dir=DEF_SYSTEMD_DIR,
         e["worlds"].append("engine")
         is_decision = name in decision_all
         is_numeric = name in numeric_set
-        d = envfrozen_engine.get(name) or defs.get(name)
+        explicit_dynamic = ENGINE_EXPLICIT_DYNAMIC.get(name)
+        d = envfrozen_engine.get(name) or defs.get(name) or explicit_dynamic
         default = (d or {}).get("default")
         carriers, snap = [], {}
         # nośnik flags.json (kanon hot-reload dla decyzyjnych/numerycznych)
@@ -577,6 +798,8 @@ def build_registry(flags_json=DEF_FLAGS_JSON, systemd_dir=DEF_SYSTEMD_DIR,
             carriers.append(f"{envfrozen_engine[name]['file']}-const")
         elif name in defs and name not in fjson and not (is_decision or is_numeric):
             carriers.append("common.py-const")
+        if explicit_dynamic:
+            carriers.append("explicit-dynamic-source-scan")
         # świat 1b: pin w unitach (per-SERVICE — parity-guardy pinują env dla SWOICH proc.)
         pin_units = []
         for unit, env in sorted(engine_units_env.items()):
@@ -596,6 +819,8 @@ def build_registry(flags_json=DEF_FLAGS_JSON, systemd_dir=DEF_SYSTEMD_DIR,
         elif name in envfrozen_engine:
             sot = "common.py-const" if envfrozen_engine[name]["file"].endswith("common.py") \
                 else f"{envfrozen_engine[name]['file']}"
+        elif explicit_dynamic:
+            sot = "explicit-dynamic-source-scan"
         else:
             sot = "common.py-const"
         # effective (kanon): flags.json dla decyzyjnych; inaczej default / per-service
@@ -624,6 +849,8 @@ def build_registry(flags_json=DEF_FLAGS_JSON, systemd_dir=DEF_SYSTEMD_DIR,
         else:
             rollback = f"env OFF w {sot} + restart {owner_svc} ZA ACK"
         cons = sorted(consumer_idx.get(name, set()))
+        if explicit_dynamic:
+            cons = sorted(set(cons) | set(explicit_dynamic["consumers"]))
         if name in envfrozen_engine:
             cons = sorted(set(cons) |
                           {f"{envfrozen_engine[name]['file']}:{envfrozen_engine[name]['const']}"})
@@ -856,7 +1083,8 @@ def main() -> int:
             old = json.load(open(args.out, encoding="utf-8")).get("flags", {})
             preserved = merge_curation(reg, old)
         except Exception as ex:
-            print(f"  MERGE ostrzeżenie: {ex}", file=sys.stderr)
+            print(f"  MERGE HOLD: {ex}", file=sys.stderr)
+            return 3
     elif curated_existing and not args.merge:
         print(f"⚠ UWAGA: rejestr ma {curated_existing} SKUROWANYCH wpisów; seed bez "
               f"--merge je NADPISZE. Użyj --merge, by zachować kurację.", file=sys.stderr)
