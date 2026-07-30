@@ -1,0 +1,22 @@
+diff --git a/tools/flag_lifecycle_registry.json b/tools/flag_lifecycle_registry.json
+index 1111111..2222222 100644
+--- a/tools/flag_lifecycle_registry.json
++++ b/tools/flag_lifecycle_registry.json
+@@ -100,6 +100,10 @@
+   "flags": {
++    "ENABLE_CTO_REGISTRY_ONLY": {
++      "lifecycle": "live",
++      "source_of_truth": "flags.json"
++    },
+     "ENABLE_EXISTING_FLAG": {
+       "lifecycle": "live"
+     }
+diff --git a/tools/flag_effect_baseline.json b/tools/flag_effect_baseline.json
+index 3333333..4444444 100644
+--- a/tools/flag_effect_baseline.json
++++ b/tools/flag_effect_baseline.json
+@@ -1,4 +1,5 @@
+ {
++  "ENABLE_CTO_EFFECT_BASELINE_ONLY": false,
+   "ENABLE_EXISTING_FLAG": false
+ }

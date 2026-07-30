@@ -1,0 +1,8 @@
+diff --git a/common.py b/common.py
+index 1111111..2222222 100644
+--- a/common.py
++++ b/common.py
+@@ -300,6 +300,10 @@ ETAP4_DECISION_FLAGS = (
+     "ENABLE_NO_GPS_EQUAL_TREATMENT",
++    "ENABLE_CTO_REGISTRY_ONLY",
+     "ENABLE_EQUAL_TREATMENT_BUCKET",

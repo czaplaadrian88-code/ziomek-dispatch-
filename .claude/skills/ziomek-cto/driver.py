@@ -204,6 +204,23 @@ def _is_engine_path(path: str) -> bool:
     return True
 
 
+_FLAG_METADATA_ONLY_PATHS = frozenset({
+    "tools/flag_effect_baseline.json",
+    "tools/flag_lifecycle_registry.json",
+})
+
+
+def _is_behavioral_flag_path(path: str) -> bool:
+    """Czy diff może zmieniać wykonanie flagi, a nie tylko jej metadane.
+
+    Re-seed lifecycle/effect registries zapisuje nazwy wielu istniejących flag,
+    ale nie zmienia ich readerów, defaultów ani wartości. Te pliki pozostają w
+    pełnym ``files`` (więc nadal dowodzą obecności flagi w rejestrze), lecz nie
+    mogą same tworzyć obowiązku ON≠OFF dla każdej nazwy występującej w JSON.
+    """
+    return _is_engine_path(path) and path not in _FLAG_METADATA_ONLY_PATHS
+
+
 def _grep_repo_tests(needle: str) -> bool:
     tdir = REPO / "tests"
     if not tdir.is_dir():
@@ -356,6 +373,12 @@ def cmd_dod(args: argparse.Namespace) -> int:
             ev[_norm(k.strip())] = val.strip()
 
     added_engine = [(p, l) for p, d in files.items() if _is_engine_path(p) for l in d["added"]]
+    added_behavioral_flags = [
+        (p, l)
+        for p, d in files.items()
+        if _is_behavioral_flag_path(p)
+        for l in d["added"]
+    ]
     added_tests = [l for p, d in files.items() if _is_test_path(p) for l in d["added"]]
     engine_changed = any(_is_engine_path(p) for p in files)
     py_changed = any(p.endswith(".py") for p in files)
@@ -370,7 +393,7 @@ def cmd_dod(args: argparse.Namespace) -> int:
         return any(base in l or path in l for l in nd_lines)
 
     rows: list[tuple[str, str, str]] = []  # (check, PASS/FAIL/N-D, detal)
-    rows += _dod_flag_rows(added_engine, added_tests, files)
+    rows += _dod_flag_rows(added_behavioral_flags, added_tests, files)
     rows += _dod_metric_rows(added_engine, added_tests)
     rows += _dod_twin_rows(reg, files, _nd_covers)
     rows += _dod_evidence_rows(ev, engine_changed, py_changed)

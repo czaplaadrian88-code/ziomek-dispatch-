@@ -69,6 +69,30 @@ want_rc "dod: fixture niepełny → exit 1" 1 $rc
 echo "$DOUT" | grep -q "FAIL  flaga ENABLE_CTO_FIXTURE_DEMO: test ON≠OFF" \
   && ok "dod: FAIL wskazuje brak testu ON≠OFF" || bad "dod: brak FAIL na teście ON≠OFF"
 
+# 6b. Registry/effect baseline to METADANE: re-seed nie może udawać zmiany
+# wykonania setek flag i żądać dla każdej nowego testu ON≠OFF.
+ROUT=$("$PY" "$HERE/driver.py" dod "$HERE/fixtures/fixture-diff-registry-only.diff" \
+       --evidence "$HERE/fixtures/fixture-evidence-complete.txt" 2>&1); rc=$?
+want_rc "dod: registry-only reseed + evidence → exit 0" 0 $rc
+if echo "$ROUT" | grep -q "N-D   flaga: test ON≠OFF" \
+   && ! echo "$ROUT" | grep -q "flaga ENABLE_CTO_REGISTRY_ONLY: test ON≠OFF" \
+   && ! echo "$ROUT" | grep -q "flaga ENABLE_CTO_EFFECT_BASELINE_ONLY: test ON≠OFF"; then
+  ok "dod: registry/effect metadata nie tworzą behavioral ON≠OFF"
+else
+  bad "dod: registry-only nazwa błędnie uznana za behavioral flagę"
+fi
+
+# 6c. MUTATION-PROBE granicy: ta sama nazwa przeniesiona do common.py znowu
+# MUSI być behavioral i czerwienić bez testu. Wykluczenie jest po exact path,
+# nie po treści/nazwie flagi.
+MFLAG=$("$PY" "$HERE/driver.py" dod \
+        "$HERE/fixtures/fixture-diff-registry-as-common.diff" \
+        --evidence "$HERE/fixtures/fixture-evidence-complete.txt" 2>&1); rc=$?
+want_rc "mutation-probe: registry payload w common.py → exit 1" 1 $rc
+echo "$MFLAG" | grep -q "FAIL  flaga ENABLE_CTO_REGISTRY_ONLY: test ON≠OFF" \
+  && ok "mutation-probe: behavioral common.py nadal wymaga ON≠OFF" \
+  || bad "mutation-probe: common.py został omyłkowo wyłączony z bramki flag"
+
 # 7. ORACLE dod: fixture kompletny (test ON≠OFF + dowody) = PRZYJĘTY (exit 0)
 "$PY" "$HERE/driver.py" dod "$HERE/fixtures/fixture-diff-complete.diff" \
       --evidence "$HERE/fixtures/fixture-evidence-complete.txt" >/dev/null 2>&1

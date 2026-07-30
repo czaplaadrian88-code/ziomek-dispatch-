@@ -94,6 +94,11 @@ sprawdzenia", czyli kłamiący przyrząd (C9).
    bramki, którą sam sobie postawiłeś.
 6. `dod` na refie gitowym wymaga czystego dostępu do `git` (bez `ZIOMEK_CTO_NO_LIVE`);
    na pliku `.diff` działa hermetycznie.
+7. Re-seed `tools/flag_lifecycle_registry.json` i
+   `tools/flag_effect_baseline.json` zmienia **metadane**, nie wykonanie flag.
+   Nazwy dodane wyłącznie w tych plikach nie tworzą obowiązku nowego testu
+   ON≠OFF. Te pliki nadal pozostają źródłem dowodu, że behavioral flaga wykryta
+   w kodzie jest wpisana do rejestru.
 
 ## Zakres i bezpieczeństwo
 
