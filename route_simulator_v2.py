@@ -896,25 +896,62 @@ def _is_paczka_ordersim(o) -> bool:
 
 
 def _capz_bag_metrics(plan, bag, new_order, cap_min):
-    """(overage_food, max_carried_food) z `plan.per_order_delivery_times` (ready-anchor,
-    już policzone), WYŁĄCZAJĄC paczki (finding feas-o2-paczka-blind). NIE dotyka
+    """(overage_food, max_carried_food) z kanonicznego carry evaluatora,
+    WYŁĄCZAJĄC paczki (finding feas-o2-paczka-blind). NIE dotyka
     `_compute_o2_metrics` (istniejąca ENABLE_O2_READY_ANCHOR_SWEEP nietknięta) — osobne,
     paczka-świadome liczenie WYŁĄCZNIE dla cap-Z reseq. Wzór 1:1 z bundle_calib._max_carried_age
     (max wieku NIESIONYCH picked_up) + overage (Σ max(0, age−cap)). (None,None) gdy brak per_order."""
+    from dispatch_v2 import common as _Cc
     from dispatch_v2.core import carry_freshness as _cf
-    pt = plan.per_order_delivery_times
-    if not pt:
+    if not _Cc.decision_flag("ENABLE_CARRY_CANON_V2"):
+        pt = plan.per_order_delivery_times
+        if not pt:
+            return None, None
+        paczka = {
+            getattr(o, "order_id", None)
+            for o in list(bag) + [new_order]
+            if _is_paczka_ordersim(o)
+        }
+        picked = {
+            getattr(o, "order_id", None)
+            for o in bag
+            if getattr(o, "picked_up_at", None) is not None
+            or getattr(o, "status", None) == "picked_up"
+        }
+        overage = 0.0
+        carried = {}
+        for oid, age in pt.items():
+            if age is None or oid in paczka:
+                continue
+            overage += max(0.0, age - cap_min)
+            if oid in picked:
+                carried[oid] = age
+        return round(overage, 1), round(_cf.max_carry_min(carried), 1)
+
+    all_orders = list(bag) + [new_order]
+    evaluated = _cf.evaluate_plan(
+        plan,
+        all_orders,
+        include_order=lambda order: (
+            getattr(order, "order_id", None)
+            in (getattr(plan, "predicted_delivered_at", None) or {})
+            and not _is_paczka_ordersim(order)
+        ),
+    )
+    rows = evaluated.get("orders") if isinstance(evaluated, dict) else None
+    if not rows or evaluated.get("status") != "EVALUATED":
         return None, None
-    paczka = {getattr(o, "order_id", None) for o in list(bag) + [new_order]
-              if _is_paczka_ordersim(o)}
     picked = {getattr(o, "order_id", None) for o in bag
               if getattr(o, "picked_up_at", None) is not None
-              or getattr(o, "status", None) == "picked_up"}
+              or getattr(o, "status", None) == "picked_up"
+              or getattr(o, "physical_possession_at", None) is not None}
     overage = 0.0
     carried = {}
-    for oid, age in pt.items():
-        if age is None or oid in paczka:
-            continue
+    for row in rows:
+        oid = row.get("order_id")
+        age = row.get("carry_min")
+        if age is None:
+            return None, None
         overage += max(0.0, age - cap_min)
         if oid in picked:
             carried[oid] = age

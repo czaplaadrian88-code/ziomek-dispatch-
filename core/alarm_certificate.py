@@ -9,12 +9,15 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import tempfile
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, Iterable, Optional
 
 from dispatch_v2 import common as C
+from dispatch_v2.core import carry_freshness as _carry_contract
+from dispatch_v2.core import strategy2_probe as _strategy2
 
 SCHEMA = "alarm_certificate.v1"
 SNAPSHOT_PATH = str(C.STATE_DIR / "alarm_certificate.json")
@@ -25,8 +28,6 @@ _THERMAL_REASONS = (
     "R6_picked_up_delta_",
     "sla_violation",
 )
-
-
 class _VerifiedCertificate(dict):
     """Certyfikat odczytany razem z hash-bound evidence jedynego writera."""
 
@@ -60,15 +61,39 @@ def _utc(value: Any) -> Optional[datetime]:
 
 
 def _candidate_carry(candidate: Any) -> Optional[float]:
+    if getattr(candidate, "plan", None) is None:
+        return None
     carry = (getattr(candidate, "metrics", None) or {}).get("carry_eval")
-    if not isinstance(carry, dict):
+    status, value = _carry_contract.hard35_evaluation(carry)
+    if status not in {
+        _carry_contract.HARD35_LE35,
+        _carry_contract.HARD35_OVER35,
+    }:
         return None
-    if carry.get("schema") != "carry_eval.v1" or carry.get("status") != "EVALUATED":
-        return None
-    value = carry.get("max_carry_min")
-    if not isinstance(value, (int, float)) or isinstance(value, bool):
-        return None
-    return float(value)
+    return value
+
+
+def _candidate_hard35_eval(candidate: Any) -> tuple[str, Optional[float]]:
+    """Alarm deleguje zakres termiczny do kanonicznego kontraktu carry.
+
+    ``EXEMPT`` nie oznacza carry=0. Oznacza wyłącznie, że biznesowy HARD35 nie
+    dotyczy tego worka (paczki-only); fizyczny pomiar pozostaje bez zmian.
+    Brak/niepoprawny nowy kontrakt zachowuje fail-closed przez ścieżkę UNKNOWN.
+    """
+    if getattr(candidate, "plan", None) is None:
+        return "UNKNOWN", None
+    carry = (getattr(candidate, "metrics", None) or {}).get("carry_eval")
+    status, value = _carry_contract.hard35_evaluation(carry)
+    if status == _carry_contract.HARD35_EXEMPT:
+        return "EXEMPT", None
+    if status not in {
+        _carry_contract.HARD35_LE35,
+        _carry_contract.HARD35_OVER35,
+    }:
+        return "UNKNOWN", None
+    if value is None:
+        return "UNKNOWN", None
+    return "EVALUATED", value
 
 
 def _passes_other_hards(candidate: Any) -> bool:
@@ -76,7 +101,11 @@ def _passes_other_hards(candidate: Any) -> bool:
     if verdict == "MAYBE":
         return True
     reason = str(getattr(candidate, "feasibility_reason", "") or "")
-    return any(reason.startswith(prefix) for prefix in _THERMAL_REASONS)
+    metrics = getattr(candidate, "metrics", None) or {}
+    return (
+        any(reason.startswith(prefix) for prefix in _THERMAL_REASONS)
+        and metrics.get("alarm_other_hards_status") == "PASSED"
+    )
 
 
 def _pool_counterfactual(
@@ -90,17 +119,24 @@ def _pool_counterfactual(
     fingerprint_rows = []
     for candidate in candidates:
         cid = str(getattr(candidate, "courier_id", "") or "")
-        value = _candidate_carry(candidate)
+        hard35_status, value = _candidate_hard35_eval(candidate)
         fingerprint_rows.append((
             cid,
+            hard35_status,
             value,
             getattr(candidate, "feasibility_verdict", None),
             getattr(candidate, "feasibility_reason", None),
+            getattr(candidate, "alarm_evaluation_status", None),
         ))
+        if getattr(candidate, "alarm_evaluation_status", None) == "UNKNOWN":
+            unknown.append(cid)
+            continue
         if not _passes_other_hards(candidate):
             excluded_other_hard.append(cid)
             continue
-        if value is None:
+        if hard35_status == "EXEMPT":
+            normal.append(cid)
+        elif value is None:
             unknown.append(cid)
         elif value <= 35.0:
             normal.append(cid)
@@ -140,6 +176,110 @@ def _strategy2_fingerprint(
         or strategy2_probe.get("status") != "EVALUATED"
         or str(strategy2_probe.get("order_id")) != str(decision_order_id)
         or not isinstance(strategy2_probe.get("found"), bool)
+    ):
+        return None, None
+    fleet = strategy2_probe.get("fleet_courier_ids")
+    fleet_count = strategy2_probe.get("fleet_count")
+    slots_checked = strategy2_probe.get("slots_checked")
+    evaluations = strategy2_probe.get("evaluations")
+    created = _utc(strategy2_probe.get("created_at"))
+    declared = _utc(strategy2_probe.get("declared_ready_at"))
+    started = _utc(strategy2_probe.get("probe_started_at"))
+    deadline = _utc(strategy2_probe.get("deadline_at"))
+    step_min = strategy2_probe.get("step_min")
+    horizon_min = strategy2_probe.get("horizon_min")
+    if (
+        not isinstance(fleet, list)
+        or not fleet
+        or len(set(map(str, fleet))) != len(fleet)
+        or not isinstance(fleet_count, int)
+        or isinstance(fleet_count, bool)
+        or fleet_count != len(fleet)
+        or not isinstance(slots_checked, int)
+        or isinstance(slots_checked, bool)
+        or slots_checked <= 0
+        or not isinstance(evaluations, list)
+        or len(evaluations) != slots_checked
+        or created is None
+        or declared is None
+        or started is None
+        or deadline is None
+        or step_min != _strategy2.STEP_MIN
+        or horizon_min != _strategy2.HORIZON_MIN
+        or deadline != created + timedelta(minutes=_strategy2.HORIZON_MIN)
+    ):
+        return None, None
+    fleet_set = set(map(str, fleet))
+    safe_by_slot = []
+    expected_slot = max(declared, started) + timedelta(
+        minutes=_strategy2.STEP_MIN
+    )
+    for index, evaluation in enumerate(evaluations):
+        slot_at = (
+            _utc(evaluation.get("slot_at"))
+            if isinstance(evaluation, dict)
+            else None
+        )
+        if (
+            not isinstance(evaluation, dict)
+            or slot_at is None
+            or slot_at != expected_slot + timedelta(
+                minutes=index * _strategy2.STEP_MIN
+            )
+            or slot_at > deadline
+            or not isinstance(evaluation.get("couriers"), list)
+        ):
+            return None, None
+        rows = evaluation["couriers"]
+        row_cids = [
+            str(row.get("courier_id") or "")
+            for row in rows if isinstance(row, dict)
+        ]
+        if (
+            len(rows) != fleet_count
+            or len(row_cids) != fleet_count
+            or set(row_cids) != fleet_set
+            or len(set(row_cids)) != fleet_count
+            or any(
+                not _strategy2._complete_courier_result(row)
+                for row in rows
+            )
+        ):
+            return None, None
+        safe_by_slot.append({
+            str(row["courier_id"])
+            for row in rows if row.get("status") == "SAFE_LE35"
+        })
+    feasible = strategy2_probe.get("feasible_courier_ids")
+    if (
+        not isinstance(feasible, list)
+        or len(set(map(str, feasible))) != len(feasible)
+    ):
+        return None, None
+    feasible_set = set(map(str, feasible))
+    if strategy2_probe["found"]:
+        final_slot = _utc(evaluations[-1].get("slot_at"))
+        if (
+            not safe_by_slot[-1]
+            or feasible_set != safe_by_slot[-1]
+            or _utc(strategy2_probe.get("slot_at")) != final_slot
+            or strategy2_probe.get("courier_id") not in feasible_set
+            or not isinstance(strategy2_probe.get("shift_min"), (int, float))
+            or isinstance(strategy2_probe.get("shift_min"), bool)
+            or not math.isclose(
+                float(strategy2_probe["shift_min"]),
+                (final_slot - declared).total_seconds() / 60.0,
+                rel_tol=0.0,
+                abs_tol=0.11,
+            )
+        ):
+            return None, None
+    elif (
+        feasible_set
+        or any(safe_by_slot)
+        or _utc(evaluations[-1].get("slot_at"))
+        + timedelta(minutes=_strategy2.STEP_MIN)
+        <= deadline
     ):
         return None, None
     fingerprint = hashlib.sha256(json.dumps(
@@ -266,6 +406,10 @@ def validate(
     valid_until = _utc(certificate.get("valid_until"))
     now_utc = _utc(now)
     if observed is None or valid_until is None or now_utc is None:
+        return False
+    if abs(
+        (valid_until - observed).total_seconds() - TTL_SECONDS
+    ) > 0.001:
         return False
     if now_utc < observed or now_utc > valid_until:
         return False
@@ -507,9 +651,13 @@ def hard35_best_effort_choice(
     cap = 40.0 if alarm_on else 35.0
     allowed = []
     known = []
+    exempt = []
     for candidate in pool:
-        value = _candidate_carry(candidate)
-        if value is not None:
+        hard35_status, value = _candidate_hard35_eval(candidate)
+        if hard35_status == "EXEMPT":
+            exempt.append(candidate)
+            allowed.append(candidate)
+        elif value is not None:
             known.append((value, candidate))
             if value <= cap:
                 allowed.append(candidate)
@@ -519,7 +667,8 @@ def hard35_best_effort_choice(
         "alarm": alarm_on,
         "pool_count": len(pool),
         "within_cap_count": len(allowed),
-        "unknown_count": len(pool) - len(known),
+        "thermal_exempt_count": len(exempt),
+        "unknown_count": len(pool) - len(known) - len(exempt),
     }
     if allowed:
         meta["reason"] = "candidate_within_carry_cap"

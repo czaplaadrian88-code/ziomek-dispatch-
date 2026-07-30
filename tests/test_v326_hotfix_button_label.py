@@ -35,7 +35,17 @@ def _run(travel_min, prep_min, order_id="test-123"):
         "travel_min": travel_min,
     }
     # Mock datetime.now in telegram_approver module
-    with mock.patch.object(telegram_approver, "datetime") as mock_dt:
+    original_flag = telegram_approver.flag
+    with mock.patch.object(telegram_approver, "datetime") as mock_dt, \
+            mock.patch.object(
+                telegram_approver,
+                "flag",
+                side_effect=lambda name, default=False: (
+                    True
+                    if name == "PROPOSAL_FORMAT_V2"
+                    else original_flag(name, default)
+                ),
+            ):
         mock_dt.now.return_value = frozen_now
         mock_dt.fromisoformat = datetime.fromisoformat  # passthrough
         kbd = telegram_approver.build_keyboard(
@@ -98,7 +108,17 @@ def main():
     frozen_now = datetime(2026, 4, 24, 10, 0, 0, tzinfo=timezone.utc)
     pickup_ready = (frozen_now + timedelta(minutes=20)).isoformat()
     cand = {"courier_id": "999", "name": "X", "travel_min": 3}
-    with mock.patch.object(telegram_approver, "datetime") as mock_dt:
+    original_flag = telegram_approver.flag
+    with mock.patch.object(telegram_approver, "datetime") as mock_dt, \
+            mock.patch.object(
+                telegram_approver,
+                "flag",
+                side_effect=lambda name, default=False: (
+                    True
+                    if name == "PROPOSAL_FORMAT_V2"
+                    else original_flag(name, default)
+                ),
+            ):
         mock_dt.now.return_value = frozen_now
         mock_dt.fromisoformat = datetime.fromisoformat
         kbd = telegram_approver.build_keyboard("t1", candidates=[cand], pickup_ready_at=pickup_ready)

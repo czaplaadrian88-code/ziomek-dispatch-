@@ -1390,11 +1390,16 @@ def _g4_final_validator(stops, envelope_stops, orders_state, now):
          zapisać.
 
     Zwraca dict `{"ok": bool, "reason": str|None, "detail": ...}` — trafia do
-    `validator.final` w ledgerze v2. NIGDY nie rzuca: błąd walidatora nie może
-    być powodem, dla którego kurier zostaje bez planu, więc wyjątek = `ok`
-    z powodem `validator_error` (i głośnym WARNINGIEM).
+    `validator.final` w ledgerze v2. NIGDY nie rzuca. Przy świadomie włączonym
+    `ENABLE_CARRY_CANON_V2` niepewność walidatora blokuje zapis (`ok=False`,
+    `validator_error`) i pozostawia decyzję koordynatorowi; przy OFF zachowuje
+    zamrożone legacy fail-open, aby rollback flagi naprawdę cofał semantykę.
     """
+    _carry_canon_on = False
     try:
+        _carry_canon_on = bool(
+            _CF.decision_flag("ENABLE_CARRY_CANON_V2")
+        )
         if not stops:
             return {"ok": False, "reason": "empty_plan"}
         prev_t = None
@@ -1426,15 +1431,31 @@ def _g4_final_validator(stops, envelope_stops, orders_state, now):
         }
         _certificate = _alarm_cert.read(
             now, scope_order_ids=_scope)
-        cap = _lex_guards.load_thresholds(
-            alarm_certificate=_certificate).carry_cap_min
+        thresholds = _lex_guards.load_thresholds(
+            alarm_certificate=_certificate)
+        cap = thresholds.carry_cap_min
         env = _g4_carry_map(envelope_stops, orders_state, now)
         fin = _g4_carry_map(stops, orders_state, now)
         for oid, carry in fin.items():
-            if carry is None or carry <= cap:
+            if carry is None:
+                # OFF-parity: legacy G4 pomijał brak proxy i zapisywał plan.
+                # Fail-closed należy wyłącznie do świadomie włączonego,
+                # kanonicznego kontraktu physical-possession.
+                if not _carry_canon_on:
+                    continue
+                return {
+                    "ok": False,
+                    "reason": "freshness_unevaluable",
+                    "detail": {"order_id": oid, "cap_min": cap},
+                }
+            if carry <= cap:
                 continue
             base = env.get(oid)
-            if base is not None and base > cap and carry <= base:
+            if (
+                base is not None
+                and base > cap
+                and carry <= base
+            ):
                 continue
             return {"ok": False, "reason": "freshness_envelope",
                     "detail": {"order_id": oid, "carry_min": round(carry, 2),
@@ -1444,7 +1465,9 @@ def _g4_final_validator(stops, envelope_stops, orders_state, now):
         return {"ok": True, "reason": None}
     except Exception as e:
         _log.warning("G4 final validator fail: %s: %s", type(e).__name__, e)
-        return {"ok": True, "reason": "validator_error"}
+        if not _carry_canon_on:
+            return {"ok": True, "reason": "validator_error"}
+        return {"ok": False, "reason": "validator_error"}
 
 
 def _g4_assert_current_valid_plan(cid, plan, oids, orders_state, phase):
@@ -1487,28 +1510,82 @@ def _g4_assert_current_valid_plan(cid, plan, oids, orders_state, phase):
         return True
 
 
-def _g4_carry_map(stops, orders_state, now):
-    """`{oid: carry_min}` niesionych — przez JEDNĄ metrykę `core.carry_freshness`."""
+def _g4_legacy_carry_map(stops, orders_state, now):
+    """Zamrożony resolver G4 sprzed ``ENABLE_CARRY_CANON_V2``."""
     out = {}
-    for s in stops or []:
-        if s.get("type") != "dropoff":
+    for stop in stops or []:
+        if stop.get("type") != "dropoff":
             continue
-        oid = str(s.get("order_id"))
+        oid = str(stop.get("order_id"))
         rec = orders_state.get(oid) or {}
         if rec.get("status") != "picked_up":
             continue
-        t = _parse_dt(s.get("predicted_at"))
+        predicted = _parse_dt(stop.get("predicted_at"))
         try:
             from dispatch_v2.common import parse_panel_timestamp
-            pa = parse_panel_timestamp(rec.get("picked_up_at"))
+            possession = parse_panel_timestamp(rec.get("picked_up_at"))
         except Exception:
-            pa = None
-        if t is None or pa is None:
+            possession = None
+        if predicted is None or possession is None:
             out[oid] = None
             continue
-        handoff = _cfresh.handoff_min(t.timestamp() / 60.0, s.get("dwell_min") or 3.5)
-        out[oid] = _cfresh.carry_min(handoff, pa.timestamp() / 60.0)
+        handoff = _cfresh.handoff_min(
+            predicted.timestamp() / 60.0,
+            stop.get("dwell_min") or 3.5,
+        )
+        out[oid] = _cfresh.carry_min(
+            handoff,
+            possession.timestamp() / 60.0,
+        )
     return out
+
+
+def _g4_carry_map(stops, orders_state, now):
+    """``{oid: carry_min}`` z jawnym OFF-parity przy granicy flagi."""
+    if not _CF.decision_flag("ENABLE_CARRY_CANON_V2"):
+        return _g4_legacy_carry_map(stops, orders_state, now)
+    drops = {}
+    pickups = {}
+    orders = []
+    for s in stops or []:
+        oid = str(s.get("order_id"))
+        predicted = _parse_dt(s.get("predicted_at"))
+        if s.get("type") == "pickup":
+            if predicted is not None:
+                pickups[oid] = predicted
+            continue
+        if s.get("type") != "dropoff":
+            continue
+        rec = orders_state.get(oid) or {}
+        if (
+            rec.get("status") != "picked_up"
+            and not rec.get("physical_possession_at")
+        ):
+            continue
+        drops[oid] = (
+            None
+            if predicted is None
+            else predicted + timedelta(
+                minutes=float(
+                    s.get("dwell_min")
+                    if s.get("dwell_min") is not None else 3.5
+                )
+            )
+        )
+        orders.append({**rec, "order_id": oid})
+    if not orders:
+        return {}
+    evaluated = _cfresh.evaluate_plan(
+        {
+            "predicted_delivered_at": drops,
+            "pickup_at": pickups,
+        },
+        orders,
+    )
+    return {
+        str(row.get("order_id")): row.get("carry_min")
+        for row in evaluated.get("orders", [])
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -2057,7 +2134,8 @@ def _reorder_noncarried_min_drive(seq, orders_state, start_pos, now):
     return seq
 
 
-def _facts_of(deliv, dwell, kind_pick, oid_of, carried, carried_age, viol, drive):
+def _facts_of(deliv, dwell, kind_pick, oid_of, carried, carried_age, viol, drive,
+              *, carry_override=None):
     """Fakty permutacji dla guardów WB2 — JEDNA metryka handoff/carry.
 
     Cała arytmetyka idzie przez `core.carry_freshness`, ten sam moduł, którego
@@ -2078,10 +2156,51 @@ def _facts_of(deliv, dwell, kind_pick, oid_of, carried, carried_age, viol, drive
         h = _cfresh.handoff_min(deliv[i], dwell[i])
         handoff[oid] = h
         if oid in carried:
-            age = carried_age.get(oid)
-            carry[oid] = _cfresh.carry_min(h, None if age is None else -float(age))
+            if carry_override is not None:
+                carry[oid] = carry_override.get(oid)
+            else:
+                age = carried_age.get(oid)
+                carry[oid] = _cfresh.carry_min(
+                    h,
+                    None if age is None else -float(age),
+                )
     return _lex_guards.Facts(window_viol=viol, drive_min=drive,
                              handoff_by_order=handoff, carry_by_order=carry)
+
+
+def _lex_canonical_carry_map(
+    deliv,
+    dwell,
+    kind_pick,
+    oid_of,
+    carried,
+    orders_state,
+    now,
+):
+    """Carry dla jednej permutacji przez jedynego właściciela kontraktu."""
+    drops = {}
+    orders = []
+    for i, oid in enumerate(oid_of):
+        if kind_pick[i] or oid not in carried:
+            continue
+        handoff = _cfresh.handoff_min(deliv[i], dwell[i])
+        drops[oid] = (
+            None
+            if handoff is None
+            else now + timedelta(minutes=float(handoff))
+        )
+        orders.append({**(orders_state.get(oid) or {}), "order_id": oid})
+    evaluated = _cfresh.evaluate_plan(
+        {
+            "predicted_delivered_at": drops,
+            "pickup_at": {},
+        },
+        orders,
+    )
+    return {
+        str(row.get("order_id")): row.get("carry_min")
+        for row in evaluated.get("orders", [])
+    }
 
 
 def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
@@ -2180,8 +2299,11 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
         _alarm_certificate = None
         _lg_meta = {k: None for k in ("source", "age_s", "fingerprint", "ewma",
                                       "observed_at", "valid_until", "generation")}
-    _alarm_cap = _lex_guards.load_thresholds(
-        alarm_certificate=_alarm_certificate).carry_cap_min
+    _alarm_thresholds = _lex_guards.load_thresholds(
+        alarm_certificate=_alarm_certificate)
+    _alarm_cap = _alarm_thresholds.carry_cap_min
+    _carry_v2_on = bool(_CF.decision_flag("ENABLE_CARRY_CANON_V2"))
+    _metric_carry_maps = {}
 
     def _metrics(perm):
         t = 0.0; drive = 0.0; prev = 0
@@ -2199,6 +2321,20 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
                 pick[si] = t; t += dwell[si]
             else:
                 deliv[si] = t; t += dwell[si]
+        canonical_carry = None
+        if _carry_v2_on:
+            canonical_carry = _lex_canonical_carry_map(
+                deliv,
+                dwell,
+                kind_pick,
+                oid_of,
+                carried,
+                orders_state,
+                now,
+            )
+            if any(canonical_carry.get(oid) is None for oid in carried):
+                return None
+            _metric_carry_maps[tuple(perm)] = canonical_carry
         n_viol = 0; breaches = 0; maxcarry = 0.0
         for i in range(n):
             if kind_pick[i]:
@@ -2210,10 +2346,13 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
             if dt is None:
                 continue
             if oid in carried:
-                age = carried_age.get(oid)
-                bag = (age + dt) if age is not None else None
-                if age is not None:
-                    maxcarry = max(maxcarry, age + dt)
+                if canonical_carry is not None:
+                    bag = canonical_carry.get(oid)
+                else:
+                    age = carried_age.get(oid)
+                    bag = (age + dt) if age is not None else None
+                if bag is not None:
+                    maxcarry = max(maxcarry, bag)
             else:
                 bp = pick[ppos[oid]] if oid in ppos else None
                 bag = _r6_thermal_bag_min(dt, bp,
@@ -2226,6 +2365,12 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
     if base is None:
         return seq
     bdrive, bdeliv, bpick, bviol, bbreach, bcarry, blegs = base
+    # Ten writer porównuje permutacje ISTNIEJĄCEGO worka. Absolutny HARD35
+    # należy do granicy przydziału w core.selection/alarm_certificate; tutaj
+    # kanonem jest ciągłość i brak pogorszenia fizycznego stanu. Dzięki temu
+    # identity pozostaje dopuszczalnym baseline, a lex-window nigdy nie może
+    # wybrać permutacji z większą liczbą naruszeń okna tylko dlatego, że worek
+    # był już fizycznie ponad capem przed tym tickiem.
     carry_cap = max(_alarm_cap, bcarry)
     # ── WB2: guardy warunkowe (spec docs/WB2_CONDITIONAL_GUARDS.md) ──
     # OFF ⇒ ani jedna linia niżej nie zmienia zachowania (legacy carry_cap +
@@ -2233,10 +2378,11 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
     # spójny zestaw G1/G2/G3 z wyjątkiem D1 — nie dokładamy trzeciego
     # równoległego progu do tej samej prawdy.
     _guards_on = bool(ENABLE_LEX_WINDOW_GUARDS_V2)
-    _thr = (_lex_guards.load_thresholds(
-        alarm_certificate=_alarm_certificate) if _guards_on else None)
+    _thr = _alarm_thresholds if _guards_on else None
     _bfacts = _facts_of(bdeliv, dwell, kind_pick, oid_of, carried,
-                        carried_age, bviol, bdrive) if _guards_on else None
+                        carried_age, bviol, bdrive,
+                        carry_override=_metric_carry_maps.get(tuple(range(n)))
+                        if _carry_v2_on else None) if _guards_on else None
     _guard_rej = _lex_guards.empty_rejection_counters() if _guards_on else {}
     _guard_exempt = 0
     _best_guard = None
@@ -2279,7 +2425,9 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
                 _gres = _lex_guards.evaluate(
                     _bfacts,
                     _facts_of(deliv, dwell, kind_pick, oid_of, carried,
-                              carried_age, n_viol, drive),
+                              carried_age, n_viol, drive,
+                              carry_override=_metric_carry_maps.get(tuple(perm))
+                              if _carry_v2_on else None),
                     assigned_ids=assigned, carried_ids=carried, thresholds=_thr)
                 if not _gres.admissible:
                     _k = _lex_guards.rejection_counter_key(_gres.reason)
@@ -2517,10 +2665,10 @@ def _operator_pin_hard_report(cid, final_stops, orders_state,
     z L3 przez `_l3_bag_time_ages`; `alarm40` = przekroczony poziom Alarmu OD-07);
     no_return = detektor Z-RULE `_detect_departed_pickup_revisit` (ta sama
     semantyka co F6, bez seedu carried — parytet z detekcją inwariantów);
-    grafik (v4) = SEMANTYKA 1:1 z feasibility: okno = EFEKTYWNE cs.shift_end
-    (`courier_resolver.resolve_effective_shift_end_by_cid` — working-override
-    'pracuje' z GRAFIK-CAP; fleet i raport delegują do wspólnego
-    `effective_shift_end`, zero trzeciej kopii); PICKUP po shift_end = breach
+    grafik (v5) = SEMANTYKA 1:1 z feasibility: okno = typed EffectiveShiftWindow
+    (`courier_resolver.resolve_effective_shift_window_by_cid` — ten sam
+    AvailabilityContext/working rollback i zamrożone ``now`` co ewaluacja;
+    fleet i raport delegują do wspólnego window ownera); PICKUP po shift_end = breach
     BEZ tolerancji (parytet V3.25 Gate, pod tą samą flagą
     ENABLE_V325_SCHEDULE_HARDENING); DROPOFF > shift_end +
     V324_HARD_REJECT_DROPOFF_AFTER_SHIFT_MIN = breach (parytet V3.24-A, flaga
@@ -2552,7 +2700,11 @@ def _operator_pin_hard_report(cid, final_stops, orders_state,
                              "first_oid": (str(_oids[0]) if _oids[0] is not None else None)})
         try:
             from dispatch_v2 import courier_resolver as _CR_g
-            _sh_end = _CR_g.resolve_effective_shift_end_by_cid(cid)
+            _sh_window = _CR_g.resolve_effective_shift_window_by_cid(
+                cid,
+                now=now,
+            )
+            _sh_end = _sh_window.end_at
         except Exception:
             _sh_end = None
         if _sh_end is not None:

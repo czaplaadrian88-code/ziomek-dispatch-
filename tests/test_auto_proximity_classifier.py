@@ -124,6 +124,19 @@ def test_global_kill_switch_disabled_returns_ack():
     assert "auto_proximity_disabled_global" in reason, f"unexpected reason: {reason}"
 
 
+def test_global_kill_switch_cannot_hide_best_effort_alert():
+    """AUTO kill-switch nie osłabia owner-facing always-propose/least-damage."""
+    best = _make_candidate(courier_id="c1", score=80.0, best_effort=True)
+    result = _make_result(best=best)
+    flags = {
+        "AUTO_PROXIMITY_ENABLED": False,
+        "AUTO_PROXIMITY_SHADOW_ONLY": False,
+    }
+    route, reason = classify_auto_route(result, flags=flags)
+    assert route == ROUTE_ALERT, f"expected ALERT, got {route} ({reason})"
+    assert reason == "best_effort_no_feasible (sla_viol=0)"
+
+
 def test_shadow_only_true_processes_normally():
     """flags SHADOW_ONLY=True ENABLED=False -> classifier still runs (returns AUTO if conditions met)."""
     result = _make_result()

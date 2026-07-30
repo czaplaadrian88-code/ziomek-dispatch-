@@ -175,7 +175,8 @@ def test_tick_claim_ledger_on_off(monkeypatch):
     monkeypatch.setattr(SD, "_probe_same_restaurant_race",
                         lambda *a, **k: None)
     monkeypatch.setattr(SD, "_serialize_result",
-                        lambda result, eid, latency_ms: {"best": {}})
+                        lambda result, eid, latency_ms: {
+                            "best": {}, "latency_ms": latency_ms})
     monkeypatch.setattr(SD, "_append_shadow_log", lambda *a, **k: None,
                         raising=False)
 

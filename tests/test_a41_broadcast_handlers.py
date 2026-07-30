@@ -35,6 +35,32 @@ def _mk_event(scope, payload_extra=None, event_id="evt_001"):
     }
 
 
+def _init_event_db(path):
+    """Utwórz minimalny schemat event_bus w bazie należącej do testu."""
+    import sqlite3
+
+    conn = sqlite3.connect(str(path))
+    conn.executescript("""
+        CREATE TABLE events (
+            event_id TEXT PRIMARY KEY,
+            event_type TEXT NOT NULL,
+            order_id TEXT,
+            courier_id TEXT,
+            payload TEXT,
+            created_at TEXT NOT NULL,
+            processed_at TEXT,
+            status TEXT DEFAULT 'pending'
+        );
+        CREATE INDEX idx_events_status ON events(status);
+        CREATE TABLE processed_events (
+            event_id TEXT PRIMARY KEY,
+            processed_at TEXT NOT NULL
+        );
+    """)
+    conn.commit()
+    conn.close()
+
+
 def main():
     results = {"pass": 0, "fail": 0}
 
@@ -123,28 +149,8 @@ def main():
     with tempfile.TemporaryDirectory() as tmpdir:
         sub_state = Path(tmpdir) / "subscriber.json"
         import os
-        import sqlite3 as _sq
         tmp_db = str(Path(tmpdir) / "events_a41.db")
-        conn = _sq.connect(tmp_db)
-        conn.executescript("""
-            CREATE TABLE events (
-                event_id TEXT PRIMARY KEY,
-                event_type TEXT NOT NULL,
-                order_id TEXT,
-                courier_id TEXT,
-                payload TEXT,
-                created_at TEXT NOT NULL,
-                processed_at TEXT,
-                status TEXT DEFAULT 'pending'
-            );
-            CREATE INDEX idx_events_status ON events(status);
-            CREATE TABLE processed_events (
-                event_id TEXT PRIMARY KEY,
-                processed_at TEXT NOT NULL
-            );
-        """)
-        conn.commit()
-        conn.close()
+        _init_event_db(tmp_db)
         _orig_db_path = event_bus._db_path
         event_bus._db_path = lambda: tmp_db
         try:
@@ -185,11 +191,16 @@ def main():
     print("\n=== test 13: subscriber state persisted atomic ===")
     with tempfile.TemporaryDirectory() as tmpdir:
         sp = Path(tmpdir) / "sub_state.json"
-        sub = BroadcastSubscriber(consumer_id="persist_test", state_path=sp)
-        # Manually save state (poll without events should be no-op)
-        sub.poll(["CONFIG_RELOAD"], limit=5)
-        # Subscriber state file may not exist yet (no events) — verify graceful
-        expect("subscriber works without state file", True)
+        tmp_db = str(Path(tmpdir) / "events_a41_empty.db")
+        _init_event_db(tmp_db)
+        _orig_db_path = event_bus._db_path
+        event_bus._db_path = lambda: tmp_db
+        try:
+            sub = BroadcastSubscriber(consumer_id="persist_test", state_path=sp)
+            sub.poll(["CONFIG_RELOAD"], limit=5)
+            expect("subscriber works without state file", True)
+        finally:
+            event_bus._db_path = _orig_db_path
 
     print(f"\n=== RESULT: {results['pass']} PASS / {results['fail']} FAIL ===")
     return 0 if results["fail"] == 0 else 1

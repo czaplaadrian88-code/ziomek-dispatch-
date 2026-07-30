@@ -21,6 +21,7 @@ from dispatch_v2 import common as C
 from dispatch_v2 import prep_bias_anchor
 from dispatch_v2 import effects_buffer as _EB  # K08 refaktoru: zapis shadow PO decyzji
 from dispatch_v2.position_model import OriginTravelEstimate
+from dispatch_v2.shift_interval import ShiftEndStatus
 from dispatch_v2.common import (
     ENABLE_C2_SHADOW_LOG,
     HAVERSINE_ROAD_FACTOR_BIALYSTOK,
@@ -462,6 +463,7 @@ def check_feasibility_v2(
     pos_from_store: bool = False,  # Z-06 (audyt 2026-06-10) — pozycja odtworzona z last-known-pos store (≤25 min), NIE świeży fix tego ticku
     origin_travel: Optional[OriginTravelEstimate] = None,
     shadow_probe: bool = False,  # S2: pełna feasibility bez pobocznych writerów shadow
+    shift_end_status: Optional[ShiftEndStatus] = None,
 ) -> Tuple[str, str, Dict, Optional[RoutePlanV2]]:
     if now is None:
         now = datetime.now(timezone.utc)
@@ -469,6 +471,36 @@ def check_feasibility_v2(
         now = now.replace(tzinfo=timezone.utc)
 
     metrics: Dict = {"bag_size_before": len(bag)}
+    try:
+        typed_shift_end_status = (
+            shift_end_status
+            if isinstance(shift_end_status, ShiftEndStatus)
+            else ShiftEndStatus(shift_end_status)
+            if shift_end_status is not None
+            else None
+        )
+    except (TypeError, ValueError):
+        typed_shift_end_status = ShiftEndStatus.UNKNOWN_DATA_ERROR
+    if typed_shift_end_status is not None:
+        metrics["shift_end_status"] = typed_shift_end_status.value
+    if (
+        shift_end is None
+        and typed_shift_end_status
+        is ShiftEndStatus.UNKNOWN_WINDOWLESS_ASSIGNMENT
+    ):
+        # Typed assignment to nie awaria grafiku i nie kandydat do FAIL12.
+        # Authority zachowuje istniejący bag w fleet, lecz brak deklarowanego
+        # końca zawsze blokuje NOWĄ obietnicę — niezależnie od historycznej
+        # flagi V3.25 schedule hardening.
+        metrics["grafik_unknown"] = True
+        metrics["v325_reject_reason"] = "GRAFIK_UNKNOWN"
+        return (
+            "NO",
+            "v325_GRAFIK_UNKNOWN "
+            "(windowless assignment has no declared shift end)",
+            metrics,
+            None,
+        )
     if origin_travel is not None:
         metrics.update({
             "origin_travel_provenance": origin_travel.provenance,
@@ -1081,27 +1113,47 @@ def check_feasibility_v2(
             "address_id": getattr(o, "address_id", None),
             "order_type": getattr(o, "order_type", None),
         })
-    # A (noc 28.07): JEDEN evaluator physical-possession→handoff. Flaga OFF
-    # nie tworzy pola i nie uruchamia dodatkowej arytmetyki (parytet rekordu).
-    # S2 i Alarm konsumują dokładnie ten obiekt; nie re-derywują proxy.
-    if C.decision_flag("ENABLE_CARRY_CANON_V2"):
-        from dispatch_v2.core import carry_freshness as _carry
-        _paczka_exempt_on = C.flag(
-            "ENABLE_PACZKA_R6_THERMAL_EXEMPT",
-            getattr(C, "ENABLE_PACZKA_R6_THERMAL_EXEMPT", False),
-        )
-        metrics["carry_eval"] = _carry.evaluate_plan(
-            plan,
-            list(bag) + [new_order],
-            include_order=lambda order: not (
-                _paczka_exempt_on and _is_paczka_sim(order)
-            ),
-        )
+    _r6_orders = list(bag) + [new_order]
+    _paczka_exempt_on = C.flag(
+        "ENABLE_PACZKA_R6_THERMAL_EXEMPT",
+        getattr(C, "ENABLE_PACZKA_R6_THERMAL_EXEMPT", False),
+    )
     _paczki_only_mix = (
         (C.ENABLE_R_PACZKI_FLEX or C.flag("ENABLE_R_PACZKI_FLEX", False))
         and _is_paczka_sim(new_order)
         and all(_is_paczka_sim(_o) for _o in bag)
     )
+    # A (noc 28.07): JEDEN evaluator physical-possession→handoff. Flaga OFF
+    # nie tworzy pola i nie uruchamia dodatkowej arytmetyki (parytet rekordu).
+    # S2 i Alarm konsumują dokładnie ten obiekt; nie re-derywują proxy.
+    if C.decision_flag("ENABLE_CARRY_CANON_V2"):
+        from dispatch_v2.core import carry_freshness as _carry
+        _carry_eval = _carry.evaluate_plan(
+            plan,
+            _r6_orders,
+            include_order=lambda order: not (
+                _paczka_exempt_on and _is_paczka_sim(order)
+            ),
+        )
+        _all_paczki = all(_is_paczka_sim(_o) for _o in _r6_orders)
+        _thermal_exempt_reason = (
+            "paczka_r6_thermal_exempt"
+            if _paczka_exempt_on and _all_paczki
+            else "paczki_only_flex"
+            if _paczki_only_mix
+            else None
+        )
+        # Jeden kanoniczny writer zakresu termicznego. Alarm/HARD35 nie może
+        # ponownie rozpoznawać address_id ani udawać, że paczka ma carry=0.
+        _carry_eval["thermal_scope"] = {
+            "schema": "carry_thermal_scope.v1",
+            "status": (
+                "EXEMPT" if _thermal_exempt_reason else "APPLICABLE"
+            ),
+            "reason": _thermal_exempt_reason,
+            "order_count": len(_r6_orders),
+        }
+        metrics["carry_eval"] = _carry_eval
     # S1 (2026-07-02): flaga JEDNEGO źródła kotwic 35-min (sla_anchor). OFF = inline
     # bajt-w-bajt; ON = te same decyzje + metryka obs `sla_anchor_source` (naruszenie
     # kotwicy READY [R6] i NOW [SLA] widoczne NIEZALEŻNIE → de-maskowanie L-TEATR-1/2).
@@ -1131,10 +1183,7 @@ def check_feasibility_v2(
         # FIRMOWE PACZKI (Adrian 2026-06-15): paczka/firmowe (Dr Tusz/tonery, Nadajesz.pl,
         # PACZKA_ADDRESS_IDS) to NIE gorące jedzenie → wyłączona z reguły 35min (R6 termik),
         # także w MIESZANYM worku. Nie ustawia r6_max/worst i nie trafia do violations.
-        _o_paczka_exempt = (
-            C.flag("ENABLE_PACZKA_R6_THERMAL_EXEMPT",
-                   getattr(C, "ENABLE_PACZKA_R6_THERMAL_EXEMPT", False))
-            and _is_paczka_sim(o))
+        _o_paczka_exempt = _paczka_exempt_on and _is_paczka_sim(o)
         if _o_paczka_exempt and o.order_id not in r6_paczka_exempt_oids:
             r6_paczka_exempt_oids.append(o.order_id)
         # [C2] prep-bias anchor correction (flag ENABLE_PREP_BIAS_TABLE, default OFF).
@@ -1219,6 +1268,11 @@ def check_feasibility_v2(
         metrics["r6_soft_penalty_c3_legacy"] = 0.0
         metrics["r6_soft_zone_active"] = False
 
+    # Alarm może rozluźnić wyłącznie termiczny reject, który był JEDYNYM
+    # nieprzejściem. Wszystkie trzy termiczne powody używają więc jednego
+    # odroczonego slotu, a marker ``alarm_other_hards_status=PASSED`` powstaje
+    # dopiero po przejściu wszystkich pozostałych HARD-ów na końcu funkcji.
+    _alarm_thermal_reject = None
     if plan.sla_violations > 0:
         # 2026-05-20 (diagnoza 474863 Gabryś) — SLA pre-existing bypass:
         # rozdziel violations na (a) "pre-existing" — picked_up order którego
@@ -1311,12 +1365,16 @@ def check_feasibility_v2(
             # Nie return — niech P3-D4 / per-order R6 dalej oceniają
         else:
             worst = max(violations_detail, key=lambda v: v["over_sla_by_min"])
-            return (
+            _sla_reject = (
                 "NO",
                 f"sla_violation ({worst['order_id']} +{worst['elapsed_min']}min, over by {worst['over_sla_by_min']})",
                 metrics,
                 plan,
             )
+            if C.decision_flag("ENABLE_CARRY_CANON_V2"):
+                _alarm_thermal_reject = _sla_reject
+            else:
+                return _sla_reject
     # V3.28 ANCHOR FIX: hard reject TYLKO za assigned-but-not-picked + new_order >35.
     # Picked_up orders są tracked ale NIE rejected (kurier kończy w drodze).
     if r6_per_order_violations:
@@ -1325,13 +1383,20 @@ def check_feasibility_v2(
                 and C.flag("ENABLE_R6_BREACH_SHADOW_LOG", False)):
             _emit_r6_breach_shadow(new_order, worst_oid, worst_bt, r6_per_order_violations, metrics,
                                    bag_total=len(bag) + 1, now=now, tier=courier_tier)
-        return (
+        _r6_reject = (
             "NO",
             f"R6_per_order_>35min ({worst_oid} {worst_bt:.1f}min, "
             f"thermal anchor=ready_at; n_violations={len(r6_per_order_violations)})",
             metrics,
             plan,
         )
+        if C.decision_flag("ENABLE_CARRY_CANON_V2"):
+            # Certyfikat musi wiedzieć, czy termika była JEDYNYM nieprzejściem.
+            # Przy ON odkładamy ten return do końca pozostałych HARD-ów.
+            if _alarm_thermal_reject is None:
+                _alarm_thermal_reject = _r6_reject
+        else:
+            return _r6_reject
 
     # P3-D4 2026-05-11: picked_up R6 delta-based reject (Boboli 44 min case 10.05).
     # Adrian doktryna NEW 10.05 wieczór: picked_up tracking-only za luźna — gdy
@@ -1353,13 +1418,18 @@ def check_feasibility_v2(
                 if pu_pred > new_pickup_at:
                     # New pickup detour delays this picked_up delivery
                     metrics["r6_picked_up_delta_reject"] = True
-                    return (
+                    _picked_reject = (
                         "NO",
                         f"R6_picked_up_delta_>35min ({pu_oid} {pu_bt:.1f}min; "
                         f"new pickup delays carry, n_picked_up_v={len(r6_picked_up_violations)})",
                         metrics,
                         plan,
                     )
+                    if C.decision_flag("ENABLE_CARRY_CANON_V2"):
+                        if _alarm_thermal_reject is None:
+                            _alarm_thermal_reject = _picked_reject
+                        break
+                    return _picked_reject
 
     # V3.24-A: hard reject gdy planned dropoff nowego ordera > shift_end +
     # V324_HARD_REJECT_DROPOFF_AFTER_SHIFT_MIN (default 5 min). Precyzyjniejsze
@@ -1418,5 +1488,9 @@ def check_feasibility_v2(
             metrics,
             plan,
         )
+
+    if _alarm_thermal_reject is not None:
+        metrics["alarm_other_hards_status"] = "PASSED"
+        return _alarm_thermal_reject
 
     return ("MAYBE", "ok_sla_fits", metrics, plan)

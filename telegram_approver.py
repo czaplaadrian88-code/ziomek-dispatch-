@@ -2018,6 +2018,68 @@ def run_gastro_assign(
 
 # ---- async tasks ----
 
+
+def _is_hard35_owner_alert(rec: dict) -> bool:
+    """Kanoniczna identyfikacja nieinteraktywnego alarmu HARD35."""
+    return (
+        rec.get("verdict") == "KOORD"
+        and str(rec.get("reason") or "").startswith(
+            "hard35_least_damage_alert")
+    )
+
+
+def _is_owner_facing_shadow_record(rec: dict) -> bool:
+    return rec.get("verdict") == "PROPOSE" or _is_hard35_owner_alert(rec)
+
+
+async def _enqueue_owner_record(state: dict, rec: dict) -> bool:
+    """Jedna granica tailera: PROPOSE oraz jawny alert least-damage."""
+    if not _is_owner_facing_shadow_record(rec):
+        return False
+    await state["incoming"].put(rec)
+    return True
+
+
+def _format_owner_record(rec: dict) -> str:
+    """Renderer owner-facing: alarm HARD35 nie może wyglądać jak propozycja."""
+    body = format_proposal(rec)
+    if not _is_hard35_owner_alert(rec):
+        return body
+    meta = rec.get("hard35_enforcement") or {}
+    cap = meta.get("cap_min")
+    if not isinstance(cap, (int, float)):
+        match = re.search(r"\bcap=([0-9]+(?:\.[0-9]+)?)", str(rec.get("reason") or ""))
+        cap = float(match.group(1)) if match else 35.0
+    cap_text = f"{float(cap):g}"
+    return (
+        f"🚨 ALERT — brak planu mieszczącego się w limicie {cap_text} min.\n"
+        "Poniżej wariant najmniej szkodliwy; wymaga ręcznej decyzji.\n\n"
+        f"{body}"
+    )
+
+
+def _owner_message_payload(state: dict, rec: dict) -> tuple[dict, bool]:
+    """Payload Telegram + czy rekord jest interaktywną propozycją."""
+    payload = {
+        "chat_id": state["admin_id"],
+        "text": _format_owner_record(rec),
+    }
+    actionable = rec.get("verdict") == "PROPOSE"
+    if actionable:
+        oid = str(rec.get("order_id") or "")
+        top_candidates = (
+            [rec.get("best")]
+            + list((rec.get("alternatives") or []))[:2]
+        )
+        payload["reply_markup"] = build_keyboard(
+            oid,
+            candidates=top_candidates,
+            pickup_ready_at=rec.get("pickup_ready_at"),
+            decision=rec,
+        )
+    return payload, actionable
+
+
 async def shadow_tailer(state: dict) -> None:
     path = state["shadow_log_path"]
     try:
@@ -2042,8 +2104,7 @@ async def shadow_tailer(state: dict) -> None:
                                 rec = json.loads(line)
                             except json.JSONDecodeError:
                                 continue
-                            if rec.get("verdict") == "PROPOSE":
-                                await state["incoming"].put(rec)
+                            await _enqueue_owner_record(state, rec)
                         offset = f.tell()
         except Exception as e:
             _log.warning(f"tailer err: {e}")
@@ -2077,6 +2138,7 @@ async def proposal_sender(state: dict) -> None:
         _is_paczka_flex = ENABLE_R_PACZKI_FLEX and is_paczka_order(rec)
         if (_aid_int is not None
                 and _aid_int in FIRMOWE_KONTO_ADDRESS_IDS
+                and rec.get("verdict") == "PROPOSE"
                 and not flag("ENABLE_FIRMOWE_KONTO_TELEGRAM_PROPOSALS", False)
                 and not _is_paczka_flex):
             _log.info(
@@ -2084,23 +2146,21 @@ async def proposal_sender(state: dict) -> None:
                 f"(firmowe konto, flag ENABLE_FIRMOWE_KONTO_TELEGRAM_PROPOSALS=false)"
             )
             continue
-        text = format_proposal(rec)
-        top_candidates = [rec.get("best")] + list((rec.get("alternatives") or []))[:2]
-        kbd = build_keyboard(oid, candidates=top_candidates,
-                              pickup_ready_at=rec.get("pickup_ready_at"),  # V3.26 hotfix
-                              decision=rec)  # Backlog #12: dla F7AGREE buttons
+        message_payload, actionable = _owner_message_payload(state, rec)
         r = await asyncio.to_thread(
             tg_request, state["token"], "sendMessage",
-            {
-                "chat_id": state["admin_id"],
-                "text": text,
-                "reply_markup": kbd,
-            },
+            message_payload,
         )
         if not r.get("ok"):
             _log.warning(f"sendMessage fail oid={oid}: {r.get('error') or r.get('description')}")
             continue
         message_id = r["result"]["message_id"]
+        if not actionable:
+            _log.info(
+                "SENT HARD35 OWNER ALERT oid=%s msg=%s (bez przycisków)",
+                oid, message_id,
+            )
+            continue
         entry = {
             "order_id": oid,
             "message_id": message_id,

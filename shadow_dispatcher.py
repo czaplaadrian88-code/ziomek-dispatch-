@@ -309,8 +309,16 @@ _METRICS_EXCLUDE = {
 # serializer is the final byte-parity boundary.
 _METRICS_FLAG_OWNERS = {
     "carry_eval": "ENABLE_CARRY_CANON_V2",
+    "alarm_other_hards_status": "ENABLE_CARRY_CANON_V2",
     "hard35_enforcement": "ENABLE_HARD35_ENFORCE",
 }
+
+
+def _metric_owner_enabled(owner_flag: str) -> bool:
+    """Serializer parity uses the same effective coupling as decision code."""
+    if owner_flag == "ENABLE_HARD35_ENFORCE":
+        return C.hard35_enforcement_enabled()
+    return C.decision_flag(owner_flag)
 
 
 def _json_safe(v, _depth: int = 0):
@@ -348,7 +356,7 @@ def _propagate_prefixed_metrics(base: dict, metrics) -> None:
         if k in _METRICS_EXCLUDE:
             continue
         owner_flag = _METRICS_FLAG_OWNERS.get(k)
-        if owner_flag is not None and not C.decision_flag(owner_flag):
+        if owner_flag is not None and not _metric_owner_enabled(owner_flag):
             continue
         base[k] = _json_safe(v)
 
@@ -1237,7 +1245,7 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
         out["order_created_at"] = str(_order_created_at)
     _hard35 = getattr(result, "hard35_enforcement", None)
     if (
-        C.decision_flag("ENABLE_HARD35_ENFORCE")
+        C.hard35_enforcement_enabled()
         and isinstance(_hard35, dict)
     ):
         out["hard35_enforcement"] = _json_safe(_hard35)
@@ -1524,14 +1532,8 @@ def _fail03_k2_shadow(record, k1):
             "pos_source": pos_src, "no_gps": no_gps, "banner": banner, "phase": 1}
 
 
-def process_event(
-    event: dict,
-    fleet: Dict,
-    meta: Optional[dict],
-    now: Optional[datetime] = None,
-    current_order_state: Optional[dict] = None,
-) -> PipelineResult:
-    """Pure: NEW_ORDER event + snapshot → PipelineResult. Safe to test."""
+def _build_order_event(event: dict) -> dict:
+    """Legacy event byte-for-byte; carry provenance wyłącznie za jego flagą."""
     payload = event.get("payload") or {}
     order_event = {
         "event_id": event.get("event_id"),
@@ -1552,9 +1554,28 @@ def process_event(
         "address_id": payload.get("address_id"),
         "order_type": payload.get("order_type"),
         "created_at_utc": payload.get("created_at_utc") or payload.get("created_at"),
-        "physical_possession_at": payload.get("physical_possession_at"),
-        "physical_possession_source": payload.get("physical_possession_source"),
     }
+    if C.decision_flag("ENABLE_CARRY_CANON_V2"):
+        order_event.update({
+            "physical_possession_at": payload.get("physical_possession_at"),
+            "physical_possession_source": payload.get(
+                "physical_possession_source"),
+            "event_gate_status": payload.get("event_gate_status"),
+            "contract_version": payload.get("contract_version"),
+        })
+    return order_event
+
+
+def process_event(
+    event: dict,
+    fleet: Dict,
+    meta: Optional[dict],
+    now: Optional[datetime] = None,
+    current_order_state: Optional[dict] = None,
+) -> PipelineResult:
+    """Pure: NEW_ORDER event + snapshot → PipelineResult. Safe to test."""
+    payload = event.get("payload") or {}
+    order_event = _build_order_event(event)
     # K04 refaktor (2026-07-06, ADR-R04): nagrywanie wejść decyzji za flagą
     # ENABLE_WORLD_RECORD (OFF/brak klucza = czysta delegacja 1:1; wrapper jest
     # wewnętrznie fail-soft i nigdy nie zmienia wyniku). Import lazy+fail-soft —

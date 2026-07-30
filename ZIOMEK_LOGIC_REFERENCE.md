@@ -744,6 +744,14 @@ idle/level, district match, decision time/peak, pool tier composition). Latency 
 parser-degraded / frozen-window / best-effort / weak-pick / Kebab-Król-dinner; ACK on czasówka /
 solo-fallback / shift-end-edge; AUTO only if all conditions pass. High-risk 14–17 "death zone"
 bucket boosts margin +5 (R6 breach 13–20% there vs 7–9% lunch/dinner).
+Always-propose/least-damage `best_effort` ma jednego bezflagowego ownera w
+`auto_proximity_classifier._detect_edge_routing`. Kill-switch przepuszcza taki
+wynik do normalnej klasyfikacji, lecz nie wybiera route/reason. Dzięki temu
+`_build_context` nadal zapisuje calibration shadow, a `parser_degraded` i
+`frozen_window_violation` zachowują wyższą precedencję przed ogólnym
+`best_effort_no_feasible`. Wyłączenie autonomii nadal daje ACK zwykłym
+propozycjom, ale nie może ukryć stanu „0 feasible”; pipeline nie ma drugiego
+postcondition ani kopii polityki routingu.
 
 **`auto_assign_gate.py` + `auto_assign_executor.py` — AUTON-01/02 (2026-06-13 / 2026-06-30)** ⚪ executor OFF.
 - **Gate** `evaluate_auto_assign` = pure telemetry computed **always** (lesson #186): `would_auto_assign` +
@@ -1124,6 +1132,64 @@ Flagi LIVE (wszystkie `flags.json=true`, hot-reload), dotąd nieudokumentowane w
 | `ENABLE_PLANNER_UNIFIED` | core/planner.py (tier_params+plan_bag) + plan_recheck._gen_one_bag_plan (parametry i `_sweep`→plan_bag z simulate_fn=R) | K15 refaktoru (ADR-R03, kontrakt ①): bliźniak parametryzacji tier→(dwell,tempo) silnik↔re-planer sprowadzony do JEDNEGO źródła. Silnik deleguje tier_params ZAWSZE (przenosiny 1:1, nie za flagą; simulate zostaje lokalnym symbolem feasibility — kontrakt monkeypatch suity). Re-planer: OFF/brak klucza = stary inline bajt-w-bajt; ON = parametry+wywołanie przez core.planner (semantyka TIER_DWELL zachowana, flaga czytana HOT — env-rozjazd drop-inów bez znaczenia dla tej ścieżki) |
 | `ENABLE_PLANNER_UNIFIED_SHADOW` | plan_recheck._gen_one_bag_plan (gałąź OFF głównej) | K15 refaktoru: przy głównej OFF liczy parametry OBIEMA drogami (inline i core.planner) i loguje rozjazd `PLANNER_PARAM_MISMATCH` (WARNING, log-only, bez drugiej symulacji — zero wpływu na plan). Dowód parytetu na żywo przed flipem głównej |
 | `ENABLE_OPERATOR_ROUTE_ORDER_OVERRIDE` | operator_route_override.pin_stops + plan_recheck._gen_one_bag_plan / _retime_one_bag_plan (hook PO F6, przed retime) + dispatch_pipeline._route_order_override_shadow_pass (PO finalnym firewallu) | 2026-07-19/20 (zadanie ownera): koordynator ustawia KOLEJNOŚĆ podjazdów kuriera (`dispatch_state/operator_route_overrides.json`: pełna permutacja aktywnego worka + set_by/set_at/ttl_min) → kanon `courier_plans.json` = sekwencja operatora (nadrzędna wobec soft-heurystyk kolejności F6: carried-first/relax/no-return/lex-window), ETA legów przeliczane ISTNIEJĄCYM `_retime_stops` (łańcuch OSRM + clamp committed). Walidacja: zbiór id == zbiór aktywnych zleceń kuriera, TTL od set_at, fail-open na brak/uszkodzony plik. `czas_kuriera` NIETYKALNY (R27) — spóźnienie odbioru > 5 min logowane w `committed_breaches`. Telemetria dedykowana ZAWSZE (też OFF): `dispatch_state/operator_route_override_events.jsonl`, zdarzenia `operator_route_override_{applied\|rejected\|expired}`. Dodatkowo ważny manual-seq jest liczony wspólnym walidatorem na każdym wyniku silnika i auto-serializowany A+B do kanonicznego `shadow_decisions.jsonl` jako `route_order_would_apply`, skróty `route_order_manual_seq` / `route_order_engine_seq` oraz `route_order_divergence`; brak wpisu lub odrzut = brak pól. Konsola (`fleet_state._build_route` → `route_order.order_podjazdy`) i apka czytają kanon = przezroczyste. OFF/brak klucza = score/verdict/plan/winner 1:1; jedyna różnica to addytywna telemetria ledgera |
+
+### Eskalacja R6 35/40 (2026-07-28/29) — cztery sprzężone flagi, domyślnie OFF
+
+- `ENABLE_CARRY_CANON_V2` przełącza feasibility, G4, lex-window i cap-Z na
+  jednego właściciela possession→handoff→carry w `core/carry_freshness.py`.
+  `carry_eval.v1` jest kontraktem decyzyjnym: `orders[].carry_min`,
+  `max_carry_min` i predykaty `le_35/le_40` niosą te same surowe minuty;
+  zaokrąglenie jest dopuszczalne dopiero w rendererze. Feasibility jest też
+  jedynym writerem `carry_eval.v1.thermal_scope`: status `EXEMPT` oznacza
+  wyłącznie worek paczek niepodlegający termicznemu HARD35 (nie fałszywe
+  `carry=0`). `core/carry_freshness.hard35_status` jest jednym ownerem
+  interpretacji `LE35/OVER35/EXEMPT/UNKNOWN`; S1, S2, Alarm i HARD35 konsumują
+  ten sam wynik bez ponownego rozpoznawania adresów ani surowych pól. OFF
+  uruchamia zamrożone ścieżki legacy bez pól `carry_eval.v1`;
+  G4 zachowuje wtedy historyczne pomijanie niemierzalnego carry i fail-open
+  przy wyjątku. Fail-closed `freshness_unevaluable`/`validator_error` należy
+  wyłącznie do świadomie włączonego kanonicznego kontraktu.
+- `ENABLE_STRATEGY2_PROBE_SHADOW` uruchamia wyłącznie pełną sondę
+  slot×flota od +5 minut do `created_at+90`. Nie wykonuje przesunięcia czasu.
+  `strategy2_probe.classify_courier_status` jest jedynym ownerem terminalnego
+  statusu w slocie: każdy feasibility `NO` jest kompletnym
+  `NO_SAFE_PLAN` nawet bez pomiaru carry, a `MAYBE` jest bezpieczne dla
+  `LE35` albo `EXEMPT`. Tylko `MAYBE+UNKNOWN` pozostaje `UNEVALUABLE`.
+- `ENABLE_ALARM_CERTIFICATE_SHADOW` publikuje krótko żyjący, hash-bound
+  `alarm_certificate.v1`; sam certyfikat jest obserwacyjny i nie może zmienić
+  limitu ani werdyktu. Termiczne rejecty `sla_violation`, `R6_per_order_` i
+  `R6_picked_up_delta_` są przy carry-v2 odkładane do jednego końcowego slotu;
+  `alarm_other_hards_status=PASSED` powstaje wyłącznie po przejściu wszystkich
+  późniejszych HARD-ów. Inny HARD odrzucający kandydata nie dostaje markera i
+  nie może uzasadnić Alarmu/limitu 40. Serializer A+B przypisuje marker temu
+  samemu feature-ownerowi i usuwa go po wyłączeniu CARRY_CANON także ze
+  starych/replayowanych wyników.
+- `ENABLE_HARD35_ENFORCE` włącza fail-closed filtr 35 minut oraz jawny
+  least-damage/ALERT wyłącznie przy równoczesnym
+  `ENABLE_CARRY_CANON_V2=true`, ponieważ filtr konsumuje `carry_eval.v1`.
+  `HARD35=true` przy `CARRY_CANON_V2=false` jest celowo inert — niezależny hot
+  rollback producenta nie może zamienić całej puli w UNKNOWN/ALERT. Limit 40
+  jest dostępny wyłącznie wtedy, gdy równocześnie istnieje ważny certyfikat
+  Alarmu dowodzący pełną pulę oraz brak ratunku S2. Po odfiltrowaniu breach
+  `best`, `candidates`, owner-facing `reason`, pickup-extension redirect i
+  efektywny licznik puli są aktualizowane razem; nie wolno raportować usuniętego
+  zwycięzcy. Solo przekazuje do HARD35 wyłącznie plan solo, dlatego jego
+  nieweryfikowana pula display/alternatives pozostaje nietknięta — filtr może
+  usuwać tylko wiersze, które faktycznie ocenił.
+
+Wszystkie cztery flagi pozostają `false` do pełnej regresji, niezależnego
+review, co najmniej dwudniowego shadow i osobnego ACK ownera. Rollback każdego
+etapu to hot-flip odpowiedniej flagi na `false`; wyłączenie HARD35 zamyka
+możliwość limitu 40, a wyłączenie CARRY_CANON automatycznie wygasza zależny
+filtr HARD35 bez potrzeby drugiego, atomowego flipu.
+
+`ENABLE_LEX_WINDOW_GUARDS_V2` włącza warunkowe guardy G1–G3/G5 warstwy P-1:
+chroni handoff/carry, wymaga materialnego zysku i nie pozwala pogorszyć okna.
+Absolutny cap 35/40 obowiązuje wyłącznie przy NOWYM przydziale na granicy
+`core.selection`/`alarm_certificate`. G4, lex-window i per-tick retime istniejącego
+worka zawsze zachowują identity oraz wyjątek „baseline już był ponad limitem,
+ale kandydat nie pogarsza”; w przeciwnym razie fizycznie spóźniony worek
+zamroziłby wszystkie późniejsze zapisy ETA albo pozwoliłby P-1 pogorszyć okno.
 
 ### Sprint WB1 + C7 (2026-07-27) — dwie flagi LOG-ONLY (obserwowalność incydentu CZASY 492)
 

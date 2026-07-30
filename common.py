@@ -72,6 +72,8 @@ ENABLE_LOADGOV_SNAPSHOT_PUBLISH = False
 # Noc 2026-07-28 — drabina eskalacji S1→S2→S3. Wszystkie cztery przełączniki
 # startują OFF i są w ETAP4_DECISION_FLAGS, bo nawet shadow producer stanie się
 # wejściem decyzji po odczycie certyfikatu przez plan-recheck/selection.
+# HARD35 konsumuje carry_eval.v1 i jest egzekwowany wyłącznie przy równoczesnym
+# CARRY_CANON_V2=ON; wyłączenie producenta jest niezależnym hot rollbackiem.
 ENABLE_CARRY_CANON_V2 = False
 ENABLE_ALARM_CERTIFICATE_SHADOW = False
 ENABLE_STRATEGY2_PROBE_SHADOW = False
@@ -1071,6 +1073,28 @@ def decision_flag(name: str, *, source: bool = False) -> bool:
             return bool(_ov)
     values = load_flags_source() if source else load_flags()
     return bool(values.get(name, globals().get(name, False)))
+
+
+def hard35_enforcement_enabled(*, source: bool = False) -> bool:
+    """Efektywny HARD35: konsument istnieje tylko razem z ``carry_eval.v1``.
+
+    Jedno źródło sprzężenia dla absolutnego filtra NOWEGO przydziału,
+    kwalifikacji capa Alarmu i serializerów. Lex-window/G4 istniejącego worka
+    używają tego samego carry_eval, ale zachowują ciągłość „nie gorzej”.
+    Surowe flagi pozostają osobne w fingerprintach, lecz wyłączenie producenta
+    carry jest niezależnym hot rollbackiem całej zależnej egzekucji.
+    """
+    if source:
+        return (
+            decision_flag("ENABLE_CARRY_CANON_V2", source=True)
+            and decision_flag("ENABLE_HARD35_ENFORCE", source=True)
+        )
+    # Bez keyworda zachowujemy istniejący kontrakt testowych monkeypatchy
+    # ``decision_flag = lambda name: ...``.
+    return (
+        decision_flag("ENABLE_CARRY_CANON_V2")
+        and decision_flag("ENABLE_HARD35_ENFORCE")
+    )
 
 
 def flag_fingerprint(*, source: bool = False) -> str:

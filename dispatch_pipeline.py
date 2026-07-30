@@ -12,7 +12,7 @@ Verdicts:
 import copy
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
-from typing import List, Dict, Optional, Tuple, Any
+from typing import List, Dict, Optional, Tuple, Any, Iterable
 
 from dispatch_v2.route_simulator_v2 import OrderSim, RoutePlanV2, DWELL_PICKUP_MIN  # noqa: F401 — DWELL_PICKUP_MIN: kontrakt atrybutu dla core.candidates (_dp.DWELL_PICKUP_MIN, K11)
 from dispatch_v2.feasibility_v2 import check_feasibility_v2  # noqa: F401 — kontrakt atrybutu: monkeypatch tools/replay_feasibility + aliasy _dp w core.{candidates,selection} (K11/K12)
@@ -23,6 +23,7 @@ from dispatch_v2 import effects_buffer as _EB  # K08 refaktoru: efekty PO decyzj
 from dispatch_v2.core import gates as _gates  # K10 refaktoru: bramki wejściowe (geokod-defense, early-bird)
 from dispatch_v2.core import candidates as _candidates  # K11 refaktoru: pętla per-kurier
 from dispatch_v2.core import selection as _selection  # K12 refaktoru: selekcja + werdykt
+from dispatch_v2.core import carry_freshness as _carry_contract
 # G5 (2026-07-27, CZASY 492): wspólne jądro EWMA + kanoniczny producent snapshotu
 # loadgov. `_loadgov_ewma_step` jest atrybutem modułu, żeby test parytetu mógł go
 # podmienić bez dotykania importu; `_loadgov_pub` publikuje TYLKO w procesie, który
@@ -3403,6 +3404,75 @@ class Candidate:
     traffic_v2_shadow_route: Optional[Dict[str, Any]] = None
 
 
+def _strategy2_required(candidates: Iterable[Candidate]) -> bool:
+    """S2 jest potrzebna, dopóki S1 nie ma pełnego planu z carry <=35."""
+    for candidate in candidates:
+        carry = (getattr(candidate, "metrics", None) or {}).get("carry_eval")
+        if (
+            getattr(candidate, "feasibility_verdict", None) == "MAYBE"
+            and
+            getattr(candidate, "plan", None) is not None
+            and _carry_contract.hard35_status(carry) in {
+                _carry_contract.HARD35_LE35,
+                _carry_contract.HARD35_EXEMPT,
+            }
+        ):
+            return False
+    return True
+
+
+def _alarm_counterfactual_pool(
+    candidates: Iterable[Candidate],
+    *,
+    failed_courier_ids: Iterable[str],
+    fleet_courier_ids: Iterable[str] = (),
+) -> List[Candidate]:
+    """Pełna pula certyfikatu: każdy brak wyniku zostaje jawnym UNKNOWN.
+
+    ``eval_courier() -> None`` jest legalnym wynikiem, ale nie jest dowodem,
+    że kurier nie ma planu <=35. Pełny kontrfakt wiąże się więc z wejściową
+    flotą, nie wyłącznie z listą zmaterializowanych ``Candidate``.
+    """
+    pool = list(candidates)
+    known = {str(getattr(candidate, "courier_id", "")) for candidate in pool}
+    failed = {str(cid) for cid in failed_courier_ids if str(cid)}
+    full_fleet = {
+        str(cid) for cid in fleet_courier_ids if str(cid)
+    } | failed
+    for cid in sorted(full_fleet - known):
+        cid = str(cid)
+        if not cid:
+            continue
+        unknown = Candidate(
+            courier_id=cid,
+            name=None,
+            score=float("-inf"),
+            feasibility_verdict="UNKNOWN",
+            feasibility_reason=(
+                "candidate_evaluation_error"
+                if cid in failed
+                else "candidate_not_materialized"
+            ),
+            plan=None,
+            metrics={
+                "carry_eval": {
+                    "schema": "carry_eval.v1",
+                    "status": "UNEVALUABLE",
+                    "orders": [],
+                    "evaluated_count": 0,
+                    "unknown_count": 1,
+                    "invalid_count": 0,
+                    "max_carry_min": None,
+                    "all_le_35": None,
+                    "all_le_40": None,
+                },
+            },
+        )
+        unknown.alarm_evaluation_status = "UNKNOWN"
+        pool.append(unknown)
+    return pool
+
+
 def _v328_classify_fail_cause(exc: Exception) -> str:
     """L2.2 (most K5): klasa przyczyny fail-u kuriera w catch-allu _v328_eval_safe.
 
@@ -3494,7 +3564,8 @@ class PipelineResult:
     full_pool_candidates: Optional[List[Candidate]] = None
     # Sprint-1 2026-04-30 (logging extension): pool size scalars dla counterfactual
     # analysis. pool_total_count = liczba kandydatów PRZED feasibility cut (cała
-    # rozważana pula), pool_feasible_count = liczba MAYBE post-feasibility.
+    # rozważana pula), pool_feasible_count = liczba MAYBE po wszystkich
+    # egzekwowanych HARD-ach (w tym aktywnym filtrze HARD35).
     # Domyślnie 0 (early_bird path nie wchodzi w feasibility loop).
     pool_total_count: int = 0
     pool_feasible_count: int = 0
@@ -3743,6 +3814,16 @@ def _classify_and_set_auto_route(
             log.warning(f"auto_proximity classifier exception order={getattr(result, 'order_id', '?')}: {_e}")
         except Exception:
             pass
+    # `reason` jest kanonicznym kontraktem przekazywanym przez serializer do
+    # owner-facing Telegrama; classifier sam obsługuje wyłącznie PROPOSE.
+    if (
+        getattr(result, "verdict", None) == "KOORD"
+        and str(getattr(result, "reason", "") or "").startswith(
+            "hard35_least_damage_alert"
+        )
+    ):
+        result.auto_route = "ALERT"
+        result.auto_route_reason = "hard35_no_candidate_within_cap"
     # FAIL-04 (shadow-first): wykryj slepa-wiare-w-prep dla wysoko-wariancyjnych
     # restauracji. Osobny try wewnatrz helpera — nie moze zaklocic auto_route.
     _detect_and_set_prep_variance_anomaly(result, order_event)
@@ -4101,6 +4182,8 @@ def _bag_dict_to_ordersim(d: dict) -> OrderSim:
     # podpięcie prawdziwego sensora nie wymagało nowego evaluatora.
     sim.physical_possession_at = d.get("physical_possession_at")
     sim.physical_possession_source = d.get("physical_possession_source")
+    sim.event_gate_status = d.get("event_gate_status")
+    sim.contract_version = d.get("contract_version")
     return sim
 
 
@@ -4957,6 +5040,8 @@ def _assess_order_impl(
     new_order.physical_possession_at = order_event.get("physical_possession_at")
     new_order.physical_possession_source = order_event.get(
         "physical_possession_source")
+    new_order.event_gate_status = order_event.get("event_gate_status")
+    new_order.contract_version = order_event.get("contract_version")
 
     # Traffic-aware fallback speed dla estymat ETA (zgodne z P0.5 common.py)
     fleet_speed_kmh = get_fallback_speed_kmh(now)
@@ -5346,12 +5431,21 @@ def _assess_order_impl(
         if _af_single_source_on:
             _l4_floor_candidate_eta(c)
 
-    # C — sonda S2 wyłącznie po zerze feasible S1. Każdy slot przechodzi przez
+    # Pula certyfikatu zachowuje również kurierów, których bieżąca ewaluacja
+    # rzuciła wyjątek. Selekcja ich nie widzi, ale kontrfakt nie może zamienić
+    # braku dowodu w dowód braku bezpiecznego planu.
+    _alarm_validation_pool = _alarm_counterfactual_pool(
+        candidates,
+        failed_courier_ids=_v328_failed_couriers,
+        fleet_courier_ids=fleet_snapshot,
+    )
+
+    # C — sonda S2 wyłącznie po zerze planów S1 z carry <=35. Każdy slot przechodzi przez
     # TEN SAM core.candidates/check_feasibility_v2 na CAŁEJ flocie. Context
     # `shadow_probe` wycina pomocnicze writery/capture; wynik nie mutuje decyzji.
     _strategy2_probe = None
     if (C.decision_flag("ENABLE_STRATEGY2_PROBE_SHADOW")
-            and not any(c.feasibility_verdict == "MAYBE" for c in candidates)):
+            and _strategy2_required(candidates)):
         try:
             from dispatch_v2.core import strategy2_probe as _s2
             _created = parse_panel_timestamp(
@@ -5394,10 +5488,17 @@ def _assess_order_impl(
                         position_model_variants_lock=None,
                         shadow_probe=True,
                     )
-                    _feasible_cids = []
+                    _rows = []
+                    _slot_status = "EVALUATED"
                     for _cid in _fleet_ids:
                         _entry = _s2_fleet_index.get(str(_cid))
                         if _entry is None:
+                            _slot_status = "UNEVALUABLE"
+                            _rows.append({
+                                "courier_id": str(_cid),
+                                "status": "UNEVALUABLE",
+                                "error_type": "MissingFleetEntry",
+                            })
                             continue
                         _raw_cid, _cs = _entry
                         try:
@@ -5410,18 +5511,65 @@ def _assess_order_impl(
                                 order_id, _cid, _slot.isoformat(),
                                 type(_s2_candidate_exc).__name__,
                             )
-                            continue
-                        if (_candidate is None
-                                or _candidate.feasibility_verdict != "MAYBE"):
+                            _slot_status = "UNEVALUABLE"
+                            _rows.append({
+                                "courier_id": str(_cid),
+                                "status": "UNEVALUABLE",
+                                "error_type": type(_s2_candidate_exc).__name__,
+                            })
                             continue
                         _carry_eval = (
                             getattr(_candidate, "metrics", None) or {}
-                        ).get("carry_eval")
-                        if (isinstance(_carry_eval, dict)
-                                and _carry_eval.get("status") == "EVALUATED"
-                                and _carry_eval.get("all_le_35") is True):
-                            _feasible_cids.append(str(_cid))
-                    return _feasible_cids
+                        ).get("carry_eval") if _candidate is not None else None
+                        if _candidate is None:
+                            _slot_status = "UNEVALUABLE"
+                            _rows.append({
+                                "courier_id": str(_cid),
+                                "status": "UNEVALUABLE",
+                                "error_type": "CandidateNotMaterialized",
+                            })
+                            continue
+                        _candidate_verdict = (
+                            getattr(_candidate, "feasibility_verdict", "NO")
+                        )
+                        _carry_status = (
+                            _carry_eval.get("status")
+                            if isinstance(_carry_eval, dict)
+                            else "NOT_APPLICABLE"
+                        )
+                        _hard35_status = _carry_contract.hard35_status(
+                            _carry_eval
+                        )
+                        _courier_status = _s2.classify_courier_status(
+                            _candidate_verdict,
+                            _hard35_status,
+                        )
+                        if _courier_status == "UNEVALUABLE":
+                            _slot_status = "UNEVALUABLE"
+                            _rows.append({
+                                "courier_id": str(_cid),
+                                "status": "UNEVALUABLE",
+                                "feasibility_verdict": _candidate_verdict,
+                                "carry_status": _carry_status,
+                                "hard35_status": _hard35_status,
+                                "all_le_35": None,
+                            })
+                            continue
+                        _rows.append({
+                            "courier_id": str(_cid),
+                            "status": _courier_status,
+                            "feasibility_verdict": _candidate_verdict,
+                            "carry_status": _carry_status,
+                            "hard35_status": _hard35_status,
+                            "all_le_35": (
+                                _carry_eval.get("all_le_35")
+                                if isinstance(_carry_eval, dict) else None
+                            ),
+                        })
+                    return {
+                        "status": _slot_status,
+                        "couriers": _rows,
+                    }
 
                 _strategy2_probe = _s2.probe(
                     order_id=order_id,
@@ -5452,7 +5600,7 @@ def _assess_order_impl(
         try:
             from dispatch_v2.core import alarm_certificate as _alarm
             _alarm_certificate = _alarm.build(
-                candidates,
+                _alarm_validation_pool,
                 decision_order_id=order_id,
                 now=now,
                 strategy2_probe=_strategy2_probe,
@@ -5542,7 +5690,7 @@ def _assess_order_impl(
     if _alarm_certificate is not None:
         # Prywatny, nieserializowany materiał do ponownej walidacji F4 przez
         # jedynego writera snapshotu w dispatch-shadow.
-        _selected.alarm_validation_candidates = candidates
+        _selected.alarm_validation_candidates = _alarm_validation_pool
     if C.decision_flag("ENABLE_STRATEGY2_PROBE_SHADOW"):
         _selected.order_created_at = getattr(
             new_order, "created_at_utc", None)

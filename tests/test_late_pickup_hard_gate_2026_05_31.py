@@ -116,10 +116,11 @@ def test_pickup_extension_redirect_payload():
     # nie w oknie fixed-size (było brittle wobec każdej rozbudowy bloku).
     src = (inspect.getsource(dispatch_pipeline) + inspect.getsource(_k11c) + inspect.getsource(_k12s))
     assert "R-LATE-PICKUP tiering (2026-05-31" in src
-    assert "pickup_extension_redirect = {" in src
+    assert "def _pickup_extension_redirect_for" in src
     assert "suggested_pickup_iso" in src
     assert "committed_breach_min" in src
     assert "_result_pf.pickup_extension_redirect = pickup_extension_redirect" in src
+    assert "_pickup_extension_redirect_for(result.best)" in src
 
 
 def test_metric_serialized_to_metrics():

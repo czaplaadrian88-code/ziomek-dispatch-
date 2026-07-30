@@ -1394,6 +1394,10 @@ def test_h2_oserror_after_child_start_is_unknown_and_never_rolls_back(
     monkeypatch.setattr(C, "ENABLE_AUTO_ASSIGN", True)
     monkeypatch.setenv("ALLOW_AUTO_ASSIGN_STATE_IN_TEST", "1")
     monkeypatch.setattr(E, "_pytest_active", lambda: False)
+    # Ten oracle celowo otwiera wyłącznie bramkę subprocessu. Hermetyczny
+    # conftest tworzy świeży flags.json, a zamrożony NOW jest wcześniejszy od
+    # jego mtime; bez izolacji niezależny dry-first kończy test przed Popen.
+    monkeypatch.setattr(E, "_flags_recently_changed", lambda *_args: False)
     effect = tmp_path / "panel-effect"
 
     class StartedChild:

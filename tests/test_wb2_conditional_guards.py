@@ -35,6 +35,7 @@ from dispatch_v2.core import lex_window_guards as G
 from dispatch_v2.core import lex_window_ledger as LWL
 from dispatch_v2.core import loadgov_snapshot as LG
 from dispatch_v2.core import alarm_certificate as AC
+from dispatch_v2.core import strategy2_probe as S2
 
 FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures",
                        "wb2_incident_492_20260727T160912Z.json")
@@ -481,20 +482,50 @@ def test_cap_alarmowy_40_tylko_z_certyfikatem(monkeypatch):
         courier_id="c37",
         feasibility_verdict="NO",
         feasibility_reason="R6_per_order_>35min",
-        metrics={"carry_eval": {
-            "schema": "carry_eval.v1",
-            "status": "EVALUATED",
-            "max_carry_min": 37.0,
-            "unknown_count": 0,
-        }},
+        plan=SimpleNamespace(
+            sequence=["o"],
+            predicted_delivered_at={},
+            pickup_at={},
+        ),
+        metrics={
+            "carry_eval": {
+                "schema": "carry_eval.v1",
+                "status": "EVALUATED",
+                "orders": [{
+                    "order_id": "o",
+                    "carry_min": 37.0,
+                    "le_35": False,
+                    "le_40": True,
+                }],
+                "evaluated_count": 1,
+                "max_carry_min": 37.0,
+                "unknown_count": 0,
+                "invalid_count": 0,
+                "all_le_35": False,
+                "all_le_40": True,
+            },
+            "alarm_other_hards_status": "PASSED",
+        },
     )
     cert_now = datetime.now(timezone.utc)
-    s2 = {
-        "schema": "strategy2_probe.v1",
-        "status": "EVALUATED",
-        "order_id": "o",
-        "found": False,
-    }
+    s2 = S2.probe(
+        order_id="o",
+        created_at=cert_now - timedelta(minutes=85),
+        declared_ready_at=cert_now,
+        now=cert_now,
+        fleet_ids=["c37"],
+        evaluate_slot=lambda _slot, _fleet: {
+            "status": "EVALUATED",
+            "couriers": [{
+                "courier_id": "c37",
+                "status": "NO_SAFE_PLAN",
+                "feasibility_verdict": "NO",
+                "carry_status": "EVALUATED",
+                "hard35_status": "OVER35",
+                "all_le_35": False,
+            }],
+        },
+    )
     cert = AC.build(
         [candidate],
         decision_order_id="o",
@@ -507,7 +538,11 @@ def test_cap_alarmowy_40_tylko_z_certyfikatem(monkeypatch):
         "decision_flag",
         lambda name: (
             True
-            if name == "ENABLE_ALARM_CERTIFICATE_SHADOW"
+            if name in (
+                "ENABLE_ALARM_CERTIFICATE_SHADOW",
+                "ENABLE_CARRY_CANON_V2",
+                "ENABLE_HARD35_ENFORCE",
+            )
             else original_decision_flag(name)
         ),
     )

@@ -10,6 +10,7 @@ import copy
 import hashlib
 import inspect
 import json
+from pathlib import Path
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -33,15 +34,26 @@ def _plan(**drops):
     )
 
 
-def _order(oid, *, picked=None, physical=None, physical_source=None):
+def _order(
+    oid,
+    *,
+    picked=None,
+    physical=None,
+    physical_source=None,
+    ready=NOW,
+):
     out = SimpleNamespace(
         order_id=oid,
         status="picked_up" if picked else "assigned",
         picked_up_at=picked,
-        pickup_ready_at=NOW,
+        pickup_ready_at=ready,
     )
     out.physical_possession_at = physical
     out.physical_possession_source = physical_source
+    out.event_gate_status = "BOUND" if physical is not None else None
+    out.contract_version = (
+        "physical_possession.v1" if physical is not None else None
+    )
     return out
 
 
@@ -78,9 +90,9 @@ def test_A_unbound_pickup_is_explicit_proxy_never_bound():
     plan.pickup_at["food"] = NOW + timedelta(minutes=5)
     got = CF.evaluate_plan(plan, [_order("food")])
     item = got["orders"][0]
-    assert item["carry_min"] == 25.0
+    assert item["carry_min"] == 30.0
     assert item["source"] == "proxy"
-    assert item["possession_source"] == "planned_pickup_at"
+    assert item["possession_source"] == "pickup_ready_at"
 
 
 def test_F6_untrusted_physical_source_stays_proxy():
@@ -96,7 +108,7 @@ def test_F6_untrusted_physical_source_stays_proxy():
     item = got["orders"][0]
     assert item["carry_min"] == 20.0
     assert item["source"] == "proxy"
-    assert item["possession_source"] == "panel.picked_up_at"
+    assert item["possession_source"] == "pickup_ready_at"
 
 
 def test_F7_carry_cap_uses_raw_value_before_display_rounding():
@@ -111,14 +123,17 @@ def test_F7_carry_cap_uses_raw_value_before_display_rounding():
         )],
     )
     item = got["orders"][0]
-    assert item["carry_min"] == 35.0
+    assert item["carry_min"] == raw_minutes
     assert item["le_35"] is False
     assert got["max_carry_min"] == raw_minutes
     assert got["all_le_35"] is False
 
 
 def test_A_missing_possession_is_unevaluable_not_zero():
-    got = CF.evaluate_plan(_plan(food=NOW + timedelta(minutes=20)), [_order("food")])
+    got = CF.evaluate_plan(
+        _plan(food=NOW + timedelta(minutes=20)),
+        [_order("food", ready=None)],
+    )
     assert got["status"] == "UNEVALUABLE"
     assert got["unknown_count"] == 1
     assert got["orders"][0]["carry_min"] is None
@@ -135,32 +150,82 @@ class _Candidate:
     feasibility_reason: str = "ok"
 
     def __post_init__(self):
+        rows = []
+        if self.carry is not None:
+            rows.append({
+                "order_id": self.courier_id,
+                "carry_min": self.carry,
+                "le_35": self.carry <= 35.0,
+                "le_40": self.carry <= 40.0,
+            })
         self.metrics = {
             "carry_eval": {
                 "schema": "carry_eval.v1",
                 "status": "EVALUATED" if self.carry is not None else "UNEVALUABLE",
+                "orders": rows,
+                "evaluated_count": len(rows),
                 "max_carry_min": self.carry,
                 "unknown_count": 0 if self.carry is not None else 1,
+                "invalid_count": 0,
+                "all_le_35": (
+                    self.carry <= 35.0 if self.carry is not None else None
+                ),
+                "all_le_40": (
+                    self.carry <= 40.0 if self.carry is not None else None
+                ),
             }
         }
+        self.plan = SimpleNamespace(
+            sequence=[self.courier_id],
+            predicted_delivered_at={},
+            pickup_at={},
+        )
+        if self.feasibility_reason.startswith("R6_"):
+            self.metrics["alarm_other_hards_status"] = "PASSED"
 
 
-def _s2_result(order_id: str, *, found: bool) -> dict:
-    return {
-        "schema": "strategy2_probe.v1",
-        "status": "EVALUATED",
-        "order_id": order_id,
-        "found": found,
-        "slot_at": (
-            (NOW + timedelta(minutes=10)).isoformat() if found else None
-        ),
-        "shift_min": 10.0 if found else None,
-        "courier_id": "s2-safe" if found else None,
-        "feasible_courier_ids": ["s2-safe"] if found else [],
-        "fleet_count": 3,
-        "slots_checked": 2,
-        "deadline_at": (NOW + timedelta(minutes=30)).isoformat(),
-    }
+def _s2_result(order_id: str, *, found: bool, now: datetime = NOW) -> dict:
+    fleet = ["c1", "c2", "s2-safe"]
+    slot_number = 0
+
+    def evaluate_slot(_slot, _fleet):
+        nonlocal slot_number
+        slot_number += 1
+        is_final = slot_number == 2
+        return {
+            "status": "EVALUATED",
+            "couriers": [{
+                "courier_id": cid,
+                "status": (
+                    "SAFE_LE35"
+                    if found and is_final and cid == "s2-safe"
+                    else "NO_SAFE_PLAN"
+                ),
+                "feasibility_verdict": (
+                    "MAYBE"
+                    if found and is_final and cid == "s2-safe"
+                    else "NO"
+                ),
+                "carry_status": "EVALUATED",
+                "hard35_status": (
+                    "LE35"
+                    if found and is_final and cid == "s2-safe"
+                    else "OVER35"
+                ),
+                "all_le_35": bool(
+                    found and is_final and cid == "s2-safe"
+                ),
+            } for cid in fleet],
+        }
+
+    return S2.probe(
+        order_id=order_id,
+        created_at=now - timedelta(minutes=80),
+        declared_ready_at=now,
+        now=now,
+        fleet_ids=fleet,
+        evaluate_slot=evaluate_slot,
+    )
 
 
 def test_B_counterfactual_normal_wins_over_any_load_signal():
@@ -286,10 +351,7 @@ def test_B_forged_dict_cannot_open_loadgov_loose_window(monkeypatch):
     assert tol == 5.0 and reason == "strict_no_alarm_certificate"
     cert_now = datetime.now(timezone.utc)
     pool = [_Candidate("c37", 37.0, "NO", "R6_per_order_>35min")]
-    s2 = {
-        **_s2_result("o-window", found=False),
-        "deadline_at": (cert_now + timedelta(minutes=30)).isoformat(),
-    }
+    s2 = _s2_result("o-window", found=False, now=cert_now)
     cert = AC.build(
         pool,
         decision_order_id="o-window",
@@ -354,9 +416,26 @@ def test_C_strategy2_searches_every_courier_and_returns_first_slot():
 
     def evaluate(slot, fleet):
         calls.append((slot, tuple(fleet)))
-        if slot >= NOW + timedelta(minutes=15):
-            return ["c2"]
-        return []
+        safe = slot >= NOW + timedelta(minutes=15)
+        return {
+            "status": "EVALUATED",
+            "couriers": [{
+                "courier_id": cid,
+                "status": (
+                    "SAFE_LE35" if safe and cid == "c2" else "NO_SAFE_PLAN"
+                ),
+                "feasibility_verdict": (
+                    "MAYBE" if safe and cid == "c2" else "NO"
+                ),
+                "carry_status": (
+                    "EVALUATED"
+                ),
+                "hard35_status": (
+                    "LE35" if safe and cid == "c2" else "OVER35"
+                ),
+                "all_le_35": True if safe and cid == "c2" else False,
+            } for cid in fleet],
+        }
 
     got = S2.probe(
         order_id="o6",
@@ -385,7 +464,20 @@ def test_C_created_plus_90_is_hard_horizon():
         declared_ready_at=NOW,
         now=NOW,
         fleet_ids=["c1"],
-        evaluate_slot=lambda slot, fleet: seen.append(slot) or [],
+        evaluate_slot=lambda slot, fleet: (
+            seen.append(slot)
+            or {
+                "status": "EVALUATED",
+                "couriers": [{
+                    "courier_id": cid,
+                        "status": "NO_SAFE_PLAN",
+                        "feasibility_verdict": "NO",
+                        "carry_status": "EVALUATED",
+                        "hard35_status": "OVER35",
+                        "all_le_35": False,
+                } for cid in fleet],
+            }
+        ),
     )
     assert got["found"] is False
     assert seen == [NOW + timedelta(minutes=5), NOW + timedelta(minutes=10)]
@@ -454,10 +546,7 @@ def test_D_no_safe_candidate_stays_visible_as_least_damage_alert():
 def test_D_valid_alarm_allows_35_40_but_never_over_40(monkeypatch):
     cert_now = datetime.now(timezone.utc)
     pool = [_Candidate("c37", 37.0, "NO", "R6_per_order_>35min")]
-    s2 = {
-        **_s2_result("o8", found=False),
-        "deadline_at": (cert_now + timedelta(minutes=30)).isoformat(),
-    }
+    s2 = _s2_result("o8", found=False, now=cert_now)
     cert = AC.bind_scope(AC.build(
         pool, decision_order_id="o8", now=cert_now,
         strategy2_probe=s2), ["o8"])
@@ -480,7 +569,7 @@ def test_D_valid_alarm_allows_35_40_but_never_over_40(monkeypatch):
     assert meta["cap_min"] == 40.0 and meta["alarm"] is True
 
 
-def _hard35_selection_case(monkeypatch):
+def _hard35_selection_case(monkeypatch, carry_min=35.01):
     from dispatch_v2.core import selection
 
     plan = SimpleNamespace(
@@ -490,8 +579,18 @@ def _hard35_selection_case(monkeypatch):
     )
     carry = {
         "schema": "carry_eval.v1", "status": "EVALUATED",
-        "orders": [], "max_carry_min": 35.01,
-        "all_le_35": False, "all_le_40": True,
+        "orders": [{
+            "order_id": "hard35",
+            "carry_min": carry_min,
+            "le_35": carry_min <= 35.0,
+            "le_40": carry_min <= 40.0,
+        }],
+        "evaluated_count": 1,
+        "unknown_count": 0,
+        "invalid_count": 0,
+        "max_carry_min": carry_min,
+        "all_le_35": carry_min <= 35.0,
+        "all_le_40": carry_min <= 40.0,
     }
     candidate = DP.Candidate(
         "c36", "C36", 10.0, "MAYBE", "ok", plan,
@@ -507,7 +606,10 @@ def _hard35_selection_case(monkeypatch):
     )
     monkeypatch.setattr(
         C, "decision_flag",
-        lambda name: name == "ENABLE_HARD35_ENFORCE",
+        lambda name: name in {
+            "ENABLE_CARRY_CANON_V2",
+            "ENABLE_HARD35_ENFORCE",
+        },
     )
     monkeypatch.setattr(DP, "_classify_and_set_auto_route", lambda *a, **k: None)
     ctx = selection.SelectionContext(
@@ -532,6 +634,14 @@ def test_F2_maybe_plan_over_35_hits_hard35_before_feasible_propose(monkeypatch):
     assert result.verdict == "KOORD"
     assert result.reason.startswith("hard35_least_damage_alert")
     assert result.best.courier_id == "c36"
+
+
+def test_F2_hard35_oracle_really_discriminates_below_and_above_cap(monkeypatch):
+    below = _hard35_selection_case(monkeypatch, carry_min=30.0)
+    above = _hard35_selection_case(monkeypatch, carry_min=35.01)
+
+    assert below.verdict == "PROPOSE"
+    assert above.verdict == "KOORD"
 
 
 def test_F8_mutation_disabling_hard35_hook_is_killed(monkeypatch):
@@ -567,16 +677,71 @@ def test_D_selection_has_single_final_hard35_proposal_boundary():
 # Ratchety integracji, serializery A+B + defaults OFF
 
 
-def test_ratchet_one_carry_owner_and_one_alarm_snapshot_writer():
-    """Blokuje powrót proxy w konsumentach i drugiego writera certyfikatu."""
+def test_ratchet_one_carry_owner_and_one_alarm_snapshot_writer(monkeypatch):
+    """Mutacyjnie blokuje lokalny proxy w bliźniakach i drugi writer certyfikatu."""
     from dispatch_v2 import feasibility_v2
     from dispatch_v2 import plan_recheck
     from dispatch_v2 import route_simulator_v2
     from dispatch_v2.core import selection
 
     assert "carry_freshness" in inspect.getsource(feasibility_v2)
-    assert "carry_freshness" in inspect.getsource(plan_recheck)
-    assert "carry_freshness" in inspect.getsource(route_simulator_v2)
+    oracle = {
+        "schema": "carry_eval.v1",
+        "status": "EVALUATED",
+        "orders": [{
+            "order_id": "food",
+            "carry_min": 38.0,
+            "le_35": False,
+            "le_40": True,
+            "source": "bound",
+        }],
+        "evaluated_count": 1,
+        "unknown_count": 0,
+        "invalid_count": 0,
+        "max_carry_min": 38.0,
+        "all_le_35": False,
+        "all_le_40": True,
+    }
+    calls = []
+
+    def _canonical(*args, **kwargs):
+        calls.append((args, kwargs))
+        return oracle
+
+    monkeypatch.setattr(CF, "evaluate_plan", _canonical)
+    original = C.decision_flag
+    monkeypatch.setattr(
+        C,
+        "decision_flag",
+        lambda name: True if name == "ENABLE_CARRY_CANON_V2" else original(name),
+    )
+    plan = SimpleNamespace(
+        predicted_delivered_at={"food": NOW + timedelta(minutes=38)},
+        pickup_at={},
+        per_order_delivery_times={"food": 33.0},
+    )
+    order = _order("food", picked=NOW + timedelta(minutes=5))
+    order.status = "picked_up"
+    order.address_id = None
+    order.order_type = None
+    new_order = _order("new")
+    new_order.address_id = None
+    new_order.order_type = None
+    _, max_carried = route_simulator_v2._capz_bag_metrics(
+        plan, [order], new_order, 35.0
+    )
+    assert max_carried == 38.0
+
+    stops = [{
+        "type": "dropoff",
+        "order_id": "food",
+        "predicted_at": (NOW + timedelta(minutes=38)).isoformat(),
+    }]
+    carry_map = plan_recheck._g4_carry_map(
+        stops, {"food": {"status": "picked_up"}}, NOW
+    )
+    assert carry_map == {"food": 38.0}
+    assert len(calls) == 2
     assert "hard35_best_effort_choice" in inspect.getsource(selection)
     assert "_alarm.publish" in inspect.getsource(SD._tick)
     assert ".publish(" not in inspect.getsource(DP._assess_order_impl)
@@ -640,6 +805,7 @@ def test_shadow_record_carries_all_three_versioned_metrics_A_and_B(
 
 def test_F9_flags_off_serializer_is_byte_identical_to_frozen_baseline(monkeypatch):
     monkeypatch.setattr(SD, "now_iso", lambda: NOW.isoformat())
+    monkeypatch.setattr(SD.calib_maps, "prep_bias_for", lambda _name: None)
     monkeypatch.setattr(C, "ENABLE_R04_SHADOW", False)
     for name in (
         "ENABLE_CARRY_CANON_V2",
@@ -694,31 +860,14 @@ def test_F9_flags_off_serializer_is_byte_identical_to_frozen_baseline(monkeypatc
     assert not nested_leaked, (
         f"feature-owned candidate metrics leaked while OFF: {nested_leaked}"
     )
-    # OFF-parity dowodzony ODPORNIE na środowisko: zbiór kluczy rekordu = zamrożony
-    # baseline (klucze nie zależą od ortools/venv, w przeciwieństwie do hash wartości —
-    # dawny hardcoded hash był policzony w okrojonym sandboxie i pękał w kanonicznym venv).
-    # Razem z asercjami leaked/nested_leaked wyżej: przy OFF serializer NIE dodaje ŻADNEGO
-    # nowego klucza względem bazy sprzed fundamentu eskalacji.
-    FROZEN_OFF_KEYSET = {
-        "alternatives", "auto_block_reasons", "auto_block_reasons_d",
-        "auto_block_reasons_dprime", "auto_route", "auto_route_context",
-        "auto_route_reason", "best", "best_effort_r6_redirect",
-        "commit_divergence_redirect", "decision_meta", "delivery_address",
-        "difficult_case_redirect", "effective_ready_shadow",
-        "eta_cell_corrected_min", "eta_cell_correction_flag", "eta_defer_hint",
-        "eta_unreliable", "eta_unreliable_meta", "event_id",
-        "late_pickup_shadow", "latency_ms", "loadaware_shadow",
-        "min_delivered_at_shadow", "mode", "mode_reason", "order_id",
-        "pickup_extension_redirect", "pickup_ready_at", "pool_feasible_count",
-        "pool_total_count", "prep_bias_min", "prep_variance_anomaly",
-        "proposal_claims_count", "proposal_claims_relaxed", "r6_danger_shadow",
-        "reason", "reserve_tiebreak_shadow", "restaurant", "rule_verdict",
-        "ts", "v328_fail_causes", "verdict", "would_auto_assign",
-        "would_auto_assign_d", "would_auto_assign_dprime",
-    }
-    assert set(record.keys()) == FROZEN_OFF_KEYSET, (
-        "OFF keyset != baseline; nowe/utracone klucze: "
-        f"{set(record.keys()) ^ FROZEN_OFF_KEYSET}")
+    frozen = (
+        Path(__file__).with_name("golden")
+        / "escalation_off_record_v1.json"
+    ).read_bytes()
+    actual = json.dumps(
+        record, ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8") + b"\n"
+    assert actual == frozen
 
 
 def test_all_four_new_flags_default_off_and_registered():

@@ -1,11 +1,10 @@
 {
  "_frozen": "2026-06-25",
- "_updated": "2026-07-01 L0.1 conftest-leak closure: +4 (flagi ISTNIEJACE przeniesione do ETAP4 z leaku flags.json - dlug testowy odziedziczony, nie nowy; LOAD_PLAN_PURE_READ ma test sciezki flagowej test_loadplan_pure_read_2026_06_29, ale nie w formie matchowanej przez checker)",
- "_count": 8,
+ "_updated": "2026-07-29 R10: ENABLE_E2_PLN_AB usunieta po dodaniu testu efektu ON/OFF; baseline ma 10 pozycji.",
+ "_count": 10,
  "_note": "C-FLAG-EFFECT: flagi decyzyjne ETAP4 bez testu dotykajacego flagi (swiadomy dlug). Cel = kurczyc liste. NOWA flaga ETAP4 bez testu efektu poza ta lista -> FAIL. Naprawa: test toggle ON<->OFF z asercja zmiany decyzji, potem usun z baseline.",
  "baseline": [
   "ENABLE_BEST_EFFORT_POS_SOURCE_KEY",
-  "ENABLE_E2_PLN_AB",
   "ENABLE_GRAFIK_FULL_NAMES_SOURCE",
   "ENABLE_LOAD_PLAN_PURE_READ",
   "ENABLE_OBJ_DELIVERY_FOOD_AGE_SHADOW",

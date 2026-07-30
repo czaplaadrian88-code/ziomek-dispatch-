@@ -38,21 +38,136 @@ sam predykat (Sol RUN3-b: „nie implementować dwóch niezależnych checkerów"
 """
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
+from collections.abc import Mapping
 from typing import Any, Callable, Dict, Iterable, Optional
+from zoneinfo import ZoneInfo
 
 #: Handoff = przyjazd + dwell dostawy. Ratchet: test WB2 czerwienieje, jeśli
 #: którakolwiek warstwa wróci do liczenia świeżości na czasie przyjazdu.
 HANDOFF_INCLUDES_DROPOFF_DWELL = True
 CARRY_EVAL_SCHEMA = "carry_eval.v1"
+THERMAL_SCOPE_SCHEMA = "carry_thermal_scope.v1"
+THERMAL_EXEMPT_REASONS = frozenset({
+    "paczka_r6_thermal_exempt",
+    "paczki_only_flex",
+})
+HARD35_LE35 = "LE35"
+HARD35_OVER35 = "OVER35"
+HARD35_EXEMPT = "EXEMPT"
+HARD35_UNKNOWN = "UNKNOWN"
 # Jawna allowlista dowodów fizycznego possession. Sam niepusty opis źródła
 # nie jest provenance: panel/click/plan pozostają proxy nawet wtedy, gdy niosą
 # poprawnie sformatowany timestamp.
 BOUND_POSSESSION_SOURCES = frozenset({
+    "gps_geofence",
     "gps_bag_sensor",
     "physical_handoff_event",
     "restaurant_handoff_event",
 })
+BOUND_EVENT_GATE_STATUS = "BOUND"
+BOUND_POSSESSION_CONTRACT_VERSIONS = frozenset({
+    "physical_possession.v1",
+})
+
+
+def hard35_evaluation(
+    carry_eval: Any,
+) -> tuple[str, Optional[float]]:
+    """Kanoniczna walidacja i interpretacja carry dla wszystkich konsumentów.
+
+    Funkcja nie wylicza carry ponownie. Waliduje jedynie zapis writera
+    ``feasibility_v2`` i zwraca wspólny stan dla S2, Alarmu oraz HARD35.
+    Brak starego ``thermal_scope`` zachowuje kompatybilność rekordów sprzed
+    migracji; obecny writer zawsze publikuje jawny APPLICABLE/EXEMPT.
+    """
+    if (
+        not isinstance(carry_eval, Mapping)
+        or carry_eval.get("schema") != CARRY_EVAL_SCHEMA
+    ):
+        return HARD35_UNKNOWN, None
+
+    scope = carry_eval.get("thermal_scope")
+    if scope is not None:
+        if (
+            not isinstance(scope, Mapping)
+            or scope.get("schema") != THERMAL_SCOPE_SCHEMA
+            or scope.get("status") not in {"APPLICABLE", "EXEMPT"}
+            or not isinstance(scope.get("order_count"), int)
+            or isinstance(scope.get("order_count"), bool)
+            or scope.get("order_count") < 1
+        ):
+            return HARD35_UNKNOWN, None
+        if scope.get("status") == "EXEMPT":
+            if scope.get("reason") not in THERMAL_EXEMPT_REASONS:
+                return HARD35_UNKNOWN, None
+            return HARD35_EXEMPT, None
+        if scope.get("reason") is not None:
+            return HARD35_UNKNOWN, None
+
+    if carry_eval.get("status") != "EVALUATED":
+        return HARD35_UNKNOWN, None
+    rows = carry_eval.get("orders")
+    if not isinstance(rows, list) or not rows:
+        return HARD35_UNKNOWN, None
+    values = []
+    for row in rows:
+        if not isinstance(row, Mapping):
+            return HARD35_UNKNOWN, None
+        raw = row.get("carry_min")
+        if (
+            not isinstance(raw, (int, float))
+            or isinstance(raw, bool)
+            or not math.isfinite(float(raw))
+            or float(raw) < 0.0
+        ):
+            return HARD35_UNKNOWN, None
+        value = float(raw)
+        if (
+            row.get("le_35") is not (value <= 35.0)
+            or row.get("le_40") is not (value <= 40.0)
+        ):
+            return HARD35_UNKNOWN, None
+        values.append(value)
+    if (
+        carry_eval.get("evaluated_count") != len(values)
+        or carry_eval.get("unknown_count") != 0
+        or carry_eval.get("invalid_count") != 0
+        or carry_eval.get("all_le_35") is not all(v <= 35.0 for v in values)
+        or carry_eval.get("all_le_40") is not all(v <= 40.0 for v in values)
+    ):
+        return HARD35_UNKNOWN, None
+    raw_max = carry_eval.get("max_carry_min")
+    if (
+        not isinstance(raw_max, (int, float))
+        or isinstance(raw_max, bool)
+        or not math.isfinite(float(raw_max))
+        or float(raw_max) < 0.0
+        or not math.isclose(
+            float(raw_max),
+            max(values),
+            rel_tol=0.0,
+            abs_tol=1e-9,
+        )
+    ):
+        return HARD35_UNKNOWN, None
+    maximum = float(raw_max)
+    return (
+        HARD35_LE35 if maximum <= 35.0 else HARD35_OVER35,
+        maximum,
+    )
+
+
+def hard35_status(carry_eval: Any) -> str:
+    """Status-only adapter wspólnej, pełnej walidacji kontraktu."""
+    return hard35_evaluation(carry_eval)[0]
+
+
+def _field(value: Any, name: str, default: Any = None) -> Any:
+    if isinstance(value, Mapping):
+        return value.get(name, default)
+    return getattr(value, name, default)
 
 
 def handoff_min(arrival_min: Optional[float],
@@ -121,7 +236,11 @@ def worst_delta(baseline_by_order: Dict[str, Optional[float]],
     return worst_oid, worst
 
 
-def _as_utc(value: Any) -> Optional[datetime]:
+def _as_utc(
+    value: Any,
+    *,
+    naive_timezone=timezone.utc,
+) -> Optional[datetime]:
     """Datetime/ISO -> aware UTC. Brak lub zły format pozostaje niewiedzą."""
     if isinstance(value, datetime):
         parsed = value
@@ -133,35 +252,56 @@ def _as_utc(value: Any) -> Optional[datetime]:
     else:
         return None
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
+        parsed = parsed.replace(tzinfo=naive_timezone)
     return parsed.astimezone(timezone.utc)
 
 
 def _possession(order: Any, plan: Any) -> tuple[Optional[datetime], str, str]:
     """Jedyny resolver possession dla carry v2.
 
-    `bound` wymaga jawnego fizycznego eventu. Klik `picked_up_at` oraz
-    projektowany pickup są zawsze nazwane `proxy`; nigdy nie awansują do
-    ground-truth przez samą nazwę pola.
+    `bound` wymaga jawnego GPS-geofence/fizycznego eventu z pełnym bindingiem.
+    Niezwiązany ``physical_possession_at`` nie może wygrać z poprawnym klikowym
+    fallbackiem. Klik `picked_up_at` jest jawnie nazwany ``proxy_fallback``.
+    Przed fizycznym odbiorem termika biegnie od gotowości jedzenia; projektowany
+    pickup jest dopiero awaryjnym proxy, gdy ready anchor nie istnieje.
     """
-    physical = _as_utc(getattr(order, "physical_possession_at", None))
+    physical = _as_utc(_field(order, "physical_possession_at"))
     physical_source = str(
-        getattr(order, "physical_possession_source", "") or ""
+        _field(order, "physical_possession_source", "") or ""
     ).strip()
     if physical is not None:
-        binding = (
-            "bound"
-            if physical_source in BOUND_POSSESSION_SOURCES
-            else "proxy"
+        event_gate_status = str(
+            _field(order, "event_gate_status", "") or ""
+        ).strip()
+        contract_version = str(
+            _field(order, "contract_version", "") or ""
+        ).strip()
+        bound = (
+            physical_source in BOUND_POSSESSION_SOURCES
+            and event_gate_status == BOUND_EVENT_GATE_STATUS
+            and contract_version in BOUND_POSSESSION_CONTRACT_VERSIONS
         )
-        return physical, binding, physical_source or "unbound_physical_source"
+        if bound:
+            return physical, "bound", physical_source
 
-    picked = _as_utc(getattr(order, "picked_up_at", None))
+    # Panelowe ``picked_up_at`` bez offsetu jest czasem Europe/Warsaw.
+    # Ta normalizacja żyje w kanonicznym resolverze, nie w konsumentach.
+    picked = _as_utc(
+        _field(order, "picked_up_at"),
+        naive_timezone=ZoneInfo("Europe/Warsaw"),
+    )
     if picked is not None:
-        return picked, "proxy", "picked_up_at_click"
+        return picked, "proxy_fallback", "picked_up_at_click"
 
-    oid = str(getattr(order, "order_id", "") or "")
-    planned = _as_utc((getattr(plan, "pickup_at", None) or {}).get(oid))
+    # R6/HARD35: jedzenie jeszcze nieodebrane starzeje się od chwili gotowości,
+    # nie od późniejszego miejsca pickup w planie.  Odwrócenie tych dwóch
+    # fallbacków maskowało 50 min realnej termiki jako 25 min carry.
+    ready = _as_utc(_field(order, "pickup_ready_at"))
+    if ready is not None:
+        return ready, "proxy", "pickup_ready_at"
+
+    oid = str(_field(order, "order_id", "") or "")
+    planned = _as_utc((_field(plan, "pickup_at", {}) or {}).get(oid))
     if planned is not None:
         return planned, "proxy", "planned_pickup_at"
     return None, "proxy", "missing_possession"
@@ -181,23 +321,36 @@ def evaluate_plan(
     """
     rows = []
     unknown = 0
+    invalid = 0
     evaluated = []
-    drops = getattr(plan, "predicted_delivered_at", None) or {}
+    drops = _field(plan, "predicted_delivered_at", {}) or {}
     for order in orders:
         if include_order is not None and not include_order(order):
             continue
-        oid = str(getattr(order, "order_id", "") or "")
+        oid = str(_field(order, "order_id", "") or "")
         handoff = _as_utc(drops.get(oid))
         possession, binding, possession_source = _possession(order, plan)
         value = None
+        reason = None
         if handoff is not None and possession is not None:
             raw_value = (handoff - possession).total_seconds() / 60.0
-            value = round(raw_value, 2)
-            evaluated.append(raw_value)
+            if raw_value < 0.0:
+                raw_value = None
+                invalid += 1
+                reason = "negative_carry"
+            else:
+                # ``carry_eval.v1`` jest kontraktem decyzyjnym, nie rendererem.
+                # Wiersz i agregaty MUSZĄ nieść te same surowe minuty; inaczej
+                # ``le_*`` liczone na raw oraz ``max_carry_min`` nie mogą zostać
+                # zweryfikowane z zaokrąglonego wiersza. Zaokrąglenie należy
+                # wyłącznie do konsumenta prezentacyjnego.
+                value = raw_value
+                evaluated.append(raw_value)
         else:
             raw_value = None
             unknown += 1
-        rows.append({
+            reason = "missing_handoff_or_possession"
+        row = {
             "order_id": oid,
             "carry_min": value,
             "le_35": None if raw_value is None else raw_value <= 35.0,
@@ -205,16 +358,24 @@ def evaluate_plan(
             "source": binding,
             "possession_source": possession_source,
             "handoff_source": "predicted_delivery_with_dropoff_dwell",
-        })
+        }
+        if reason is not None:
+            row["reason"] = reason
+        rows.append(row)
 
     max_carry = max(evaluated) if evaluated else None
-    status = "EVALUATED" if rows and unknown == 0 else "UNEVALUABLE"
+    status = (
+        "EVALUATED"
+        if rows and unknown == 0 and invalid == 0
+        else "UNEVALUABLE"
+    )
     return {
         "schema": CARRY_EVAL_SCHEMA,
         "status": status,
         "orders": rows,
         "evaluated_count": len(evaluated),
         "unknown_count": unknown,
+        "invalid_count": invalid,
         "max_carry_min": max_carry,
         "all_le_35": (
             None if status != "EVALUATED" else all(v <= 35.0 for v in evaluated)

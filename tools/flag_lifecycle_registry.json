@@ -4440,6 +4440,8 @@
     "dispatch_v2/core/carry_freshness.py",
     "dispatch_v2/dispatch_pipeline.py",
     "dispatch_v2/feasibility_v2.py",
+    "dispatch_v2/plan_recheck.py",
+    "dispatch_v2/route_simulator_v2.py",
     "dispatch_v2/shadow_dispatcher.py"
    ],
    "curated_at": "2026-07-28",
@@ -4456,14 +4458,14 @@
    "lifecycle": "planned",
    "lifecycle_seeded": false,
    "name": "ENABLE_CARRY_CANON_V2",
-   "notes": "A noc 28.07: jeden evaluator carry=handoff-possession; handoff to predicted delivery po dwellu. Physical event=bound, picked_up click lub plan pickup=proxy. OFF nie tworzy carry_eval.v1 i nie zmienia rekordu/decyzji.",
+   "notes": "A noc 28.07: jeden evaluator carry=handoff-possession; handoff to predicted delivery po dwellu. Physical event=bound, picked_up click=proxy_fallback, a przed odbiorem pickup_ready_at wygrywa z plan pickup=proxy. OFF nie tworzy carry_eval.v1 ani alarm_other_hards_status; serializer A+B usuwa oba również ze starego/replayowanego wyniku, nie zmienia rekordu/decyzji i automatycznie wygasza zależny filtr HARD35.",
    "owner": {
     "business": "Adrian",
     "service": "dispatch-shadow.service"
    },
    "removal_condition": "po związaniu physical possession i zatwierdzeniu migracji wszystkich konsumentów owner może utrwalić evaluator bez flagi",
    "review_date": "2026-08-04",
-   "rollback": "flags.json ENABLE_CARRY_CANON_V2=false hot-reload; brak carry_eval.v1, legacy R6 bez zmian",
+   "rollback": "flags.json ENABLE_CARRY_CANON_V2=false hot-reload; brak carry_eval.v1, legacy R6 bez zmian, zależny ENABLE_HARD35_ENFORCE jest inert nawet jeśli jego klucz pozostał true",
    "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [
@@ -4478,7 +4480,9 @@
    "consumers": [
     "dispatch_v2/common.py",
     "dispatch_v2/core/alarm_certificate.py",
-    "dispatch_v2/core/selection.py"
+    "dispatch_v2/core/lex_window_guards.py",
+    "dispatch_v2/core/selection.py",
+    "dispatch_v2/shadow_dispatcher.py"
    ],
    "curated_at": "2026-07-28",
    "current_snapshot": {
@@ -4494,7 +4498,7 @@
    "lifecycle": "planned",
    "lifecycle_seeded": false,
    "name": "ENABLE_HARD35_ENFORCE",
-   "notes": "D noc 28.07: domyka obejście best-effort/ALWAYS_PROPOSE. ON filtruje carry>35 poza ważnym Alarmem; gdy brak planu w capie pokazuje least-damage jako KOORD/ALERT, nigdy jako feasible PROPOSE. Flip wyłącznie jako ostatni krok po S2+Alarm i ACK ownera.",
+   "notes": "D noc 28.07: domyka obejście best-effort/ALWAYS_PROPOSE. ON filtruje carry>35 poza ważnym Alarmem wyłącznie przy ENABLE_CARRY_CANON_V2=ON; CARRY_CANON=OFF czyni filtr inert dla niezależnego hot rollbacku. Gdy brak planu w capie pokazuje least-damage jako KOORD/ALERT, nigdy jako feasible PROPOSE. Flip wyłącznie jako ostatni krok po S2+Alarm i ACK ownera.",
    "owner": {
     "business": "Adrian",
     "service": "dispatch-shadow.service"

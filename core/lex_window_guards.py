@@ -57,7 +57,7 @@ class Thresholds:
     """Progi EFEKTYWNE tej ewaluacji (trafiają do ledgera per guard)."""
 
     delay_tol_min: float      # G1 + G2-delta — JEDEN wspólny budżet delty
-    carry_cap_min: float      # G2 absolutny cap trybu (35 / 40 w Alarmie)
+    carry_cap_min: float      # G2 normalny cap trybu (35 / 40 w Alarmie)
     min_gain_min: float       # G3
     alarm: bool = False       # czy cap pochodzi z kanonicznego Alarmu
 
@@ -80,10 +80,14 @@ def load_thresholds(
         fl = _C.load_flags()
     except Exception:
         fl = {}
-    alarm = _lg.alarm_certified(
-        alarm_certificate,
-        candidates=alarm_candidates,
-        strategy2_probe=strategy2_probe,
+    hard35_enforced = _C.hard35_enforcement_enabled()
+    alarm = (
+        hard35_enforced
+        and _lg.alarm_certified(
+            alarm_certificate,
+            candidates=alarm_candidates,
+            strategy2_probe=strategy2_probe,
+        )
     )
     cap_key = ("LEX_WINDOW_CARRY_CAP_ALARM_MIN" if alarm
                else "LEX_WINDOW_CARRY_CAP_MIN")
@@ -192,10 +196,14 @@ def evaluate(baseline: Facts, candidate: Facts, *,
             return GuardResult(False, exemption, verdicts, "g2_unevaluable")
         if cand_carry <= cap:
             continue
-        # Baseline już ponad capem: brak wyjątku ABSOLUTNEGO, ale kandydatowi
-        # wolno co najwyżej nie pogorszyć (D2 „relative"). Inaczej regresja
-        # świeżości byłaby na zawsze zablokowana, gdy raz przekroczy 35.
-        if base_carry is not None and base_carry > cap and cand_carry <= base_carry:
+        # Baseline już ponad capem: writer istniejącego worka może wyłącznie
+        # nie pogorszyć stanu (D2 „relative"). Absolutny HARD dla NOWEGO
+        # przydziału ma jednego ownera w core.selection/alarm_certificate.
+        if (
+            base_carry is not None
+            and base_carry > cap
+            and cand_carry <= base_carry
+        ):
             cap_reason = "over_cap_not_worsened"
             continue
         verdicts["G2"] = _v(FAIL, cap, cand_carry - cap, f"cap świeżości {oid}")

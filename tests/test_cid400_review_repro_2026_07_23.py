@@ -111,6 +111,7 @@ def test_console_writer_and_pool_resolver_share_effective_store(
     monkeypatch.setattr(C, "decision_flag", lambda name: True)
     monkeypatch.setattr(MO, "decision_flag", lambda name: True)
     monkeypatch.setattr(MO, "_resolve_cid", lambda _name: "400")
+    monkeypatch.setattr(MO, "_all_name_to_cid", lambda: {"Courier Exact": 400})
     monkeypatch.setattr(CR, "GRAFIK_FULL_NAMES_PATH", str(names_path))
     monkeypatch.setattr(
         schedule_utils,

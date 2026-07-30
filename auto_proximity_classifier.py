@@ -482,6 +482,8 @@ def _detect_edge_routing(
         return ROUTE_ALERT, "parser_degraded"
     if _has_frozen_window_violation(ctx.best_metrics):
         return ROUTE_ALERT, "frozen_window_violation"
+    # Jeden owner owner-facing least-damage. Parser/frozen mają wyższą
+    # precedencję i pozostają widocznym powodem tego samego ALERT.
     if ctx.best_effort or ctx.best_plan_violations > 0:
         return ROUTE_ALERT, f"best_effort_no_feasible (sla_viol={ctx.best_plan_violations})"
     if ctx.best_metrics.get("v325_score_blocked"):
@@ -551,6 +553,19 @@ def _meets_high_conf(ctx: ClassifierContext, thresholds: Dict[str, Any]) -> Tupl
 
 # -------------- Public entry point --------------
 
+def _best_effort_requires_classification(result: Any) -> bool:
+    """Czy kill-switch AUTO musi przepuścić klasyfikację owner-facing.
+
+    Funkcja nie wybiera route ani reason. Jedynym ownerem tej polityki jest
+    `_detect_edge_routing`, po zbudowaniu kontekstu, zapisaniu calibration
+    shadow i sprawdzeniu wyższej precedencji parser/frozen-window.
+    """
+    if getattr(result, "verdict", None) != "PROPOSE":
+        return False
+    best = getattr(result, "best", None)
+    return bool(best is not None and getattr(best, "best_effort", False))
+
+
 def classify_auto_route(
     result: Any,
     fleet_snapshot: Optional[Dict[str, Any]] = None,
@@ -584,7 +599,13 @@ def classify_auto_route(
     fleet_snapshot = fleet_snapshot or {}
 
     # Global kill switch — fail closed to standard flow
-    if not flags.get("AUTO_PROXIMITY_ENABLED", False) and not flags.get("AUTO_PROXIMITY_SHADOW_ONLY", False):
+    # Always-propose/least-damage musi jednak przejść przez normalny classifier,
+    # aby zachować shadow writer i precedencję parser/frozen-window.
+    if (
+        not flags.get("AUTO_PROXIMITY_ENABLED", False)
+        and not flags.get("AUTO_PROXIMITY_SHADOW_ONLY", False)
+        and not _best_effort_requires_classification(result)
+    ):
         return ROUTE_ACK, "auto_proximity_disabled_global"
 
     # Verdict precondition: classifier only operates on PROPOSE outcomes

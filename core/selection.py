@@ -107,15 +107,66 @@ def select_and_emit(ctx: SelectionContext, candidates: list):
     log = _dp.log
     # ── koniec prologu; poniżej ciało bajt-w-bajt z impl ──
 
-    def _hard35_proposal_boundary(result, proposal_pool):
+    def _r6_pov_count(candidate):
+        """Kanoniczny licznik R6 używany przez wybór i opis best-effort."""
+        metrics = getattr(candidate, "metrics", None)
+        if not metrics:
+            return 99
+        violations = metrics.get("r6_per_order_violations")
+        return len(violations) if violations else 0
+
+    def _pickup_extension_redirect_for(candidate):
+        """Jedyny owner owner-facing redirectu dla FINALNEGO zwycięzcy."""
+        if (
+            candidate is None
+            or not getattr(C, "ENABLE_LATE_PICKUP_HARD_GATE", False)
+        ):
+            return None
+        tier = _late_pickup_tier(candidate)
+        if tier < 1:
+            return None
+        metrics = getattr(candidate, "metrics", None) or {}
+        return {
+            "tier": tier,
+            "courier_id": str(getattr(candidate, "courier_id", "")),
+            "suggested_pickup_iso": metrics.get("new_pickup_eta_iso"),
+            "new_pickup_late_min": metrics.get("new_pickup_late_min"),
+            "committed_breach_min": (
+                round(metrics.get("late_pickup_committed_max", 0.0), 1)
+                if tier == 2
+                else None
+            ),
+            "committed_worst_restaurant": (
+                metrics.get("late_pickup_committed_worst_restaurant")
+                if tier == 2
+                else None
+            ),
+        }
+
+    def _hard35_proposal_boundary(
+        result,
+        proposal_pool,
+        *,
+        candidate_pool_is_complete=True,
+    ):
         """Jedyny lejek HARD35 dla feasible, best-effort i solo PROPOSE."""
         if (
             result.verdict != "PROPOSE"
-            or not C.decision_flag("ENABLE_HARD35_ENFORCE")
-            or result.best is None
-            or result.best.plan is None
+            # Canonical feature coupling lives in common. Absolutny HARD dla
+            # NOWEGO przydziału ma ownera tutaj; G4/lex-window istniejącego
+            # worka chronią ciągłość przez regułę „nie gorzej”.
+            # Bez producenta carry nie ma dowodu do egzekwowania.
+            or not C.hard35_enforcement_enabled()
         ):
             return result
+        # `best_effort` opisuje klasę decyzji (0 feasible), nie tożsamość
+        # pierwotnego zwycięzcy. HARD35 może przepiąć `best` na innego kuriera
+        # z tej samej puli; przenieś marker na nowego zwycięzcę, aby wszystkie
+        # downstreamy (classifier, serializer, firewall, Telegram) nadal
+        # widziały prawdziwy stan decyzji.
+        was_best_effort = bool(
+            getattr(getattr(result, "best", None), "best_effort", False)
+        )
         from dispatch_v2.core import alarm_certificate as _alarm
         pool = list(proposal_pool)
         within_cap, least_damage, meta = _alarm.hard35_best_effort_choice(
@@ -126,8 +177,69 @@ def select_and_emit(ctx: SelectionContext, candidates: list):
         )
         result.hard35_enforcement = meta
         if within_cap:
-            result.best = within_cap[0]
-            result.candidates = within_cap[:TOP_N_CANDIDATES]
+            # This is a HARD filter, not another selector.  E2 PLN, OBJM and
+            # carry-aware best-effort have already established the ranking in
+            # ``result.best``/``result.candidates``.  Filtering in raw
+            # ``proposal_pool`` order silently undid those owners.
+            from dispatch_v2.identity.candidate_pool import (
+                candidate_identity_key as _candidate_key,
+            )
+            _allowed_by_key = {}
+            _allowed_object_ids = set()
+            for _allowed in within_cap:
+                _allowed_by_key.setdefault(_candidate_key(_allowed), _allowed)
+                _allowed_object_ids.add(id(_allowed))
+            _ranked_allowed = []
+            _seen_keys = set()
+            for _ranked in (
+                [getattr(result, "best", None)]
+                + list(getattr(result, "candidates", None) or [])
+                + pool
+            ):
+                if _ranked is None:
+                    continue
+                _key = _candidate_key(_ranked)
+                if _key not in _allowed_by_key or _key in _seen_keys:
+                    continue
+                _seen_keys.add(_key)
+                _ranked_allowed.append(
+                    _ranked
+                    if id(_ranked) in _allowed_object_ids
+                    else _allowed_by_key[_key]
+                )
+            result.best = _ranked_allowed[0]
+            if was_best_effort:
+                result.best.best_effort = True
+            if candidate_pool_is_complete:
+                result.candidates = _ranked_allowed[:TOP_N_CANDIDATES]
+            # Redirect został policzony przed granicą HARD35. Po repicku jego
+            # czas, tier i restauracja muszą pochodzić z finalnego best; None
+            # jawnie wygasza redirect poprzedniego zwycięzcy.
+            result.pickup_extension_redirect = (
+                _pickup_extension_redirect_for(result.best)
+            )
+            # `best`, `candidates`, owner-facing `reason` i efektywny licznik
+            # puli są jednym kontraktem.  Filtr nie może zostawić nazwy
+            # usuniętego zwycięzcy ani liczby kandydatów sprzed HARD35.
+            if str(getattr(result, "reason", "")).startswith("feasible="):
+                result.pool_feasible_count = len(_ranked_allowed)
+                result.reason = (
+                    f"feasible={len(_ranked_allowed)} "
+                    f"best={result.best.courier_id}"
+                )
+            elif (
+                was_best_effort
+                and str(getattr(result, "reason", "")).startswith(
+                    "best_effort ("
+                )
+            ):
+                result.pool_feasible_count = 0
+                result.reason = (
+                    "best_effort (0 feasible, "
+                    f"r6_violations={_r6_pov_count(result.best)}, "
+                    "legacy_sla_v="
+                    f"{result.best.plan.sla_violations})"
+                )
             metrics = getattr(result.best, "metrics", None)
             if isinstance(metrics, dict):
                 metrics["hard35_enforcement"] = meta
@@ -397,16 +509,7 @@ def select_and_emit(ctx: SelectionContext, candidates: list):
                 r6_danger_shadow = {"changed": False}
 
         if _wtier >= 1:
-            pickup_extension_redirect = {
-                "tier": _wtier,
-                "courier_id": str(getattr(_winner, "courier_id", "")),
-                "suggested_pickup_iso": _wm.get("new_pickup_eta_iso"),
-                "new_pickup_late_min": _wm.get("new_pickup_late_min"),
-                "committed_breach_min": (round(_wm.get("late_pickup_committed_max", 0.0), 1)
-                                         if _wtier == 2 else None),
-                "committed_worst_restaurant": (_wm.get("late_pickup_committed_worst_restaurant")
-                                               if _wtier == 2 else None),
-            }
+            pickup_extension_redirect = _pickup_extension_redirect_for(_winner)
             log.info(
                 f"LATE_PICKUP_TIER order={order_id} winner={_winner.courier_id} tier={_wtier} "
                 f"new_late={_wm.get('new_pickup_late_min')}min "
@@ -1016,12 +1119,6 @@ def select_and_emit(ctx: SelectionContext, candidates: list):
     # (V3.28 P0 anchor=pickup_ready_at), nie legacy plan.sla_violations (anchor=TSP
     # pickup_at). Pre-fix: Jelenia 43 min carry przeszedł bo plan.sla_violations=0
     # (TSP pickup misaligned z real ready_at).
-    def _r6_pov_count(c):
-        if not hasattr(c, "metrics") or not c.metrics:
-            return 99
-        pov = c.metrics.get("r6_per_order_violations")
-        return len(pov) if pov else 0
-
     # Sprint OBJ F3 / BUG-4: największe przekroczenie R6 (min) kandydata wg
     # objm_ (route_metrics.compute_plan_metrics, anchor=gotowość/picked_up).
     # 0.0 gdy brak metryki — conservative (brak danych → brak eskalacji).
@@ -1287,6 +1384,7 @@ def select_and_emit(ctx: SelectionContext, candidates: list):
                 bag=[],  # pusty bag = solo
                 new_order=new_order,
                 shift_end=getattr(cs, "shift_end", None),
+                shift_end_status=getattr(cs, "shift_end_status", None),
                 shift_start=getattr(cs, "shift_start", None),
                 now=now,
                 sla_minutes=35,
@@ -1339,7 +1437,10 @@ def select_and_emit(ctx: SelectionContext, candidates: list):
             pool_feasible_count=0,
         )
         _result_solo = _hard35_proposal_boundary(
-            _result_solo, [solo_best])
+            _result_solo,
+            [solo_best],
+            candidate_pool_is_complete=False,
+        )
         _classify_and_set_auto_route(_result_solo, fleet_snapshot, order_event, now=now, v328_fail_causes=_v328_fail_causes)
         return _result_solo
 
