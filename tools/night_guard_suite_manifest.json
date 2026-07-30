@@ -1,6 +1,6 @@
 {
-  "base_sha": "c16253b90af33d427a72c51befa3b54136f21caf",
-  "manifest_version": 35,
+  "base_sha": "0e817adfa11dafcb9d302fbb2b2a3e1206d38227",
+  "manifest_version": 36,
   "nodeids": [
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix1_kurier_ids_load_fail_logs_error_and_dedups",
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix2_bag_not_stale_dedup_same_input",
@@ -1936,6 +1936,7 @@
     "tests/test_escalation_fixpack2_2026_07_29.py::test_FL_hard35_plan_none_is_never_propose",
     "tests/test_escalation_fixpack2_2026_07_29.py::test_FM_least_damage_koord_is_enqueued_for_owner",
     "tests/test_escalation_fixpack2_2026_07_29.py::test_FN_world_record_input_has_no_possession_keys_when_flag_off",
+    "tests/test_escalation_fixpack3_2026_07_29.py::test_enable_r6_breach_shadow_log_prod_probe_on_off_matrix",
     "tests/test_escalation_fixpack3_2026_07_29.py::test_r3_01_s2_ignores_no_candidate_with_safe_looking_plan",
     "tests/test_escalation_fixpack3_2026_07_29.py::test_r3_02_legal_none_result_stays_unknown_in_full_pool",
     "tests/test_escalation_fixpack3_2026_07_29.py::test_r3_03_not_applicable_carry_is_not_complete_no_safe_proof",
@@ -2002,6 +2003,7 @@
     "tests/test_escalation_ladder_night_2026_07_28.py::test_F3_pipeline_builds_alarm_only_after_strategy2_result",
     "tests/test_escalation_ladder_night_2026_07_28.py::test_F3_strategy2_safe_plan_invalidates_alarm_counterfactual",
     "tests/test_escalation_ladder_night_2026_07_28.py::test_F4_validate_recomputes_counterfactual_from_real_pool",
+    "tests/test_escalation_ladder_night_2026_07_28.py::test_F5_enable_load_plan_pure_read_reader_and_probe_matrix",
     "tests/test_escalation_ladder_night_2026_07_28.py::test_F5_strategy2_soon_free_read_is_byte_pure",
     "tests/test_escalation_ladder_night_2026_07_28.py::test_F6_untrusted_physical_source_stays_proxy",
     "tests/test_escalation_ladder_night_2026_07_28.py::test_F7_carry_cap_uses_raw_value_before_display_rounding",
@@ -6396,7 +6398,7 @@
     "tests/test_zombie01_pickup_guard.py::test_picked_up_recent_kept",
     "tests/test_zombie01_pickup_guard.py::test_zombie_assigned_with_stale_pickup_filtered"
   ],
-  "nodeids_sha256": "fcc268e23ee071d497f411b191d00f1f916451aae8a51db49a36280da25af704",
+  "nodeids_sha256": "f9bf013015b88fa0e4ae73bb5d648c4df87139f96ec3e7df9a89d1f5a2b92211",
   "outcome_contracts": {
     "tests/test_canon_static_check_a1.py::test_defer_completion_guard_armed_when_defer_exists": [
       "skipped"
@@ -6523,7 +6525,7 @@
     ]
   },
   "owner": "Adrian",
-  "reason": "Q5 release root closure: lifecycle source-proof fail-closed, curated tombstones, route parity canonical import, independent regression closure",
+  "reason": "Q5 final DoD closure: exact flag matrices, behavioral-scope CTO gate, retired covered effect debt, lifecycle and route parity root fixes",
   "schema_version": 1,
-  "updated_at_utc": "2026-07-30T16:20:08+00:00"
+  "updated_at_utc": "2026-07-30T16:48:22+00:00"
 }
