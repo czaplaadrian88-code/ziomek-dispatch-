@@ -38,6 +38,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 _BACKEND = Path("/root/.openclaw/workspace/nadajesz_clone/panel/backend")
 _SCRIPTS = Path("/root/.openclaw/workspace/scripts")
+_COURIER_API = _SCRIPTS / "courier_api"
 sys.path.insert(0, str(_BACKEND))
 sys.path.insert(0, str(_SCRIPTS))
 
@@ -104,11 +105,32 @@ def _load_backend_module() -> Any:
     from dispatch_v2 import live_eta as _live_eta  # noqa: F401,PLC0415
     from dispatch_v2 import route_podjazdy as _route_podjazdy  # noqa: F401,PLC0415
 
-    try:
-        from courier_api import courier_orders  # type: ignore  # noqa: PLC0415
-    except ImportError:
-        sys.path.insert(0, str(_SCRIPTS / "courier_api"))
-        import courier_orders  # type: ignore  # noqa: PLC0415
+    # courier-api nadal ma legacy sibling imports (`import config`,
+    # `import delivery_town`, ...), więc samo zaimportowanie go jako pakietu nie
+    # odtwarza granicy procesu usługi.  Gdy PYTHONPATH zawiera worktree
+    # dispatch_v2, jego katalog `config/` wygrywa jako namespace package i
+    # courier_orders dostaje obcy moduł bez COURIER_ACTIVE_STATUSES.  Katalog
+    # faktycznie uruchamianej usługi musi być pierwszy PRZED importem.
+    courier_api_dir = str(_COURIER_API)
+    if not sys.path or sys.path[0] != courier_api_dir:
+        sys.path.insert(0, courier_api_dir)
+    import courier_orders  # type: ignore  # noqa: PLC0415
+
+    expected_orders = (_COURIER_API / "courier_orders.py").resolve()
+    expected_config = (_COURIER_API / "config.py").resolve()
+    loaded_orders = Path(getattr(courier_orders, "__file__", "")).resolve()
+    loaded_config_module = getattr(courier_orders, "config", None)
+    loaded_config = Path(
+        getattr(loaded_config_module, "__file__", "")
+    ).resolve()
+    if loaded_orders != expected_orders:
+        raise RuntimeError(
+            f"courier_orders import root mismatch: {loaded_orders}"
+        )
+    if loaded_config != expected_config:
+        raise RuntimeError(f"courier config import root mismatch: {loaded_config}")
+    if not hasattr(loaded_config_module, "COURIER_ACTIVE_STATUSES"):
+        raise RuntimeError("courier config missing COURIER_ACTIVE_STATUSES")
 
     return courier_orders
 

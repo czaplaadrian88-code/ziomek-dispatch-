@@ -97,6 +97,13 @@ def test_twins_bidirectional():
     a, b = "TRUST_CANON_ORDER", "ENABLE_BUILD_VIEW_TRUST_CANON_ORDER"
     assert b in flags[a]["twin_of"] and a in flags[b]["twin_of"]
     assert flags[a]["worlds"] == ["panel"] and flags[b]["worlds"] == ["apka"]
+    for a, b in (
+        ("ENABLE_CZASOWKA_RECLAIM_LIVE", "ENABLE_CZASOWKA_RECLAIM_SHADOW"),
+        ("ENABLE_EXPLICIT_UNKNOWN_POSITION_MODEL",
+         "ENABLE_EXPLICIT_UNKNOWN_POSITION_SHADOW"),
+        ("ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL", "ENABLE_UWAGI_BRIDGE_NADAWCA"),
+    ):
+        assert b in flags[a]["twin_of"] and a in flags[b]["twin_of"]
 
 
 # ── 3) COVERAGE SILNIKA niezależny od rejestru (anty-tautologia) ────────────────
@@ -284,7 +291,9 @@ def test_reseed_merge_preserves_curation_pure():
                    "lifecycle": "live", "lifecycle_seeded": False,
                    "owner": {"service": "dispatch-shadow.service", "business": "Adrian"},
                    "review_date": "2026-10-10", "removal_condition": "n/d dopóki live",
-                   "notes": "kuracja-test", "default": "STARY-DERYWAT",
+                   "rollback": "specjalizowany hot rollback", "notes": "kuracja-test",
+                   "superseded_by": "FLAG_SUCCESSOR",
+                   "default": "STARY-DERYWAT",
                    "current_snapshot": {"flags.json": "STARY-DERYWAT"}},
         # FLAG_B w starym BEZ kuracji → merge nie dotyka
         "FLAG_B": {"name": "FLAG_B", "lifecycle": "planned", "lifecycle_seeded": True,
@@ -298,6 +307,8 @@ def test_reseed_merge_preserves_curation_pure():
     assert a["lifecycle"] == "live" and a["lifecycle_seeded"] is False
     assert a["owner"]["business"] == "Adrian" and a["review_date"] == "2026-10-10"
     assert a["removal_condition"] == "n/d dopóki live" and a["notes"] == "kuracja-test"
+    assert a["rollback"] == "specjalizowany hot rollback"
+    assert a["superseded_by"] == "FLAG_SUCCESSOR"
     # pola DERYWOWANE ze świeżego skanu (NIE ze starego):
     assert a["default"] is False and a["current_snapshot"] == {"flags.json": True}
     b = fresh["flags"]["FLAG_B"]

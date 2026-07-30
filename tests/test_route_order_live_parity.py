@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 import subprocess
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -591,6 +592,57 @@ def test_backend_contract_requires_snapshot_builder_and_explicit_config():
 
     with pytest.raises(RuntimeError, match="build_view_from_snapshots"):
         MON._backend_contract(LegacyModule)
+
+
+def test_backend_loader_prefers_courier_api_over_worktree_config_namespace(
+    tmp_path
+):
+    """Negatywny oracle: dispatch_v2/config nie może podszyć się pod courier config."""
+    wrong_root = tmp_path / "dispatch-worktree"
+    (wrong_root / "config").mkdir(parents=True)
+    courier_root = tmp_path / "courier_api"
+    courier_root.mkdir()
+    (courier_root / "config.py").write_text(
+        "COURIER_ACTIVE_STATUSES = ('assigned',)\n", encoding="utf-8"
+    )
+    (courier_root / "courier_orders.py").write_text(
+        "import config\n"
+        "CONFIG_ORIGIN = config.__file__\n"
+        "ACTIVE = config.COURIER_ACTIVE_STATUSES\n",
+        encoding="utf-8",
+    )
+    probe = (
+        "import importlib.util, json\n"
+        "from pathlib import Path\n"
+        f"tool = Path({str(TOOL)!r})\n"
+        "spec = importlib.util.spec_from_file_location('parity_probe', tool)\n"
+        "mod = importlib.util.module_from_spec(spec)\n"
+        "spec.loader.exec_module(mod)\n"
+        f"mod._COURIER_API = Path({str(courier_root)!r})\n"
+        "loaded = mod._load_backend_module()\n"
+        "print(json.dumps({'orders': loaded.__file__, "
+        "'config': loaded.CONFIG_ORIGIN, 'active': loaded.ACTIVE}))\n"
+    )
+    child_env = dict(os.environ)
+    child_env["PYTHONPATH"] = (
+        str(wrong_root)
+        + os.pathsep
+        + child_env.get("PYTHONPATH", "")
+    )
+    completed = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        timeout=30,
+        env=child_env,
+    )
+    assert completed.returncode == 0, completed.stderr
+    loaded = json.loads(completed.stdout)
+    assert Path(loaded["config"]).resolve() == (courier_root / "config.py").resolve()
+    assert Path(loaded["orders"]).resolve() == (
+        courier_root / "courier_orders.py"
+    ).resolve()
+    assert loaded["active"] == ["assigned"]
 
 
 @pytest.mark.skipif(

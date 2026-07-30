@@ -108,6 +108,10 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setattr(P, "ENABLE_PLAN_CANON_ORDER_INVARIANTS", True)
     monkeypatch.setattr(P, "ENABLE_CARRIED_FIRST_RELAX", True)
     monkeypatch.setattr(P, "ENABLE_GPS_FREE_ANCHOR", True)
+    # Ten plik testuje kontrakt override, nie WB2/G4. Bez jawnej izolacji
+    # hot-flip ENABLE_LEX_WINDOW_GUARDS_V2 z żywego flags.json zmienia wynik
+    # fixture i pełna suita zależy od stanu produkcji.
+    monkeypatch.setattr(P, "ENABLE_LEX_WINDOW_GUARDS_V2", False)
     monkeypatch.setattr(O, "OVERRIDES_PATH", str(tmp_path / "operator_route_overrides.json"))
     monkeypatch.setattr(O, "EVENTS_PATH", str(tmp_path / "operator_route_override_events.jsonl"))
     monkeypatch.setattr(O, "_DOC_CACHE", {"path": None, "sig": None, "doc": None,

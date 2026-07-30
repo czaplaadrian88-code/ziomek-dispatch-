@@ -69,7 +69,8 @@ REVIEW_BY_CLASS = {
 }
 # Pola „własności kuracji" — chronione przy RE-SEED --merge (nie nadpisywać skanem).
 CURATION_FIELDS = ("owner", "lifecycle", "lifecycle_seeded", "curated_at",
-                   "review_date", "removal_condition", "notes")
+                   "review_date", "removal_condition", "rollback", "superseded_by",
+                   "notes")
 # Log-only / obserwacyjne (semantyka shadow poza samym „_SHADOW").
 _SHADOW_NAME_RE = re.compile(r"SHADOW|AUDIT_LOG|INSTRUMENTATION|OBSERVABILITY")
 
@@ -85,8 +86,14 @@ _FLAG_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 #    prefiks ENABLE_, a TRUST_CANON_ORDER↔BUILD_VIEW to głęboki rename). Seeder
 #    linkuje twin_of DWUSTRONNIE i waliduje symetrię. ──────────────────────────
 TWIN_CONCEPTS = {
+    "czasowka_reclaim": ["ENABLE_CZASOWKA_RECLAIM_LIVE",
+                         "ENABLE_CZASOWKA_RECLAIM_SHADOW"],
     "delivery_dash_when_no_plan": ["DELIVERY_DASH_WHEN_NO_PLAN",
                                    "ENABLE_DELIVERY_DASH_WHEN_NO_PLAN"],
+    "explicit_unknown_position": ["ENABLE_EXPLICIT_UNKNOWN_POSITION_MODEL",
+                                  "ENABLE_EXPLICIT_UNKNOWN_POSITION_SHADOW"],
+    "firmowe_uwagi_geocode_reject": ["ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL",
+                                     "ENABLE_UWAGI_BRIDGE_NADAWCA"],
     "live_eta_courier_guard": ["LIVE_ETA_COURIER_GUARD",
                                "ENABLE_LIVE_ETA_COURIER_GUARD"],
     "plan_aware_podjazdy": ["PLAN_AWARE_PODJAZDY", "ENABLE_PLAN_AWARE_PODJAZDY"],

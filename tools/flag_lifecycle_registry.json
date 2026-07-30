@@ -12,7 +12,7 @@
    "panel": 84,
    "test_isolated": 8,
    "total": 536,
-   "twins_concepts": 5
+   "twins_concepts": 8
   },
   "generator": "tools/flag_lifecycle_seed.py",
   "note": "stan flag = 3 światy (ADR-004); wartości current_snapshot z żywych źródeł dnia 2026-07-10; lifecycle heurystyczny (lifecycle_seeded).",
@@ -3244,7 +3244,7 @@
    },
    "removal_condition": "po minimum 2 dniach shadow owner wybiera promocję albo retire; certyfikat pozostaje wersjonowany",
    "review_date": "2026-08-04",
-   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "rollback": "flags.json ENABLE_ALARM_CERTIFICATE_SHADOW=false hot-reload; plan-recheck i selection wracają strict 35",
    "source_of_truth": "common.py-const",
    "twin_of": [],
    "worlds": [
@@ -3392,7 +3392,7 @@
    },
    "removal_condition": "po ustaleniu stałego kontraktu pomiaru albo retire za ACK",
    "review_date": "2026-08-10",
-   "rollback": "flags.json OFF hot-reload (bez restartu)",
+   "rollback": "flags.json false/brak klucza (hot-reload, bez restartu)",
    "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [
@@ -3737,7 +3737,7 @@
    },
    "removal_condition": "po minimum 2 dniach cienia: flip/retire za ACK ownera",
    "review_date": "2026-08-21",
-   "rollback": "flags.json OFF hot-reload (bez restartu)",
+   "rollback": "flags.json: klucz false lub brak klucza (hot-reload, bez restartu)",
    "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [
@@ -4374,7 +4374,7 @@
    },
    "removal_condition": "po zamknięciu decyzji o flipie C7 albo osobnym ACK retire",
    "review_date": "2026-08-10",
-   "rollback": "flags.json OFF hot-reload (bez restartu)",
+   "rollback": "flags.json false/brak klucza (hot-reload, bez restartu)",
    "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [
@@ -4528,7 +4528,7 @@
    },
    "removal_condition": "po związaniu physical possession i zatwierdzeniu migracji wszystkich konsumentów owner może utrwalić evaluator bez flagi",
    "review_date": "2026-08-04",
-   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "rollback": "flags.json ENABLE_CARRY_CANON_V2=false hot-reload; brak carry_eval.v1, legacy R6 bez zmian, zależny ENABLE_HARD35_ENFORCE jest inert nawet jeśli jego klucz pozostał true",
    "source_of_truth": "common.py-const",
    "twin_of": [],
    "worlds": [
@@ -4722,7 +4722,7 @@
    },
    "removal_condition": "jeśli nie wpięta do 2026-12 → retire (ACK Adrian)",
    "review_date": "2026-09-10",
-   "rollback": "flags.json OFF hot-reload (bez restartu)",
+   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
    "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [
@@ -5017,7 +5017,7 @@
    },
    "removal_condition": "po walidacji markerow gastro i stabilnym oknie obserwacji albo retire do 2026-10",
    "review_date": "2026-08-20",
-   "rollback": "flags.json OFF hot-reload (bez restartu)",
+   "rollback": "flags.json: klucz false lub brak klucza (hot-reload, bez restartu)",
    "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [
@@ -5091,9 +5091,11 @@
    },
    "removal_condition": "osobna implementacja etapu LIVE albo odrzucenie po karcie ownera",
    "review_date": "2026-08-21",
-   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "rollback": "flags.json: klucz false lub brak klucza; kod etapu SHADOW nie emituje eventu LIVE",
    "source_of_truth": "common.py-const",
-   "twin_of": [],
+   "twin_of": [
+    "ENABLE_CZASOWKA_RECLAIM_SHADOW"
+   ],
    "worlds": [
     "engine"
    ]
@@ -5129,9 +5131,11 @@
    },
    "removal_condition": "werdykt po co najmniej 2 dniach obserwacji: karta LIVE albo reject",
    "review_date": "2026-08-21",
-   "rollback": "flags.json OFF hot-reload (bez restartu)",
+   "rollback": "flags.json OFF/brak klucza: zero I/O shadow, bez restartu po hot-reload",
    "source_of_truth": "flags.json",
-   "twin_of": [],
+   "twin_of": [
+    "ENABLE_CZASOWKA_RECLAIM_LIVE"
+   ],
    "worlds": [
     "engine"
    ]
@@ -5316,7 +5320,7 @@
    },
    "removal_condition": "Po zastąpieniu wersjonowanym event storem decision-time ETA.",
    "review_date": "2026-08-21",
-   "rollback": "flags.json OFF hot-reload (bez restartu)",
+   "rollback": "flags.json ENABLE_DECISION_ETA_LOG=false hot-reload (bez restartu)",
    "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [
@@ -6203,9 +6207,11 @@
    },
    "removal_condition": "werdykt po min 300 decyzjach lub 7 dniach; target winner-share U0 45-55% G0",
    "review_date": "2026-07-29",
-   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "rollback": "flaga OFF hot-reload; brak deployu/restartu w tym kandydacie",
    "source_of_truth": "common.py-const",
-   "twin_of": [],
+   "twin_of": [
+    "ENABLE_EXPLICIT_UNKNOWN_POSITION_SHADOW"
+   ],
    "worlds": [
     "engine"
    ]
@@ -6242,9 +6248,11 @@
    },
    "removal_condition": "po werdykcie okna shadow i decyzji adopt/reject głównej polityki",
    "review_date": "2026-07-29",
-   "rollback": "flags.json OFF hot-reload (bez restartu)",
+   "rollback": "flaga OFF hot-reload: zero dual-eval i zero payloadu obu polityk",
    "source_of_truth": "flags.json",
-   "twin_of": [],
+   "twin_of": [
+    "ENABLE_EXPLICIT_UNKNOWN_POSITION_MODEL"
+   ],
    "worlds": [
     "engine"
    ]
@@ -6697,7 +6705,9 @@
    "review_date": "2026-10-10",
    "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
    "source_of_truth": "common.py-const",
-   "twin_of": [],
+   "twin_of": [
+    "ENABLE_UWAGI_BRIDGE_NADAWCA"
+   ],
    "worlds": [
     "engine"
    ]
@@ -7806,7 +7816,7 @@
    },
    "removal_condition": "po trwałym zatwierdzeniu HARD35 owner może usunąć flagę i zachować enforcement",
    "review_date": "2026-08-04",
-   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "rollback": "flags.json ENABLE_HARD35_ENFORCE=false hot-reload; wraca legacy best-effort/ALWAYS_PROPOSE",
    "source_of_truth": "common.py-const",
    "twin_of": [],
    "worlds": [
@@ -8335,7 +8345,7 @@
    },
    "removal_condition": "n/d — guard trwaly; przeglad progow po kalibracji z ledgera v2",
    "review_date": "2026-10-27",
-   "rollback": "flags.json OFF hot-reload (bez restartu)",
+   "rollback": "flags.json OFF (hot-reload przez _D3_FALA_A_FLAGS, bez restartu)",
    "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [
@@ -8373,7 +8383,7 @@
    },
    "removal_condition": "n/d dopoki zbieramy baseline WB2; po kalibracji progow -> przeglad",
    "review_date": "2026-10-27",
-   "rollback": "env OFF w flags.json + restart dispatch-shadow.service ZA ACK",
+   "rollback": "flags.json OFF hot-reload (bez restartu); OFF = sciezka v1 jak przed WB1",
    "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [
@@ -8602,7 +8612,7 @@
    },
    "removal_condition": "po stabilizacji kontraktu źródeł i minimum 2 dniach obserwacji decyzja ownera: utrwalić albo retire",
    "review_date": "2026-08-04",
-   "rollback": "flags.json OFF hot-reload (bez restartu)",
+   "rollback": "flags.json ENABLE_LIVE_ETA_WARM_SOURCE=false hot-reload; revert commita R3",
    "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [
@@ -8678,7 +8688,7 @@
    },
    "removal_condition": "n/d — kill-switch producenta zostaje jako rollback; przeglad razem z decyzja ownera o unifikacji mianownika serii legacy (rekalibracja progow LOADGOV 2.7/3.5/3.0)",
    "review_date": "2026-10-27",
-   "rollback": "env OFF w flags.json + restart dispatch-shadow.service ZA ACK",
+   "rollback": "flags.json OFF hot-reload (bez restartu); OFF = brak pliku snapshotu, czytnik STRICT 5 jak przed G5",
    "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [
@@ -9060,8 +9070,9 @@
    },
    "removal_condition": "po werdykcie flip/reject cienia (winner-share no-GPS -> ~pula) + 2 dni obserwacji",
    "review_date": "2026-08-19",
-   "rollback": "flags.json OFF hot-reload (bez restartu)",
+   "rollback": "flags.json OFF hot-reload (bez restartu); pre-flip kod inertny (OFF default)",
    "source_of_truth": "flags.json",
+   "superseded_by": "ENABLE_EXPLICIT_UNKNOWN_POSITION_MODEL",
    "twin_of": [],
    "worlds": [
     "engine"
@@ -9718,7 +9729,7 @@
    },
    "removal_condition": "flip ON za ACK Adriana po oknie cienia (would_apply) albo retire kandydata",
    "review_date": "2026-08-10",
-   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "rollback": "flags.json ENABLE_OPERATOR_ROUTE_ORDER_OVERRIDE=false (hot-reload, bez restartu); default OFF w common.py",
    "source_of_truth": "common.py-const",
    "twin_of": [],
    "worlds": [
@@ -10785,7 +10796,7 @@
    },
    "removal_condition": "jeśli nie wpięta do 2026-12 → retire (ACK Adrian)",
    "review_date": "2026-09-10",
-   "rollback": "flags.json OFF hot-reload (bez restartu)",
+   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
    "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [
@@ -11121,7 +11132,7 @@
    },
    "removal_condition": "usunąć trzy inertne drop-iny w tym samym kontrolowanym deployu co live_eta single-source; potem lifecycle=dead",
    "review_date": "2026-08-10",
-   "rollback": "rm drop-in dispatch-plan-recheck.service.d/live-eta-refresh.conf + restart dispatch-b-route-shadow.service ZA ACK",
+   "rollback": "revert kandydata przed deployem; po deployu rollback kodu wymaga jawnego przywrócenia starego writera i drop-inu za ACK",
    "source_of_truth": "drop-in:dispatch-b-route-shadow.service",
    "twin_of": [],
    "worlds": [
@@ -11764,7 +11775,7 @@
    },
    "removal_condition": "po zastąpieniu przez kanoniczny proposal_assignment Etapu 2 albo retire za ACK",
    "review_date": "2026-08-10",
-   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "rollback": "flags.json false/brak klucza (hot-reload, bez restartu)",
    "source_of_truth": "common.py-const",
    "twin_of": [],
    "worlds": [
@@ -11871,7 +11882,7 @@
    },
    "removal_condition": "po werdykcie gate R2 i ustaleniu stałego odświeżania albo retire za ACK",
    "review_date": "2026-08-10",
-   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "rollback": "flags.json false/brak klucza (hot-reload, bez restartu)",
    "source_of_truth": "common.py-const",
    "twin_of": [],
    "worlds": [
@@ -12356,7 +12367,7 @@
    },
    "removal_condition": "flip flags.json=true za ACK ownera (fix reassign-lag apki starego kuriera) lub retire, jeśli nie wpięta do 2026-10",
    "review_date": "2026-08-10",
-   "rollback": "flags.json OFF hot-reload (bez restartu)",
+   "rollback": "flip ENABLE_REASSIGN_OLD_PLAN_RELEASE=false w flags.json (decision_flag hot-reload per-call, BEZ restartu); pelny = git revert + restart dispatch-panel-watcher.service ZA ACK",
    "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [
@@ -13258,7 +13269,7 @@
    },
    "removal_condition": "flip flags.json=true za ACK po merge i weryfikacji health albo retire po zastapieniu stalym recovery loopem",
    "review_date": "2026-08-10",
-   "rollback": "flags.json OFF hot-reload (bez restartu)",
+   "rollback": "flip ENABLE_STATE_OUTBOX_SWEEPER=false w flags.json (hot-reload, bez restartu); pelny = git revert + restart dispatch-panel-watcher.service ZA ACK",
    "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [
@@ -13402,7 +13413,7 @@
    },
    "removal_condition": "po minimum 2 dniach shadow i decyzji ownera: zbudować osobną flagę pełnego S2 albo retire",
    "review_date": "2026-08-04",
-   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "rollback": "flags.json ENABLE_STRATEGY2_PROBE_SHADOW=false hot-reload; brak dodatkowych solve i pola strategy2_probe.v1",
    "source_of_truth": "common.py-const",
    "twin_of": [],
    "worlds": [
@@ -13551,9 +13562,11 @@
    },
    "removal_condition": "n/d dopóki live",
    "review_date": "2026-10-10",
-   "rollback": "flags.json OFF hot-reload (bez restartu)",
+   "rollback": "env OFF w flags.json + restart dispatch-shadow.service ZA ACK",
    "source_of_truth": "flags.json",
-   "twin_of": [],
+   "twin_of": [
+    "ENABLE_FIRMOWE_REJECT_ON_GEOCODE_FAIL"
+   ],
    "worlds": [
     "engine"
    ]
@@ -16304,7 +16317,7 @@
    },
    "removal_condition": "przeglad po wpieciu producenta Alarm certificate",
    "review_date": "2026-10-27",
-   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "rollback": "flags.json na wartosc sprzed zmiany (hot-reload)",
    "source_of_truth": "common.py-const",
    "twin_of": [],
    "worlds": [
@@ -16340,7 +16353,7 @@
    },
    "removal_condition": "n/d — prog decyzyjny",
    "review_date": "2026-10-27",
-   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "rollback": "flags.json na wartosc sprzed zmiany (hot-reload)",
    "source_of_truth": "common.py-const",
    "twin_of": [],
    "worlds": [
@@ -16377,7 +16390,7 @@
    },
    "removal_condition": "n/d — prog decyzyjny",
    "review_date": "2026-10-27",
-   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "rollback": "flags.json na wartosc sprzed zmiany (hot-reload)",
    "source_of_truth": "common.py-const",
    "twin_of": [],
    "worlds": [
@@ -16413,7 +16426,7 @@
    },
    "removal_condition": "n/d — prog decyzyjny",
    "review_date": "2026-10-27",
-   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "rollback": "flags.json na wartosc sprzed zmiany (hot-reload)",
    "source_of_truth": "common.py-const",
    "twin_of": [],
    "worlds": [
@@ -16487,7 +16500,7 @@
    },
    "removal_condition": "n/d — parametr swiezosci snapshotu",
    "review_date": "2026-10-27",
-   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "rollback": "flags.json na wartosc sprzed zmiany (hot-reload)",
    "source_of_truth": "common.py-const",
    "twin_of": [],
    "worlds": [
@@ -16523,7 +16536,7 @@
    },
    "removal_condition": "n/d — parametr swiezosci snapshotu",
    "review_date": "2026-10-27",
-   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "rollback": "flags.json na wartosc sprzed zmiany (hot-reload)",
    "source_of_truth": "common.py-const",
    "twin_of": [],
    "worlds": [
@@ -16559,7 +16572,7 @@
    },
    "removal_condition": "n/d — parametr swiezosci snapshotu",
    "review_date": "2026-10-27",
-   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "rollback": "flags.json na wartosc sprzed zmiany (hot-reload)",
    "source_of_truth": "common.py-const",
    "twin_of": [],
    "worlds": [
@@ -16595,7 +16608,7 @@
    },
    "removal_condition": "n/d — parametr swiezosci snapshotu",
    "review_date": "2026-10-27",
-   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "rollback": "flags.json na wartosc sprzed zmiany (hot-reload)",
    "source_of_truth": "common.py-const",
    "twin_of": [],
    "worlds": [
@@ -18090,7 +18103,7 @@
    },
    "removal_condition": "razem z ENABLE_PROPOSAL_CLAIM_PERSISTENCE przy przejściu na proposal_assignment Etapu 2",
    "review_date": "2026-08-10",
-   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "rollback": "usunąć klucz z flags.json; fallback 240 s hot-reload",
    "source_of_truth": "common.py-const",
    "twin_of": [],
    "worlds": [
