@@ -1145,6 +1145,128 @@ class GateStore:
             connection.commit()
         return self.show_at_job(job_key)
 
+    def cancel_at_job(
+        self,
+        job_key: str,
+        at_job_id: str,
+        *,
+        expected_gate_version: int,
+        actor: str,
+        reason: str,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Record an exact scheduler cancellation and supersede its gate.
+
+        The caller must remove the exact queue entry first and prove that it
+        is absent. This store method then atomically closes both writers of
+        truth: the registered at intent and its semantic gate. It also
+        reconciles a prior ``MISSING_ALARM`` caused by an already-removed job.
+        """
+
+        job_key = _required_text(job_key, "job_key")
+        at_job_id = _required_text(at_job_id, "at_job_id")
+        if not at_job_id.isdigit():
+            raise ValidationError("at_job_id musi być liczbą")
+        if (
+            not isinstance(expected_gate_version, int)
+            or expected_gate_version < 1
+        ):
+            raise ValidationError("expected_gate_version musi być dodatnią liczbą")
+        actor = _required_text(actor, "actor")
+        reason = _required_text(reason, "reason")
+        timestamp = iso_utc(now or utc_now())
+        self.initialize()
+        with self._write_connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            job = connection.execute(
+                "SELECT * FROM at_jobs WHERE job_key = ?", (job_key,)
+            ).fetchone()
+            if job is None:
+                connection.rollback()
+                raise GateNotFound(f"brak at job: {job_key}")
+            if str(job["at_job_id"] or "") != at_job_id:
+                connection.rollback()
+                raise ValidationError(
+                    f"at job id drift: {job['at_job_id']!r} != {at_job_id!r}"
+                )
+            if job["status"] not in {"SCHEDULED", "MISSING_ALARM"}:
+                connection.rollback()
+                raise GateError(
+                    f"at job ma stan terminalny lub niegotowy: {job['status']}"
+                )
+            gate = connection.execute(
+                "SELECT * FROM gates WHERE gate_id = ?", (job["gate_id"],)
+            ).fetchone()
+            assert gate is not None
+            if int(gate["version"]) != expected_gate_version:
+                connection.rollback()
+                raise CASConflict(
+                    f"CAS konflikt bramki {job['gate_id']}: "
+                    f"expected {expected_gate_version}, jest {gate['version']}"
+                )
+            if gate["state"] not in {
+                "BUILT_OFF",
+                "WAIT_DATA",
+                "READY_FOR_REVIEW",
+                "SUPERSEDED",
+            }:
+                connection.rollback()
+                raise IllegalTransition(
+                    f"nie można anulować at-joba dla bramki {gate['state']}"
+                )
+            from_state = str(gate["state"])
+            connection.execute(
+                """
+                UPDATE at_jobs SET status = 'CANCELLED', updated_at = ?,
+                    finished_at = ?, reconcile_note = ? WHERE job_key = ?
+                """,
+                (timestamp, timestamp, reason, job_key),
+            )
+            cursor = connection.execute(
+                """
+                UPDATE gates SET state = 'SUPERSEDED', alarm = 0,
+                    alarm_reason = '', blocker = ?,
+                    next_step = 'Nie wykonuj anulowanego at-joba',
+                    version = version + 1, updated_at = ?,
+                    closed_at = COALESCE(closed_at, ?)
+                WHERE gate_id = ? AND version = ?
+                """,
+                (
+                    reason,
+                    timestamp,
+                    timestamp,
+                    job["gate_id"],
+                    expected_gate_version,
+                ),
+            )
+            if cursor.rowcount != 1:
+                connection.rollback()
+                raise CASConflict(f"CAS konflikt bramki {job['gate_id']}")
+            updated = connection.execute(
+                "SELECT * FROM gates WHERE gate_id = ?", (job["gate_id"],)
+            ).fetchone()
+            assert updated is not None
+            connection.execute(
+                """
+                INSERT INTO gate_events (
+                    gate_id, from_state, to_state, expected_version,
+                    result_version, actor, reason, occurred_at, snapshot_json
+                ) VALUES (?, ?, 'SUPERSEDED', ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    job["gate_id"],
+                    from_state,
+                    expected_gate_version,
+                    int(updated["version"]),
+                    actor,
+                    f"at-job #{at_job_id} anulowany kanonicznie: {reason}",
+                    timestamp,
+                    self._event_snapshot(updated),
+                ),
+            )
+            connection.commit()
+        return self.show_at_job(job_key)
+
     def reconcile_at_jobs(
         self,
         present_job_ids: set[str] | None,

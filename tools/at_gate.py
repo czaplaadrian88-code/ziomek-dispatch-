@@ -306,6 +306,81 @@ def _run_registered_inner(
     return exit_code
 
 
+def cancel(args: argparse.Namespace) -> int:
+    """Cancel one exact registered job and close its intent atomically."""
+
+    store = GateStore(args.db)
+    job = store.show_at_job(args.job_key)
+    if str(job.get("at_job_id") or "") != args.at_job_id:
+        raise ValidationError(
+            f"at job id drift: {job.get('at_job_id')!r} != {args.at_job_id!r}"
+        )
+    try:
+        queue = _run_process([args.atq_bin])
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise GateError(
+            f"nie można potwierdzić atq przed anulowaniem: {exc}"
+        ) from exc
+    if queue.returncode != 0:
+        detail = (queue.stderr or queue.stdout).strip().replace("\n", " ")[:300]
+        raise GateError(
+            f"atq nie potwierdziło stanu przed anulowaniem: "
+            f"rc={queue.returncode}: {detail}"
+        )
+    present = _parse_atq(queue.stdout)
+    if args.at_job_id in present:
+        if args.already_removed:
+            raise ValidationError(
+                f"at-job #{args.at_job_id} nadal istnieje; "
+                "--already-removed jest fałszywe"
+            )
+        try:
+            removed = _run_process([args.atrm_bin, args.at_job_id])
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise GateError(f"atrm nie usunął at-joba: {exc}") from exc
+        if removed.returncode != 0:
+            detail = (
+                (removed.stderr or removed.stdout)
+                .strip()
+                .replace("\n", " ")[:300]
+            )
+            raise GateError(
+                f"atrm nie usunął at-joba #{args.at_job_id}: "
+                f"rc={removed.returncode}: {detail}"
+            )
+        verify = _run_process([args.atq_bin])
+        if verify.returncode != 0 or args.at_job_id in _parse_atq(verify.stdout):
+            raise GateError(
+                f"brak postcondition: at-job #{args.at_job_id} nadal jest w atq"
+            )
+    elif not args.already_removed:
+        raise ValidationError(
+            f"at-job #{args.at_job_id} już nie istnieje; "
+            "użyj --already-removed do jawnej rekoncyliacji"
+        )
+
+    cancelled = store.cancel_at_job(
+        args.job_key,
+        args.at_job_id,
+        expected_gate_version=args.expected_gate_version,
+        actor=args.actor,
+        reason=args.reason,
+    )
+    print(
+        json.dumps(
+            {
+                "status": cancelled["status"],
+                "gate_id": cancelled["gate_id"],
+                "job_key": cancelled["job_key"],
+                "at_job_id": cancelled["at_job_id"],
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
+    return 0
+
+
 def reconcile(args: argparse.Namespace) -> int:
     present: set[str] | None
     unavailable_note = ""
@@ -361,6 +436,27 @@ def build_parser() -> argparse.ArgumentParser:
     runner.add_argument("--token", required=True)
     runner.add_argument("--command-b64", required=True)
 
+    cancel_parser = subparsers.add_parser(
+        "cancel",
+        help="anuluj exact zarejestrowany at-job i zamknij jego intencję",
+    )
+    cancel_parser.add_argument("--job-key", required=True)
+    cancel_parser.add_argument("--at-job-id", required=True)
+    cancel_parser.add_argument(
+        "--expected-gate-version",
+        required=True,
+        type=int,
+    )
+    cancel_parser.add_argument("--actor", required=True)
+    cancel_parser.add_argument("--reason", required=True)
+    cancel_parser.add_argument("--already-removed", action="store_true")
+    cancel_parser.add_argument(
+        "--atq-bin", default="atq", help=argparse.SUPPRESS
+    )
+    cancel_parser.add_argument(
+        "--atrm-bin", default="atrm", help=argparse.SUPPRESS
+    )
+
     reconcile_parser = subparsers.add_parser(
         "reconcile", help="porównaj aktywne wpisy DB z atq"
     )
@@ -377,6 +473,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             return schedule(args)
         if args.command_name == "run":
             return run_registered(args)
+        if args.command_name == "cancel":
+            return cancel(args)
         return reconcile(args)
     except (GateError, ValidationError) as exc:
         print(

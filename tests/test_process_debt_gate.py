@@ -20,6 +20,7 @@ from process_debt_gate import (  # noqa: E402
     CASConflict,
     GateStore,
     IllegalTransition,
+    ValidationError,
     render_open_gates,
 )
 
@@ -318,6 +319,38 @@ def test_reconcile_missing_at_job_sets_alarm_visible_in_view(tmp_path: Path) -> 
         source="fixture.sqlite3",
     )
     assert "| ALARM |" in view
+
+    with pytest.raises(ValidationError):
+        store.cancel_at_job(
+            "job-key-1",
+            "999",
+            expected_gate_version=3,
+            actor="pytest",
+            reason="wrong scheduler receipt must fail",
+        )
+    with pytest.raises(CASConflict):
+        store.cancel_at_job(
+            "job-key-1",
+            "123",
+            expected_gate_version=2,
+            actor="pytest",
+            reason="stale cancellation must fail",
+        )
+    gate = store.show_gate("at.test")
+    cancelled = store.cancel_at_job(
+        "job-key-1",
+        "123",
+        expected_gate_version=gate["version"],
+        actor="pytest",
+        reason="exact successor is ready",
+        now=datetime(2026, 7, 21, 12, 4, tzinfo=timezone.utc),
+    )
+    assert cancelled["status"] == "CANCELLED"
+    closed = store.show_gate("at.test")
+    assert closed["state"] == "SUPERSEDED"
+    assert closed["alarm"] is False
+    assert closed["events"][-1]["actor"] == "pytest"
+    assert store.reconcile_at_jobs(set())["alarms"] == []
 
 
 def test_successful_at_result_advances_to_review_and_records_hash(tmp_path: Path) -> None:

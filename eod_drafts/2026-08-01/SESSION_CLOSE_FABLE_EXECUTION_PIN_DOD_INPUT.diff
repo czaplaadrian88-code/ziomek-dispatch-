@@ -1,0 +1,19 @@
+diff --git a/tools/process_debt_gate.py b/tools/process_debt_gate.py
+--- a/tools/process_debt_gate.py
++++ b/tools/process_debt_gate.py
+@@
++    def cancel_at_job(self, job_key, at_job_id, *, expected_gate_version, actor, reason, now=None):
++        """Atomically record CANCELLED and SUPERSEDED under exact ID and CAS."""
+diff --git a/tools/at_gate.py b/tools/at_gate.py
+--- a/tools/at_gate.py
++++ b/tools/at_gate.py
+@@
++def cancel(args):
++    """Prove exact atq removal before calling the canonical ledger writer."""
+diff --git a/tests/test_process_debt_gate.py b/tests/test_process_debt_gate.py
+--- a/tests/test_process_debt_gate.py
++++ b/tests/test_process_debt_gate.py
+@@
++    with pytest.raises(ValidationError):
++        store.cancel_at_job("job-key-1", "999", expected_gate_version=3, actor="pytest", reason="wrong ID")
++    assert store.cancel_at_job("job-key-1", "123", expected_gate_version=3, actor="pytest", reason="exact")["status"] == "CANCELLED"
