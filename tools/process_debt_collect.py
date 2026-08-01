@@ -11,7 +11,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -653,6 +655,54 @@ def _atq_snapshot(path: Path | None, unavailable: bool) -> tuple[set[str] | None
     return parse_atq(result.stdout), "atq"
 
 
+def _registered_payload_identity_matches(job: Mapping[str, Any]) -> bool:
+    """Tombstone wiąże numeric queue ID tylko z exact sealed payloadem.
+
+    Sama obecność ścieżki nie jest authority: reused ID, symlink, katalog albo
+    podmieniony inode/ctime muszą wrócić do klasy AT_JOB_UNREGISTERED.
+    """
+
+    path_text = str(job.get("payload_path") or "")
+    if not path_text:
+        return False
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            path_text,
+            os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0),
+        )
+        metadata = os.fstat(descriptor)
+        expected = (
+            int(job["payload_dev"]),
+            int(job["payload_ino"]),
+            int(job["payload_ctime_ns"]),
+            int(job["payload_size"]),
+        )
+        expected_sha256 = str(job["payload_sha256"])
+    except (KeyError, TypeError, ValueError, OSError):
+        if descriptor is not None:
+            os.close(descriptor)
+        return False
+    actual = (
+        int(metadata.st_dev),
+        int(metadata.st_ino),
+        int(metadata.st_ctime_ns),
+        int(metadata.st_size),
+    )
+    if not stat.S_ISREG(metadata.st_mode) or actual != expected:
+        os.close(descriptor)
+        return False
+    digest = hashlib.sha256()
+    try:
+        while chunk := os.read(descriptor, 1024 * 1024):
+            digest.update(chunk)
+    except OSError:
+        return False
+    finally:
+        os.close(descriptor)
+    return bool(_SHA_RE.fullmatch(expected_sha256)) and digest.hexdigest() == expected_sha256
+
+
 def collect_atq(
     *,
     store: GateStore,
@@ -666,8 +716,21 @@ def collect_atq(
     present, source = _atq_snapshot(snapshot_path, force_unavailable)
     if present is None:
         return [], {"status": "UNAVAILABLE", "detail": source}
-    jobs = store.list_at_jobs(active_only=True)
-    registered_ids = {str(job["at_job_id"]): job for job in jobs if job.get("at_job_id")}
+    all_jobs = store.list_at_jobs(active_only=False)
+    active_statuses = {"SUBMITTING", "SCHEDULED", "MISSING_ALARM"}
+    active_jobs = [job for job in all_jobs if str(job["status"]) in active_statuses]
+    tombstones = [
+        job
+        for job in all_jobs
+        if str(job["status"]) in {"CANCELLED", "SUBMISSION_FAILED"}
+        and job.get("at_job_id")
+        and _registered_payload_identity_matches(job)
+    ]
+    registered_ids = {
+        str(job["at_job_id"]): job
+        for job in [*active_jobs, *tombstones]
+        if job.get("at_job_id")
+    }
     proposals: list[dict[str, Any]] = []
     # Zarejestrowane joby mają już kanoniczny gate. Ich brak w `atq`, launch
     # grace, aktywne claimy oraz rzeczywiste MISSING_ALARM klasyfikuje i zapisuje
@@ -702,9 +765,10 @@ def collect_atq(
         "status": "OK",
         "source": source,
         "present": sorted(present, key=int),
-        "registered_active": len(registered_ids),
+        "registered_active": len(active_jobs),
+        "registered_cancel_tombstones": len(tombstones),
         "canonical_missing_alarm": sum(
-            job["status"] == "MISSING_ALARM" for job in jobs
+            job["status"] == "MISSING_ALARM" for job in active_jobs
         ),
         "unregistered": len(unknown),
     }

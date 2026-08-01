@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import os
+import sqlite3
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -37,20 +39,26 @@ def register_sealed_at_job(
     command = ["/bin/true", suffix]
     job_key = f"job-{suffix}"
     gate_id = f"at.collect.{suffix}"
-    payload_path = str((tmp_path / f"payload-{suffix}.json").absolute())
+    payload = (tmp_path / f"payload-{suffix}.json").absolute()
+    payload.write_bytes(f"sealed payload {suffix}".encode("utf-8"))
+    payload.chmod(0o600)
+    metadata = os.stat(payload, follow_symlinks=False)
+    payload_path = str(payload)
     identity = {
-        "sha256": ("a" if suffix == "running" else "b") * 64,
-        "device": 1,
-        "inode": 2,
-        "ctime_ns": 3,
-        "size": 4,
+        "sha256": hashlib.sha256(payload.read_bytes()).hexdigest(),
+        "device": metadata.st_dev,
+        "inode": metadata.st_ino,
+        "ctime_ns": metadata.st_ctime_ns,
+        "size": metadata.st_size,
     }
+    artifact_root = str((tmp_path / f"artifacts-{suffix}").absolute())
     binding = runner_auth_binding(
         job_key=job_key,
         gate_id=gate_id,
         scheduled_for=scheduled_for,
         command_sha256=canonical_argv_hash(command),
         payload_sha256=str(identity["sha256"]),
+        artifact_root=artifact_root,
     )
     store.register_at_job(
         gate_id=gate_id,
@@ -69,6 +77,7 @@ def register_sealed_at_job(
         runner_auth_hmac=runner_auth_tag(token, binding),
         payload_path=payload_path,
         payload_identity=identity,
+        artifact_root=artifact_root,
         now=datetime(2026, 7, 21, 9, 0, tzinfo=timezone.utc),
     )
     store.confirm_at_job(
@@ -257,3 +266,164 @@ def test_atq_collector_consumes_reconcile_status_instead_of_guessing_missing(
     source = inspect.getsource(collector.collect_atq)
     assert "AT_JOB_MISSING" not in source
     assert 'category="at-missing"' not in source
+
+
+def test_collector_treats_cancelled_payload_as_pending_tombstone_only(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    store = GateStore(tmp_path / "cancel-tombstone.sqlite3")
+    record = register_sealed_at_job(
+        store,
+        tmp_path,
+        suffix="cancel-tombstone",
+        queue_id="733",
+        scheduled_for="2026-07-21T10:00:00Z",
+    )
+    payload_path = Path(str(record["payload_path"]))
+    gate = store.show_gate("at.collect.cancel-tombstone")
+    claim = store.begin_at_job_cancellation(
+        str(record["job_key"]),
+        "733",
+        expected_gate_version=int(gate["version"]),
+        actor="pytest",
+        reason="logical tombstone",
+    )
+    store.cancel_at_job(
+        str(record["job_key"]),
+        "733",
+        cancel_claim_id=str(claim["claim_id"]),
+        expected_gate_version=int(gate["version"]),
+        actor="pytest",
+        reason="logical tombstone",
+    )
+    snapshot = tmp_path / "tombstone-atq.txt"
+    snapshot.write_text("733\tfixture\n", encoding="utf-8")
+
+    proposals, status = collector.collect_atq(
+        store=store,
+        snapshot_path=snapshot,
+        force_unavailable=False,
+        owner="pytest",
+        default_due_at="2026-07-23T00:00:00Z",
+        default_opened_at="2026-07-21T09:00:00Z",
+        master_sha=CODE_SHA,
+    )
+    assert proposals == []
+    assert status["registered_cancel_tombstones"] == 1
+
+    # Behawioralny SHA oracle: staty i dokładny FD są nadal zgodne, zmienia się
+    # wyłącznie digest zapisany w ledgerze. Tombstone musi przestać maskować ID.
+    with sqlite3.connect(store.db_path) as connection:
+        connection.execute(
+            "UPDATE at_jobs SET payload_sha256=? WHERE job_key=?",
+            ("0" * 64, record["job_key"]),
+        )
+        connection.commit()
+    proposals, status = collector.collect_atq(
+        store=store,
+        snapshot_path=snapshot,
+        force_unavailable=False,
+        owner="pytest",
+        default_due_at="2026-07-23T00:00:00Z",
+        default_opened_at="2026-07-21T09:00:00Z",
+        master_sha=CODE_SHA,
+    )
+    assert [proposal["kind"] for proposal in proposals] == ["AT_JOB_UNREGISTERED"]
+    assert status["registered_cancel_tombstones"] == 0
+    with sqlite3.connect(store.db_path) as connection:
+        connection.execute(
+            "UPDATE at_jobs SET payload_sha256=? WHERE job_key=?",
+            (record["identity"]["sha256"], record["job_key"]),
+        )
+        connection.commit()
+
+    # fstat, wszystkie read i close muszą dotyczyć descriptoru zwróconego przez
+    # jedno O_NOFOLLOW open — ścieżka nie może zostać ponownie otwarta do hash.
+    exact_job = store.show_at_job(str(record["job_key"]))
+    real_open = collector.os.open
+    real_fstat = collector.os.fstat
+    real_read = collector.os.read
+    real_close = collector.os.close
+    opened: list[int] = []
+    consumed: list[tuple[str, int]] = []
+
+    def spy_open(*args, **kwargs):
+        descriptor = real_open(*args, **kwargs)
+        opened.append(descriptor)
+        return descriptor
+
+    def spy_fstat(descriptor):
+        consumed.append(("fstat", descriptor))
+        return real_fstat(descriptor)
+
+    def spy_read(descriptor, size):
+        consumed.append(("read", descriptor))
+        return real_read(descriptor, size)
+
+    def spy_close(descriptor):
+        consumed.append(("close", descriptor))
+        return real_close(descriptor)
+
+    monkeypatch.setattr(collector.os, "open", spy_open)
+    monkeypatch.setattr(collector.os, "fstat", spy_fstat)
+    monkeypatch.setattr(collector.os, "read", spy_read)
+    monkeypatch.setattr(collector.os, "close", spy_close)
+    assert collector._registered_payload_identity_matches(exact_job) is True
+    assert len(opened) == 1
+    assert consumed
+    assert {descriptor for _operation, descriptor in consumed} == {opened[0]}
+    monkeypatch.undo()
+
+    # Podmieniony inode nie może odziedziczyć numeric ID starego tombstone.
+    payload_path.unlink()
+    payload_path.write_bytes(b"foreign reused queue id")
+    payload_path.chmod(0o600)
+    proposals, status = collector.collect_atq(
+        store=store,
+        snapshot_path=snapshot,
+        force_unavailable=False,
+        owner="pytest",
+        default_due_at="2026-07-23T00:00:00Z",
+        default_opened_at="2026-07-21T09:00:00Z",
+        master_sha=CODE_SHA,
+    )
+    assert [proposal["kind"] for proposal in proposals] == ["AT_JOB_UNREGISTERED"]
+    assert status["registered_cancel_tombstones"] == 0
+
+    # Symlink i katalog pod tą samą ścieżką również nigdy nie są authority.
+    payload_path.unlink()
+    target = tmp_path / "foreign-target"
+    target.write_bytes(b"foreign")
+    payload_path.symlink_to(target)
+    proposals, status = collector.collect_atq(
+        store=store,
+        snapshot_path=snapshot,
+        force_unavailable=False,
+        owner="pytest",
+        default_due_at="2026-07-23T00:00:00Z",
+        default_opened_at="2026-07-21T09:00:00Z",
+        master_sha=CODE_SHA,
+    )
+    assert [proposal["kind"] for proposal in proposals] == ["AT_JOB_UNREGISTERED"]
+    assert status["registered_cancel_tombstones"] == 0
+
+    payload_path.unlink()
+    payload_path.mkdir()
+    proposals, status = collector.collect_atq(
+        store=store,
+        snapshot_path=snapshot,
+        force_unavailable=False,
+        owner="pytest",
+        default_due_at="2026-07-23T00:00:00Z",
+        default_opened_at="2026-07-21T09:00:00Z",
+        master_sha=CODE_SHA,
+    )
+    assert [proposal["kind"] for proposal in proposals] == ["AT_JOB_UNREGISTERED"]
+    assert status["registered_cancel_tombstones"] == 0
+
+    source = inspect.getsource(collector._registered_payload_identity_matches)
+    assert "O_NOFOLLOW" in source
+    assert "payload_sha256" in source
+    assert "os.fstat" in source
+    assert "lexists" not in inspect.getsource(collector.collect_atq)
