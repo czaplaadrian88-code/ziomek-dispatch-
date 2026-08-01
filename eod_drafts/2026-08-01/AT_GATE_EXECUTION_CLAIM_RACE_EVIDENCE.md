@@ -1,6 +1,6 @@
 # At-gate authority, durable receipt, ledger v4 i kolejka Fable — evidence
 
-Status: `HOLD — ROOT FIX, FRESH BLIND I FULL REGRESSION GREEN; COMMIT/LIVE/E2E PENDING`
+Status: `LIVE — PROVIDER D0C0640B5 + LEDGER V4 + NO-MODEL E2E GREEN; FABLE AT#229 PENDING`
 
 Data: 2026-08-01 UTC
 
@@ -133,9 +133,13 @@ Potwierdzone źródła problemów:
   do niepoświadczonej ścieżki.
 - Exact Q1/Q5 pathsets są porównywane z rzeczywistym `git diff`, nie tylko z
   deklarowaną liczbą plików.
-- `QUEUE_STATUS.state=REMEDIATION_REQUIRED`, a stary `PREFLIGHT.json` v2 jest
-  celowo stale. Queue pozostaje fail-closed aż do provider deploy, no-model E2E
-  i świeżego preflight v3.
+- Po deployu preflight wykrył u źródła jeden stale pin własnego selftestu
+  kolejki. Rebind wyłącznie `QUEUE_SELFTEST_SHA256` do realnego SHA przeszedł
+  43/43 testy i niezależny incremental `GO`.
+- `QUEUE_STATUS.state=PREFLIGHT_VERIFIED`; świeży `PREFLIGHT.json` v3 ma SHA
+  `10a14a472027a5c996da3b5f96ee846a8c3bf51f8ebb7f4e03546c0bf4d74161`.
+  Queue fingerprint to
+  `a119aa14ffd473b0285ae5b1d29cbe6fcc340b9c32c4d2e1f28c92bacbc2f08b`.
 
 ## Mapa kompletności
 
@@ -155,12 +159,14 @@ Potwierdzone źródła problemów:
 | public DTO | operator/export | consumer | TAK | marker redaction + exact keysets/version |
 | SQLite boundary | storage errors | writer/consumer | TAK | connect/commit/rollback/close/integrity→StorageError |
 | collector | inwentaryzacja atq | consumer | TAK | exact tombstone identity/reused ID/symlink/dir/brak |
-| queue `execute` | model authority | consumer | TAK w kodzie | 43 selftests; real no-model E2E po deployu |
+| queue `execute` | model authority | consumer | TAK LIVE | 43 selftests + real no-model E2E po deployu |
 
 ## Aktualne dowody testowe
 
 - Focused ledger/scheduler/collector: `56 passed in 7.00s`; exit 0.
-- Queue remediation: `43 tests in 0.184s`; exit 0.
+- Queue remediation po finalnym rebindzie: `43 passed, 29 subtests passed in
+  0.12s`; exit 0. Runner SHA:
+  `08271e127d7c2f73c5bf314d34c4c0f2b1e07787309ccc256cc06c8d45a8fc5b`.
 - `ziomek-blind-review/selftest.sh`: 8/8 PASS, `SELFTEST OK`.
 - `ziomek-cto/selftest.sh`: wszystkie bramki scope/DoD/brief/handoff PASS.
 - `py_compile` dotkniętych narzędzi/testów: PASS.
@@ -190,47 +196,60 @@ Potwierdzone źródła problemów:
   Żaden przerwany przebieg nie jest release gate; finalny przebieg od zera
   opisany wyżej jest właściwą zieloną bramką.
 
-## Runtime baseline i operacje LIVE
+## Runtime i operacje LIVE
 
-Na moment tego raportu nic z kandydata nie zostało wdrożone:
-
-- live code pozostaje na kanonicznym masterze sprzed tego root-fixu;
-- live ledger: schema v2, claims 0; integrity/FK green w read-only preflight;
-- istniejące joby i `atq` nie zostały zmienione;
-- żadna usługa nie została zrestartowana, żadna flaga nie została przełączona;
-- Fable ani inny model nie został uruchomiony.
+- Kanoniczny `master` został fast-forwardowany bez konfliktu z cudzymi dirty
+  plikami do `d0c0640b577f4ffd92f2ab70157fb511ee3d78c1` (obejmuje wymagany
+  poprzednik `40daa2d603ddc6efd6cbd743f833521681103166`).
+- Przed deployem powstał tag
+  `rollback/at-gate-v4-predeploy-20260801T154412Z` oraz jawne kopie trzech
+  narzędzi. Finalne SHA live są identyczne z zaakceptowanym kandydatem.
+- Świeży backup SQLite Backup API v2 ma mode `0600`, integrity `ok`, FK=0,
+  claims=0 i SHA
+  `d75b62734b68229b91427a2dfe6559b35f9a155827f73a4c862c89adfe4bf936`.
+- Produkcyjny ledger przeszedł atomowo `user_version 2→4`; zachowane liczności
+  przed migracją: gates=109, events=434, jobs=6, claims=0. Po rejestracji
+  następcy audytu: gates=110, events=437, jobs=7, claims=0; integrity `ok`,
+  FK=0, mode `0600`.
+- Powdrożeniowy scratch E2E użył realnych wdrożonych narzędzi i realnego queue
+  runnera. `at_gate` utworzył auth2 RUN claim, oba publiczne verifiery v4
+  przeszły, a kolejka zatrzymała się dopiero na guardzie resetu z rc=97.
+  Claim został sfinalizowany z durable receiptem; `run-20260802` nie powstał,
+  `QUEUE_STATUS` nie zmienił SHA, a fingerprint produkcyjnej bazy przed/po był
+  identyczny. Dowód:
+  `/root/artifacts/session284-at-gate-postdeploy-e2e-20260801T154909Z/`.
+- Nowy realny sealed auth2 job `at#229` jest `SCHEDULED` na
+  `2026-08-02T10:10:00Z`; gate
+  `release.sessions274-280-review-queue-v4-postdeploy-20260802` jest
+  `READY_FOR_REVIEW` v3 bez alarmu. Audyt ma wyłącznie authority read-only i
+  nie może automatycznie promować ani mutować LIVE.
+- Żadna usługa nie została zrestartowana, żadna flaga nie została przełączona;
+  `dispatch-telegram` pozostaje inactive/disabled. Fable ani inny model nie
+  został uruchomiony w tej sesji.
 
 ## Backup i rollback
 
-Aktualne rehearsal artifacts są prywatne w:
-`/root/artifacts/session284-at-gate-migration-rehearsal-20260801T1505Z-v4/`.
+Rehearsal jest w
+`/root/artifacts/session284-at-gate-migration-rehearsal-20260801T1505Z-v4/`,
+a rzeczywisty backup i kopie kodu w
+`/root/artifacts/session284-at-gate-live-deploy-20260801T154412Z/`.
 
-Bezpośrednio przed produkcyjną migracją musi powstać nowy backup przez SQLite
-Backup API, z mode `0600`, hashem, `integrity_check=ok` i FK=0. Przed pierwszym
-claimem rollback jest wspólny: przywrócenie trzech zgodnych narzędzi oraz bazy
-v2 z backupu w quiet window. Stary commit v3 nie jest rollbackiem i nie może
-otworzyć finalnego v4. Po jakimkolwiek claimie downgrade jest zabroniony;
-rollback jest forward-only przez logiczny CANCEL v4 i zatrzymanie nowych
-schedule. Nie wolno kopiować aktywnego SQLite z WAL.
+Po utworzeniu auth2 joba #229 nie wolno wykonywać downgrade ani otwierać bazy
+starym v3. Rollback jest forward-only: logiczny exact cancel joba #229,
+zatrzymanie nowych schedule i jawny forward-fix v4. Backup v2 pozostaje dowodem
+i ostatnią opcją disaster recovery wyłącznie po adjudykacji, nie zwykłym
+automatycznym rollbackiem aktywnego ledgera. Nie wolno kopiować SQLite z WAL.
 
-## Pozostałe bramki do LIVE
+## Pozostała bramka powdrożeniowa
 
-1. Zamrozić SHA wszystkich sześciu plików, kolejki i evidence; uruchomić
-   mechaniczne `ziomek-cto dod` oraz `ziomek-blind-review blind/check`.
-2. Commitować wyłącznie jawne ścieżki i wdrożyć spójny provider bez restartu
-   usług, zachowując cudze dirty files.
-3. W quiet window: świeży SQLite backup API, atomowa migracja v2→v4, exact
-   schema/integrity/FK/count verification.
-4. Wykonać realny no-model E2E `at_gate → queue execute`: claim i 14-key
-   attestation muszą przejść, a time/preflight gate zatrzymać przed Claude.
-5. Wygenerować świeży preflight v3, utworzyć nowy gate/job auth2 przez
-   `at_gate.py`, zaplanować audyt Fable dopiero na zatwierdzone okno po resecie.
-
-Nie ogłaszać DONE ani LIVE przed wykonaniem wszystkich punktów.
+Kod, migracja, preflight i scheduler są LIVE oraz zweryfikowane. Pozostał tylko
+read-only audyt Fable uruchamiany przez `at#229` po resecie. Jego werdykt nie
+zmienia automatycznie kodu, flag ani produkcji; po wyniku MAIN waliduje receipt,
+trzy werdykty i dopiero aktualizuje odpowiednie gate'y.
 
 ## Mechaniczne evidence dla bramki DoD
 
 regresja: 6399 passed, 24 skipped, 8 xfailed, failed=0; canonical worktree run
-e2e: isolated GateStore v4 → at_gate claim/verifier → queue execute passed; stale preflight zatrzymał przed model subprocess
+e2e: deployed GateStore v4 → at_gate auth2 claim/verifier → queue verifier passed; quota-reset guard rc97 zatrzymał przed model subprocess; prod DB unchanged
 pozytywny-wplyw: mutation probes uruchamiały child przy usuniętym verifierze i maskowały reused ID przy pominiętym SHA; finalne oracles czerwieniały mutanty
 rollback: świeży SQLite Backup API v2 mode 0600 + git revert trzech narzędzi przed claimem; po claimie forward-only logical CANCEL v4
