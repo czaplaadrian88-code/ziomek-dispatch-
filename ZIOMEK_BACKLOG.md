@@ -1,5 +1,21 @@
 # ZIOMEK AI DISPATCHER - BACKLOG ROZWOJU
 
+> **FINAL LIVE 2026-08-01 15:57 UTC — AT-GATE/LEDGER V4 WDROŻONY, FABLE #229:**
+> jawny owner ACK „wprowadź live, audyt powdrożeniowy Fable” wykonany.
+> Provider `d0c0640b5` jest na kanonicznym masterze; ledger produkcyjny
+> zmigrowany atomowo v2→v4 po backupie API `0600`, integrity/FK green, claims=0.
+> Pełna regresja `6399P/0F/24S/8X`; focused 56/56; queue 43/43 + 29 subtestów;
+> postdeploy auth2 E2E przeszedł oba verifiery i zatrzymał się przed modelem na
+> guardzie resetu. Release gate `release.at-gate-execution-claim-race-20260801`
+> = `CLOSED` v8. Nowy sealed auth2 `at#229` czeka na 02.08 10:10 UTC; gate
+> `release.sessions274-280-review-queue-v4-postdeploy-20260802` =
+> `READY_FOR_REVIEW` v3 bez alarmu, preflight v3 `10a14a47…`, runner
+> `08271e12…`. #227/#228 są historycznie CANCELLED/SUPERSEDED. Zero restartów
+> usług i flipów; Fable nie została jeszcze uruchomiona. Pełny handoff:
+> `/root/handover/SESSIONS_274_280_SINGLE_ULTRA_HANDOFF_2026-07-30.md`.
+> Osobno nadal otwarte: błędne czasy Jakub/Grill/Kolejowa, Q5 outcome-manifest,
+> `S-AUTO-01` oraz PII denylista blind-review bundlera.
+
 > **KANDYDAT 2026-07-24 — C7 POST-SHIFT REPLAY GO:** owner związał kryterium
 > monotonicznie („każde 5 min w dół to poprawa, najlepsze 0"). Branch
 > `fix/c7-exclusions-20260724`, commit `18864aff4`: klasyfikator u źródła,
