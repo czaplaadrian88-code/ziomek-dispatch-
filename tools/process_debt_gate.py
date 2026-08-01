@@ -17,6 +17,7 @@ import sqlite3
 import stat
 import sys
 import tempfile
+import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -56,6 +57,13 @@ AT_ACTIVE_STATUSES = frozenset({"SUBMITTING", "SCHEDULED", "MISSING_ALARM"})
 AT_TERMINAL_STATUSES = frozenset(
     {"SUCCEEDED", "FAILED", "SUBMISSION_FAILED", "CANCELLED"}
 )
+CLAIM_ACTIVE_STATUSES = frozenset({"CLAIMED"})
+DB_SCHEMA_VERSION = 3
+SEALED_AUTH_VERSION = 2
+CLAIM_BINDING_VERSION = 1
+AT_RUN_CLAIM_STALE_SECONDS = 12 * 60 * 60
+AT_CANCEL_CLAIM_STALE_SECONDS = 5 * 60
+AT_LAUNCH_GRACE_SECONDS = 2 * 60
 
 _ID_RE = re.compile(r"^[a-z0-9][a-z0-9._:-]{2,127}$")
 _SHA_RE = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
@@ -86,6 +94,10 @@ class ValidationError(GateError):
     """Dane wejściowe nie spełniają kontraktu."""
 
 
+class ClaimConflict(GateError):
+    """At-job ma już claim RUN albo CANCEL; drugi skutek jest zabroniony."""
+
+
 def utc_now() -> datetime:
     return datetime.now(timezone.utc).replace(microsecond=0)
 
@@ -114,6 +126,63 @@ def canonical_json(value: Any) -> str:
 
 def sha256_json(value: Any) -> str:
     return hashlib.sha256(canonical_json(value).encode("utf-8")).hexdigest()
+
+
+def canonical_argv_hash(command: Sequence[str]) -> str:
+    if not command or any(not isinstance(part, str) or not part for part in command):
+        raise ValidationError("command musi być niepustą listą argumentów")
+    return sha256_json(list(command))
+
+
+def runner_auth_binding(
+    *,
+    job_key: str,
+    gate_id: str,
+    scheduled_for: str,
+    command_sha256: str,
+    payload_sha256: str,
+) -> dict[str, Any]:
+    """Jedno kanoniczne związanie sealed payloadu z exact jobem i argv."""
+
+    return {
+        "schema_version": SEALED_AUTH_VERSION,
+        "operation": "RUN",
+        "job_key": _required_text(job_key, "job_key"),
+        "gate_id": _validate_gate_id(gate_id),
+        "scheduled_for": iso_utc(parse_timestamp(scheduled_for, "scheduled_for")),
+        "command_sha256": _validate_evidence_hash(command_sha256),
+        "payload_sha256": _validate_evidence_hash(payload_sha256),
+    }
+
+
+def runner_auth_tag(token: str, binding: Mapping[str, Any]) -> str:
+    token = _required_text(token, "runner_token")
+    return hmac.new(
+        token.encode("utf-8"),
+        canonical_json(dict(binding)).encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def _validated_identity(value: Mapping[str, Any] | None, field: str) -> dict[str, Any]:
+    if not isinstance(value, Mapping):
+        raise ValidationError(f"{field}: wymagany obiekt identity")
+    expected = {"sha256", "device", "inode", "ctime_ns", "size"}
+    if set(value) != expected:
+        raise ValidationError(f"{field}: wymagane exact pola {sorted(expected)}")
+    try:
+        result = {
+            "sha256": _validate_evidence_hash(str(value["sha256"])),
+            "device": int(value["device"]),
+            "inode": int(value["inode"]),
+            "ctime_ns": int(value["ctime_ns"]),
+            "size": int(value["size"]),
+        }
+    except (TypeError, ValueError) as exc:
+        raise ValidationError(f"{field}: niepoprawna tożsamość pliku") from exc
+    if any(result[key] < 0 for key in ("device", "inode", "ctime_ns", "size")):
+        raise ValidationError(f"{field}: wartości identity nie mogą być ujemne")
+    return result
 
 
 def _required_text(value: Any, field: str) -> str:
@@ -153,6 +222,26 @@ def _metadata_json(value: Mapping[str, Any] | None) -> str:
     if not isinstance(value, Mapping):
         raise ValidationError("metadata musi być obiektem JSON")
     return canonical_json(dict(value))
+
+
+AT_JOB_CLAIMS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS at_job_claims (
+    claim_id TEXT PRIMARY KEY,
+    job_key TEXT NOT NULL UNIQUE REFERENCES at_jobs(job_key),
+    gate_id TEXT NOT NULL REFERENCES gates(gate_id),
+    status TEXT NOT NULL CHECK (status IN ('CLAIMED', 'FINALIZED')),
+    binding_json TEXT NOT NULL,
+    binding_sha256 TEXT NOT NULL,
+    receipt_sha256 TEXT,
+    exit_code INTEGER,
+    claimed_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    finalized_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS at_job_claims_status
+ON at_job_claims(status, claimed_at, job_key);
+"""
 
 
 SCHEMA = f"""
@@ -213,7 +302,17 @@ CREATE TABLE IF NOT EXISTS at_jobs (
     finished_at TEXT,
     exit_code INTEGER,
     result_evidence_hash TEXT,
-    reconcile_note TEXT NOT NULL DEFAULT ''
+    reconcile_note TEXT NOT NULL DEFAULT '',
+    auth_version INTEGER NOT NULL DEFAULT 1 CHECK (auth_version IN (1, 2)),
+    runner_auth_tag TEXT,
+    command_sha256 TEXT,
+    payload_path TEXT,
+    payload_sha256 TEXT,
+    payload_dev INTEGER,
+    payload_ino INTEGER,
+    payload_ctime_ns INTEGER,
+    payload_size INTEGER,
+    artifact_root TEXT
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS at_jobs_queue_id
@@ -221,6 +320,8 @@ ON at_jobs(at_job_id) WHERE at_job_id IS NOT NULL;
 
 CREATE UNIQUE INDEX IF NOT EXISTS at_jobs_one_active_per_gate
 ON at_jobs(gate_id) WHERE status IN ('SUBMITTING', 'SCHEDULED', 'MISSING_ALARM');
+
+{AT_JOB_CLAIMS_SCHEMA}
 """
 
 REQUIRED_COLUMNS = {
@@ -238,8 +339,36 @@ REQUIRED_COLUMNS = {
         "job_key", "gate_id", "at_job_id", "status", "scheduled_for",
         "command_json", "runner_token_hash", "created_at", "updated_at",
         "last_seen_at", "finished_at", "exit_code", "result_evidence_hash",
-        "reconcile_note",
+        "reconcile_note", "auth_version", "runner_auth_tag", "command_sha256",
+        "payload_path", "payload_sha256", "payload_dev", "payload_ino",
+        "payload_ctime_ns", "payload_size", "artifact_root",
     },
+    "at_job_claims": {
+        "claim_id", "job_key", "gate_id", "status", "binding_json",
+        "binding_sha256", "receipt_sha256", "exit_code", "claimed_at",
+        "updated_at", "finalized_at",
+    },
+}
+
+V2_AT_JOB_COLUMNS: dict[str, str] = {
+    "auth_version": "INTEGER NOT NULL DEFAULT 1 CHECK (auth_version IN (1, 2))",
+    "runner_auth_tag": "TEXT",
+    "command_sha256": "TEXT",
+    "payload_path": "TEXT",
+    "payload_sha256": "TEXT",
+    "payload_dev": "INTEGER",
+    "payload_ino": "INTEGER",
+    "payload_ctime_ns": "INTEGER",
+    "payload_size": "INTEGER",
+    "artifact_root": "TEXT",
+}
+
+LEGACY_V2_CLAIM_COLUMNS = {
+    "claim_id", "job_key", "gate_id", "status", "binding_json",
+    "binding_sha256", "auth_tag", "receipt_path", "receipt_sha256",
+    "receipt_dev", "receipt_ino", "receipt_ctime_ns", "receipt_size",
+    "exit_code", "stdout_sha256", "stderr_sha256", "claimed_at",
+    "updated_at", "finalized_at",
 }
 
 
@@ -248,6 +377,10 @@ class GateStore:
 
     def __init__(self, db_path: str | os.PathLike[str] = DEFAULT_DB):
         self.db_path = Path(db_path).expanduser()
+
+    def _migration_checkpoint(self, step: str) -> None:
+        """No-op seam dla fault-injection testu atomowej migracji v1→v2."""
+        del step
 
     def initialize(self) -> None:
         parent = self.db_path.parent
@@ -273,12 +406,10 @@ class GateStore:
             raise GateError(f"baza nie jest zwykłym plikiem: {self.db_path}")
         with self._write_connection() as connection:
             version = int(connection.execute("PRAGMA user_version").fetchone()[0])
-            # Wersja 2 = kanoniczny żywy ledger po hardeningu auth at-jobów (dodatkowe
-            # kolumny at_jobs). Tabele gates/gate_events są wersjonowo stabilne (identyczne
-            # w 1 i 2), więc transition bramek działa poprawnie na obu.
-            if version not in (0, 1, 2):
+            if version not in (0, 1, 2, DB_SCHEMA_VERSION):
                 raise GateError(
-                    f"nieobsługiwana wersja schematu SQLite: {version}; oczekiwano 0, 1 albo 2"
+                    "nieobsługiwana wersja schematu SQLite: "
+                    f"{version}; oczekiwano 0, 1, 2 albo {DB_SCHEMA_VERSION}"
                 )
             existing_tables = {
                 str(row[0])
@@ -291,28 +422,73 @@ class GateStore:
                     "odmowa przejęcia niewersjonowanej bazy zawierającej tabele kanoniczne"
                 )
             try:
-                connection.executescript(SCHEMA)
-            except sqlite3.Error as exc:
-                raise GateError(f"niezgodny schemat SQLite: {exc}") from exc
-            for table, expected in REQUIRED_COLUMNS.items():
-                actual = {
+                connection.execute("BEGIN IMMEDIATE")
+                for statement in SCHEMA.split(";"):
+                    if statement.strip():
+                        connection.execute(statement)
+                if version < DB_SCHEMA_VERSION:
+                    self._migration_checkpoint("schema-ddl")
+                actual_claims = {
                     str(row[1])
-                    for row in connection.execute(f"PRAGMA table_info({table})").fetchall()
+                    for row in connection.execute(
+                        "PRAGMA table_info(at_job_claims)"
+                    ).fetchall()
                 }
-                missing = sorted(expected - actual)
-                if missing:
-                    raise GateError(
-                        f"niezgodny schemat {table}; brak kolumn: {', '.join(missing)}"
+                expected_claims = REQUIRED_COLUMNS["at_job_claims"]
+                if version == 2 and actual_claims == LEGACY_V2_CLAIM_COLUMNS:
+                    legacy_count = int(
+                        connection.execute(
+                            "SELECT COUNT(*) FROM at_job_claims"
+                        ).fetchone()[0]
                     )
-            # Nigdy nie degraduj kanonicznej wersji: v2 (auth at-jobów) MUSI przetrwać,
-            # inaczej at_gate traci kontrakt sealed-payload. Świeża/legacy baza = 1.
-            # Atomowo pod blokadą zapisu (BEGIN IMMEDIATE + re-read) — zamyka wyścig z
-            # równoległą migracją 1→2 (Sol cross-check 2026-07-24): bez tego odczyt sprzed
-            # cudzej migracji mógłby ją nadpisać z powrotem w dół.
-            connection.execute("BEGIN IMMEDIATE")
-            current = int(connection.execute("PRAGMA user_version").fetchone()[0])
-            connection.execute(f"PRAGMA user_version = {current if current >= 1 else 1}")
-            connection.execute("COMMIT")
+                    if legacy_count:
+                        raise GateError(
+                            "migracja v2→v3 odrzucona: legacy at_job_claims "
+                            f"zawiera {legacy_count} rekordów wymagających ręcznego rozliczenia"
+                        )
+                    connection.execute("DROP TABLE at_job_claims")
+                    for statement in AT_JOB_CLAIMS_SCHEMA.split(";"):
+                        if statement.strip():
+                            connection.execute(statement)
+                    self._migration_checkpoint("claim-table-rebuild")
+                actual_at_jobs = {
+                    str(row[1])
+                    for row in connection.execute("PRAGMA table_info(at_jobs)").fetchall()
+                }
+                for column, definition in V2_AT_JOB_COLUMNS.items():
+                    if column not in actual_at_jobs:
+                        connection.execute(
+                            f"ALTER TABLE at_jobs ADD COLUMN {column} {definition}"
+                        )
+                        self._migration_checkpoint(f"at_jobs.{column}")
+                for table, expected in REQUIRED_COLUMNS.items():
+                    actual = {
+                        str(row[1])
+                        for row in connection.execute(
+                            f"PRAGMA table_info({table})"
+                        ).fetchall()
+                    }
+                    missing = sorted(expected - actual)
+                    if missing:
+                        raise GateError(
+                            f"niezgodny schemat {table}; brak kolumn: "
+                            + ", ".join(missing)
+                        )
+                    if table == "at_job_claims" and actual != expected:
+                        unexpected = sorted(actual - expected)
+                        raise GateError(
+                            "niezgodny schemat at_job_claims; nadmiarowe kolumny: "
+                            + ", ".join(unexpected)
+                        )
+                if version < DB_SCHEMA_VERSION:
+                    self._migration_checkpoint("validated")
+                connection.execute(f"PRAGMA user_version = {DB_SCHEMA_VERSION}")
+                connection.commit()
+            except Exception as exc:
+                connection.rollback()
+                if isinstance(exc, GateError):
+                    raise
+                raise GateError(f"niezgodny schemat SQLite: {exc}") from exc
         try:
             os.chmod(self.db_path, 0o600)
         except PermissionError:
@@ -356,6 +532,13 @@ class GateStore:
         result = dict(row)
         result["command"] = json.loads(result.pop("command_json"))
         result.pop("runner_token_hash", None)
+        result.pop("runner_auth_tag", None)
+        return result
+
+    @staticmethod
+    def _row_to_claim(row: sqlite3.Row) -> dict[str, Any]:
+        result = dict(row)
+        result["binding"] = json.loads(result.pop("binding_json"))
         return result
 
     @staticmethod
@@ -808,44 +991,117 @@ class GateStore:
             )
         return gates
 
-    def register_at_intent(
+    def register_at_job(
         self,
         *,
         gate_id: str,
+        title: str,
+        owner: str,
+        due_at: str,
+        blocker: str,
+        code_sha: str,
+        evidence_hash: str,
+        opened_at: str | None,
+        actor: str,
         job_key: str,
         runner_token_hash: str,
         scheduled_for: str,
         command: Sequence[str],
+        runner_auth_hmac: str,
+        payload_path: str,
+        payload_identity: Mapping[str, Any],
         now: datetime | None = None,
     ) -> dict[str, Any]:
         gate_id = _validate_gate_id(gate_id)
+        title = _required_text(title, "title")
+        owner = _required_text(owner, "owner")
+        due_at = iso_utc(parse_timestamp(due_at, "due_at"))
+        blocker = _required_text(blocker, "blocker")
+        code_sha = _validate_code_sha(code_sha)
+        evidence_hash = _validate_evidence_hash(evidence_hash)
+        actor = _required_text(actor, "actor")
         job_key = _required_text(job_key, "job_key")
         runner_token_hash = _validate_evidence_hash(runner_token_hash)
         scheduled_for = iso_utc(parse_timestamp(scheduled_for, "scheduled_for"))
-        if not command or any(not isinstance(part, str) or not part for part in command):
-            raise ValidationError("command musi być niepustą listą argumentów")
+        command_sha256 = canonical_argv_hash(command)
+        auth_version = SEALED_AUTH_VERSION
+        runner_auth_hmac = _validate_evidence_hash(runner_auth_hmac)
+        payload_path = _required_text(payload_path, "payload_path")
+        if not Path(payload_path).is_absolute():
+            raise ValidationError("payload_path musi być absolutna")
+        identity = _validated_identity(payload_identity, "payload_identity")
         timestamp = iso_utc(now or utc_now())
+        opened = (
+            iso_utc(parse_timestamp(opened_at, "opened_at"))
+            if opened_at
+            else timestamp
+        )
+        gate_metadata = _metadata_json(
+            {
+                "scheduled_for": scheduled_for,
+                "command_sha256": command_sha256,
+                "runner_contract": "sealed-payload-v2-preexec-claim",
+            }
+        )
         self.initialize()
         try:
             with self._write_connection() as connection:
                 connection.execute("BEGIN IMMEDIATE")
-                gate = connection.execute(
-                    "SELECT state FROM gates WHERE gate_id = ?", (gate_id,)
-                ).fetchone()
-                if gate is None:
-                    connection.rollback()
-                    raise GateNotFound(f"brak rekordu: {gate_id}")
-                if gate["state"] != "BUILT_OFF":
-                    connection.rollback()
-                    raise IllegalTransition(
-                        "zadanie at można rejestrować tylko dla bramki BUILT_OFF"
+                connection.execute(
+                    """
+                    INSERT INTO gates (
+                        gate_id, title, kind, state, owner, due_at, next_step,
+                        blocker, code_sha, evidence_hash, version, alarm,
+                        alarm_reason, opened_at, created_at, updated_at,
+                        closed_at, metadata_json
+                    ) VALUES (
+                        ?, ?, 'AT_JOB', 'BUILT_OFF', ?, ?,
+                        'Zaplanuj job wyłącznie przez at_gate.py', ?, ?, ?,
+                        1, 0, '', ?, ?, ?, NULL, ?
                     )
+                    """,
+                    (
+                        gate_id,
+                        title,
+                        owner,
+                        due_at,
+                        blocker,
+                        code_sha,
+                        evidence_hash,
+                        opened,
+                        timestamp,
+                        timestamp,
+                        gate_metadata,
+                    ),
+                )
+                gate = connection.execute(
+                    "SELECT * FROM gates WHERE gate_id = ?", (gate_id,)
+                ).fetchone()
+                assert gate is not None
+                connection.execute(
+                    """
+                    INSERT INTO gate_events (
+                        gate_id, from_state, to_state, expected_version,
+                        result_version, actor, reason, occurred_at, snapshot_json
+                    ) VALUES (?, NULL, 'BUILT_OFF', NULL, 1, ?, ?, ?, ?)
+                    """,
+                    (
+                        gate_id,
+                        actor,
+                        "atomowe utworzenie bramki i sealed at-intent",
+                        timestamp,
+                        self._event_snapshot(gate),
+                    ),
+                )
                 connection.execute(
                     """
                     INSERT INTO at_jobs (
                         job_key, gate_id, at_job_id, status, scheduled_for,
-                        command_json, runner_token_hash, created_at, updated_at
-                    ) VALUES (?, ?, NULL, 'SUBMITTING', ?, ?, ?, ?, ?)
+                        command_json, runner_token_hash, created_at, updated_at,
+                        auth_version, runner_auth_tag, command_sha256,
+                        payload_path, payload_sha256, payload_dev, payload_ino,
+                        payload_ctime_ns, payload_size
+                    ) VALUES (?, ?, NULL, 'SUBMITTING', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         job_key,
@@ -853,17 +1109,28 @@ class GateStore:
                         scheduled_for,
                         canonical_json(
                             {
-                                "argv_sha256": sha256_json(list(command)),
+                                "argv_sha256": command_sha256,
                                 "argc": len(command),
                             }
                         ),
                         runner_token_hash,
                         timestamp,
                         timestamp,
+                        auth_version,
+                        runner_auth_hmac,
+                        command_sha256,
+                        payload_path,
+                        identity["sha256"],
+                        identity["device"],
+                        identity["inode"],
+                        identity["ctime_ns"],
+                        identity["size"],
                     ),
                 )
                 connection.commit()
         except sqlite3.IntegrityError as exc:
+            if "gates.gate_id" in str(exc) or "UNIQUE constraint failed: gates.gate_id" in str(exc):
+                raise GateAlreadyExists(f"rekord już istnieje: {gate_id}") from exc
             raise GateError(f"nie udało się zarejestrować intencji at: {exc}") from exc
         return self.show_at_job(job_key)
 
@@ -1018,18 +1285,221 @@ class GateStore:
             connection.commit()
         return self.show_at_job(job_key)
 
-    def finish_at_job(
+    @staticmethod
+    def _stored_command_hash(job: Mapping[str, Any]) -> str:
+        value = str(job["command_sha256"] or "")
+        if not value:
+            try:
+                value = str(json.loads(str(job["command_json"]))["argv_sha256"])
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                raise ValidationError("at job nie ma kanonicznego argv_sha256") from exc
+        return _validate_evidence_hash(value)
+
+    @staticmethod
+    def _claim_binding(claim: Mapping[str, Any]) -> dict[str, Any]:
+        try:
+            binding = json.loads(str(claim["binding_json"]))
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+            raise ClaimConflict("claim ma niepoprawny binding JSON") from exc
+        if not isinstance(binding, dict):
+            raise ClaimConflict("claim binding nie jest obiektem")
+        if str(claim["binding_sha256"]) != sha256_json(binding):
+            raise ClaimConflict("claim binding digest mismatch")
+        return binding
+
+    @classmethod
+    def _validate_run_claim_binding(
+        cls,
+        claim: Mapping[str, Any],
+        job: Mapping[str, Any],
+        stored_command_hash: str,
+    ) -> dict[str, Any]:
+        binding = cls._claim_binding(claim)
+        expected_keys = {
+            "schema_version",
+            "operation",
+            "job_key",
+            "gate_id",
+            "at_job_id",
+            "command_sha256",
+            "payload_sha256",
+            "gate_state",
+            "gate_version",
+            "gate_code_sha",
+            "gate_evidence_hash",
+        }
+        if set(binding) != expected_keys:
+            raise ClaimConflict("RUN claim binding shape mismatch")
+        if (
+            binding.get("schema_version") != CLAIM_BINDING_VERSION
+            or binding.get("operation") != "RUN"
+            or binding.get("job_key") != job["job_key"]
+            or binding.get("gate_id") != job["gate_id"]
+            or binding.get("at_job_id") != str(job["at_job_id"] or "")
+            or binding.get("command_sha256") != stored_command_hash
+            or binding.get("payload_sha256") != str(job["payload_sha256"] or "")
+            or binding.get("gate_state") not in ALL_STATES
+            or not isinstance(binding.get("gate_version"), int)
+        ):
+            raise ClaimConflict("RUN claim binding identity mismatch")
+        try:
+            _validate_code_sha(str(binding["gate_code_sha"]))
+            _validate_evidence_hash(str(binding["gate_evidence_hash"]))
+        except ValidationError as exc:
+            raise ClaimConflict("RUN claim gate snapshot mismatch") from exc
+        return binding
+
+    def claim_at_job(
         self,
         job_key: str,
         *,
         runner_token: str,
+        command: Sequence[str],
+        payload_path: str | None = None,
+        payload_identity: Mapping[str, Any] | None = None,
+        require_auth_version: int | None = None,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Atomowo przyznaj jedyny RUN claim przed jakimkolwiek subprocess."""
+
+        job_key = _required_text(job_key, "job_key")
+        runner_token = _required_text(runner_token, "runner_token")
+        supplied_command_hash = canonical_argv_hash(command)
+        timestamp = iso_utc(now or utc_now())
+        token_hash = hashlib.sha256(runner_token.encode("utf-8")).hexdigest()
+        self.initialize()
+        with self._write_connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            job = connection.execute(
+                "SELECT * FROM at_jobs WHERE job_key = ?", (job_key,)
+            ).fetchone()
+            if job is None:
+                connection.rollback()
+                raise GateNotFound(f"brak at job: {job_key}")
+            if not hmac.compare_digest(token_hash, str(job["runner_token_hash"])):
+                connection.rollback()
+                raise ValidationError("niepoprawny token wykonawcy")
+            stored_command_hash = self._stored_command_hash(job)
+            if not hmac.compare_digest(supplied_command_hash, stored_command_hash):
+                connection.rollback()
+                raise ValidationError("command identity mismatch przed subprocess")
+            auth_version = int(job["auth_version"] or 1)
+            if require_auth_version is not None and auth_version != require_auth_version:
+                connection.rollback()
+                raise ValidationError(
+                    f"wymagany auth_version={require_auth_version}, jest {auth_version}"
+                )
+            payload_sha = str(job["payload_sha256"] or "")
+            if auth_version == 2:
+                expected_path = str(job["payload_path"] or "")
+                if not payload_path or str(Path(payload_path).absolute()) != expected_path:
+                    connection.rollback()
+                    raise ValidationError("payload path nie zgadza się z rejestracją")
+                identity = _validated_identity(payload_identity, "payload_identity")
+                expected_identity = {
+                    "sha256": _validate_evidence_hash(payload_sha),
+                    "device": int(job["payload_dev"]),
+                    "inode": int(job["payload_ino"]),
+                    "ctime_ns": int(job["payload_ctime_ns"]),
+                    "size": int(job["payload_size"]),
+                }
+                if identity != expected_identity:
+                    connection.rollback()
+                    raise ValidationError("payload identity nie zgadza się z rejestracją")
+                auth_binding = runner_auth_binding(
+                    job_key=job_key,
+                    gate_id=str(job["gate_id"]),
+                    scheduled_for=str(job["scheduled_for"]),
+                    command_sha256=stored_command_hash,
+                    payload_sha256=payload_sha,
+                )
+                expected_tag = _validate_evidence_hash(str(job["runner_auth_tag"] or ""))
+                if not hmac.compare_digest(
+                    runner_auth_tag(runner_token, auth_binding), expected_tag
+                ):
+                    connection.rollback()
+                    raise ValidationError("sealed payload HMAC nie zgadza się")
+            elif payload_path is not None or payload_identity is not None:
+                connection.rollback()
+                raise ValidationError("auth v1 nie przyjmuje sealed payload")
+            existing = connection.execute(
+                "SELECT * FROM at_job_claims WHERE job_key = ?", (job_key,)
+            ).fetchone()
+            if existing is not None:
+                connection.rollback()
+                raise ClaimConflict(
+                    f"at job ma już claim {existing['status']}; re-exec zabroniony"
+                )
+            if job["status"] != "SCHEDULED":
+                connection.rollback()
+                raise GateError(f"at job nie jest gotowy do RUN claim: {job['status']}")
+            if parse_timestamp(timestamp) < parse_timestamp(
+                str(job["scheduled_for"]), "scheduled_for"
+            ):
+                connection.rollback()
+                raise IllegalTransition("RUN claim przed scheduled_for jest zabroniony")
+            gate = connection.execute(
+                "SELECT * FROM gates WHERE gate_id = ?", (job["gate_id"],)
+            ).fetchone()
+            if gate is None:
+                connection.rollback()
+                raise GateNotFound(f"brak bramki dla at job: {job['gate_id']}")
+            if str(gate["state"]) in TERMINAL_STATES or bool(gate["alarm"]):
+                connection.rollback()
+                raise IllegalTransition(
+                    f"pre-exec wymaga aktywnej bramki bez ALARM; "
+                    f"jest {gate['state']} alarm={int(bool(gate['alarm']))}"
+                )
+            claim_id = f"claim-{uuid.uuid4().hex}"
+            binding = {
+                "schema_version": CLAIM_BINDING_VERSION,
+                "operation": "RUN",
+                "job_key": job_key,
+                "gate_id": str(job["gate_id"]),
+                "at_job_id": str(job["at_job_id"] or ""),
+                "command_sha256": stored_command_hash,
+                "payload_sha256": payload_sha,
+                "gate_state": str(gate["state"]),
+                "gate_version": int(gate["version"]),
+                "gate_code_sha": str(gate["code_sha"]),
+                "gate_evidence_hash": str(gate["evidence_hash"]),
+            }
+            connection.execute(
+                """
+                INSERT INTO at_job_claims (
+                    claim_id, job_key, gate_id, status, binding_json,
+                    binding_sha256, claimed_at, updated_at
+                ) VALUES (?, ?, ?, 'CLAIMED', ?, ?, ?, ?)
+                """,
+                (
+                    claim_id,
+                    job_key,
+                    job["gate_id"],
+                    canonical_json(binding),
+                    sha256_json(binding),
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            connection.commit()
+        return self.show_at_claim(job_key)
+
+    def finish_at_job(
+        self,
+        job_key: str,
+        *,
+        claim_id: str,
+        runner_token: str,
         exit_code: int,
         evidence_hash: str,
+        command: Sequence[str],
         now: datetime | None = None,
     ) -> dict[str, Any]:
         job_key = _required_text(job_key, "job_key")
+        claim_id = _required_text(claim_id, "claim_id")
         runner_token = _required_text(runner_token, "runner_token")
         evidence_hash = _validate_evidence_hash(evidence_hash)
+        supplied_command_hash = canonical_argv_hash(command)
         if not isinstance(exit_code, int):
             raise ValidationError("exit_code musi być liczbą całkowitą")
         timestamp = iso_utc(now or utc_now())
@@ -1046,7 +1516,29 @@ class GateStore:
             if not hmac.compare_digest(token_hash, str(job["runner_token_hash"])):
                 connection.rollback()
                 raise ValidationError("niepoprawny token wykonawcy")
-            if job["status"] not in {"SCHEDULED", "MISSING_ALARM"}:
+            stored_command_hash = self._stored_command_hash(job)
+            if not hmac.compare_digest(supplied_command_hash, stored_command_hash):
+                connection.rollback()
+                raise ValidationError("command identity mismatch przy finish")
+            claim = connection.execute(
+                "SELECT * FROM at_job_claims WHERE job_key = ?", (job_key,)
+            ).fetchone()
+            if claim is None or str(claim["claim_id"]) != claim_id:
+                connection.rollback()
+                raise ClaimConflict("finish nie ma exact RUN claim_id")
+            if claim["status"] != "CLAIMED" or claim["gate_id"] != job["gate_id"]:
+                connection.rollback()
+                raise ClaimConflict("finish wymaga aktywnego exact RUN claimu")
+            try:
+                binding = self._validate_run_claim_binding(
+                    claim,
+                    job,
+                    stored_command_hash,
+                )
+            except ClaimConflict:
+                connection.rollback()
+                raise
+            if job["status"] != "SCHEDULED":
                 connection.rollback()
                 raise GateError(f"at job ma stan terminalny lub niegotowy: {job['status']}")
             new_status = "SUCCEEDED" if exit_code == 0 else "FAILED"
@@ -1058,72 +1550,24 @@ class GateStore:
                 """,
                 (new_status, exit_code, evidence_hash, timestamp, timestamp, job_key),
             )
+            connection.execute(
+                """
+                UPDATE at_job_claims SET status = 'FINALIZED', exit_code = ?,
+                    receipt_sha256 = ?, updated_at = ?, finalized_at = ?
+                WHERE claim_id = ? AND status = 'CLAIMED'
+                """,
+                (exit_code, evidence_hash, timestamp, timestamp, claim_id),
+            )
             gate = connection.execute(
                 "SELECT * FROM gates WHERE gate_id = ?", (job["gate_id"],)
             ).fetchone()
             assert gate is not None
             gate_version = int(gate["version"])
-            if exit_code == 0 and gate["state"] == "WAIT_DATA":
-                cursor = connection.execute(
-                    """
-                    UPDATE gates SET state = 'READY_FOR_REVIEW',
-                        evidence_hash = ?, blocker = 'BRAK',
-                        next_step = 'Niezależny review wyniku at-joba',
-                        alarm = 0, alarm_reason = '', version = version + 1,
-                        updated_at = ? WHERE gate_id = ? AND version = ?
-                    """,
-                    (evidence_hash, timestamp, job["gate_id"], gate_version),
+            if exit_code == 0:
+                reason = (
+                    "procesowy receipt at-joba ma exit 0; semantyczna promocja "
+                    "wymaga osobnego review"
                 )
-                if cursor.rowcount != 1:
-                    connection.rollback()
-                    raise CASConflict(f"CAS konflikt bramki {job['gate_id']}")
-                updated = connection.execute(
-                    "SELECT * FROM gates WHERE gate_id = ?", (job["gate_id"],)
-                ).fetchone()
-                assert updated is not None
-                connection.execute(
-                    """
-                    INSERT INTO gate_events (
-                        gate_id, from_state, to_state, expected_version,
-                        result_version, actor, reason, occurred_at, snapshot_json
-                    ) VALUES (?, 'WAIT_DATA', 'READY_FOR_REVIEW', ?, ?,
-                              'at_gate/run', ?, ?, ?)
-                    """,
-                    (
-                        job["gate_id"],
-                        gate_version,
-                        int(updated["version"]),
-                        f"at-job zakończony kodem 0; dowód {evidence_hash}",
-                        timestamp,
-                        self._event_snapshot(updated),
-                    ),
-                )
-            elif exit_code != 0:
-                reason = f"at-job zakończył się kodem {exit_code}"
-                cursor = connection.execute(
-                    """
-                    UPDATE gates SET evidence_hash = ?, alarm = 1,
-                        alarm_reason = ?, blocker = ?,
-                        next_step = 'Przeanalizuj błąd i utwórz nową kontrolowaną bramkę',
-                        version = version + 1, updated_at = ?
-                    WHERE gate_id = ? AND version = ?
-                    """,
-                    (
-                        evidence_hash,
-                        reason,
-                        reason,
-                        timestamp,
-                        job["gate_id"],
-                        gate_version,
-                    ),
-                )
-                if cursor.rowcount != 1:
-                    connection.rollback()
-                    raise CASConflict(f"CAS konflikt bramki {job['gate_id']}")
-                updated = connection.execute(
-                    "SELECT * FROM gates WHERE gate_id = ?", (job["gate_id"],)
-                ).fetchone()
-                assert updated is not None
                 connection.execute(
                     """
                     INSERT INTO gate_events (
@@ -1136,16 +1580,70 @@ class GateStore:
                         gate["state"],
                         gate["state"],
                         gate_version,
-                        int(updated["version"]),
+                        gate_version,
+                        f"{reason}; procesowy dowód {evidence_hash}",
+                        timestamp,
+                        self._event_snapshot(gate),
+                    ),
+                )
+            elif exit_code != 0:
+                reason = f"at-job zakończył się kodem {exit_code}"
+                binding_still_current = (
+                    gate["state"] == binding.get("gate_state")
+                    and gate_version == binding.get("gate_version")
+                    and gate["code_sha"] == binding.get("gate_code_sha")
+                    and gate["evidence_hash"] == binding.get("gate_evidence_hash")
+                    and gate["state"] not in TERMINAL_STATES
+                )
+                if binding_still_current:
+                    cursor = connection.execute(
+                        """
+                        UPDATE gates SET alarm = 1,
+                            alarm_reason = CASE
+                                WHEN alarm = 1 AND alarm_reason <> ''
+                                THEN alarm_reason || ' | PROCESS: ' || ?
+                                ELSE ?
+                            END,
+                            version = version + 1, updated_at = ?
+                        WHERE gate_id = ? AND version = ?
+                        """,
+                        (reason, reason, timestamp, job["gate_id"], gate_version),
+                    )
+                    if cursor.rowcount != 1:
+                        connection.rollback()
+                        raise CASConflict(f"CAS konflikt bramki {job['gate_id']}")
+                    updated = connection.execute(
+                        "SELECT * FROM gates WHERE gate_id = ?", (job["gate_id"],)
+                    ).fetchone()
+                    assert updated is not None
+                    result_version = int(updated["version"])
+                    snapshot = self._event_snapshot(updated)
+                else:
+                    reason += "; gate zmienił się po claimie — pola bramki zachowane"
+                    result_version = gate_version
+                    snapshot = self._event_snapshot(gate)
+                connection.execute(
+                    """
+                    INSERT INTO gate_events (
+                        gate_id, from_state, to_state, expected_version,
+                        result_version, actor, reason, occurred_at, snapshot_json
+                    ) VALUES (?, ?, ?, ?, ?, 'at_gate/run', ?, ?, ?)
+                    """,
+                    (
+                        job["gate_id"],
+                        gate["state"],
+                        gate["state"],
+                        gate_version,
+                        result_version,
                         reason,
                         timestamp,
-                        self._event_snapshot(updated),
+                        snapshot,
                     ),
                 )
             connection.commit()
         return self.show_at_job(job_key)
 
-    def cancel_at_job(
+    def begin_at_job_cancellation(
         self,
         job_key: str,
         at_job_id: str,
@@ -1155,16 +1653,115 @@ class GateStore:
         reason: str,
         now: datetime | None = None,
     ) -> dict[str, Any]:
-        """Record an exact scheduler cancellation and supersede its gate.
-
-        The caller must remove the exact queue entry first and prove that it
-        is absent. This store method then atomically closes both writers of
-        truth: the registered at intent and its semantic gate. It also
-        reconciles a prior ``MISSING_ALARM`` caused by an already-removed job.
-        """
+        """Wygraj atomowo z RUN claimem zanim caller dotknie kolejki at."""
 
         job_key = _required_text(job_key, "job_key")
         at_job_id = _required_text(at_job_id, "at_job_id")
+        if not at_job_id.isdigit():
+            raise ValidationError("at_job_id musi być liczbą")
+        if not isinstance(expected_gate_version, int) or expected_gate_version < 1:
+            raise ValidationError("expected_gate_version musi być dodatnią liczbą")
+        actor = _required_text(actor, "actor")
+        reason = _required_text(reason, "reason")
+        timestamp = iso_utc(now or utc_now())
+        self.initialize()
+        with self._write_connection() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            job = connection.execute(
+                "SELECT * FROM at_jobs WHERE job_key = ?", (job_key,)
+            ).fetchone()
+            if job is None:
+                connection.rollback()
+                raise GateNotFound(f"brak at job: {job_key}")
+            if str(job["at_job_id"] or "") != at_job_id:
+                connection.rollback()
+                raise ValidationError(
+                    f"at job id drift: {job['at_job_id']!r} != {at_job_id!r}"
+                )
+            if job["status"] not in {"SCHEDULED", "MISSING_ALARM"}:
+                connection.rollback()
+                raise GateError(f"at job nie jest anulowalny: {job['status']}")
+            gate = connection.execute(
+                "SELECT * FROM gates WHERE gate_id = ?", (job["gate_id"],)
+            ).fetchone()
+            assert gate is not None
+            existing = connection.execute(
+                "SELECT * FROM at_job_claims WHERE job_key = ?", (job_key,)
+            ).fetchone()
+            if existing is not None:
+                binding = self._claim_binding(existing)
+                expected_retry = {
+                    "schema_version": CLAIM_BINDING_VERSION,
+                    "operation": "CANCEL",
+                    "job_key": job_key,
+                    "gate_id": str(job["gate_id"]),
+                    "at_job_id": at_job_id,
+                    "gate_version": expected_gate_version,
+                    "actor": actor,
+                    "reason_sha256": hashlib.sha256(reason.encode("utf-8")).hexdigest(),
+                }
+                if (
+                    existing["status"] == "CLAIMED"
+                    and existing["gate_id"] == job["gate_id"]
+                    and binding == expected_retry
+                ):
+                    connection.rollback()
+                    return self.show_at_claim(job_key)
+                connection.rollback()
+                raise ClaimConflict("RUN claim wygrał z anulowaniem")
+            if int(gate["version"]) != expected_gate_version:
+                connection.rollback()
+                raise CASConflict(
+                    f"CAS konflikt bramki {job['gate_id']}: expected "
+                    f"{expected_gate_version}, jest {gate['version']}"
+                )
+            claim_id = f"cancel-{uuid.uuid4().hex}"
+            binding = {
+                "schema_version": CLAIM_BINDING_VERSION,
+                "operation": "CANCEL",
+                "job_key": job_key,
+                "gate_id": str(job["gate_id"]),
+                "at_job_id": at_job_id,
+                "gate_version": int(gate["version"]),
+                "actor": actor,
+                "reason_sha256": hashlib.sha256(reason.encode("utf-8")).hexdigest(),
+            }
+            connection.execute(
+                """
+                INSERT INTO at_job_claims (
+                    claim_id, job_key, gate_id, status, binding_json,
+                    binding_sha256, claimed_at, updated_at
+                ) VALUES (?, ?, ?, 'CLAIMED', ?, ?, ?, ?)
+                """,
+                (
+                    claim_id,
+                    job_key,
+                    job["gate_id"],
+                    canonical_json(binding),
+                    sha256_json(binding),
+                    timestamp,
+                    timestamp,
+                ),
+            )
+            connection.commit()
+        return self.show_at_claim(job_key)
+
+    def cancel_at_job(
+        self,
+        job_key: str,
+        at_job_id: str,
+        *,
+        cancel_claim_id: str,
+        expected_gate_version: int,
+        actor: str,
+        reason: str,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Finalizuj exact CANCEL claim dopiero po dowodzie nieobecności w atq."""
+
+        job_key = _required_text(job_key, "job_key")
+        at_job_id = _required_text(at_job_id, "at_job_id")
+        cancel_claim_id = _required_text(cancel_claim_id, "cancel_claim_id")
         if not at_job_id.isdigit():
             raise ValidationError("at_job_id musi być liczbą")
         if (
@@ -1194,26 +1791,48 @@ class GateStore:
                 raise GateError(
                     f"at job ma stan terminalny lub niegotowy: {job['status']}"
                 )
+            claim = connection.execute(
+                "SELECT * FROM at_job_claims WHERE job_key = ?", (job_key,)
+            ).fetchone()
+            if claim is None or str(claim["claim_id"]) != cancel_claim_id:
+                connection.rollback()
+                raise ClaimConflict("brak exact CANCEL claim_id")
+            expected_binding = {
+                "schema_version": CLAIM_BINDING_VERSION,
+                "operation": "CANCEL",
+                "job_key": job_key,
+                "gate_id": str(job["gate_id"]),
+                "at_job_id": at_job_id,
+                "gate_version": expected_gate_version,
+                "actor": actor,
+                "reason_sha256": hashlib.sha256(reason.encode("utf-8")).hexdigest(),
+            }
+            try:
+                binding = self._claim_binding(claim)
+            except ClaimConflict:
+                connection.rollback()
+                raise
+            if (
+                claim["status"] != "CLAIMED"
+                or claim["gate_id"] != job["gate_id"]
+                or binding != expected_binding
+            ):
+                connection.rollback()
+                raise ClaimConflict("finalize wymaga aktywnego exact CANCEL claimu")
             gate = connection.execute(
                 "SELECT * FROM gates WHERE gate_id = ?", (job["gate_id"],)
             ).fetchone()
             assert gate is not None
-            if int(gate["version"]) != expected_gate_version:
-                connection.rollback()
-                raise CASConflict(
-                    f"CAS konflikt bramki {job['gate_id']}: "
-                    f"expected {expected_gate_version}, jest {gate['version']}"
-                )
-            if gate["state"] not in {
+            cancellable_states = {
                 "BUILT_OFF",
                 "WAIT_DATA",
                 "READY_FOR_REVIEW",
                 "SUPERSEDED",
-            }:
-                connection.rollback()
-                raise IllegalTransition(
-                    f"nie można anulować at-joba dla bramki {gate['state']}"
-                )
+            }
+            gate_unchanged = (
+                int(gate["version"]) == expected_gate_version
+                and gate["state"] in cancellable_states
+            )
             from_state = str(gate["state"])
             connection.execute(
                 """
@@ -1222,46 +1841,67 @@ class GateStore:
                 """,
                 (timestamp, timestamp, reason, job_key),
             )
-            cursor = connection.execute(
+            connection.execute(
                 """
-                UPDATE gates SET state = 'SUPERSEDED', alarm = 0,
-                    alarm_reason = '', blocker = ?,
-                    next_step = 'Nie wykonuj anulowanego at-joba',
-                    version = version + 1, updated_at = ?,
-                    closed_at = COALESCE(closed_at, ?)
-                WHERE gate_id = ? AND version = ?
+                UPDATE at_job_claims SET status = 'FINALIZED', updated_at = ?,
+                    finalized_at = ? WHERE claim_id = ? AND status = 'CLAIMED'
                 """,
-                (
-                    reason,
-                    timestamp,
-                    timestamp,
-                    job["gate_id"],
-                    expected_gate_version,
-                ),
+                (timestamp, timestamp, cancel_claim_id),
             )
-            if cursor.rowcount != 1:
-                connection.rollback()
-                raise CASConflict(f"CAS konflikt bramki {job['gate_id']}")
-            updated = connection.execute(
-                "SELECT * FROM gates WHERE gate_id = ?", (job["gate_id"],)
-            ).fetchone()
-            assert updated is not None
+            if gate_unchanged:
+                cursor = connection.execute(
+                    """
+                    UPDATE gates SET state = 'SUPERSEDED', alarm = 0,
+                        alarm_reason = '', blocker = ?,
+                        next_step = 'Nie wykonuj anulowanego at-joba',
+                        version = version + 1, updated_at = ?,
+                        closed_at = COALESCE(closed_at, ?)
+                    WHERE gate_id = ? AND version = ?
+                    """,
+                    (
+                        reason,
+                        timestamp,
+                        timestamp,
+                        job["gate_id"],
+                        expected_gate_version,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    connection.rollback()
+                    raise CASConflict(f"CAS konflikt bramki {job['gate_id']}")
+                updated = connection.execute(
+                    "SELECT * FROM gates WHERE gate_id = ?", (job["gate_id"],)
+                ).fetchone()
+                assert updated is not None
+                to_state = "SUPERSEDED"
+                result_version = int(updated["version"])
+                snapshot = self._event_snapshot(updated)
+                event_reason = f"at-job #{at_job_id} anulowany kanonicznie: {reason}"
+            else:
+                to_state = from_state
+                result_version = int(gate["version"])
+                snapshot = self._event_snapshot(gate)
+                event_reason = (
+                    f"at-job #{at_job_id} anulowany; gate zmienił się po CANCEL "
+                    f"claimie i jego pola zachowano: {reason}"
+                )
             connection.execute(
                 """
                 INSERT INTO gate_events (
                     gate_id, from_state, to_state, expected_version,
                     result_version, actor, reason, occurred_at, snapshot_json
-                ) VALUES (?, ?, 'SUPERSEDED', ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     job["gate_id"],
                     from_state,
+                    to_state,
                     expected_gate_version,
-                    int(updated["version"]),
+                    result_version,
                     actor,
-                    f"at-job #{at_job_id} anulowany kanonicznie: {reason}",
+                    event_reason,
                     timestamp,
-                    self._event_snapshot(updated),
+                    snapshot,
                 ),
             )
             connection.commit()
@@ -1296,6 +1936,8 @@ class GateStore:
         normalized = {str(value) for value in present_job_ids if str(value).isdigit()}
         alarms: list[dict[str, str]] = []
         seen: list[str] = []
+        running: list[str] = []
+        launching: list[str] = []
         with self._write_connection() as connection:
             connection.execute("BEGIN IMMEDIATE")
             jobs = connection.execute(
@@ -1362,6 +2004,89 @@ class GateStore:
                         {"job_key": job["job_key"], "gate_id": job["gate_id"], "at_job_id": ""}
                     )
                     continue
+                claim = connection.execute(
+                    """
+                    SELECT * FROM at_job_claims
+                    WHERE job_key = ? AND status = 'CLAIMED'
+                    """,
+                    (job["job_key"],),
+                ).fetchone()
+                if claim is not None:
+                    binding = json.loads(str(claim["binding_json"]))
+                    operation = str(binding.get("operation") or "")
+                    age = (
+                        parse_timestamp(timestamp)
+                        - parse_timestamp(str(claim["claimed_at"]), "claimed_at")
+                    ).total_seconds()
+                    stale_after = (
+                        AT_RUN_CLAIM_STALE_SECONDS
+                        if operation == "RUN"
+                        else AT_CANCEL_CLAIM_STALE_SECONDS
+                    )
+                    if age <= stale_after:
+                        if operation == "RUN":
+                            running.append(str(job["job_key"]))
+                        if queue_id in normalized:
+                            seen.append(queue_id)
+                        continue
+                    reason = (
+                        f"ALARM: {operation or 'UNKNOWN'} claim bez terminalnego "
+                        f"receiptu ponad {stale_after} sekund"
+                    )
+                    connection.execute(
+                        """
+                        UPDATE at_jobs SET status = 'MISSING_ALARM', updated_at = ?,
+                            reconcile_note = ? WHERE job_key = ?
+                        """,
+                        (timestamp, reason, job["job_key"]),
+                    )
+                    gate = connection.execute(
+                        "SELECT * FROM gates WHERE gate_id = ?", (job["gate_id"],)
+                    ).fetchone()
+                    assert gate is not None
+                    gate_version = int(gate["version"])
+                    cursor = connection.execute(
+                        """
+                        UPDATE gates SET alarm = 1, alarm_reason = ?, blocker = ?,
+                            next_step = 'Rozlicz aktywny claim bez ponownego wykonania',
+                            version = version + 1, updated_at = ?
+                        WHERE gate_id = ? AND version = ?
+                        """,
+                        (reason, reason, timestamp, job["gate_id"], gate_version),
+                    )
+                    if cursor.rowcount != 1:
+                        connection.rollback()
+                        raise CASConflict(f"CAS konflikt bramki {job['gate_id']}")
+                    updated = connection.execute(
+                        "SELECT * FROM gates WHERE gate_id = ?", (job["gate_id"],)
+                    ).fetchone()
+                    assert updated is not None
+                    connection.execute(
+                        """
+                        INSERT INTO gate_events (
+                            gate_id, from_state, to_state, expected_version,
+                            result_version, actor, reason, occurred_at, snapshot_json
+                        ) VALUES (?, ?, ?, ?, ?, 'at_gate/reconcile', ?, ?, ?)
+                        """,
+                        (
+                            job["gate_id"],
+                            gate["state"],
+                            gate["state"],
+                            gate_version,
+                            int(updated["version"]),
+                            reason,
+                            timestamp,
+                            self._event_snapshot(updated),
+                        ),
+                    )
+                    alarms.append(
+                        {
+                            "job_key": job["job_key"],
+                            "gate_id": job["gate_id"],
+                            "at_job_id": queue_id,
+                        }
+                    )
+                    continue
                 if queue_id in normalized:
                     seen.append(queue_id)
                     connection.execute(
@@ -1371,6 +2096,16 @@ class GateStore:
                         """,
                         (timestamp, timestamp, job["job_key"]),
                     )
+                    continue
+                launch_age = (
+                    parse_timestamp(timestamp)
+                    - parse_timestamp(str(job["scheduled_for"]), "scheduled_for")
+                ).total_seconds()
+                if 0 <= launch_age <= AT_LAUNCH_GRACE_SECONDS:
+                    # `atd` usuwa wpis z atq zanim shell runnera zdąży wykonać
+                    # atomowy RUN claim. Krótkie, deterministyczne okno nie może
+                    # samo włączyć alarmu blokującego prawidłowy claim.
+                    launching.append(str(job["job_key"]))
                     continue
                 if job["status"] == "MISSING_ALARM":
                     alarms.append(
@@ -1425,7 +2160,13 @@ class GateStore:
                     {"job_key": job["job_key"], "gate_id": job["gate_id"], "at_job_id": queue_id}
                 )
             connection.commit()
-        return {"status": "OK", "seen": sorted(seen, key=int), "alarms": alarms}
+        return {
+            "status": "OK",
+            "seen": sorted(set(seen), key=int),
+            "running": sorted(running),
+            "launching": sorted(launching),
+            "alarms": alarms,
+        }
 
     def show_at_job(self, job_key: str) -> dict[str, Any]:
         job_key = _required_text(job_key, "job_key")
@@ -1436,6 +2177,27 @@ class GateStore:
             if row is None:
                 raise GateNotFound(f"brak at job: {job_key}")
         return self._row_to_job(row)
+
+    def show_at_claim(self, job_key: str) -> dict[str, Any]:
+        job_key = _required_text(job_key, "job_key")
+        with self._read_connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM at_job_claims WHERE job_key = ?", (job_key,)
+            ).fetchone()
+            if row is None:
+                raise GateNotFound(f"brak claimu dla at job: {job_key}")
+        return self._row_to_claim(row)
+
+    def list_at_claims(self, *, active_only: bool = False) -> list[dict[str, Any]]:
+        if not self.db_path.is_file():
+            return []
+        query = "SELECT * FROM at_job_claims"
+        if active_only:
+            query += " WHERE status = 'CLAIMED'"
+        query += " ORDER BY claimed_at, job_key"
+        with self._read_connection() as connection:
+            rows = connection.execute(query).fetchall()
+        return [self._row_to_claim(row) for row in rows]
 
     def list_at_jobs(self, *, active_only: bool = False) -> list[dict[str, Any]]:
         if not self.db_path.is_file():
@@ -1562,13 +2324,15 @@ def render_open_gates(
 def export_payload(store: GateStore, *, as_of: datetime) -> dict[str, Any]:
     gates = store.list_gates(include_terminal=True)
     at_jobs = store.list_at_jobs()
+    at_claims = store.list_at_claims()
     return {
-        "schema_version": 1,
+        "schema_version": DB_SCHEMA_VERSION,
         "generated_at": iso_utc(as_of),
         "source": str(store.db_path),
         "ledger_hash": sha256_json(gates),
         "gates": gates,
         "at_jobs": at_jobs,
+        "at_job_claims": at_claims,
     }
 
 

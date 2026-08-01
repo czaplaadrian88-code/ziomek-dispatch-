@@ -16,28 +16,44 @@ import os
 import re
 import secrets
 import shlex
+import stat
 import subprocess
 import sys
 import traceback
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Mapping, Sequence
 
 from process_debt_gate import (
     DEFAULT_DB,
     GateError,
     GateStore,
+    SEALED_AUTH_VERSION,
     ValidationError,
+    canonical_argv_hash,
     canonical_json,
     iso_utc,
     parse_timestamp,
+    runner_auth_binding,
+    runner_auth_tag,
     utc_now,
 )
 
 
 _AT_JOB_RE = re.compile(r"\bjob\s+(\d+)\b", re.I)
 _ATQ_RE = re.compile(r"^\s*(\d+)\s+")
+_PAYLOAD_KEYS = {
+    "schema_version",
+    "db_path",
+    "job_key",
+    "gate_id",
+    "runner_token",
+    "command",
+    "command_sha256",
+    "scheduled_for",
+}
+_MAX_PRIVATE_FILE_BYTES = 4 * 1024 * 1024
 
 # ── Trwały log przebiegu at-joba ────────────────────────────────────────────────
 # LUKA SYSTEMOWA (bramka eta.gps-remeasure-checkpoint, ALARM 2026-07-25): ``at``
@@ -50,8 +66,181 @@ _ATQ_RE = re.compile(r"^\s*(\d+)\s+")
 # a to był dokładnie przypadek #225 (brak wpisu terminalnego = ``finish_at_job``
 # nigdy się nie wykonał). Logowanie wyłącznie po fakcie by tego NIE wykryło.
 #
-# Log NIE zawiera runner-tokenu (leży jawnym tekstem w ciele at-joba; osobny dług).
+# Log NIE zawiera runner-tokenu; nowe joby niosą go wyłącznie w pliku 0600,
+# którego identity jest związane z ledgerem i który znika zaraz po RUN claimie.
 AT_LOG_DIR = Path(os.environ.get("AT_GATE_LOG_DIR", "/root/handover/at_logs"))
+
+
+def _identity_from_stat(file_stat: os.stat_result, data: bytes) -> dict[str, int | str]:
+    return {
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "device": int(file_stat.st_dev),
+        "inode": int(file_stat.st_ino),
+        "ctime_ns": int(file_stat.st_ctime_ns),
+        "size": len(data),
+    }
+
+
+def _fsync_directory(path: Path) -> None:
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _ensure_private_directory(path: Path) -> Path:
+    path = path.absolute()
+    if path.exists() or path.is_symlink():
+        info = path.lstat()
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+            raise ValidationError(f"prywatny katalog nie jest zwykłym katalogiem: {path}")
+    else:
+        path.mkdir(mode=0o700, parents=True, exist_ok=False)
+        _fsync_directory(path.parent)
+        info = path.lstat()
+    if path.resolve() != path:
+        raise ValidationError(f"prywatny katalog ma symlink w ścieżce: {path}")
+    if info.st_uid != os.geteuid() or stat.S_IMODE(info.st_mode) != 0o700:
+        raise ValidationError(f"prywatny katalog wymaga ownera procesu i mode 0700: {path}")
+    return path
+
+
+def _exclusive_private_write(path: Path, data: bytes) -> dict[str, int | str]:
+    if len(data) > _MAX_PRIVATE_FILE_BYTES:
+        raise ValidationError("sealed payload przekracza limit")
+    parent = _ensure_private_directory(path.parent)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        file_stat = os.fstat(descriptor)
+        if not stat.S_ISREG(file_stat.st_mode):
+            raise ValidationError("sealed payload nie jest zwykłym plikiem")
+        with os.fdopen(descriptor, "wb", closefd=False) as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        final_stat = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    _fsync_directory(parent)
+    return _identity_from_stat(final_stat, data)
+
+
+def _read_private_bytes(path: Path) -> tuple[bytes, dict[str, int | str]]:
+    _ensure_private_directory(path.parent)
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    try:
+        before = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(before.st_mode)
+            or before.st_uid != os.geteuid()
+            or stat.S_IMODE(before.st_mode) != 0o600
+            or before.st_size > _MAX_PRIVATE_FILE_BYTES
+        ):
+            raise ValidationError("sealed payload nie spełnia owner/mode/size")
+        chunks: list[bytes] = []
+        total = 0
+        while True:
+            chunk = os.read(
+                descriptor,
+                min(1024 * 1024, _MAX_PRIVATE_FILE_BYTES + 1 - total),
+            )
+            if not chunk:
+                break
+            chunks.append(chunk)
+            total += len(chunk)
+            if total > _MAX_PRIVATE_FILE_BYTES:
+                raise ValidationError("sealed payload przekracza limit")
+        data = b"".join(chunks)
+        after = os.fstat(descriptor)
+        if (
+            before.st_dev,
+            before.st_ino,
+            before.st_ctime_ns,
+            before.st_size,
+        ) != (after.st_dev, after.st_ino, after.st_ctime_ns, after.st_size):
+            raise ValidationError("sealed payload zmienił identity podczas odczytu")
+    finally:
+        os.close(descriptor)
+    return data, _identity_from_stat(after, data)
+
+
+def _unlink_exact_private_file(
+    path: Path,
+    expected_identity: Mapping[str, Any],
+) -> None:
+    """Usuń tylko ten sam sealed payload; nigdy podstawiony path/inode."""
+
+    parent = _ensure_private_directory(path.parent)
+    directory_fd = os.open(
+        parent,
+        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0),
+    )
+    try:
+        try:
+            current = os.stat(path.name, dir_fd=directory_fd, follow_symlinks=False)
+        except OSError as exc:
+            raise ValidationError(f"sealed payload cleanup lookup failed: {exc}") from exc
+        actual = {
+            "device": int(current.st_dev),
+            "inode": int(current.st_ino),
+            "ctime_ns": int(current.st_ctime_ns),
+            "size": int(current.st_size),
+        }
+        expected = {
+            key: int(expected_identity[key])
+            for key in ("device", "inode", "ctime_ns", "size")
+        }
+        if not stat.S_ISREG(current.st_mode) or actual != expected:
+            raise ValidationError("sealed payload cleanup identity mismatch")
+        os.unlink(path.name, dir_fd=directory_fd)
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
+
+
+def _load_sealed_payload(path: Path) -> tuple[dict[str, Any], dict[str, int | str]]:
+    data, identity = _read_private_bytes(path)
+    try:
+        payload = json.loads(data.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise ValidationError("sealed payload: niepoprawny JSON") from exc
+    if not isinstance(payload, dict) or set(payload) != _PAYLOAD_KEYS:
+        raise ValidationError("sealed payload: exact shape mismatch")
+    if payload["schema_version"] != SEALED_AUTH_VERSION:
+        raise ValidationError(
+            f"sealed payload: schema_version musi wynosić {SEALED_AUTH_VERSION}"
+        )
+    command = payload["command"]
+    if not isinstance(command, list) or canonical_argv_hash(command) != payload["command_sha256"]:
+        raise ValidationError("sealed payload: command/hash mismatch")
+    if not isinstance(payload["db_path"], str) or not Path(payload["db_path"]).is_absolute():
+        raise ValidationError("sealed payload.db_path: wymagana ścieżka absolutna")
+    for key in ("job_key", "gate_id", "runner_token", "scheduled_for"):
+        if not isinstance(payload[key], str) or not payload[key]:
+            raise ValidationError(f"sealed payload.{key}: wymagana wartość")
+    return payload, identity
+
+
+def _discard_cancelled_sealed_payload(job: Mapping[str, Any]) -> None:
+    if int(job.get("auth_version") or 1) != SEALED_AUTH_VERSION:
+        return
+    path_text = job.get("payload_path")
+    if not isinstance(path_text, str) or not path_text:
+        raise ValidationError("auth2 cancel: brak payload_path")
+    identity: dict[str, Any] = {
+        "sha256": job.get("payload_sha256"),
+        "device": job.get("payload_dev"),
+        "inode": job.get("payload_ino"),
+        "ctime_ns": job.get("payload_ctime_ns"),
+        "size": job.get("payload_size"),
+    }
+    if any(value is None for value in identity.values()):
+        raise ValidationError("auth2 cancel: niepełne payload identity")
+    path = Path(path_text)
+    if path.exists() or path.is_symlink():
+        _unlink_exact_private_file(path, identity)
 
 
 def _run_log_path(job_key: str) -> Path:
@@ -97,6 +286,7 @@ def _run_process(
     *,
     stdin: str | None = None,
     timeout: float = 30.0,
+    env: Mapping[str, str] | None = None,
 ) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         list(command),
@@ -105,6 +295,7 @@ def _run_process(
         text=True,
         timeout=timeout,
         check=False,
+        env=dict(env) if env is not None else None,
     )
 
 
@@ -156,59 +347,96 @@ def schedule(args: argparse.Namespace) -> int:
     token = secrets.token_urlsafe(32)
     token_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
     job_key = f"at-{uuid.uuid4().hex}"
-    store.add_gate(
-        gate_id=args.gate_id,
-        title=args.title,
-        kind="AT_JOB",
-        owner=args.owner,
-        due_at=args.due_at,
-        next_step="Zaplanuj job wyłącznie przez at_gate.py",
-        blocker=args.blocker,
-        code_sha=args.code_sha,
-        evidence_hash=args.evidence_hash,
-        opened_at=args.opened_at,
-        metadata={
-            "scheduled_for": iso_utc(scheduled),
-            "command_sha256": hashlib.sha256(canonical_json(command).encode("utf-8")).hexdigest(),
-        },
-        actor=args.actor,
-        reason="utworzenie bramki przed wysłaniem do at",
+    command_sha256 = canonical_argv_hash(command)
+    database_path = str(Path(args.db).expanduser().absolute())
+    payload_root = _ensure_private_directory(
+        Path(
+            getattr(args, "payload_dir", "")
+            or Path(database_path).parent / "at-payloads"
+        )
     )
-    store.register_at_intent(
-        gate_id=args.gate_id,
+    payload_path = payload_root / f"{job_key}.json"
+    payload = {
+        "schema_version": SEALED_AUTH_VERSION,
+        "db_path": database_path,
+        "job_key": job_key,
+        "gate_id": args.gate_id,
+        "runner_token": token,
+        "command": command,
+        "command_sha256": command_sha256,
+        "scheduled_for": iso_utc(scheduled),
+    }
+    payload_identity = _exclusive_private_write(
+        payload_path,
+        (canonical_json(payload) + "\n").encode("utf-8"),
+    )
+    binding = runner_auth_binding(
         job_key=job_key,
-        runner_token_hash=token_hash,
+        gate_id=args.gate_id,
         scheduled_for=iso_utc(scheduled),
-        command=command,
+        command_sha256=command_sha256,
+        payload_sha256=str(payload_identity["sha256"]),
     )
+    try:
+        store.register_at_job(
+            gate_id=args.gate_id,
+            title=args.title,
+            owner=args.owner,
+            due_at=args.due_at,
+            blocker=args.blocker,
+            code_sha=args.code_sha,
+            evidence_hash=args.evidence_hash,
+            opened_at=args.opened_at,
+            actor=args.actor,
+            job_key=job_key,
+            runner_token_hash=token_hash,
+            scheduled_for=iso_utc(scheduled),
+            command=command,
+            runner_auth_hmac=runner_auth_tag(token, binding),
+            payload_path=str(payload_path),
+            payload_identity=payload_identity,
+        )
+    except Exception:
+        _unlink_exact_private_file(payload_path, payload_identity)
+        raise
 
     runner = [
         sys.executable,
         str(Path(__file__).resolve()),
-        "--db",
-        str(Path(args.db).resolve()),
         "run",
-        "--job-key",
-        job_key,
-        "--token",
-        token,
-        "--command-b64",
-        _encode_command(command),
+        "--payload-file",
+        str(payload_path),
     ]
     shell_line = " ".join(shlex.quote(part) for part in runner) + "\n"
     try:
-        result = _run_process([args.at_bin, "-t", _at_time(scheduled)], stdin=shell_line)
+        result = _run_process(
+            [args.at_bin, "-t", _at_time(scheduled)],
+            stdin=shell_line,
+            env={
+                "PATH": "/usr/bin:/bin",
+                "LANG": "C.UTF-8",
+                "LC_ALL": "C.UTF-8",
+                "TZ": "UTC",
+                "SHELL": "/bin/sh",
+            },
+        )
     except (OSError, subprocess.TimeoutExpired) as exc:
-        store.fail_at_submission(job_key, f"at niedostępne: {exc}")
+        try:
+            store.fail_at_submission(job_key, f"at niedostępne: {exc}")
+        finally:
+            _unlink_exact_private_file(payload_path, payload_identity)
         raise GateError(f"nie udało się uruchomić at: {exc}") from exc
     combined = "\n".join(part for part in (result.stdout, result.stderr) if part)
     match = _AT_JOB_RE.search(combined)
     if result.returncode != 0 or match is None:
         detail = combined.strip().replace("\n", " ")[:400] or "brak identyfikatora joba"
-        store.fail_at_submission(
-            job_key,
-            f"at zwróciło kod {result.returncode}: {detail}",
-        )
+        try:
+            store.fail_at_submission(
+                job_key,
+                f"at zwróciło kod {result.returncode}: {detail}",
+            )
+        finally:
+            _unlink_exact_private_file(payload_path, payload_identity)
         raise GateError(f"at nie potwierdziło joba: {detail}")
 
     at_job_id = match.group(1)
@@ -228,6 +456,7 @@ def schedule(args: argparse.Namespace) -> int:
             store.fail_at_submission(job_key, f"potwierdzenie DB nieudane; {detail}: {exc}")
         except GateError:
             pass
+        _unlink_exact_private_file(payload_path, payload_identity)
         raise GateError(f"job #{at_job_id} nie został potwierdzony w DB; {detail}: {exc}") from exc
     print(
         json.dumps(
@@ -246,11 +475,41 @@ def schedule(args: argparse.Namespace) -> int:
 
 
 def run_registered(args: argparse.Namespace) -> int:
-    log_path = _open_run_log(args.job_key)
+    payload_path: Path | None = None
+    payload_identity: Mapping[str, Any] | None = None
+    require_auth_version: int | None = None
+    if getattr(args, "payload_file", None):
+        payload_path = Path(args.payload_file).absolute()
+        log_path = _open_run_log(f"sealed-{payload_path.name}")
+    else:
+        log_path = _open_run_log(getattr(args, "job_key", None) or "legacy-unknown")
     try:
-        command = _decode_command(args.command_b64)
-        _append_run_log(log_path, f"argv:    {shlex.join(command)}\n\n")
-        return _run_registered_inner(args, command, log_path)
+        if payload_path is not None:
+            payload, payload_identity = _load_sealed_payload(payload_path)
+            args.db = str(payload["db_path"])
+            args.job_key = str(payload["job_key"])
+            args.token = str(payload["runner_token"])
+            command = list(payload["command"])
+            require_auth_version = SEALED_AUTH_VERSION
+        else:
+            if not args.job_key or not args.token or not args.command_b64:
+                raise ValidationError(
+                    "legacy run wymaga --job-key, --token i --command-b64"
+                )
+            command = _decode_command(args.command_b64)
+        _append_run_log(
+            log_path,
+            f"argv_sha256: {canonical_argv_hash(command)}\n"
+            f"argc:        {len(command)}\n\n",
+        )
+        return _run_registered_inner(
+            args,
+            command,
+            log_path,
+            payload_path=payload_path,
+            payload_identity=payload_identity,
+            require_auth_version=require_auth_version,
+        )
     except BaseException as exc:  # noqa: BLE001 — ślad MUSI zostać także przy SystemExit/KeyboardInterrupt
         _append_run_log(
             log_path,
@@ -261,10 +520,46 @@ def run_registered(args: argparse.Namespace) -> int:
 
 
 def _run_registered_inner(
-    args: argparse.Namespace, command: Sequence[str], log_path: Path | None
+    args: argparse.Namespace,
+    command: Sequence[str],
+    log_path: Path | None,
+    *,
+    payload_path: Path | None = None,
+    payload_identity: Mapping[str, Any] | None = None,
+    require_auth_version: int | None = None,
 ) -> int:
+    store = GateStore(args.db)
+    claim = store.claim_at_job(
+        args.job_key,
+        runner_token=args.token,
+        command=command,
+        payload_path=str(payload_path) if payload_path is not None else None,
+        payload_identity=payload_identity,
+        require_auth_version=require_auth_version,
+    )
+    if payload_path is not None:
+        assert payload_identity is not None
+        _unlink_exact_private_file(payload_path, payload_identity)
+    child_env = dict(os.environ)
+    child_env.update(
+        {
+            "AT_GATE_DB": str(Path(args.db).expanduser().absolute()),
+            "AT_GATE_JOB_KEY": str(args.job_key),
+            "AT_GATE_CLAIM_ID": str(claim["claim_id"]),
+            "AT_GATE_GATE_ID": str(claim["gate_id"]),
+            "AT_GATE_COMMAND_SHA256": canonical_argv_hash(command),
+            "HOME": child_env.get("HOME", "/root"),
+            "USER": child_env.get("USER", "root"),
+            "LOGNAME": child_env.get("LOGNAME", "root"),
+        }
+    )
     try:
-        result = subprocess.run(command, capture_output=True, check=False)
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            check=False,
+            env=child_env,
+        )
         exit_code = int(result.returncode)
         stdout = result.stdout
         stderr = result.stderr
@@ -280,11 +575,13 @@ def _run_registered_inner(
         + stderr
     ).hexdigest()
     try:
-        GateStore(args.db).finish_at_job(
+        store.finish_at_job(
             args.job_key,
+            claim_id=str(claim["claim_id"]),
             runner_token=args.token,
             exit_code=exit_code,
             evidence_hash=evidence,
+            command=command,
         )
     except GateError as exc:
         stderr += f"\nat_gate: ALARM: wynik nie zapisany w DB: {exc}\n".encode("utf-8")
@@ -334,10 +631,30 @@ def cancel(args: argparse.Namespace) -> int:
                 f"at-job #{args.at_job_id} nadal istnieje; "
                 "--already-removed jest fałszywe"
             )
+    elif not args.already_removed:
+        raise ValidationError(
+            f"at-job #{args.at_job_id} już nie istnieje; "
+            "użyj --already-removed do jawnej rekoncyliacji"
+        )
+
+    # DB-first interlock: RUN i CANCEL rywalizują pod tym samym BEGIN IMMEDIATE.
+    # Po tym punkcie nawet awaria atrm nie może dopuścić child subprocess.
+    cancel_claim = store.begin_at_job_cancellation(
+        args.job_key,
+        args.at_job_id,
+        expected_gate_version=args.expected_gate_version,
+        actor=args.actor,
+        reason=args.reason,
+    )
+    _discard_cancelled_sealed_payload(job)
+    if args.at_job_id in present:
         try:
             removed = _run_process([args.atrm_bin, args.at_job_id])
         except (OSError, subprocess.TimeoutExpired) as exc:
-            raise GateError(f"atrm nie usunął at-joba: {exc}") from exc
+            raise GateError(
+                "CANCEL claim zapisany fail-closed, ale atrm jest niedostępne: "
+                f"{exc}"
+            ) from exc
         if removed.returncode != 0:
             detail = (
                 (removed.stderr or removed.stdout)
@@ -345,23 +662,20 @@ def cancel(args: argparse.Namespace) -> int:
                 .replace("\n", " ")[:300]
             )
             raise GateError(
-                f"atrm nie usunął at-joba #{args.at_job_id}: "
+                f"CANCEL claim zapisany fail-closed; atrm #{args.at_job_id} "
                 f"rc={removed.returncode}: {detail}"
             )
         verify = _run_process([args.atq_bin])
         if verify.returncode != 0 or args.at_job_id in _parse_atq(verify.stdout):
             raise GateError(
-                f"brak postcondition: at-job #{args.at_job_id} nadal jest w atq"
+                f"CANCEL claim zapisany fail-closed, ale brak postcondition: "
+                f"at-job #{args.at_job_id} nadal jest w atq"
             )
-    elif not args.already_removed:
-        raise ValidationError(
-            f"at-job #{args.at_job_id} już nie istnieje; "
-            "użyj --already-removed do jawnej rekoncyliacji"
-        )
 
     cancelled = store.cancel_at_job(
         args.job_key,
         args.at_job_id,
+        cancel_claim_id=str(cancel_claim["claim_id"]),
         expected_gate_version=args.expected_gate_version,
         actor=args.actor,
         reason=args.reason,
@@ -429,12 +743,14 @@ def build_parser() -> argparse.ArgumentParser:
     add.add_argument("--actor", default="at_gate/schedule")
     add.add_argument("--at-bin", default="at", help=argparse.SUPPRESS)
     add.add_argument("--atrm-bin", default="atrm", help=argparse.SUPPRESS)
+    add.add_argument("--payload-dir", help=argparse.SUPPRESS)
     add.add_argument("command", nargs=argparse.REMAINDER)
 
     runner = subparsers.add_parser("run", help=argparse.SUPPRESS)
-    runner.add_argument("--job-key", required=True)
-    runner.add_argument("--token", required=True)
-    runner.add_argument("--command-b64", required=True)
+    runner.add_argument("--payload-file")
+    runner.add_argument("--job-key")
+    runner.add_argument("--token")
+    runner.add_argument("--command-b64")
 
     cancel_parser = subparsers.add_parser(
         "cancel",

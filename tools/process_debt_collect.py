@@ -669,39 +669,10 @@ def collect_atq(
     jobs = store.list_at_jobs(active_only=True)
     registered_ids = {str(job["at_job_id"]): job for job in jobs if job.get("at_job_id")}
     proposals: list[dict[str, Any]] = []
-    gate_cache: dict[str, dict[str, Any]] = {}
-    for queue_id, job in sorted(registered_ids.items(), key=lambda item: int(item[0])):
-        if queue_id in present:
-            continue
-        gate_id = str(job["gate_id"])
-        try:
-            gate = gate_cache.setdefault(gate_id, store.show_gate(gate_id))
-        except GateError:
-            continue
-        evidence = {
-            "at_job_id": queue_id,
-            "job_key": job["job_key"],
-            "registered_status": job["status"],
-            "present_in_atq": False,
-            "snapshot_source": source,
-        }
-        proposals.append(
-            _proposal(
-                category="at-missing",
-                source=queue_id,
-                gate_id=gate_id,
-                title=f"ALARM: at-job #{queue_id} zniknął bez statusu terminalnego",
-                kind="AT_JOB_MISSING",
-                owner=str(gate["owner"]),
-                due_at=str(gate["due_at"]),
-                next_step="Uruchom at_gate.py reconcile i ustal wynik z logu",
-                blocker="Brak terminalnego statusu zarejestrowanego joba",
-                code_sha=str(gate["code_sha"]),
-                evidence=evidence,
-                opened_at=str(gate["opened_at"]),
-                metadata={"at_job_id": queue_id, "existing_gate": True},
-            )
-        )
+    # Zarejestrowane joby mają już kanoniczny gate. Ich brak w `atq`, launch
+    # grace, aktywne claimy oraz rzeczywiste MISSING_ALARM klasyfikuje i zapisuje
+    # wyłącznie GateStore.reconcile_at_jobs. Collector nie tworzy drugiego
+    # proposal/writera tej samej prawdy; OPEN_GATES materializuje stan ledgera.
     unknown = sorted(present - set(registered_ids), key=int)
     if _SHA_RE.fullmatch(master_sha):
         for queue_id in unknown:
@@ -732,7 +703,9 @@ def collect_atq(
         "source": source,
         "present": sorted(present, key=int),
         "registered_active": len(registered_ids),
-        "missing_terminal": len(set(registered_ids) - present),
+        "canonical_missing_alarm": sum(
+            job["status"] == "MISSING_ALARM" for job in jobs
+        ),
         "unregistered": len(unknown),
     }
 
