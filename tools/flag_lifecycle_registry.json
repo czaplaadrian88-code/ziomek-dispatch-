@@ -1,7 +1,7 @@
 {
  "_meta": {
   "counts": {
-   "apka": 27,
+   "apka": 29,
    "engine": 434,
    "engine_1b_units": 12,
    "etap4": 154,
@@ -11,7 +11,7 @@
    "numeric": 36,
    "panel": 88,
    "test_isolated": 8,
-   "total": 549,
+   "total": 551,
    "twins_concepts": 8
   },
   "generator": "tools/flag_lifecycle_seed.py",
@@ -4895,6 +4895,74 @@
    "twin_of": [],
    "worlds": [
     "engine"
+   ]
+  },
+  "ENABLE_COURIER_DELIVERY_LEDGER_ENFORCE": {
+   "carriers": [
+    "courier_api/config.py"
+   ],
+   "consumers": [
+    "courier_api/config.py:ENABLE_COURIER_DELIVERY_LEDGER_ENFORCE"
+   ],
+   "current_snapshot": {
+    "courier-api.service": false
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": true,
+   "name": "ENABLE_COURIER_DELIVERY_LEDGER_ENFORCE",
+   "notes": "",
+   "owner": {
+    "business": "Adrian",
+    "service": "courier-api.service"
+   },
+   "removal_condition": "aktywacja lub retire wg roadmapy (ACK Adrian)",
+   "review_date": "2026-08-10",
+   "rollback": "env ENABLE_COURIER_DELIVERY_LEDGER_ENFORCE OFF + restart courier-api.service ZA ACK",
+   "source_of_truth": "courier_api/config.py",
+   "twin_of": [],
+   "worlds": [
+    "apka"
+   ]
+  },
+  "ENABLE_COURIER_DELIVERY_LEDGER_SHADOW": {
+   "carriers": [
+    "courier_api/config.py"
+   ],
+   "consumers": [
+    "courier_api/config.py:ENABLE_COURIER_DELIVERY_LEDGER_SHADOW"
+   ],
+   "current_snapshot": {
+    "courier-api.service": false
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "shadow",
+   "lifecycle_seeded": true,
+   "name": "ENABLE_COURIER_DELIVERY_LEDGER_SHADOW",
+   "notes": "",
+   "owner": {
+    "business": "Adrian",
+    "service": "courier-api.service"
+   },
+   "removal_condition": "po walidacji shadow: flip lub retire (ACK Adrian)",
+   "review_date": "2026-08-10",
+   "rollback": "env ENABLE_COURIER_DELIVERY_LEDGER_SHADOW OFF + restart courier-api.service ZA ACK",
+   "source_of_truth": "courier_api/config.py",
+   "twin_of": [],
+   "worlds": [
+    "apka"
    ]
   },
   "ENABLE_COURIER_LAST_KNOWN_POS": {
