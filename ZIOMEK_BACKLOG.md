@@ -1,5 +1,26 @@
 # ZIOMEK AI DISPATCHER - BACKLOG ROZWOJU
 
+> **SESSION CLOSE 2026-08-01 20:45 UTC — LICZNIK DOSTAW 16 VS 17 / ROOT-FIX CANDIDATE:**
+> jedna realnie wykonana dostawa została po pickupie oznaczona w panelu jako
+> status `9/cancelled`. `panel_watcher` zastosował `ORDER_RETURNED_TO_POOL`, a
+> `state_machine` wyczyścił kuriera; późniejszy GPS potwierdził przejazd i
+> kilkuminutowy postój przy odrębnym celu dostawy. Courier API liczy tylko
+> `status=delivered` + zgodny kurier + dzisiejszy `delivered_at`, więc poprawnie
+> policzył wadliwy upstreamowy zbiór jako 16. Po zgłoszeniu doszła osobna nowa
+> dostawa i snapshot urósł do 17, ale brakujący kurs nadal nie został
+> rozliczony. Gate `courier.delivered-count-16-vs-17-20260801` jest
+> `READY_FOR_REVIEW` v4. Root-fix powstał w dwóch izolowanych branchach:
+> `courier_api` `95bdc02e` (append-only delivery ledger, DB v8, lockowany
+> manual-7 recovery, OFF/SHADOW/ENFORCE) i rejestr flag `01cc28954`; 24 oracle,
+> dwa mutation probe, pełna regresja delta=0. Kod NIE jest zmergowany ani LIVE,
+> a historyczny kurs nadal nie jest skorygowany — wymagane niezależne review i
+> osobny ACK na backup/migrację/restart/shadow/enforce oraz korektę danych.
+> Raport bez PII:
+> `eod_drafts/2026-08-01/COURIER_COUNT_16_VS_17_ROOT_CAUSE.md`.
+> Owner polecił utrwalić wiedzę i zamknąć sesję. Sesja implementacyjna jest
+> zamknięta, ale gate pozostaje otwarty w `READY_FOR_REVIEW`; zamknięcie nie
+> oznacza merge'u, wdrożenia ani korekty danych. Tmux 286 pozostał nietknięty.
+
 > **FINAL LIVE 2026-08-01 15:57 UTC — AT-GATE/LEDGER V4 WDROŻONY, FABLE #229:**
 > jawny owner ACK „wprowadź live, audyt powdrożeniowy Fable” wykonany.
 > Provider `d0c0640b5` jest na kanonicznym masterze; ledger produkcyjny
