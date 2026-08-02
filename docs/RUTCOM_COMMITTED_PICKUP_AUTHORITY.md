@@ -1,11 +1,24 @@
 # Rutcom committed pickup authority
 
-Status: kandydat v23 niewdrożony, kod ciemny, nowa flaga domyślnie `OFF`.
+Status: kandydat v24 niewdrożony, kod ciemny, nowa flaga domyślnie `OFF`.
 Owner 2026-08-01 polecił docelowo włączyć ją `ON`, ale wdrożenie kodu,
 kontrolowane restarty i weryfikacja runtime pozostają osobną operacją live.
 
-V23 domyka sześć klas znalezionych przez dwa blind review v22 oraz niezależnie
-wykryty wyścig rolloutowy. Watcher i pre-proposal chwytają jeden typowany
+V24 domyka trzy unikalne ustalenia dwóch blind review exact-byte v23 oraz dodatkową lukę
+wykrytą w audycie MAIN przed zamrożeniem. Coordinator klasyfikuje pełny
+post-observation aggregate, więc zmiana `prep_minutes` 20→60 nie może ominąć
+sprzężonego writera. Każdy nowy receipt kolejki ma schema v6 i niesie dokładny
+click-time policy lease; pre-policy v4/v5 pozostaje czytelny wyłącznie dla
+ciemnego legacy elastyka i nigdy nie może dostać authority po flipie. Ten sam
+lease jest częścią claimu, proofu i durable state eventu. Claim jest wyłącznie
+dziennikiem transakcji: manual flag ani sam fakt claimu nie zastępują zapisanego
+`forward+passive`. Crash recovery nie czyta ponownie live flag i failuje closed
+przy braku, korupcji lub złym producerze snapshotu. Forward preflight ignoruje
+wyłącznie poprawny v6 receipt jawnie rozpoczęty przy forward `OFF`; code revert
+blokuje każdy policy-bound v6 zamiast usuwać jego semantykę.
+
+V23 wcześniej domknął sześć klas znalezionych przez dwa blind review v22 oraz
+niezależnie wykryty wyścig rolloutowy. Watcher i pre-proposal chwytają jeden typowany
 `CommittedPickupPolicySnapshot` przed jakimkolwiek mutable I/O; producer/source
 są jawnie zarejestrowane, a exact snapshot jest częścią trwałego raw eventu.
 Crash, retry ani hot flip nie reinterpretują rozpoczętej obserwacji. Klasa
@@ -96,13 +109,15 @@ Po zmianie obowiązuje jedna granica:
   flagi manual passthrough i jawnego mapowania statusów: `planned→2`,
   `assigned→3/4/6`. Może korygować czas w obie strony.
 - Przycisk koordynatora może autoryzować korektę w obie strony tylko przez
-  świeży, OID-bound receipt `coordinator_time_recheck.v4` obecny w kanonicznej
+  świeży, OID-bound receipt `coordinator_time_recheck.v6` obecny w kanonicznej
   kolejce. Receipt jednorazowo claimuje dokładny event; crash retry zwraca ten
   sam event, druga korekta nie może użyć tego samego kliknięcia. Claimed head
   jest niezmienny aż do exact ACK. Ponowny klik w tym oknie staje się jednym
   coalesced successorem i dopiero po terminalizacji poprzednika jest promowany
   do nowej generacji. Sam
-  `deliberate=True` ani dobrze wyglądający słownik nie są dowodem. Każdy
+  `deliberate=True` ani dobrze wyglądający słownik nie są dowodem. V6 wiąże
+  również dokładny snapshot flag z momentu kliknięcia; sam claim nie może
+  podnieść `OFF` do authority, a manual-marker flag nie jest flagą koordynatora. Każdy
   wymuszony legacy/elastyk event czasu także dostaje exact claim **przed**
   pierwszym side effectem. Po terminalnym ACK neutralny claim promuje świeżą
   kontynuację tego samego kliknięcia, aby drugie równoległe pole dostało osobny
@@ -210,17 +225,17 @@ Po zmianie obowiązuje jedna granica:
 |---|---|---|---|---|
 | `panel_client.normalize_order` | ingest jednego response Rutcom | producer CK/pickup/marker/status | N-D | Już zwraca sprzężony snapshot; oracle korzysta z produkcyjnego schematu, bez nowego parsera. |
 | panel/console koordynatora | klik „Odśwież czas” | producer żądania | N-D | Istniejący caller nadal woła `enqueue`; semantyka dowodu została scentralizowana poniżej. |
-| `coordinator_time_recheck.py` | trwała kolejka intencji | writer/reader receiptu | TAK | v5 rozdziela immutable audit `requested_at` od epoki wykonania `eligible_at`; successor zaczyna TTL dopiero po exact ACK poprzednika. Czytnik zachowuje kompatybilność v4. Immutable claimed head, exact-event claim, bounded continuation, claim-aware drain, poison/corrupt retention i rollback fence pozostają wspólne. V23 dodaje crash-safe `forward_fence.v1`: UUID i SHA dokładnego snapshotu kolejki są tworzone pod wspólnym flockiem, a enqueue/upgrade/claim/pending-cleanup/ACK nie mutują kolejki do exact release. Nie ma drugiego writera ani in-memory locka. |
+| `coordinator_time_recheck.py` | trwała kolejka intencji | writer/reader receiptu | TAK | V6 rozdziela immutable audit `requested_at` od epoki wykonania `eligible_at` i wiąże jeden exact click-time policy lease; successor tego samego kliknięcia zachowuje lease, a nowy re-click dostaje nowy. Czytnik zachowuje v4/v5 wyłącznie jako pre-policy legacy bez prawa nabycia authority. Immutable claimed head, exact-event claim, bounded continuation, claim-aware drain, poison/corrupt retention i rollback fence pozostają wspólne. V23 dodał crash-safe `forward_fence.v1`: UUID i SHA dokładnego snapshotu kolejki są tworzone pod wspólnym flockiem, a enqueue/upgrade/claim/pending-cleanup/ACK nie mutują kolejki do exact release. V24 blokuje code revert przy każdym policy-bound v6. Nie ma drugiego writera ani in-memory locka. |
 | `panel_watcher._diff_czas_kuriera` | cykliczna obserwacja CK | producer eventu | TAK | Deleguje do resolvera, nie ma własnej polityki; `null→wartość` i `wartość→wartość` mają ten sam authority path, a raw first-acceptance istnieje tylko w parytecie OFF. Wspólny próg szumu 3 min obowiązuje delty z baseline i bliźniaka. Przy rolloucie emituje wspólny status/courier/assignment/revision CAS dla CK. |
 | `panel_watcher._diff_pickup_time` | równoległa obserwacja pickup | producer eventu | TAK | Deleguje do resolvera pickup zarówno dla `null→wartość`, jak i `wartość→wartość`, i blokuje stale baseline po CK-derived authority. |
 | `panel_watcher._claim_forced_time_event` / `_apply_time_update_event` / `_diff_and_emit` / `_post_restart_cold_start_scan` | watcher transport/recovery | consumer eventu | TAK | Każdy force event jest claimowany przed side effectem; claimed kolejka jest odtwarzana przed `current_state`, a ACK zależy od exact terminalnego rekordu outbox state+downstream. V21/V22 zachowują i wcześnie odzyskują initial intent. V23 chwyta jeden panelowy policy snapshot przed drain/prefetch/detail I/O i przekazuje go przez NEW_ORDER, oba detektory oraz legacy/durable apply. Raw event utrwala exact lease, więc recovery nie czyta ponownie żywych flag. Cold start ma ten sam kontrakt. |
 | `dispatch_pipeline._v327_emit_pre_recheck_event` | pre-proposal re-check | bliźniaczy producer | TAK | Ten sam resolver/transport/event key, bieżący courier lane i CK baseline z aktualnego state; wynik scoringowy wyłącznie po apply; oba flags OFF = exact legacy bez nowego odczytu state. V22 zamraża jeden request-scoped policy snapshot przed HTTP i przekazuje dokładnie ten sam obiekt przez fetch, emit i legacy/durable apply. Przy rolloucie używa tego samego CK CAS buildera co watcher. |
-| `committed_pickup_authority.py` | polityka CK i pickup | jedyny policy/CAS owner | TAK | Incydent 491578, ochrona 483023, próg 3 min, kolejny forward, kontekstowy receipt koordynatora, oba revision/CAS, pełny proof i artifact oracle. V23 rejestruje exact producer/source, serializuje/deserializuje jedyny policy lease i projektuje post-observation aggregate. Malformed/partial lease failuje closed; assignment snapshot i policy snapshot blokują niezgodny code revert. |
-| `committed_pickup_apply.py` | kanoniczna granica/outbox/apply/lifecycle | jedyny transport eventów czasu | TAK | Tłumaczy legalny raw CK przed outboxem, używa strict state read, weryfikuje proof/CAS i seal'uje pełną kopertę. V23 przyjmuje wyłącznie zarejestrowany producer/source policy snapshot i deleguje klasyfikację do jednego wrappera state; nie ma osobnej pre-proposal-only polityki ani live reread. |
+| `committed_pickup_authority.py` | polityka CK i pickup | jedyny policy/CAS owner | TAK | Incydent 491578, ochrona 483023, próg 3 min, kolejny forward, kontekstowy receipt koordynatora, oba revision/CAS, pełny proof i artifact oracle. V23 rejestruje exact producer/source, serializuje/deserializuje jeden policy lease i projektuje post-observation aggregate. V24 dodaje queue-owned producer, ścisły v6 event-policy decoder oraz źródłową regułę `coordinator = forward AND passive`; manual flag nie autoryzuje kliknięcia. Malformed/partial lease failuje closed; assignment snapshot i policy snapshot blokują niezgodny code revert. |
+| `committed_pickup_apply.py` | kanoniczna granica/outbox/apply/lifecycle | jedyny transport eventów czasu | TAK | Tłumaczy legalny raw CK przed outboxem, używa strict state read, weryfikuje proof/CAS i seal'uje pełną kopertę. V24 bierze coordinator policy wyłącznie z exact proofu v6, initial policy z jednego odczytu trwałego NEW_ORDER receiptu i zapisuje pełny lease w durable evencie. Claim nie podmienia flag policy, nie ma live reread ani osobnej pre-proposal-only polityki. |
 | `durable_event_apply.emit_and_apply` / `resume_exact` / `is_terminal_outcome` | durable bridge i recovery rozpoczętej transakcji | metadata writer / exact receipt consumer | TAK | Opcjonalny sealer działa po finalnych markerach i przed outboxem; resume wznawia tylko wskazany rekord, a terminal oracle wymaga superseded albo applied+downstream applied przed ACK. COURIER_ASSIGNED zamraża dwa exact bool snapshoty polityki CK, więc handler i oracle nie rozjeżdżają się przy hot flipie; brak/korupcja failuje closed dla CK, nie dla assignmentu. |
 | `event_bus.list_unfinished_state_applies` | pełny rollback audit | consumer outboxa | TAK | Bez limitu zwraca każdy układ poza jawnie terminalnym; nieznany/corrupt status i malformed state_event są widoczne i blokują revert kodu. |
 | `state_machine.CZAS_KURIERA_UPDATED` / `COURIER_ASSIGNED` | legacy defense-in-depth dla raw CK | consumer/delegat | TAK | Bez `event_id` deleguje do kanonu; raw CK sources są jawnie wygaszone przy ON. Assignment i jego terminalny oracle używają tego samego resolvera oraz durable snapshotu flag: kurier zawsze jest zapisany, a równoległy CK wyłącznie według jednej receipt-bound decyzji. Historyczny durable raw row jest terminalnie superseded. |
-| `state_machine._pickup_time_event_status` | apply/recovery oracle | consumer wszystkich pickup eventów | TAK | Wspólny freeze, CAS, courier/assignment/revision i exact postcondition dla authority i legacy; receipt source jest blokowany bez proofu tylko dla czasówki, więc deliberate elastyk zachowuje legacy apply; ABA fail-closed. |
+| `state_machine._pickup_time_event_status` | apply/recovery oracle | consumer wszystkich pickup eventów | TAK | Wspólny freeze, CAS, courier/assignment/revision i exact postcondition dla authority i legacy; receipt source jest blokowany bez proofu tylko dla czasówki, więc deliberate elastyk zachowuje legacy apply; ABA fail-closed. V24 recovery z claimu/outboxa deserializuje dokładny policy lease przed jakimkolwiek live flag read; policy OFF/missing/corrupt kończy się fail-closed. |
 | `state_machine.PICKUP_TIME_UPDATED` | kanon czasu | jedyny state writer | TAK | Atomowy pickup+CK+HH:MM+revision+provenance oraz consume pending initial intentu; gdy intent jest pending, każdy sibling/legacy writer bez exact `committed_new_order_time_intent_id` jest odrzucany i nie może wyczyścić receiptu. V22 klasyfikuje wynik na post-event aggregate projektowany wspólnym helperem, więc pickup zmieniający `prep_minutes` 20→60 nie ominie mirroru czasówki. Authority mirror jest niezależny od starej flagi. `NEW_ORDER` zapisuje tylko shell i niekanoniczny receipt, nigdy drugi committed tuple. |
 | `state_machine.event_effect_status` | durable recovery | consumer postcondition | TAK | Pending/applied/superseded bez fałszywego sukcesu po częściowym zapisie. Po legalnym prune oba typy eventów czasu z pełnym `time_update_cas.v1` kończą się `superseded`, bo nie mogą odtworzyć usuniętego agregatu. |
 | lifecycle downstream / plan invalidation | odświeżenie widoków i planu | consumer eventu | TAK | Jeden istniejący callback po durable apply; usunięto martwy, duplikujący touch w pipeline. |
@@ -231,11 +246,24 @@ Po zmianie obowiązuje jedna granica:
 | courier API serializer | kontrakt aplikacji | consumer CK/HH:MM | N-D | Czyta sprzężone pola ze state; brak render override lub drugiego writera. |
 | Android `RouteLogic` | prezentacja kurierowi | consumer API | N-D | Zachowuje istniejącą precedencję; 19:21 pochodzi z jednego kanonicznego zapisu. |
 | `common.py`, lifecycle registry/checkery | rollout/fingerprint | owner flagi | TAK | Decision flag, const default OFF, rejestr i effect coverage. V23 przypina manual i forward flagę także do rzeczywistego panelowego snapshot readera; pierwszy pełny przebieg słusznie zatrzymał brak tej deklaracji, po root fixie AST/spec/test/registry są zgodne 557/557. |
-| `tools/rutcom_committed_authority_rollback.py` | rollback/roll-forward | operator gate | TAK | Wymaga OFF każdej authority flag, terminalnego outboxa, bezpiecznej kolejki i mechanicznego quiesce exact writerów. V23 dopuszcza tylko exact poprawny unclaimed aktywny elastyk bez committed artifactu; reszta kolejki blokuje. `safe_for_forward_deploy` wymaga ważnego forward fence. `fence-forward` reprobuje writerów przed i po założeniu fence; `release-forward-fence` wiąże exact ID z efektywnym ON albo jawnym abortem OFF. Code revert wymaga braku forward fence. |
+| `tools/rutcom_committed_authority_rollback.py` | rollback/roll-forward | operator gate | TAK | Wymaga OFF każdej authority flag, terminalnego outboxa, bezpiecznej kolejki i mechanicznego quiesce exact writerów. V24 dopuszcza w forward preflight wyłącznie exact poprawny v6 unclaimed elastyk, którego receipt sam dowodzi click-time forward `OFF`; każdy v4/v5 lub malformed snapshot blokuje. `safe_for_forward_deploy` wymaga ważnego forward fence. `fence-forward` reprobuje writerów przed i po założeniu fence; `release-forward-fence` wiąże exact ID z efektywnym ON albo jawnym abortem OFF. Code revert wymaga braku forward fence i blokuje każdy policy-bound v6. |
 | logi/outbox/provenance | audyt i recovery | consumer zdarzenia | TAK | Pełny proof key, revision i exact attestation pozwalają mierzyć/retry bez nowego źródła prawdy. |
-| testy incident/ratchet/twins/rollback | bramka regresji | verifier | TAK | V23 odtwarza osiem przypadków RED na v22; po fixie klaster integracyjny 428/428, queue+rollback 111/111, ratchet/mutation 27/27, lifecycle 33/33. Pierwsza pełna suita wykryła realny brak consumer mapy; po naprawie finalna regresja to 6741 passed, 74 skipped, 8 xfailed, 0 failed. Dwa świeże final-byte review v23 pozostają bramką przed live. |
+| testy incident/ratchet/twins/rollback | bramka regresji | verifier | TAK | V24 odtwarza trzy findings v23 jako RED oraz dodatkowo RED dla forged claimu z click-time OFF/manual ON. Po fixie główny klaster queue/apply/rollback ma 272/272, ratchet/mutation 28/28, a pełna regresja 6752 passed / 74 skipped / 8 xfailed / 0 failed. Dwa świeże final-byte review v24 pozostają bramką przed live. |
 
 ## Dowody przed wydaniem
+
+- Dwa blind review exact-byte v23 poprawnie zatrzymały live. Authority verdict
+  SHA `58f422b07f239730ad0dd7a279238e7cddafa210384bb742fdf16091aee00cd3`,
+  rollout verdict SHA
+  `b5443d5d1aff1569097529b446eef125c128308bde09c8ea2565f26be4085710`;
+  oba `CONFIRMED_DEFECT`. MAIN odtworzył RED: klasyfikację coordinator CK na
+  starym agregacie, state-only wyjątek queue w preflighcie oraz brak durable
+  policy snapshotu po crashu. Dodatkowy self-audit odtworzył czerwony oracle,
+  w którym sam claim z manual flagą mógł zastąpić click-time forward `OFF`.
+  V24 ma 272/272 głównego klastra, 28/28 ratchet/mutation i pełną finalną
+  regresję 6752 passed / 74 skipped / 8 xfailed / 0 failed w 462,43 s. Dwa
+  świeże hash-bound `CLEAN` pozostają bramką przed live. Evidence:
+  `eod_drafts/2026-08-01/RUTCOM_V24_DOD_EVIDENCE.txt`.
 
 - Dwa blind review exact-byte v22 poprawnie zatrzymały live: authority SHA
   `ba2e70835ee1d95fbc0caf4fde2e364b2bb1ce19d12d6233e379943f70fac12a`,

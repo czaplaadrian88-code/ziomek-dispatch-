@@ -796,11 +796,20 @@ def test_coordinator_force_requires_durable_receipt_for_backward_edit():
         {
             **payload,
             "authority_receipt": {
-                "schema": "coordinator_time_recheck.v4",
+                "schema": "coordinator_time_recheck.v6",
                 "request_id": "req-491578",
                 "order_id": "491578",
                 "requested_at": "2026-08-01T18:50:50+02:00",
+                "eligible_at": "2026-08-01T18:50:50+02:00",
                 "source": "coordinator_panel",
+                "continuation_depth": 0,
+                "committed_time_policy_snapshot": {
+                    "schema": "committed_pickup.policy_snapshot.v1",
+                    "producer": "coordinator_queue",
+                    "manual_passthrough_enabled": False,
+                    "rutcom_forward_authority_enabled": True,
+                    "passive_guard_enabled": True,
+                },
             },
         },
         coordinator_receipt_verified=True,
@@ -850,6 +859,20 @@ def _authority_runtime_flag(name: str, default=None):
     }:
         return True
     return default
+
+
+def _panel_policy(
+    *,
+    manual: bool = True,
+    forward: bool = True,
+    passive: bool = True,
+) -> CommittedPickupPolicySnapshot:
+    return CommittedPickupPolicySnapshot(
+        producer="panel_watcher",
+        manual_passthrough_enabled=manual,
+        rutcom_forward_authority_enabled=forward,
+        passive_guard_enabled=passive,
+    )
 
 
 def _seed_state_491578(sm, tmp_path, monkeypatch):
@@ -932,6 +955,7 @@ def _seed_pending_initial_time_contract(tmp_path, monkeypatch, *, oid):
         order_id=oid,
         payload=payload,
         event_id=f"{oid}_NEW_ORDER_first",
+        committed_time_policy=_panel_policy(manual=False),
     )
     assert initialized.state_ready is True
     return pw, sm, payload
@@ -943,6 +967,16 @@ def _isolate_coordinator_queue(tmp_path, monkeypatch):
     queue_path = tmp_path / "coordinator_time_recheck.json"
     monkeypatch.setattr(ctr, "QUEUE_PATH", str(queue_path))
     monkeypatch.setattr(ctr, "LOCK_PATH", str(queue_path) + ".lock")
+    monkeypatch.setattr(
+        ctr,
+        "_coordinator_policy_snapshot",
+        lambda: CommittedPickupPolicySnapshot(
+            producer="coordinator_queue",
+            manual_passthrough_enabled=True,
+            rutcom_forward_authority_enabled=True,
+            passive_guard_enabled=True,
+        ),
+    )
     return ctr
 
 
@@ -1724,6 +1758,7 @@ def test_real_durable_new_order_sanitizes_and_commits_initial_tuple(
         order_id=oid,
         payload=payload,
         event_id=f"{oid}_NEW_ORDER_first",
+        committed_time_policy=_panel_policy(manual=False),
     )
 
     assert initialized.state_ready is True
@@ -1798,6 +1833,7 @@ def test_new_order_forward_persists_original_time_intent_before_initializer(
         order_id=oid,
         payload=payload,
         event_id=f"{oid}_NEW_ORDER_first",
+        committed_time_policy=_panel_policy(manual=False),
     )
 
     assert initialized.state_ready is True
@@ -1972,6 +2008,7 @@ def test_new_order_forward_receipt_survives_on_to_off_flip(
             "delivery_address": "fixture",
         },
         event_id=f"{oid}_NEW_ORDER_first",
+        committed_time_policy=_panel_policy(manual=False),
     )
     enabled["value"] = False
     crash_recovered_state = sm.get_order_strict(oid)
@@ -2033,6 +2070,7 @@ def test_real_tick_recovers_pending_initial_intent_before_later_restamp(
         order_id=oid,
         payload=original,
         event_id=f"{oid}_NEW_ORDER_first",
+        committed_time_policy=_panel_policy(manual=False),
     )
     assert initialized.state_ready is True
     assert sm.get_order_strict(oid)["pickup_at_warsaw"] is None
@@ -2379,6 +2417,9 @@ def test_real_durable_new_order_off_preserves_legacy_initial_tuple(
         order_id=oid,
         payload=payload,
         event_id=f"{oid}_NEW_ORDER_first",
+        committed_time_policy=_panel_policy(
+            manual=False, forward=False
+        ),
     )
 
     assert initialized.state_ready is True
@@ -3578,7 +3619,10 @@ def test_forward_authority_fails_closed_without_passive_guard(
     )
 
     with pytest.raises(ValueError, match="requires passive guard"):
-        apply_boundary.apply_event(canonical)
+        apply_boundary.apply_event(
+            canonical,
+            authority_policy=_panel_policy(passive=False),
+        )
 
     monkeypatch.setattr(sm, "decision_flag", _authority_decision_flag)
     monkeypatch.setattr(
@@ -3661,7 +3705,9 @@ def test_legacy_aba_before_first_authority_apply_supersedes_pending_event(
         raise RuntimeError("synthetic crash before authority state apply")
 
     monkeypatch.setattr(sm, "update_from_event", crash_before_first_authority_state)
-    first = apply_boundary.apply_event(pending_event)
+    first = apply_boundary.apply_event(
+        pending_event, authority_policy=_panel_policy()
+    )
     assert first.state_ready is False
     assert event_bus.get_state_apply_outbox(first.event_id)[
         "state_status"
@@ -3801,7 +3847,9 @@ def test_durable_boundary_canonicalizes_raw_ck_before_outbox(
         "payload": _observation_491578(),
     }
 
-    outcome = apply_boundary.apply_event(raw)
+    outcome = apply_boundary.apply_event(
+        raw, authority_policy=_panel_policy()
+    )
     row = event_bus.get_state_apply_outbox(outcome.event_id)
     stored = sm.get_order("491578")
 
@@ -3845,26 +3893,48 @@ def test_exact_outbox_attestation_finishes_after_authority_flag_turns_off(
         raise RuntimeError("synthetic crash after durable receipt")
 
     monkeypatch.setattr(sm, "update_from_event", crash_before_state)
-    first = apply_boundary.apply_event(canonical)
+    policy = CommittedPickupPolicySnapshot(
+        producer="panel_watcher",
+        manual_passthrough_enabled=True,
+        rutcom_forward_authority_enabled=True,
+        passive_guard_enabled=True,
+    )
+    first = apply_boundary.apply_event(
+        canonical, authority_policy=policy
+    )
     row = event_bus.get_state_apply_outbox(first.event_id)
     assert first.state_ready is False
     assert row["state_status"] == "pending"
     assert row["state_event"].get("committed_authority_attestation")
+    assert row["state_event"].get(
+        "committed_time_policy_snapshot"
+    ) == {
+        "schema": "committed_pickup.policy_snapshot.v1",
+        "producer": "panel_watcher",
+        "manual_passthrough_enabled": True,
+        "rutcom_forward_authority_enabled": True,
+        "passive_guard_enabled": True,
+    }
 
     monkeypatch.setattr(sm, "update_from_event", real_update)
     monkeypatch.setattr(
         apply_boundary.C, "decision_flag", lambda _name: False
     )
-    monkeypatch.setattr(sm, "decision_flag", lambda _name: False)
-    monkeypatch.setattr(
-        sm,
-        "flag",
-        lambda name, default=None: (
-            False
-            if name == "ENABLE_CZASOWKA_CK_PASSIVE_GUARD"
-            else default
-        ),
-    )
+    def unavailable_decision_flag(name, *_args, **_kwargs):
+        if name in {
+            "ENABLE_CZASOWKA_CK_MANUAL_EDIT_PASSTHROUGH",
+            "ENABLE_CZASOWKA_RUTCOM_FORWARD_AUTHORITY",
+        }:
+            raise RuntimeError("later flag store unavailable")
+        return False
+
+    def unavailable_runtime_flag(name, default=None, *_args, **_kwargs):
+        if name == "ENABLE_CZASOWKA_CK_PASSIVE_GUARD":
+            raise RuntimeError("later flag store unavailable")
+        return default
+
+    monkeypatch.setattr(sm, "decision_flag", unavailable_decision_flag)
+    monkeypatch.setattr(sm, "flag", unavailable_runtime_flag)
     counts = durable_event_apply.drain_pending(
         state_update_fn=sm.update_from_event,
         effect_status_fn=sm.event_effect_status,
@@ -3902,7 +3972,9 @@ def test_outbox_attestation_binds_every_authorization_marker(
         raise RuntimeError("synthetic crash after durable receipt")
 
     monkeypatch.setattr(sm, "update_from_event", crash_before_state)
-    first = apply_boundary.apply_event(canonical)
+    first = apply_boundary.apply_event(
+        canonical, authority_policy=_panel_policy()
+    )
     with sqlite3.connect(events_db) as conn:
         raw = conn.execute(
             "SELECT state_event FROM state_apply_outbox WHERE event_id = ?",
@@ -4875,7 +4947,9 @@ def test_raw_ck_canonicalization_uses_strict_state_read(
         "payload": _observation_491578(),
     }
 
-    outcome = apply_boundary.apply_event(raw)
+    outcome = apply_boundary.apply_event(
+        raw, authority_policy=_panel_policy()
+    )
 
     assert reads[0] == "strict"
     assert outcome.state_ready is True
@@ -5188,6 +5262,218 @@ def test_panel_pickup_producer_classifies_post_event_prep(monkeypatch):
     assert event is not None
     assert event["payload"]["committed_authority"] == "rutcom_pickup_field"
     assert event["payload"]["new_prep_minutes"] == 60
+
+
+def test_coordinator_ck_resolver_classifies_post_observation_prep(
+    tmp_path, monkeypatch
+):
+    """A coordinator refresh may not bypass the coupled owner on 20→60."""
+    from dispatch_v2 import state_machine as sm
+
+    ctr = _isolate_coordinator_queue(tmp_path, monkeypatch)
+    monkeypatch.setattr(sm, "decision_flag", _authority_decision_flag)
+    monkeypatch.setattr(sm, "flag", _authority_runtime_flag)
+    monkeypatch.setattr(
+        ctr,
+        "_coordinator_policy_snapshot",
+        lambda: CommittedPickupPolicySnapshot(
+            producer="coordinator_queue",
+            manual_passthrough_enabled=True,
+            rutcom_forward_authority_enabled=True,
+            passive_guard_enabled=True,
+        ),
+    )
+    assert ctr.enqueue(["elastic-promoted-at-coordinator"]) == 1
+    receipt = ctr.pending_with_receipts()[
+        "elastic-promoted-at-coordinator"
+    ]
+    existing = {
+        **_existing_491578(),
+        "order_id": "elastic-promoted-at-coordinator",
+        "order_type": "elastic",
+        "prep_minutes": 20,
+    }
+    payload = _observation_491578(
+        oid=existing["order_id"],
+        source="coordinator_force",
+        authority_receipt=receipt,
+        observed_prep_minutes=60,
+        observed_at=receipt["requested_at"],
+    )
+
+    resolution = sm.resolve_czasowka_ck_observation(existing, payload)
+
+    assert resolution.outcome is ResolutionOutcome.APPLY
+    assert resolution.reason == "coordinator_receipt"
+    assert resolution.event is not None
+    assert resolution.event["event_type"] == "PICKUP_TIME_UPDATED"
+    assert resolution.event["payload"]["new_prep_minutes"] == 60
+    assert ctr.verify_claimed_event(resolution.event)
+
+
+def test_off_started_coordinator_refresh_cannot_gain_authority_after_live_on(
+    tmp_path, monkeypatch
+):
+    """The click-time OFF lease wins even when detail promotes 20→60."""
+    from dispatch_v2 import state_machine as sm
+
+    ctr = _isolate_coordinator_queue(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        ctr,
+        "_coordinator_policy_snapshot",
+        lambda: CommittedPickupPolicySnapshot(
+            producer="coordinator_queue",
+            manual_passthrough_enabled=False,
+            rutcom_forward_authority_enabled=False,
+            passive_guard_enabled=True,
+        ),
+    )
+    oid = "off-click-promoted-after-flip"
+    assert ctr.enqueue([oid], source="coordinator_panel") == 1
+    receipt = ctr.pending_with_receipts()[oid]
+
+    # Runtime is now ON, but the already queued work owns the durable OFF lease.
+    monkeypatch.setattr(sm, "decision_flag", _authority_decision_flag)
+    monkeypatch.setattr(sm, "flag", _authority_runtime_flag)
+    existing = {
+        **_existing_491578(),
+        "order_id": oid,
+        "order_type": "elastic",
+        "prep_minutes": 20,
+    }
+    payload = _observation_491578(
+        oid=oid,
+        source="coordinator_force",
+        authority_receipt=receipt,
+        observed_prep_minutes=60,
+        observed_at=receipt["requested_at"],
+    )
+
+    resolution = sm.resolve_czasowka_ck_observation(existing, payload)
+
+    assert resolution.outcome is ResolutionOutcome.SUPPRESS
+    assert resolution.reason == "forward_authority_off"
+    assert resolution.event is None
+    assert ctr.current_receipt(oid) == receipt
+
+
+def test_off_started_coordinator_refresh_remains_legacy_for_true_elastic(
+    tmp_path, monkeypatch
+):
+    """The rollout exception preserves the old path only while class stays elastic."""
+    from dispatch_v2 import state_machine as sm
+
+    ctr = _isolate_coordinator_queue(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        ctr,
+        "_coordinator_policy_snapshot",
+        lambda: CommittedPickupPolicySnapshot(
+            producer="coordinator_queue",
+            manual_passthrough_enabled=False,
+            rutcom_forward_authority_enabled=False,
+            passive_guard_enabled=True,
+        ),
+    )
+    oid = "off-click-still-elastic"
+    assert ctr.enqueue([oid], source="coordinator_panel") == 1
+    receipt = ctr.pending_with_receipts()[oid]
+    existing = {
+        **_existing_491578(),
+        "order_id": oid,
+        "order_type": "elastic",
+        "prep_minutes": 20,
+    }
+    payload = _observation_491578(
+        oid=oid,
+        source="coordinator_force",
+        authority_receipt=receipt,
+        observed_prep_minutes=20,
+        observed_at=receipt["requested_at"],
+    )
+
+    resolution = sm.resolve_czasowka_ck_observation(existing, payload)
+
+    assert resolution.outcome is ResolutionOutcome.NOT_APPLICABLE
+    assert resolution.reason == "not_czasowka"
+    assert ctr.current_receipt(oid) == receipt
+
+
+def test_claim_cannot_override_coordinator_click_time_off_policy(
+    tmp_path, monkeypatch
+):
+    """A durable claim is a journal, never a replacement authority bit."""
+    from dispatch_v2 import committed_pickup_apply as apply_boundary
+    from dispatch_v2 import lifecycle_downstream
+    from dispatch_v2 import state_machine as sm
+
+    _seed_state_491578(sm, tmp_path, monkeypatch)
+    _isolate_durable_bus(tmp_path, monkeypatch)
+    monkeypatch.setattr(lifecycle_downstream, "apply", lambda _event: None)
+    ctr = _isolate_coordinator_queue(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        ctr,
+        "_coordinator_policy_snapshot",
+        lambda: CommittedPickupPolicySnapshot(
+            producer="coordinator_queue",
+            # This intentionally catches the too-broad generic
+            # ``manual OR forward`` authority predicate.
+            manual_passthrough_enabled=True,
+            rutcom_forward_authority_enabled=False,
+            passive_guard_enabled=True,
+        ),
+    )
+    oid = "claimed-off-policy"
+    existing = {
+        **_existing_491578(),
+        "order_id": oid,
+    }
+    sm.upsert_order(oid, existing, event="TEST_CLAIMED_OFF_POLICY")
+    assert ctr.enqueue([oid], source="coordinator_panel") == 1
+    receipt = ctr.pending_with_receipts()[oid]
+    observation = _observation_491578(
+        oid=oid,
+        source="coordinator_force",
+        authority_receipt=receipt,
+        observed_at=receipt["requested_at"],
+    )
+    # Model a faulty sibling caller that tries to claim a canonical event
+    # without first consuming the queue policy. Every downstream boundary
+    # must still reject it from the exact receipt snapshot.
+    crafted = resolve_czasowka_committed_observation(
+        existing,
+        observation,
+        is_czasowka=True,
+        passive_guard_enabled=True,
+        manual_passthrough_enabled=True,
+        rutcom_forward_authority_enabled=True,
+        coordinator_receipt_verified=True,
+    )
+    assert crafted.outcome is ResolutionOutcome.APPLY
+    claimed = ctr.claim_receipt(
+        receipt,
+        order_id=oid,
+        event=crafted.event,
+    )
+    assert claimed is not None
+
+    def unavailable_flag_store(*_args, **_kwargs):
+        raise RuntimeError("later flag store unavailable")
+
+    monkeypatch.setattr(sm, "decision_flag", unavailable_flag_store)
+    monkeypatch.setattr(sm, "flag", unavailable_flag_store)
+
+    replay = sm.resolve_czasowka_ck_observation(
+        existing,
+        {**observation, "authority_receipt": claimed},
+    )
+
+    assert replay.outcome is ResolutionOutcome.SUPPRESS
+    assert replay.reason == "claimed_receipt_policy_off"
+    with pytest.raises(
+        ValueError, match="coordinator policy cannot apply authority"
+    ):
+        apply_boundary.apply_event(crafted.event)
+    assert sm.get_order_strict(oid)["czas_kuriera_hhmm"] == "19:16"
 
 
 def test_panel_off_started_raw_ck_keeps_durable_policy_after_live_on(

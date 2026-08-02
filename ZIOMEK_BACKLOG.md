@@ -1,20 +1,24 @@
 # ZIOMEK AI DISPATCHER - BACKLOG ROZWOJU
 
-> **KANDYDAT v23 2026-08-02 — RUTCOM COMMITTED PICKUP AUTHORITY / OID 491578:**
+> **KANDYDAT v24 2026-08-02 — RUTCOM COMMITTED PICKUP AUTHORITY / OID 491578:**
 > root cause potwierdzony: guard pasywny 52 razy stłumił zmianę umówionego
 > czasu Rutcom 19:16→19:21, przez co aplikacja poprawnie pokazywała stary stan
-> 19:16. Jeden resolver autorytetu zastępuje rozproszoną politykę; akceptuje
-> V23 po dwóch `CONFIRMED_DEFECT` v22 wiąże jeden policy snapshot przed I/O z
-> exact producer/source i trwałym eventem, klasyfikuje post-observation state
-> oraz dodaje atomowy UUID+SHA fence kolejki na okno preflight→flip. Wszystkie
+> 19:16. Jeden resolver autorytetu zastępuje rozproszoną politykę.
+> V24 po dwóch `CONFIRMED_DEFECT` v23 wiąże queue click→claim→proof→outbox→
+> recovery jednym exact policy lease schema v6, klasyfikuje coordinator CK na
+> post-observation state i usuwa każdy live reread z durable recovery. Claim
+> jest tylko journalem: wymaga własnego `forward AND passive`; manual flaga nie
+> może zastąpić click-time OFF. Pre-policy v4/v5 nie nabywa authority, forward
+> preflight ignoruje tylko v6 dowodzący OFF, a code revert blokuje policy-bound
+> v6. V23 wcześniej dodał atomowy UUID+SHA fence na okno preflight→flip. Wszystkie
 > mutatory kolejki używają jednego flocka; release wymaga exact ID, quiesce i
-> zgodności efektywnego ON albo jawnego abortu OFF. Finalne bramki: integracja
-> 428/428, queue+rollback 111/111, ratchet 27/27, flagi 33/33, pełna regresja
-> `6741P/0F/74S/8X/153W`. Produkcja nadal bez zmian/OFF; dwa świeże `CLEAN`
-> exact-byte pozostają przed deployem i flipem.
+> zgodności efektywnego ON albo jawnego abortu OFF. Aktualne bramki: główny
+> klaster queue/apply/rollback 272/272, ratchet/mutation 28/28 i pełna regresja
+> `6752P/0F/74S/8X/153W` w 462,43 s. Produkcja nadal bez zmian/OFF; dwa świeże `CLEAN`
+> exact-byte v24 pozostają przed deployem i flipem.
 > Historyczny kontrakt poniżej pozostaje obowiązujący: jeden resolver akceptuje
 > wyłącznie bezpieczny forward aktywnej czasówki lub korektę z markerem/
-> queue-bound receiptem v4. Jedna granica kanonizuje raw CK przed durable
+> queue-bound receiptem v6. Jedna granica kanonizuje raw CK przed durable
 > outboxem, a `PICKUP_TIME_UPDATED` jest jedyną drogą zapisu
 > pickup+CK+HH:MM+revision+provenance. Immutable claimed head, coalesced
 > successor i exact attestation wiążą retry z realnym rekordem kolejki/outboxa.

@@ -56,6 +56,7 @@ from dispatch_v2.committed_pickup_authority import (
     committed_pickup_effect_applied,
     committed_time_contract_is_complete,
     deserialize_committed_time_policy,
+    deserialize_coordinator_event_policy,
     new_order_time_intent_is_valid,
     normalize_pickup_revision,
     pickup_event_has_authority_artifact,
@@ -225,27 +226,10 @@ def resolve_czasowka_ck_observation(
     """Powiąż flagi i jednorazowy receipt ze wspólnym czystym resolverem."""
     existing = existing or {}
     payload = dict(ck_payload or {})
-    if policy_snapshot is not None:
-        if type(policy_snapshot) is not CommittedPickupPolicySnapshot:
-            raise TypeError(
-                "policy_snapshot must be CommittedPickupPolicySnapshot"
-            )
-        validate_committed_time_policy_source(
-            policy_snapshot, payload.get("source")
-        )
-        manual_enabled = policy_snapshot.manual_passthrough_enabled
-        forward_enabled = policy_snapshot.rutcom_forward_authority_enabled
-        passive_enabled = policy_snapshot.passive_guard_enabled
-    else:
-        manual_enabled = decision_flag(MANUAL_CK_AUTHORITY_FLAG)
-        forward_enabled = decision_flag(
-            RUTCOM_FORWARD_AUTHORITY_FLAG
-        )
-        passive_enabled = flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True)
     is_czasowka = _is_czasowka_order(
         project_time_observation_order(existing, payload)
     )
-    if is_czasowka and payload.get("source") == "coordinator_force":
+    if payload.get("source") == "coordinator_force":
         from dispatch_v2 import coordinator_time_recheck as receipt_store
 
         oid = str(payload.get("oid") or existing.get("order_id") or "")
@@ -253,7 +237,21 @@ def resolve_czasowka_ck_observation(
         claimed_event = receipt_store.get_claimed_event(
             receipt, order_id=oid
         )
-        if claimed_event is not None:
+        if is_czasowka and claimed_event is not None:
+            try:
+                claimed_policy = deserialize_coordinator_event_policy(
+                    claimed_event
+                )
+            except (TypeError, ValueError):
+                return CommittedPickupResolution(
+                    outcome=ResolutionOutcome.SUPPRESS,
+                    reason="claimed_receipt_policy_missing",
+                )
+            if not claimed_policy.coordinator_time_authority_enabled:
+                return CommittedPickupResolution(
+                    outcome=ResolutionOutcome.SUPPRESS,
+                    reason="claimed_receipt_policy_off",
+                )
             validation = validate_committed_pickup_event(
                 existing,
                 claimed_event,
@@ -263,9 +261,15 @@ def resolve_czasowka_ck_observation(
                 # Exact claim jest dziennikiem transakcji sprzed outboxa.
                 # Rollback blokuje nowe claimy, ale nie gubi juz zwiazanej
                 # intencji po crashu w oknie claim -> SQLite outbox.
-                passive_guard_enabled=True,
-                manual_passthrough_enabled=manual_enabled,
-                rutcom_forward_authority_enabled=True,
+                passive_guard_enabled=(
+                    claimed_policy.passive_guard_enabled
+                ),
+                manual_passthrough_enabled=(
+                    claimed_policy.manual_passthrough_enabled
+                ),
+                rutcom_forward_authority_enabled=(
+                    claimed_policy.rutcom_forward_authority_enabled
+                ),
                 coordinator_receipt_verified=True,
             )
             if validation.outcome is ResolutionOutcome.APPLY:
@@ -281,16 +285,41 @@ def resolve_czasowka_ck_observation(
         if not receipt_store.verify_pending_receipt(
             receipt, order_id=oid
         ):
-            return CommittedPickupResolution(
-                outcome=ResolutionOutcome.SUPPRESS,
-                reason="receipt_not_pending",
+            if is_czasowka:
+                return CommittedPickupResolution(
+                    outcome=ResolutionOutcome.SUPPRESS,
+                    reason="receipt_not_pending",
+                )
+            return resolve_czasowka_committed_observation(
+                existing,
+                payload,
+                is_czasowka=False,
+                passive_guard_enabled=False,
+                manual_passthrough_enabled=False,
+                rutcom_forward_authority_enabled=False,
             )
+        receipt_policy = receipt_store.receipt_policy_snapshot(receipt)
+        if receipt_policy is None:
+            if is_czasowka:
+                return CommittedPickupResolution(
+                    outcome=ResolutionOutcome.SUPPRESS,
+                    reason="receipt_policy_missing",
+                )
+            manual_enabled = False
+            forward_enabled = False
+            passive_enabled = False
+        else:
+            manual_enabled = receipt_policy.manual_passthrough_enabled
+            forward_enabled = (
+                receipt_policy.rutcom_forward_authority_enabled
+            )
+            passive_enabled = receipt_policy.passive_guard_enabled
         base_receipt = receipt_store.receipt_base(receipt)
         payload["authority_receipt"] = base_receipt
         preliminary = resolve_czasowka_committed_observation(
             existing,
             payload,
-            is_czasowka=_is_czasowka_order(existing),
+            is_czasowka=is_czasowka,
             passive_guard_enabled=passive_enabled,
             manual_passthrough_enabled=manual_enabled,
             rutcom_forward_authority_enabled=forward_enabled,
@@ -312,6 +341,24 @@ def resolve_czasowka_ck_observation(
                 reason="receipt_claim_failed",
             )
         return preliminary
+
+    if policy_snapshot is not None:
+        if type(policy_snapshot) is not CommittedPickupPolicySnapshot:
+            raise TypeError(
+                "policy_snapshot must be CommittedPickupPolicySnapshot"
+            )
+        validate_committed_time_policy_source(
+            policy_snapshot, payload.get("source")
+        )
+        manual_enabled = policy_snapshot.manual_passthrough_enabled
+        forward_enabled = policy_snapshot.rutcom_forward_authority_enabled
+        passive_enabled = policy_snapshot.passive_guard_enabled
+    else:
+        manual_enabled = decision_flag(MANUAL_CK_AUTHORITY_FLAG)
+        forward_enabled = decision_flag(
+            RUTCOM_FORWARD_AUTHORITY_FLAG
+        )
+        passive_enabled = flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True)
 
     return resolve_czasowka_committed_observation(
         existing,
@@ -414,27 +461,10 @@ def resolve_czasowka_pickup_observation(
     """
     existing = existing or {}
     payload = dict(pickup_payload or {})
-    if policy_snapshot is not None:
-        if type(policy_snapshot) is not CommittedPickupPolicySnapshot:
-            raise TypeError(
-                "policy_snapshot must be CommittedPickupPolicySnapshot"
-            )
-        validate_committed_time_policy_source(
-            policy_snapshot, payload.get("source")
-        )
-        manual_enabled = policy_snapshot.manual_passthrough_enabled
-        forward_enabled = policy_snapshot.rutcom_forward_authority_enabled
-        passive_enabled = policy_snapshot.passive_guard_enabled
-    else:
-        manual_enabled = decision_flag(MANUAL_CK_AUTHORITY_FLAG)
-        forward_enabled = decision_flag(
-            RUTCOM_FORWARD_AUTHORITY_FLAG
-        )
-        passive_enabled = flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True)
     is_czasowka = _is_czasowka_order(
         project_time_observation_order(existing, payload)
     )
-    if is_czasowka and payload.get("source") == "coordinator_force":
+    if payload.get("source") == "coordinator_force":
         from dispatch_v2 import coordinator_time_recheck as receipt_store
 
         oid = str(payload.get("oid") or existing.get("order_id") or "")
@@ -442,16 +472,36 @@ def resolve_czasowka_pickup_observation(
         claimed_event = receipt_store.get_claimed_event(
             receipt, order_id=oid
         )
-        if claimed_event is not None:
+        if is_czasowka and claimed_event is not None:
+            try:
+                claimed_policy = deserialize_coordinator_event_policy(
+                    claimed_event
+                )
+            except (TypeError, ValueError):
+                return CommittedPickupResolution(
+                    outcome=ResolutionOutcome.SUPPRESS,
+                    reason="claimed_receipt_policy_missing",
+                )
+            if not claimed_policy.coordinator_time_authority_enabled:
+                return CommittedPickupResolution(
+                    outcome=ResolutionOutcome.SUPPRESS,
+                    reason="claimed_receipt_policy_off",
+                )
             validation = validate_committed_pickup_event(
                 existing,
                 claimed_event,
                 is_czasowka=_is_czasowka_order(
                     project_time_event_order(existing, claimed_event)
                 ),
-                passive_guard_enabled=True,
-                manual_passthrough_enabled=manual_enabled,
-                rutcom_forward_authority_enabled=True,
+                passive_guard_enabled=(
+                    claimed_policy.passive_guard_enabled
+                ),
+                manual_passthrough_enabled=(
+                    claimed_policy.manual_passthrough_enabled
+                ),
+                rutcom_forward_authority_enabled=(
+                    claimed_policy.rutcom_forward_authority_enabled
+                ),
                 coordinator_receipt_verified=True,
             )
             proof = (claimed_event.get("payload") or {}).get(
@@ -478,10 +528,30 @@ def resolve_czasowka_pickup_observation(
         if not receipt_store.verify_pending_receipt(
             receipt, order_id=oid
         ):
-            return CommittedPickupResolution(
-                outcome=ResolutionOutcome.SUPPRESS,
-                reason="receipt_not_pending",
+            if is_czasowka:
+                return CommittedPickupResolution(
+                    outcome=ResolutionOutcome.SUPPRESS,
+                    reason="receipt_not_pending",
+                )
+            return _resolve_pickup_observation(
+                existing,
+                payload,
+                is_czasowka=False,
             )
+        receipt_policy = receipt_store.receipt_policy_snapshot(receipt)
+        if receipt_policy is None:
+            if is_czasowka:
+                return CommittedPickupResolution(
+                    outcome=ResolutionOutcome.SUPPRESS,
+                    reason="receipt_policy_missing",
+                )
+            forward_enabled = False
+            passive_enabled = False
+        else:
+            forward_enabled = (
+                receipt_policy.rutcom_forward_authority_enabled
+            )
+            passive_enabled = receipt_policy.passive_guard_enabled
         # coordinator_force jest źródłem zarezerwowanym: brak flagi nie może
         # zamienić go w NOT_APPLICABLE, bo watcher potraktowałby to jako zgodę
         # na legacy fallback bez receiptu. Claim już istniejący został obsłużony
@@ -518,6 +588,22 @@ def resolve_czasowka_pickup_observation(
                 reason="receipt_claim_failed",
             )
         return preliminary
+
+    if policy_snapshot is not None:
+        if type(policy_snapshot) is not CommittedPickupPolicySnapshot:
+            raise TypeError(
+                "policy_snapshot must be CommittedPickupPolicySnapshot"
+            )
+        validate_committed_time_policy_source(
+            policy_snapshot, payload.get("source")
+        )
+        forward_enabled = policy_snapshot.rutcom_forward_authority_enabled
+        passive_enabled = policy_snapshot.passive_guard_enabled
+    else:
+        forward_enabled = decision_flag(
+            RUTCOM_FORWARD_AUTHORITY_FLAG
+        )
+        passive_enabled = flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True)
 
     # Istniejaca flaga manual passthrough autoryzuje wylacznie krawedz CK
     # False->True. Zwykly pickup Rutcom przechodzi nowym kontraktem dopiero po
@@ -1067,22 +1153,20 @@ def _pickup_authority_flags(
     """Exact outbox attestation zamraża tylko autorytet tego konkretnego eventu."""
     payload = event.get("payload") or {}
     authority = payload.get("committed_authority")
-    passive_enabled = flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True)
-    manual_enabled = decision_flag(MANUAL_CK_AUTHORITY_FLAG)
-    forward_enabled = decision_flag(
-        RUTCOM_FORWARD_AUTHORITY_FLAG
-    )
     receipt_verified = False
     if durable_authorized:
-        # Exact event został autoryzowany przed zapisem outboxa. Rollback flag
-        # blokuje nowe decyzje, ale nie może rozpołowić już utrwalonej transakcji.
-        passive_enabled = True
-        manual_enabled = manual_enabled or authority == "rutcom_manual_marker"
-        forward_enabled = forward_enabled or authority in {
-            "rutcom_forward_commitment",
-            "coordinator_receipt",
-            "rutcom_pickup_field",
-        }
+        # Exact event został autoryzowany przed zapisem outboxa. Recovery
+        # odtwarza dokładne booleany policy lease, nigdy typ authority ani
+        # bieżący store flag. Brak/korupcja snapshotu failuje closed.
+        try:
+            durable_policy = deserialize_committed_time_policy(
+                event.get(COMMITTED_TIME_POLICY_SNAPSHOT_FIELD)
+            )
+        except (TypeError, ValueError):
+            return False, False, False, False, False
+        passive_enabled = durable_policy.passive_guard_enabled
+        manual_enabled = durable_policy.manual_passthrough_enabled
+        forward_enabled = durable_policy.rutcom_forward_authority_enabled
         receipt_verified = True
     else:
         proof = payload.get("committed_authority_proof")
@@ -1104,10 +1188,27 @@ def _pickup_authority_flags(
                 event
             )
             if receipt_verified:
-                # Exact claim zamraza juz zwiazana intencje w crash-window przed
-                # outboxem. Nowe klikniecie po rollbacku nadal nie moze powstac.
-                passive_enabled = True
-                forward_enabled = True
+                # The claim is only a durable journal. Its exact v6 receipt,
+                # not current flags and not claim existence, owns authority.
+                try:
+                    claimed_policy = deserialize_coordinator_event_policy(
+                        event
+                    )
+                except (TypeError, ValueError):
+                    return False, False, False, False, False
+                return (
+                    claimed_policy.passive_guard_enabled,
+                    claimed_policy.manual_passthrough_enabled,
+                    claimed_policy.rutcom_forward_authority_enabled,
+                    True,
+                    False,
+                )
+            return False, False, False, False, False
+        passive_enabled = flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True)
+        manual_enabled = decision_flag(MANUAL_CK_AUTHORITY_FLAG)
+        forward_enabled = decision_flag(
+            RUTCOM_FORWARD_AUTHORITY_FLAG
+        )
     return (
         passive_enabled,
         manual_enabled,
@@ -1329,20 +1430,28 @@ def event_effect_status(
                 event.get(COMMITTED_TIME_POLICY_SNAPSHOT_FIELD)
             )
             policy_payload = event.get("payload")
-            if (
-                event.get("event_type")
-                not in {"CZAS_KURIERA_UPDATED", "PICKUP_TIME_UPDATED"}
-                or not isinstance(policy_payload, dict)
-            ):
-                return "superseded"
-            validate_committed_time_policy_source(
-                durable_policy,
-                (
-                    policy_payload.get("observed_source")
-                    if policy_payload.get("committed_authority") is not None
-                    else policy_payload.get("source")
-                ),
-            )
+            if event.get("event_type") == "NEW_ORDER":
+                if (
+                    durable_policy.producer != "panel_watcher"
+                    or event.get(NEW_ORDER_TIME_AUTHORITY_SNAPSHOT_FIELD)
+                    is not durable_policy.initial_time_authority_enabled
+                ):
+                    return "superseded"
+            else:
+                if (
+                    event.get("event_type")
+                    not in {"CZAS_KURIERA_UPDATED", "PICKUP_TIME_UPDATED"}
+                    or not isinstance(policy_payload, dict)
+                ):
+                    return "superseded"
+                validate_committed_time_policy_source(
+                    durable_policy,
+                    (
+                        policy_payload.get("observed_source")
+                        if policy_payload.get("committed_authority") is not None
+                        else policy_payload.get("source")
+                    ),
+                )
         except (TypeError, ValueError):
             return "superseded"
     oid = event.get("order_id")
@@ -1929,20 +2038,30 @@ def update_from_event(
         authority_policy = durable_policy
     if authority_policy is not None:
         policy_payload = event.get("payload")
-        if (
-            event.get("event_type")
-            not in {"CZAS_KURIERA_UPDATED", "PICKUP_TIME_UPDATED"}
-            or not isinstance(policy_payload, dict)
-        ):
-            raise ValueError("authority_policy is reserved for time events")
-        policy_source = (
-            policy_payload.get("observed_source")
-            if policy_payload.get("committed_authority") is not None
-            else policy_payload.get("source")
-        )
-        validate_committed_time_policy_source(
-            authority_policy, policy_source
-        )
+        if event.get("event_type") == "NEW_ORDER":
+            if (
+                authority_policy.producer != "panel_watcher"
+                or event.get(NEW_ORDER_TIME_AUTHORITY_SNAPSHOT_FIELD)
+                is not authority_policy.initial_time_authority_enabled
+            ):
+                raise ValueError("NEW_ORDER requires panel_watcher policy")
+        else:
+            if (
+                event.get("event_type")
+                not in {"CZAS_KURIERA_UPDATED", "PICKUP_TIME_UPDATED"}
+                or not isinstance(policy_payload, dict)
+            ):
+                raise ValueError(
+                    "authority_policy is reserved for time events"
+                )
+            policy_source = (
+                policy_payload.get("observed_source")
+                if policy_payload.get("committed_authority") is not None
+                else policy_payload.get("source")
+            )
+            validate_committed_time_policy_source(
+                authority_policy, policy_source
+            )
 
     # Z-P1-01 Phase A: formal FSM shadow.  It is intentionally fail-open and
     # log-only; legacy behavior below (including current fallbacks/exceptions)

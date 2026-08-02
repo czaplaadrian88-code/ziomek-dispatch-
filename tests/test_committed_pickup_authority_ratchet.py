@@ -350,6 +350,7 @@ def test_both_producers_and_defense_route_to_one_resolver():
     assert pure_resolver_callers == [
         "resolve_czasowka_ck_observation",
         "resolve_czasowka_ck_observation",
+        "resolve_czasowka_ck_observation",
     ]
     assert "resolve_czasowka_ck_observation(" in watcher
     assert "resolve_czasowka_committed_observation(" in pipeline
@@ -393,10 +394,50 @@ def test_preproposal_policy_is_frozen_once_across_async_and_apply_boundaries():
     boundary = _source("committed_pickup_apply.py")
     state = _source("state_machine.py")
     assert "authority_policy: CommittedPickupPolicySnapshot | None" in boundary
-    assert "authority_policy.passive_guard_enabled" in boundary
+    assert "effective_policy.passive_guard_enabled" in boundary
     assert "policy_snapshot=authority_policy" in state
     assert "validate_committed_time_policy_source(" in state
     assert 'producer="pre_proposal_recheck"' in snapshot
+
+
+def test_v6_queue_and_durable_boundary_bind_one_policy_without_live_retry():
+    authority = _source("committed_pickup_authority.py")
+    queue = _source("coordinator_time_recheck.py")
+    state = _source("state_machine.py")
+    boundary = _source("committed_pickup_apply.py")
+    rollback = _source("tools/rutcom_committed_authority_rollback.py")
+    state_tree = ast.parse(state)
+    state_functions = {
+        node.name: ast.get_source_segment(state, node) or ""
+        for node in ast.walk(state_tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    flag_reader = state_functions["_pickup_authority_flags"]
+
+    assert 'RECEIPT_SCHEMA = "coordinator_time_recheck.v6"' in queue
+    assert 'PRE_POLICY_RECEIPT_SCHEMA = "coordinator_time_recheck.v5"' in queue
+    assert 'producer="coordinator_queue"' in queue
+    assert "policy_snapshot = _coordinator_policy_snapshot()" in queue
+    assert "def coordinator_time_authority_enabled(" in authority
+    assert "def deserialize_coordinator_event_policy(" in authority
+    assert "receipt_policy_snapshot(record)" in rollback
+    assert "receipt_policy.rutcom_forward_authority_enabled is False" in rollback
+    assert "is_czasowka=is_czasowka" in state_functions[
+        "resolve_czasowka_ck_observation"
+    ]
+    assert "serialize_committed_time_policy(effective_policy)" in boundary
+    assert "state_event_metadata=state_event_metadata" in boundary
+    assert "coordinator policy cannot apply authority" in boundary
+    assert "passive_guard_enabled=passive_enabled" in boundary
+    assert "rutcom_forward_authority_enabled=forward_enabled" in boundary
+    assert "or claim_authorized" not in boundary
+    assert "claimed_receipt_policy_off" in state
+    assert flag_reader.index("if durable_authorized:") < flag_reader.index(
+        'flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True)'
+    )
+    assert flag_reader.index("if needs_receipt:") < flag_reader.index(
+        'flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True)'
+    )
 
 
 def test_panel_policy_is_captured_before_io_and_bound_through_durable_apply():
@@ -450,7 +491,8 @@ def test_coordinator_authority_is_receipt_bound_end_to_end():
         and node.func.id == "_replay_claimed_time_event"
     ]
 
-    assert 'RECEIPT_SCHEMA = "coordinator_time_recheck.v5"' in queue
+    assert 'RECEIPT_SCHEMA = "coordinator_time_recheck.v6"' in queue
+    assert 'PRE_POLICY_RECEIPT_SCHEMA = "coordinator_time_recheck.v5"' in queue
     assert 'LEGACY_RECEIPT_SCHEMA = "coordinator_time_recheck.v4"' in queue
     assert 'ELIGIBLE_AT_FIELD = "eligible_at"' in queue
     assert "def claim_receipt(" in queue
@@ -1050,7 +1092,7 @@ def test_semantic_literal_closure_blocks_constant_alias_bypass():
             "1f6392af8dd0cd581a96be921b9278f273662a33e312fc19bb8c9f0977a5b156"
         ),
         "CZAS_KURIERA_UPDATED": (
-            "8fe4c3a4a8d8ad1274066912b306f8e635e5dd4e316e4f5ca646f25b88eafdf9"
+            "c9edda9bb32eca416a1aff4e5954ca33a9337a777d789cf6fdadd0edb5b4e9bd"
         ),
         "pickup_at_warsaw": (
             "2672d9f69eb106272ee116c4482ea2215f27e1957c4451886ec24bbea0bc8e48"

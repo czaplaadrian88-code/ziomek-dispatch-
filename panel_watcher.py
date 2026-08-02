@@ -227,24 +227,16 @@ def _emit_and_apply_state(
         # The initial raw Rutcom tuple and its policy snapshot belong to one
         # durable intent.  ON creates only an aggregate shell; the canonical
         # PICKUP_TIME_UPDATED owner resolves the full tuple immediately after.
-        if (
-            committed_time_policy is not None
-            and committed_time_policy.producer != "panel_watcher"
-        ):
+        if committed_time_policy is None:
+            raise ValueError("NEW_ORDER requires captured time policy")
+        if committed_time_policy.producer != "panel_watcher":
             raise ValueError("NEW_ORDER requires panel_watcher time policy")
         initial_authority_enabled = (
-            committed_time_policy.rutcom_forward_authority_enabled
-            if committed_time_policy is not None
-            else True
+            committed_time_policy.initial_time_authority_enabled
         )
-        if committed_time_policy is None:
-            try:
-                initial_authority_enabled = bool(
-                    C.decision_flag(RUTCOM_FORWARD_AUTHORITY_FLAG)
-                )
-            except Exception:
-                # Ambiguous flag reads must not revive the competing raw writer.
-                pass
+        state_event_metadata[
+            COMMITTED_TIME_POLICY_SNAPSHOT_FIELD
+        ] = serialize_committed_time_policy(committed_time_policy)
         state_event_metadata[
             NEW_ORDER_TIME_AUTHORITY_SNAPSHOT_FIELD
         ] = initial_authority_enabled

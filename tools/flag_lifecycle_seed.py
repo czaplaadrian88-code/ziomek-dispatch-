@@ -136,7 +136,7 @@ ENGINE_SYMBOLIC_CONSUMERS = {
         "definition": "dispatch_v2/committed_pickup_authority.py",
         "accessor": "decision_flag",
         "consumers": [
-            "dispatch_v2/committed_pickup_apply.py",
+            "dispatch_v2/coordinator_time_recheck.py",
             "dispatch_v2/dispatch_pipeline.py",
             "dispatch_v2/panel_watcher.py",
             "dispatch_v2/state_machine.py",
@@ -148,7 +148,7 @@ ENGINE_SYMBOLIC_CONSUMERS = {
         "definition": "dispatch_v2/committed_pickup_authority.py",
         "accessor": "decision_flag",
         "consumers": [
-            "dispatch_v2/committed_pickup_apply.py",
+            "dispatch_v2/coordinator_time_recheck.py",
             "dispatch_v2/dispatch_pipeline.py",
             "dispatch_v2/durable_event_apply.py",
             "dispatch_v2/panel_watcher.py",

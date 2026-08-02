@@ -30,10 +30,21 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Mapping, Optional
 
+from dispatch_v2 import common as C
+from dispatch_v2.committed_pickup_authority import (
+    COMMITTED_TIME_POLICY_SNAPSHOT_FIELD,
+    MANUAL_CK_AUTHORITY_FLAG,
+    RUTCOM_FORWARD_AUTHORITY_FLAG,
+    CommittedPickupPolicySnapshot,
+    deserialize_coordinator_receipt_policy,
+    serialize_committed_time_policy,
+)
+
 QUEUE_PATH = "/root/.openclaw/workspace/dispatch_state/coordinator_time_recheck.json"
 LOCK_PATH = QUEUE_PATH + ".lock"
 DEFAULT_TTL_MIN = 5.0  # klik starszy niż to = „przeterminowany" (watcher mógł stać) → ignoruj
-RECEIPT_SCHEMA = "coordinator_time_recheck.v5"
+RECEIPT_SCHEMA = "coordinator_time_recheck.v6"
+PRE_POLICY_RECEIPT_SCHEMA = "coordinator_time_recheck.v5"
 LEGACY_RECEIPT_SCHEMA = "coordinator_time_recheck.v4"
 CLAIM_SCHEMA = "coordinator_time_recheck.claim.v1"
 SUCCESSOR_FIELD = "successor"
@@ -68,7 +79,7 @@ _FORWARD_FENCE_TARGET = "rutcom-forward-authority-rollout"
 _QUEUE_RECEIPT_SOURCES = frozenset(
     {"coordinator_panel", "coordinator_console", "legacy_coordinator_queue"}
 )
-_UNCLAIMED_RECEIPT_FIELDS = frozenset(
+_BASE_UNCLAIMED_RECEIPT_FIELDS = frozenset(
     {
         "schema",
         "request_id",
@@ -79,11 +90,16 @@ _UNCLAIMED_RECEIPT_FIELDS = frozenset(
         CONTINUATION_DEPTH_FIELD,
     }
 )
+_UNCLAIMED_RECEIPT_FIELDS = (
+    _BASE_UNCLAIMED_RECEIPT_FIELDS
+    | {COMMITTED_TIME_POLICY_SNAPSHOT_FIELD}
+)
+_V5_UNCLAIMED_RECEIPT_FIELDS = _BASE_UNCLAIMED_RECEIPT_FIELDS
 _V5_UNCLAIMED_RECEIPT_FIELDS_NO_DEPTH = (
-    _UNCLAIMED_RECEIPT_FIELDS - {CONTINUATION_DEPTH_FIELD}
+    _V5_UNCLAIMED_RECEIPT_FIELDS - {CONTINUATION_DEPTH_FIELD}
 )
 _V4_UNCLAIMED_RECEIPT_FIELDS = (
-    _UNCLAIMED_RECEIPT_FIELDS - {ELIGIBLE_AT_FIELD}
+    _BASE_UNCLAIMED_RECEIPT_FIELDS - {ELIGIBLE_AT_FIELD}
 )
 _V4_UNCLAIMED_RECEIPT_FIELDS_NO_DEPTH = (
     _V4_UNCLAIMED_RECEIPT_FIELDS - {CONTINUATION_DEPTH_FIELD}
@@ -116,7 +132,7 @@ def receipt_base(receipt: object) -> Optional[dict]:
         return None
     schema = receipt.get("schema")
     requested_at = receipt.get("requested_at")
-    if schema == RECEIPT_SCHEMA:
+    if schema in {RECEIPT_SCHEMA, PRE_POLICY_RECEIPT_SCHEMA}:
         eligible_at = receipt.get(ELIGIBLE_AT_FIELD)
     elif schema == LEGACY_RECEIPT_SCHEMA:
         # v4 had one overloaded clock. Normalize it only in the public proof;
@@ -133,6 +149,14 @@ def receipt_base(receipt: object) -> Optional[dict]:
         "source": receipt.get("source"),
         CONTINUATION_DEPTH_FIELD: depth_raw,
     }
+    if schema == RECEIPT_SCHEMA:
+        try:
+            policy = deserialize_coordinator_receipt_policy(receipt)
+        except (TypeError, ValueError):
+            return None
+        base[COMMITTED_TIME_POLICY_SNAPSHOT_FIELD] = (
+            serialize_committed_time_policy(policy)
+        )
     if not all(str(base.get(k) or "").strip() for k in (
         "request_id",
         "order_id",
@@ -187,19 +211,31 @@ def _queue_snapshot_sha256(data: Mapping[str, object]) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def _new_receipt(
-    order_id: str,
-    *,
-    requested_at: str,
-    source: str,
-    continuation_depth: int = 0,
-) -> dict:
+def _validate_continuation_depth(continuation_depth: object) -> int:
     if (
         isinstance(continuation_depth, bool)
         or not isinstance(continuation_depth, int)
         or not 0 <= continuation_depth <= _MAX_LEGACY_CONTINUATION_DEPTH
     ):
         raise ValueError("invalid coordinator continuation depth")
+    return continuation_depth
+
+
+def _new_receipt(
+    order_id: str,
+    *,
+    requested_at: str,
+    source: str,
+    policy_snapshot: CommittedPickupPolicySnapshot,
+    continuation_depth: int = 0,
+) -> dict:
+    continuation_depth = _validate_continuation_depth(continuation_depth)
+    if type(policy_snapshot) is not CommittedPickupPolicySnapshot:
+        raise TypeError(
+            "policy_snapshot must be CommittedPickupPolicySnapshot"
+        )
+    if policy_snapshot.producer != "coordinator_queue":
+        raise ValueError("coordinator receipt requires queue-owned policy")
     return {
         "schema": RECEIPT_SCHEMA,
         "request_id": uuid.uuid4().hex,
@@ -208,7 +244,46 @@ def _new_receipt(
         ELIGIBLE_AT_FIELD: requested_at,
         "source": source,
         CONTINUATION_DEPTH_FIELD: continuation_depth,
+        COMMITTED_TIME_POLICY_SNAPSHOT_FIELD: (
+            serialize_committed_time_policy(policy_snapshot)
+        ),
     }
+
+
+def _new_pre_policy_receipt(
+    order_id: str,
+    *,
+    requested_at: str,
+    source: str,
+    continuation_depth: int = 0,
+) -> dict:
+    """Compatibility envelope that can never gain committed authority."""
+    continuation_depth = _validate_continuation_depth(continuation_depth)
+    return {
+        "schema": PRE_POLICY_RECEIPT_SCHEMA,
+        "request_id": uuid.uuid4().hex,
+        "order_id": str(order_id),
+        "requested_at": requested_at,
+        ELIGIBLE_AT_FIELD: requested_at,
+        "source": source,
+        CONTINUATION_DEPTH_FIELD: continuation_depth,
+    }
+
+
+def _coordinator_policy_snapshot() -> CommittedPickupPolicySnapshot:
+    """Capture one click-time lease while the queue flock is held."""
+    return CommittedPickupPolicySnapshot(
+        producer="coordinator_queue",
+        manual_passthrough_enabled=bool(
+            C.decision_flag(MANUAL_CK_AUTHORITY_FLAG)
+        ),
+        rutcom_forward_authority_enabled=bool(
+            C.decision_flag(RUTCOM_FORWARD_AUTHORITY_FLAG)
+        ),
+        passive_guard_enabled=bool(
+            C.flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True)
+        ),
+    )
 
 
 def _head_record(record: object) -> Optional[dict]:
@@ -246,17 +321,20 @@ def _valid_unclaimed_receipt_shape(
         and base.get("source") in _QUEUE_RECEIPT_SOURCES
         and record.get("claim") is None
         and SUCCESSOR_FIELD not in record
-        and frozenset(record)
-        in (
-            {
-                _UNCLAIMED_RECEIPT_FIELDS,
-                _V5_UNCLAIMED_RECEIPT_FIELDS_NO_DEPTH,
-            }
+        and frozenset(record) in (
+            {_UNCLAIMED_RECEIPT_FIELDS}
             if record.get("schema") == RECEIPT_SCHEMA
-            else {
-                _V4_UNCLAIMED_RECEIPT_FIELDS,
-                _V4_UNCLAIMED_RECEIPT_FIELDS_NO_DEPTH,
-            }
+            else (
+                {
+                    _V5_UNCLAIMED_RECEIPT_FIELDS,
+                    _V5_UNCLAIMED_RECEIPT_FIELDS_NO_DEPTH,
+                }
+                if record.get("schema") == PRE_POLICY_RECEIPT_SCHEMA
+                else {
+                    _V4_UNCLAIMED_RECEIPT_FIELDS,
+                    _V4_UNCLAIMED_RECEIPT_FIELDS_NO_DEPTH,
+                }
+            )
         )
     )
 
@@ -456,6 +534,16 @@ def rollback_record_is_unclaimed(
 ) -> bool:
     """Expose the runtime's exact unclaimed-envelope oracle to preflight."""
     return _valid_unclaimed_receipt_shape(record, order_id=str(order_id))
+
+
+def receipt_policy_snapshot(
+    record: object,
+) -> Optional[CommittedPickupPolicySnapshot]:
+    """Read the exact v6 policy without consulting mutable live flags."""
+    try:
+        return deserialize_coordinator_receipt_policy(record)
+    except (TypeError, ValueError):
+        return None
 
 
 def _save(data: dict) -> None:
@@ -692,12 +780,14 @@ def enqueue(oids, *, source: str = "coordinator_panel") -> int:
             raise RuntimeError(
                 "coordinator time queue fenced for legacy code rollback"
             )
+        policy_snapshot = _coordinator_policy_snapshot()
         data = _load()
         for o in oids:
             next_receipt = _new_receipt(
                 o,
                 requested_at=now,
                 source=source,
+                policy_snapshot=policy_snapshot,
             )
             current = data.get(o)
             if isinstance(current, dict) and current.get("claim") is not None:
@@ -822,7 +912,7 @@ def upgrade_legacy_receipt(
             f"{oid}:{requested.isoformat()}".encode("utf-8")
         ).hexdigest()[:32]
         upgraded = {
-            "schema": RECEIPT_SCHEMA,
+            "schema": PRE_POLICY_RECEIPT_SCHEMA,
             "request_id": f"legacy-{digest}",
             "order_id": oid,
             "requested_at": requested.isoformat(),
@@ -1115,8 +1205,14 @@ def ack_receipts(receipts: dict[str, dict | None]) -> int:
                     # Preserve the actual click time for audit, but start the
                     # execution TTL only when the non-expiring claimed head
                     # releases this successor.
+                    promoted_schema = successor_base["schema"]
+                    if promoted_schema == LEGACY_RECEIPT_SCHEMA:
+                        # v4 cannot express a fresh eligibility epoch. Promote
+                        # only its transport envelope to non-authorizing v5;
+                        # the original click audit remains unchanged.
+                        promoted_schema = PRE_POLICY_RECEIPT_SCHEMA
                     data[oid] = {
-                        "schema": RECEIPT_SCHEMA,
+                        "schema": promoted_schema,
                         "request_id": successor_base["request_id"],
                         "order_id": successor_base["order_id"],
                         "requested_at": successor_base["requested_at"],
@@ -1126,6 +1222,12 @@ def ack_receipts(receipts: dict[str, dict | None]) -> int:
                             CONTINUATION_DEPTH_FIELD
                         ],
                     }
+                    if successor_base["schema"] == RECEIPT_SCHEMA:
+                        data[oid][
+                            COMMITTED_TIME_POLICY_SNAPSHOT_FIELD
+                        ] = successor_base[
+                            COMMITTED_TIME_POLICY_SNAPSHOT_FIELD
+                        ]
                 elif (
                     isinstance(current.get("claim"), Mapping)
                     and current["claim"].get(_CLAIM_CONTINUATION_FIELD) is True
@@ -1133,14 +1235,26 @@ def ack_receipts(receipts: dict[str, dict | None]) -> int:
                     base = receipt_base(current)
                     if base is None:
                         continue
-                    continuation = _new_receipt(
-                        oid,
-                        requested_at=_utc_now().isoformat(),
-                        source=str(base["source"]),
-                        continuation_depth=(
+                    continuation_args = {
+                        "requested_at": _utc_now().isoformat(),
+                        "source": str(base["source"]),
+                        "continuation_depth": (
                             int(base[CONTINUATION_DEPTH_FIELD]) + 1
                         ),
-                    )
+                    }
+                    if base["schema"] == RECEIPT_SCHEMA:
+                        continuation = _new_receipt(
+                            oid,
+                            policy_snapshot=(
+                                deserialize_coordinator_receipt_policy(base)
+                            ),
+                            **continuation_args,
+                        )
+                    else:
+                        continuation = _new_pre_policy_receipt(
+                            oid,
+                            **continuation_args,
+                        )
                     data[oid] = continuation
                 else:
                     del data[oid]
@@ -1193,6 +1307,7 @@ def _legacy_rollback_projection(data: dict) -> tuple[dict, dict]:
         "claimed_records": 0,
         "successor_records": 0,
         "invalid_records": 0,
+        "policy_bound_records": 0,
     }
     for oid_raw, raw in data.items():
         oid = str(oid_raw)
@@ -1226,6 +1341,10 @@ def _legacy_rollback_projection(data: dict) -> tuple[dict, dict]:
         if not _valid_unclaimed_receipt_shape(raw, order_id=oid):
             counts["invalid_records"] += 1
             blockers.append(f"{oid}:invalid_v4_receipt")
+            continue
+        if raw.get("schema") == RECEIPT_SCHEMA:
+            counts["policy_bound_records"] += 1
+            blockers.append(f"{oid}:policy_bound_receipt")
             continue
         clocks = _receipt_clock_pair(raw)
         if clocks is None:

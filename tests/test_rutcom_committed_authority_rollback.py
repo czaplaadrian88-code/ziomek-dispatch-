@@ -1565,13 +1565,20 @@ def test_forward_deploy_ignores_valid_unclaimed_elastic_queue_receipt(
     """A quiesced, explicit elastic click has identical ON/OFF semantics."""
     oid = "elastic-queue-stable"
     receipt = {
-        "schema": "coordinator_time_recheck.v5",
+        "schema": "coordinator_time_recheck.v6",
         "request_id": "elastic-request",
         "order_id": oid,
         "requested_at": "2026-08-02T18:00:00+00:00",
         "eligible_at": "2026-08-02T18:00:00+00:00",
         "source": "coordinator_panel",
         "continuation_depth": 0,
+        "committed_time_policy_snapshot": {
+            "schema": "committed_pickup.policy_snapshot.v1",
+            "producer": "coordinator_queue",
+            "manual_passthrough_enabled": False,
+            "rutcom_forward_authority_enabled": False,
+            "passive_guard_enabled": True,
+        },
     }
     elastic = {
         "order_id": oid,
@@ -1617,6 +1624,60 @@ def test_forward_deploy_ignores_valid_unclaimed_elastic_queue_receipt(
     assert status["forward_blocking_queue_records"] == 0
     assert status["forward_ignored_elastic_queue_records"] == 1
     assert status["safe_for_forward_deploy"] is True
+
+
+def test_forward_deploy_blocks_unbound_pre_policy_elastic_receipt(
+    monkeypatch,
+):
+    """State-only elasticity cannot prove an OFF-started click is stable."""
+    oid = "elastic-queue-unbound-v5"
+    receipt = {
+        "schema": "coordinator_time_recheck.v5",
+        "request_id": "elastic-unbound-request",
+        "order_id": oid,
+        "requested_at": "2026-08-02T18:00:00+00:00",
+        "eligible_at": "2026-08-02T18:00:00+00:00",
+        "source": "coordinator_panel",
+        "continuation_depth": 0,
+    }
+    order = {
+        "order_id": oid,
+        "status": "assigned",
+        "order_type": "elastic",
+        "prep_minutes": 20,
+    }
+    monkeypatch.setattr(rollback.C, "decision_flag", lambda _name: False)
+    monkeypatch.setattr(
+        rollback.event_bus,
+        "list_unfinished_state_applies",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        rollback.queue,
+        "legacy_rollback_status",
+        lambda: _queue_status(records=1, pending_v4_records=1),
+    )
+    monkeypatch.setattr(
+        rollback.queue,
+        "rollback_records_snapshot",
+        lambda: {oid: receipt},
+    )
+    monkeypatch.setattr(
+        rollback.queue,
+        "rollback_record_is_unclaimed",
+        lambda record, *, order_id: record == receipt and order_id == oid,
+    )
+    monkeypatch.setattr(
+        rollback.state_machine,
+        "get_all_strict",
+        lambda: {oid: order},
+    )
+
+    status = rollback.collect_status(writer_quiescence_verified=True)
+
+    assert status["forward_blocking_queue_records"] == 1
+    assert status["forward_ignored_elastic_queue_records"] == 0
+    assert status["safe_for_forward_deploy"] is False
 
 
 @pytest.mark.parametrize(

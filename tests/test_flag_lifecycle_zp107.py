@@ -259,7 +259,7 @@ def test_committed_authority_flags_have_exact_source_bound_runtime_consumers(
     flag_name,
 ):
     expected = [
-        "dispatch_v2/committed_pickup_apply.py",
+        "dispatch_v2/coordinator_time_recheck.py",
         "dispatch_v2/dispatch_pipeline.py",
         "dispatch_v2/panel_watcher.py",
         "dispatch_v2/state_machine.py",

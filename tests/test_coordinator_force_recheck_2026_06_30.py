@@ -19,7 +19,19 @@ from types import SimpleNamespace
 import pytest
 
 ctr = importlib.import_module("dispatch_v2.coordinator_time_recheck")
+from dispatch_v2.committed_pickup_authority import (
+    CommittedPickupPolicySnapshot,
+)
 from dispatch_v2.panel_watcher import _diff_czas_kuriera, _diff_pickup_time
+
+
+def _queue_policy(*, forward: bool) -> CommittedPickupPolicySnapshot:
+    return CommittedPickupPolicySnapshot(
+        producer="coordinator_queue",
+        manual_passthrough_enabled=False,
+        rutcom_forward_authority_enabled=forward,
+        passive_guard_enabled=True,
+    )
 
 
 @pytest.fixture
@@ -28,6 +40,11 @@ def tmp_queue(monkeypatch):
     qp = os.path.join(d, "coordinator_time_recheck.json")
     monkeypatch.setattr(ctr, "QUEUE_PATH", qp)
     monkeypatch.setattr(ctr, "LOCK_PATH", qp + ".lock")
+    monkeypatch.setattr(
+        ctr,
+        "_coordinator_policy_snapshot",
+        lambda: _queue_policy(forward=False),
+    )
     return qp
 
 
@@ -42,11 +59,32 @@ def persistent_tmpdir():
         yield Path(directory)
 
 
+def _seed_pre_policy_v5(queue_path: str, *, oid: str = "8") -> dict:
+    """Persist one exact pre-v6 envelope for code-rollback compatibility."""
+    requested_at = ctr._utc_now().isoformat()
+    receipt = {
+        "schema": "coordinator_time_recheck.v5",
+        "request_id": f"pre-policy-{oid}",
+        "order_id": oid,
+        "requested_at": requested_at,
+        "eligible_at": requested_at,
+        "source": "coordinator_panel",
+        "continuation_depth": 0,
+    }
+    Path(queue_path).write_text(
+        json.dumps({oid: receipt}), encoding="utf-8"
+    )
+    return receipt
+
+
 def test_enqueue_drain_roundtrip(tmp_queue):
     assert ctr.enqueue(["111", "222"]) == 2
     queued = json.load(open(tmp_queue))
     assert queued.keys() >= {"111", "222"}
-    assert queued["111"]["schema"] == "coordinator_time_recheck.v5"
+    assert queued["111"]["schema"] == "coordinator_time_recheck.v6"
+    assert queued["111"]["committed_time_policy_snapshot"][
+        "rutcom_forward_authority_enabled"
+    ] is False
     assert queued["111"]["request_id"]
     assert queued["111"]["eligible_at"] == queued["111"]["requested_at"]
     assert ctr.drain() == {"111", "222"}
@@ -72,7 +110,7 @@ def test_drain_with_receipts_preserves_durable_authority(tmp_queue):
     drained = ctr.drain_with_receipts()
 
     assert set(drained) == {"444"}
-    assert drained["444"]["schema"] == "coordinator_time_recheck.v5"
+    assert drained["444"]["schema"] == "coordinator_time_recheck.v6"
     assert drained["444"]["eligible_at"] == drained["444"]["requested_at"]
     assert drained["444"]["source"] == "coordinator_panel"
 
@@ -137,6 +175,76 @@ def test_malformed_unclaimed_receipt_is_retained_as_poison_evidence(tmp_queue):
     status = ctr.legacy_rollback_status()
     assert status["safe_queue_projection"] is False
     assert status["blockers"] == ["446:invalid_v4_receipt"]
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["missing_snapshot", "wrong_producer", "non_boolean", "extra_key"],
+)
+def test_v6_policy_snapshot_mutations_are_poison_evidence(
+    tmp_queue, mutation
+):
+    assert ctr.enqueue(["447"], source="coordinator_panel") == 1
+    receipt = json.loads(Path(tmp_queue).read_text(encoding="utf-8"))["447"]
+    snapshot = receipt["committed_time_policy_snapshot"]
+    if mutation == "missing_snapshot":
+        receipt.pop("committed_time_policy_snapshot")
+    elif mutation == "wrong_producer":
+        snapshot["producer"] = "panel_watcher"
+    elif mutation == "non_boolean":
+        snapshot["rutcom_forward_authority_enabled"] = 0
+    else:
+        snapshot["unexpected"] = False
+    Path(tmp_queue).write_text(
+        json.dumps({"447": receipt}), encoding="utf-8"
+    )
+
+    assert ctr.pending_with_receipts() == {}
+    assert ctr.current_receipt("447") is None
+    status = ctr.legacy_rollback_status()
+    assert status["safe_queue_projection"] is False
+    assert status["blockers"] == ["447:invalid_v4_receipt"]
+
+
+def test_claim_continuation_preserves_original_off_policy(tmp_queue, monkeypatch):
+    """A continuation is the same click, so it cannot recapture later ON."""
+    assert ctr.enqueue(["448"], source="coordinator_panel") == 1
+    pending = ctr.pending_with_receipts()["448"]
+    assert pending["committed_time_policy_snapshot"][
+        "rutcom_forward_authority_enabled"
+    ] is False
+    event = {
+        "event_type": "CZAS_KURIERA_UPDATED",
+        "order_id": "448",
+        "courier_id": "1",
+        "payload": {
+            "old_ck_iso": "2026-08-02T18:00:00+02:00",
+            "old_ck_hhmm": "18:00",
+            "new_ck_iso": "2026-08-02T18:05:00+02:00",
+            "new_ck_hhmm": "18:05",
+            "source": "coordinator_force",
+        },
+    }
+    claimed = ctr.claim_receipt(
+        pending,
+        order_id="448",
+        event=event,
+        continue_after_ack=True,
+    )
+    assert claimed is not None
+    monkeypatch.setattr(
+        ctr,
+        "_coordinator_policy_snapshot",
+        lambda: _queue_policy(forward=True),
+    )
+
+    assert ctr.ack_receipts({"448": claimed}) == 1
+    continuation = ctr.current_receipt("448")
+    assert continuation is not None
+    assert continuation["schema"] == "coordinator_time_recheck.v6"
+    assert continuation["committed_time_policy_snapshot"] == pending[
+        "committed_time_policy_snapshot"
+    ]
 
 
 def test_receipt_from_another_order_cannot_authorize_time_change(
@@ -267,20 +375,9 @@ def test_czasowka_ck_with_v5_receipt_becomes_pickup_event(
         "status_id": 2,
         "prep_minutes": 90,
     }
+    _enable_coordinator_authority(sm, monkeypatch)
     ctr.enqueue(["8"], source="coordinator_panel")
     receipt = ctr.pending_with_receipts()["8"]
-    monkeypatch.setattr(
-        sm,
-        "flag",
-        lambda name, default=None: (
-            True if name == "ENABLE_CZASOWKA_CK_PASSIVE_GUARD" else default
-        ),
-    )
-    monkeypatch.setattr(
-        sm,
-        "decision_flag",
-        lambda name: name == "ENABLE_CZASOWKA_RUTCOM_FORWARD_AUTHORITY",
-    )
 
     evt = _diff_czas_kuriera(
         old,
@@ -307,9 +404,9 @@ def test_czasowka_null_ck_with_receipt_uses_same_canonical_resolver(
         "czas_kuriera_warsaw": None,
         "czas_kuriera_hhmm": None,
     }
+    _enable_coordinator_authority(sm, monkeypatch)
     assert ctr.enqueue(["8"], source="coordinator_panel") == 1
     receipt = ctr.pending_with_receipts()["8"]
-    _enable_coordinator_authority(sm, monkeypatch)
     fresh = {
         "czas_kuriera_warsaw": "2026-06-30T15:40:00+02:00",
         "czas_kuriera_hhmm": "15:40",
@@ -465,6 +562,11 @@ def _coordinator_payload(receipt: dict, *, hhmm: str = "15:40") -> dict:
 
 def _enable_coordinator_authority(sm, monkeypatch) -> None:
     monkeypatch.setattr(
+        ctr,
+        "_coordinator_policy_snapshot",
+        lambda: _queue_policy(forward=True),
+    )
+    monkeypatch.setattr(
         sm,
         "flag",
         lambda name, default=None: (
@@ -480,10 +582,10 @@ def _enable_coordinator_authority(sm, monkeypatch) -> None:
     )
 
 
-def test_v4_receipt_remains_claimable_during_v5_rollout(
+def test_pre_policy_v4_receipt_cannot_gain_authority_after_v6_rollout(
     tmp_queue, monkeypatch
 ):
-    """A receipt persisted before restart must finish under the new reader."""
+    """A pre-policy click remains readable but cannot inherit live ON."""
     from dispatch_v2 import state_machine as sm
 
     _enable_coordinator_authority(sm, monkeypatch)
@@ -505,10 +607,9 @@ def test_v4_receipt_remains_claimable_during_v5_rollout(
         _coordinator_payload(legacy),
     )
 
-    assert resolution.outcome.value == "apply"
-    claimed = ctr.current_receipt("8")
-    assert claimed is not None and claimed.get("claim")
-    assert ctr.get_claimed_event(claimed, order_id="8") == resolution.event
+    assert resolution.outcome.value == "suppress"
+    assert resolution.reason == "receipt_policy_missing"
+    assert ctr.current_receipt("8") == legacy
 
 
 def test_v5_eligibility_cannot_predate_click_and_poison_is_retained(
@@ -821,10 +922,10 @@ def test_successor_ttl_starts_when_claimed_head_releases_without_rewriting_click
     assert resolution.outcome.value == "apply"
 
 
-def test_legacy_rollback_projects_promoted_successor_from_eligibility_epoch(
+def test_legacy_rollback_blocks_policy_bound_promoted_successor(
     tmp_queue, persistent_tmpdir, monkeypatch
 ):
-    """Rollback nie może postarzyć successor-a o czas czekania za claimem."""
+    """Code rollback cannot erase the click-time policy of a v6 successor."""
     from dispatch_v2 import state_machine as sm
 
     _enable_coordinator_authority(sm, monkeypatch)
@@ -856,16 +957,12 @@ def test_legacy_rollback_projects_promoted_successor_from_eligibility_epoch(
     assert promoted["eligible_at"] == release_at.isoformat()
 
     backup = persistent_tmpdir / "promoted-successor.pre-v4.json"
-    ctr.prepare_legacy_rollback(str(backup))
-    projected = json.loads(Path(tmp_queue).read_text(encoding="utf-8"))
-
-    assert projected == {"8": promoted["eligible_at"]}
-    # Ten sam scalar czytany minutę później przez pre-v4 nadal mieści się w
-    # TTL=5. Mutacja eligible_at -> requested_at natychmiast czerwieni oracle.
-    projected_at = datetime.fromisoformat(projected["8"])
-    assert release_at + timedelta(minutes=1) - projected_at <= timedelta(
-        minutes=ctr.DEFAULT_TTL_MIN
-    )
+    with pytest.raises(RuntimeError, match="policy_bound_receipt"):
+        ctr.prepare_legacy_rollback(str(backup))
+    assert not backup.exists()
+    assert json.loads(Path(tmp_queue).read_text(encoding="utf-8")) == {
+        "8": promoted
+    }
 
 
 def test_compatibility_drain_never_consumes_claimed_transaction(
@@ -896,7 +993,7 @@ def test_compatibility_drain_never_consumes_claimed_transaction(
 def test_legacy_rollback_fences_writers_backs_up_and_projects_pending_v4(
     tmp_queue, persistent_tmpdir
 ):
-    ctr.enqueue(["8"], source="coordinator_panel")
+    _seed_pre_policy_v5(tmp_queue)
     original = Path(tmp_queue).read_bytes()
     backup = persistent_tmpdir / "coordinator_time_recheck.pre-v4.json"
 
@@ -926,7 +1023,7 @@ def test_legacy_rollback_fences_writers_backs_up_and_projects_pending_v4(
 def test_legacy_rollback_backup_failure_cannot_leave_prepared_fence(
     tmp_queue, persistent_tmpdir, monkeypatch
 ):
-    ctr.enqueue(["8"], source="coordinator_panel")
+    _seed_pre_policy_v5(tmp_queue)
     backup = persistent_tmpdir / "injected-backup-failure.json"
     real_write_once = ctr._write_once
 
@@ -949,7 +1046,7 @@ def test_legacy_rollback_backup_failure_cannot_leave_prepared_fence(
 def test_legacy_rollback_prepared_fence_revalidates_exact_backup(
     tmp_queue, persistent_tmpdir
 ):
-    ctr.enqueue(["8"], source="coordinator_panel")
+    _seed_pre_policy_v5(tmp_queue)
     backup = persistent_tmpdir / "exact-backup.json"
     ctr.prepare_legacy_rollback(str(backup))
     assert ctr.legacy_rollback_status()["rollback_prepared"] is True
@@ -1063,7 +1160,7 @@ def test_legacy_rollback_restores_exact_queue_when_fence_write_fails(
     tmp_queue, persistent_tmpdir, monkeypatch
 ):
     """Projection+fence is one transaction; failed fence restores exact bytes."""
-    assert ctr.enqueue(["8"], source="coordinator_panel") == 1
+    _seed_pre_policy_v5(tmp_queue)
     original = Path(tmp_queue).read_bytes()
     backup = persistent_tmpdir / "queue-before-failed-fence.json"
     real_write_once = ctr._write_once
@@ -1087,7 +1184,7 @@ def test_legacy_rollback_does_not_delete_fence_created_by_racer(
     tmp_queue, persistent_tmpdir, monkeypatch
 ):
     """Nieudane O_EXCL usuwa tylko własny fence, nigdy cudzy artefakt."""
-    assert ctr.enqueue(["8"], source="coordinator_panel") == 1
+    _seed_pre_policy_v5(tmp_queue)
     original = Path(tmp_queue).read_bytes()
     backup = persistent_tmpdir / "queue-before-fence-race.json"
     fence = Path(ctr._rollback_fence_path())

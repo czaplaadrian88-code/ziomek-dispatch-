@@ -16,15 +16,17 @@ from dispatch_v2 import common as C
 from dispatch_v2 import durable_event_apply, event_bus, lifecycle_downstream
 from dispatch_v2.committed_pickup_authority import (
     CK_CHANGE_REVISION_OBSERVATION_FIELD,
-    MANUAL_CK_AUTHORITY_FLAG,
+    COMMITTED_TIME_POLICY_SNAPSHOT_FIELD,
     NEW_ORDER_TIME_AUTHORITY_SNAPSHOT_FIELD,
     NEW_ORDER_TIME_INTENT_FIELD,
     NEW_ORDER_TIME_INTENT_ID_FIELD,
-    RUTCOM_FORWARD_AUTHORITY_FLAG,
     CommittedPickupPolicySnapshot,
     ResolutionOutcome,
     TIME_EVENT_CAS_SCHEMA_FIELD,
+    deserialize_committed_time_policy,
+    deserialize_coordinator_event_policy,
     project_time_event_order,
+    serialize_committed_time_policy,
     time_event_cas_artifact_present,
     time_event_cas_is_versioned,
     validate_committed_pickup_event,
@@ -105,11 +107,11 @@ def verify_durable_authority_attestation(
     return bool(isinstance(stored, dict) and stored == dict(event))
 
 
-def verify_new_order_time_intent_receipt(
+def _verified_new_order_time_intent_policy(
     current: Mapping[str, object] | None,
     event: Mapping[str, object] | None,
-) -> bool:
-    """Bind a pending state intent to the original durable NEW_ORDER row.
+) -> CommittedPickupPolicySnapshot | None:
+    """Bind and read one immutable NEW_ORDER receipt in a single DB read.
 
     The intent hash protects accidental corruption, but it is deliberately not
     a signature: anyone able to alter state could recompute it. Authority comes
@@ -117,19 +119,25 @@ def verify_new_order_time_intent_receipt(
     in orders_state by NEW_ORDER.
     """
     if not isinstance(current, Mapping) or not isinstance(event, Mapping):
-        return False
+        return None
     if not validate_new_order_time_intent_event(current, event):
-        return False
+        return None
     order_id = str(current.get("order_id") or "")
     marker = str(current.get("last_lifecycle_event_id_new_order") or "")
     intent = current.get(NEW_ORDER_TIME_INTENT_FIELD)
     if not order_id or not marker or not isinstance(intent, Mapping):
-        return False
+        return None
     row = event_bus.get_state_apply_outbox(marker)
     stored = row.get("state_event") if isinstance(row, Mapping) else None
     if not isinstance(stored, Mapping):
-        return False
-    return bool(
+        return None
+    try:
+        policy = deserialize_committed_time_policy(
+            stored.get(COMMITTED_TIME_POLICY_SNAPSHOT_FIELD)
+        )
+    except (TypeError, ValueError):
+        return None
+    valid = bool(
         str(row.get("event_id") or "") == marker
         and str(row.get("event_key") or "")
         and str(row.get("order_id") or "") == order_id
@@ -138,12 +146,31 @@ def verify_new_order_time_intent_receipt(
         and str(stored.get("event_id") or "") == marker
         and str(stored.get("order_id") or "") == order_id
         and stored.get(NEW_ORDER_TIME_AUTHORITY_SNAPSHOT_FIELD) is True
+        and policy.producer == "panel_watcher"
+        and policy.initial_time_authority_enabled is True
         and stored.get(NEW_ORDER_TIME_INTENT_FIELD) == intent
         and (event.get("payload") or {}).get(
             NEW_ORDER_TIME_INTENT_ID_FIELD
         )
         == intent.get("intent_id")
     )
+    return policy if valid else None
+
+
+def verify_new_order_time_intent_receipt(
+    current: Mapping[str, object] | None,
+    event: Mapping[str, object] | None,
+) -> bool:
+    """Return whether the exact durable NEW_ORDER receipt is valid."""
+    return _verified_new_order_time_intent_policy(current, event) is not None
+
+
+def _new_order_time_intent_policy(
+    current: Mapping[str, object] | None,
+    event: Mapping[str, object] | None,
+) -> CommittedPickupPolicySnapshot | None:
+    """Return the policy from the exact NEW_ORDER receipt, never live flags."""
+    return _verified_new_order_time_intent_policy(current, event)
 
 
 def time_update_event_key(order_id: str, event: Mapping[str, object]) -> str:
@@ -254,28 +281,12 @@ def apply_event(
     payload = event.get("payload")
     if not isinstance(payload, Mapping):
         raise ValueError("time event requires payload")
-    if authority_policy is not None:
-        if type(authority_policy) is not CommittedPickupPolicySnapshot:
-            raise TypeError(
-                "authority_policy must be CommittedPickupPolicySnapshot"
-            )
-        observed_source = (
-            payload.get("source")
-            if event_type == "CZAS_KURIERA_UPDATED"
-            else payload.get("observed_source")
+    if authority_policy is not None and type(
+        authority_policy
+    ) is not CommittedPickupPolicySnapshot:
+        raise TypeError(
+            "authority_policy must be CommittedPickupPolicySnapshot"
         )
-        if payload.get("committed_authority") is None:
-            observed_source = payload.get("source")
-        validate_committed_time_policy_source(
-            authority_policy, observed_source
-        )
-        if (
-            payload.get("committed_authority") is not None
-            and not authority_policy.authority_enabled
-        ):
-            raise ValueError(
-                "authority-disabled policy cannot apply committed authority"
-            )
 
     # Granica transportu jest ostatnim miejscem, w którym surowy CK może
     # istnieć. Jeżeli wspólny resolver rozpozna legalną zmianę committed
@@ -319,6 +330,7 @@ def apply_event(
 
     event_key = time_update_event_key(order_id, event)
     state_event_sealer = None
+    effective_policy = authority_policy
     authority = payload.get("committed_authority")
     if authority:
         # Exact outbox jest pierwszym trwałym receipt'em tej intencji. Resume
@@ -345,22 +357,7 @@ def apply_event(
                 downstream_fn=lifecycle_downstream.apply,
             )
 
-        passive_enabled = (
-            authority_policy.passive_guard_enabled
-            if authority_policy is not None
-            else C.flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True)
-        )
         current = state_machine.get_order_strict(order_id)
-        manual_enabled = (
-            authority_policy.manual_passthrough_enabled
-            if authority_policy is not None
-            else C.decision_flag(MANUAL_CK_AUTHORITY_FLAG)
-        )
-        forward_enabled = (
-            authority_policy.rutcom_forward_authority_enabled
-            if authority_policy is not None
-            else C.decision_flag(RUTCOM_FORWARD_AUTHORITY_FLAG)
-        )
         receipt_verified = False
         proof = payload.get("committed_authority_proof")
         observation = (
@@ -381,18 +378,65 @@ def apply_event(
         initial_intent_claimed = (
             payload.get(NEW_ORDER_TIME_INTENT_ID_FIELD) is not None
         )
-        initial_intent_verified = verify_new_order_time_intent_receipt(
+        initial_intent_policy = _new_order_time_intent_policy(
             current,
             event,
         )
+        initial_intent_verified = initial_intent_policy is not None
         if initial_intent_claimed and not initial_intent_verified:
             raise ValueError(
                 "committed pickup NEW_ORDER receipt rejected"
             )
+        coordinator_authority = bool(
+            authority == "coordinator_receipt"
+            or (
+                isinstance(observation, Mapping)
+                and observation.get("source") == "coordinator_force"
+            )
+        )
+        if coordinator_authority:
+            try:
+                coordinator_policy = deserialize_coordinator_event_policy(
+                    event
+                )
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "coordinator authority requires receipt policy"
+                ) from exc
+            effective_policy = coordinator_policy
+        elif initial_intent_claimed:
+            effective_policy = initial_intent_policy
+        if effective_policy is None:
+            raise ValueError(
+                "committed pickup authority requires captured policy"
+            )
+        observed_source = payload.get("observed_source")
+        validate_committed_time_policy_source(
+            effective_policy, observed_source
+        )
+        if coordinator_authority:
+            policy_authority_enabled = (
+                effective_policy.coordinator_time_authority_enabled
+            )
+        else:
+            policy_authority_enabled = effective_policy.authority_enabled
+        if not policy_authority_enabled:
+            if coordinator_authority:
+                raise ValueError(
+                    "coordinator policy cannot apply authority"
+                )
+            raise ValueError(
+                "authority-disabled policy cannot apply committed authority"
+            )
+        passive_enabled = effective_policy.passive_guard_enabled
+        manual_enabled = effective_policy.manual_passthrough_enabled
+        forward_enabled = (
+            effective_policy.rutcom_forward_authority_enabled
+        )
         claim_authorized = bool(
             receipt_verified or initial_intent_verified
         )
-        if not (passive_enabled or claim_authorized):
+        if not passive_enabled:
             raise ValueError(
                 "committed pickup authority requires passive guard"
             )
@@ -402,14 +446,11 @@ def apply_event(
             is_czasowka=C.is_czasowka_order(
                 project_time_event_order(current, event)
             ),
-            # Exact queue claim jest pierwszym trwalym journalem transakcji.
-            # Domyka crash-window claim->outbox nawet po hot rollbacku; bez
-            # claimu biezace flagi nadal sa bezwzglednie wymagane.
-            passive_guard_enabled=(passive_enabled or claim_authorized),
+            # Exact queue claim is a journal, not a replacement authority bit.
+            # Its v6 receipt carries the click-time lease through rollback.
+            passive_guard_enabled=passive_enabled,
             manual_passthrough_enabled=manual_enabled,
-            rutcom_forward_authority_enabled=(
-                forward_enabled or claim_authorized
-            ),
+            rutcom_forward_authority_enabled=forward_enabled,
             coordinator_receipt_verified=receipt_verified,
         )
         if (
@@ -425,6 +466,18 @@ def apply_event(
         # dokładny event z atestacją; wspólny FSM oracle oznaczy go terminalnie
         # ``superseded``. Bez exact receiptu ten sam stale event nadal failuje.
         state_event_sealer = _seal_authority_event
+    elif effective_policy is not None:
+        validate_committed_time_policy_source(
+            effective_policy, payload.get("source")
+        )
+
+    state_event_metadata = None
+    if effective_policy is not None:
+        state_event_metadata = {
+            COMMITTED_TIME_POLICY_SNAPSHOT_FIELD: (
+                serialize_committed_time_policy(effective_policy)
+            )
+        }
 
     return durable_event_apply.emit_and_apply(
         event_type,
@@ -442,7 +495,7 @@ def apply_event(
         effect_status_fn=state_machine.event_effect_status,
         get_order_fn=state_machine.get_order_strict,
         downstream_fn=lifecycle_downstream.apply,
-        state_event_metadata=None,
+        state_event_metadata=state_event_metadata,
         state_event_sealer=state_event_sealer,
         sweeper_enabled=None,
     )

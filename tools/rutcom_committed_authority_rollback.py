@@ -302,11 +302,14 @@ def collect_status(
     for raw_order_id, record in queue_records.items():
         order_id = str(raw_order_id)
         order = orders_state.get(order_id)
+        receipt_policy = queue.receipt_policy_snapshot(record)
         stable_unclaimed_elastic = bool(
             queue.rollback_record_is_unclaimed(
                 record,
                 order_id=order_id,
             )
+            and receipt_policy is not None
+            and receipt_policy.rutcom_forward_authority_enabled is False
             and isinstance(order, Mapping)
             and str(order.get("order_type") or "").strip().lower()
             == "elastic"

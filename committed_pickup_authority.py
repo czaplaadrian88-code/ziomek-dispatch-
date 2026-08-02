@@ -39,6 +39,7 @@ COMMITTED_PICKUP_AUTHORITY_FLAGS = (
     RUTCOM_FORWARD_AUTHORITY_FLAG,
 )
 COMMITTED_PICKUP_EVENT_ID_MARKER = "_PICKUP_TIME_UPDATED_COMMITTED_"
+COMMITTED_TIME_POLICY_SNAPSHOT_FIELD = "committed_time_policy_snapshot"
 AUTHORITY_PROOF_SCHEMA = "committed_pickup_authority.v1"
 TIME_EVENT_CAS_SCHEMA = "time_update_cas.v1"
 TIME_EVENT_CAS_SCHEMA_FIELD = "time_event_cas_schema"
@@ -65,8 +66,7 @@ _MANUAL_RUTCOM_STATUS_IDS_BY_ORDER_STATE = {
 }
 _COORDINATOR_RECEIPT_SCHEMAS = frozenset(
     {
-        "coordinator_time_recheck.v4",
-        "coordinator_time_recheck.v5",
+        "coordinator_time_recheck.v6",
     }
 )
 _COORDINATOR_RECEIPT_SOURCES = frozenset(
@@ -92,6 +92,7 @@ _DURABLE_EVENT_KEYS = _SEMANTIC_EVENT_KEYS | frozenset(
         "committed_invalidates_view_authorized",
         "czasowka_reclaim_shadow_authorized",
         "czasowka_reclaim_live_authorized",
+        COMMITTED_TIME_POLICY_SNAPSHOT_FIELD,
     }
 )
 _AUTHORITY_PAYLOAD_EXACT_KEYS = frozenset(
@@ -164,19 +165,41 @@ class CommittedPickupPolicySnapshot:
             or self.rutcom_forward_authority_enabled
         )
 
+    @property
+    def initial_time_authority_enabled(self) -> bool:
+        """Whether NEW_ORDER may hand its raw tuple to the canonical owner."""
+        return bool(
+            self.rutcom_forward_authority_enabled
+            and self.passive_guard_enabled
+        )
+
+    @property
+    def coordinator_time_authority_enabled(self) -> bool:
+        """Whether one queue click may authorize committed pickup time.
+
+        The manual-marker flag belongs to panel/Rutcom observations and must
+        never turn a coordinator receipt into authority.  A queue claim is a
+        durable journal only; its exact click-time forward+guard policy is the
+        business lease.
+        """
+        return bool(
+            self.rutcom_forward_authority_enabled
+            and self.passive_guard_enabled
+        )
+
 
 _COMMITTED_TIME_POLICY_SOURCES = {
     "pre_proposal_recheck": frozenset({"pre_proposal_recheck"}),
     "panel_watcher": frozenset(
         {
-            "coordinator_force",
             "first_acceptance",
+            "new_order_initial_intent",
             "panel_pickup_recheck",
             "panel_re_check",
         }
     ),
+    "coordinator_queue": frozenset({"coordinator_force"}),
 }
-COMMITTED_TIME_POLICY_SNAPSHOT_FIELD = "committed_time_policy_snapshot"
 COMMITTED_TIME_POLICY_SNAPSHOT_SCHEMA = "committed_pickup.policy_snapshot.v1"
 _COMMITTED_TIME_POLICY_SNAPSHOT_KEYS = frozenset(
     {
@@ -239,6 +262,50 @@ def deserialize_committed_time_policy(
             "rutcom_forward_authority_enabled"
         ),
         passive_guard_enabled=value.get("passive_guard_enabled"),
+    )
+
+
+def deserialize_coordinator_receipt_policy(
+    receipt: object,
+) -> CommittedPickupPolicySnapshot:
+    """Return the exact click-time policy carried by a v6 receipt.
+
+    Pre-v6 envelopes intentionally have no policy lease.  They remain
+    readable for dark-deploy legacy elastic work, but can never acquire new
+    committed-time authority after the rollout flag changes.
+    """
+    if not isinstance(receipt, Mapping):
+        raise ValueError("coordinator receipt must be an object")
+    if receipt.get("schema") != "coordinator_time_recheck.v6":
+        raise ValueError("coordinator receipt has no policy snapshot")
+    policy = deserialize_committed_time_policy(
+        receipt.get(COMMITTED_TIME_POLICY_SNAPSHOT_FIELD)
+    )
+    if policy.producer != "coordinator_queue":
+        raise ValueError("coordinator receipt policy has wrong producer")
+    validate_committed_time_policy_source(policy, "coordinator_force")
+    return policy
+
+
+def deserialize_coordinator_event_policy(
+    event: object,
+) -> CommittedPickupPolicySnapshot:
+    """Read the queue-owned policy bound into one canonical authority event."""
+    if not isinstance(event, Mapping):
+        raise ValueError("coordinator authority event must be an object")
+    payload = event.get("payload")
+    if not isinstance(payload, Mapping):
+        raise ValueError("coordinator authority payload must be an object")
+    proof = payload.get("committed_authority_proof")
+    observation = (
+        proof.get("observation") if isinstance(proof, Mapping) else None
+    )
+    if not isinstance(observation, Mapping) or observation.get(
+        "source"
+    ) != "coordinator_force":
+        raise ValueError("coordinator authority proof source is invalid")
+    return deserialize_coordinator_receipt_policy(
+        observation.get("authority_receipt")
     )
 
 
@@ -740,10 +807,14 @@ def _valid_coordinator_receipt(
         return False
     if receipt.get("source") not in _COORDINATOR_RECEIPT_SOURCES:
         return False
+    try:
+        deserialize_coordinator_receipt_policy(receipt)
+    except (TypeError, ValueError):
+        return False
     requested_at = _parse_aware(receipt.get("requested_at"))
     eligibility_raw = (
         receipt.get("eligible_at")
-        if receipt.get("schema") == "coordinator_time_recheck.v5"
+        if receipt.get("schema") == "coordinator_time_recheck.v6"
         else receipt.get("requested_at")
     )
     eligible_at = _parse_aware(eligibility_raw)
@@ -2043,6 +2114,8 @@ __all__ = [
     "committed_pickup_event_id",
     "committed_time_contract_is_complete",
     "deserialize_committed_time_policy",
+    "deserialize_coordinator_event_policy",
+    "deserialize_coordinator_receipt_policy",
     "is_committed_pickup_artifact",
     "is_committed_pickup_outbox_artifact",
     "is_forward_authority_outbox_artifact",

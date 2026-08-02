@@ -1,4 +1,4 @@
-# RUTCOM committed pickup authority — raport kandydata v23, 2026-08-02
+# RUTCOM committed pickup authority — raport kandydata v24, 2026-08-02
 
 ## Wynik
 
@@ -12,6 +12,47 @@ Rutcom. Granica transportu przed zapisem outboxa zamienia legalny CK na jeden
 kanoniczny `PICKUP_TIME_UPDATED`. Jeden handler state atomowo zapisuje pickup,
 CK, HH:MM, monotoniczną rewizję oraz provenance. Plan, scoring po potwierdzonym
 apply i aplikacja dziedziczą tę samą prawdę.
+
+## Co domknięto w v24
+
+Dwa blind review exact-byte v23 ponownie poprawnie zatrzymały live. Authority
+verdict `58f422b07f239730ad0dd7a279238e7cddafa210384bb742fdf16091aee00cd3`
+i rollout verdict
+`b5443d5d1aff1569097529b446eef125c128308bde09c8ea2565f26be4085710`
+wydały `CONFIRMED_DEFECT`. MAIN odtworzył trzy czerwone przypadki: coordinator
+CK używał klasy starego agregatu zamiast projekcji `prep_minutes` 20→60,
+forward preflight przepuszczał pre-policy receipt elastyka bez dowodu OFF, a
+durable authority event nie zachowywał policy lease i po crashu wracał do live
+flag. Własny audyt przed freeze wykrył czwarty oracle: ręczna flaga plus sam
+claim mogły zbyt szeroko zastąpić click-time forward `OFF`.
+
+V24 ustanawia v6 kolejki jako jedyną kopertę zdolną do authority. Snapshot
+`coordinator_queue` powstaje pod tym samym flockiem co enqueue i idzie bez
+reinterpretacji przez receipt, claim, proof, outbox, apply i recovery. V4/v5
+są nadal czytelne dla ciemnego legacy elastyka, lecz nie mogą nabyć authority.
+Claim pozostaje journalem: coordinator wymaga exact `forward AND passive`, a
+manual-marker flag nie ma tu znaczenia. Durable event zapisuje pełny policy
+snapshot; state recovery nie czyta live flag, a brak/korupcja/zły producer
+failuje closed. Preflight ignoruje tylko poprawny v6 z własnym dowodem OFF,
+natomiast code revert blokuje każdy policy-bound v6.
+
+Trzy findings review były RED na exact v23 i są zielone po fixie. Dodatkowy
+claim-oracle również przeszedł RED→GREEN. Główny klaster queue/apply/rollback
+ma 272/272, a ratchet/mutation 28/28. Pełna finalna regresja ma 6752 passed,
+74 skipped, 8 xfailed, 153 warnings i 0 failed w 462,43 s. Produkcja, flagi i
+procesy nadal pozostają nietknięte; dwa świeże review v24 są następną bramką.
+
+### Mapa kompletności v24
+
+| Miejsce | Rola | Dotknięte | Dowód |
+|---|---|---|---|
+| `coordinator_time_recheck` | owner kolejki/click-time lease | TAK | schema v6, exact producer, continuation zachowuje lease, malformed jako poison |
+| `committed_pickup_authority` | jeden policy owner | TAK | post-observation class i `coordinator=forward AND passive` |
+| `committed_pickup_apply` | durable boundary | TAK | coordinator/NEW_ORDER policy z exact receiptu, snapshot w outboxie, zero live reread |
+| `state_machine` | resolver/recovery/coupled writer | TAK | claim/outbox używa policy lease; OFF/missing/corrupt fail-closed |
+| rollback/preflight | release gate | TAK | tylko v6 OFF elastic wyjątkiem; v4/v5 i policy-bound code revert blokują |
+| flag lifecycle | mechaniczna mapa readerów | TAK | coordinator queue jest realnym symbolic consumerem, merge seed zachowuje kurację |
+| plan/scoring/serializer/apka | konsumenci state | N-D | brak render override, nowego writera i zmiany HARD/SOFT |
 
 ## Co domknięto w v23
 
@@ -821,9 +862,9 @@ ACK, post-pickup/stale-generation/revision i spójności pickup↔CK.
 
 ## Identyfikacja kandydata
 
-- Wersja: v23, po pełnej regresji, przed dwoma świeżymi review exact-byte
+- Wersja: v24, po pełnej regresji, przed dwoma świeżymi review exact-byte
 - Branch: `fix/rutcom-committed-provenance-v20-20260802`
 - Worktree: `/root/worktrees/dispatch_v2/active/20260802-rutcom-v17-integration-pkgroot/dispatch_v2`
-- Base przed v23: `16ec386845c34f947959c42c00a736d82d1a57d3`
+- Base przed v24: `a19af05b54adb15faa6fab8946e14955fcd4d2c7`
 - Zintegrowany produkcyjny master: `64f773ddc`
 - Produkcja: bez zmian; zero deployu, restartu, migracji i flipu.
