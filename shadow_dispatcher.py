@@ -1253,6 +1253,16 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
     # ON zapisuje pełną pulę sprzed top-N, bez ciężkich planów/metrics.
     if C.decision_flag("ENABLE_FULL_CHOICE_SET_LOG"):
         out["full_pool_compact"] = _serialize_full_pool_compact(result, best)
+    # A-3 ALWAYS-PROPOSE (OD-1, 2026-08-02): kanoniczny TYP wyjścia decyzji.
+    # OFF = brak kluczy (bajt-parytet baseline). ON = jawny typ owner-facing /
+    # eskalacja + flaga „ciche nic" dla monitoringu inwariantu OD-1. CZYSTA
+    # obserwacja: klasyfikator (core.proposal_output) jest funkcją nad `result`,
+    # ZERO zmiany verdiktu/best/decyzji. Konsument nowego typu LEAST_DAMAGE_ALERT
+    # = telegram (parytet _is_hard35_owner_alert), panel, konsola, upsert (A-4).
+    if C.decision_flag("ENABLE_ALWAYS_PROPOSE"):
+        from dispatch_v2.core import proposal_output as _po
+        out["proposal_output_type"] = _po.output_label(result)
+        out["proposal_output_silent"] = _po.is_silent_nothing(result)
     if out["best"] is not None:
         _propagate_prefixed_metrics(out["best"], best_m)
     return out

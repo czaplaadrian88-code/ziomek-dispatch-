@@ -11,7 +11,7 @@
    "numeric": 36,
    "panel": 88,
    "test_isolated": 8,
-   "total": 556,
+   "total": 557,
    "twins_concepts": 8
   },
   "generator": "tools/flag_lifecycle_seed.py",
@@ -20423,6 +20423,43 @@
    "worlds": [
     "engine"
    ]
+  },
+  "ENABLE_ALWAYS_PROPOSE": {
+   "carriers": [
+    "common.py:ETAP4_DECISION_FLAGS"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/core/proposal_output.py",
+    "dispatch_v2/shadow_dispatcher.py"
+   ],
+   "current_snapshot": {
+    "default": false
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_ALWAYS_PROPOSE",
+   "notes": "A-3 always-propose (OD-1). Klasyfikator core/proposal_output.py; serializer shadow log-only za flagą; shadow-first, flip za ACK ownera.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-shadow.service"
+   },
+   "removal_condition": "aktywacja lub retire wg roadmapy (ACK Adrian)",
+   "review_date": "2026-08-10",
+   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "source_of_truth": "common.py-const",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ],
+   "curated_at": "2026-08-02"
   }
  }
 }

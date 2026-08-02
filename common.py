@@ -104,6 +104,14 @@ ENABLE_ALARM_CERTIFICATE_SHADOW = False
 ENABLE_STRATEGY2_PROBE_SHADOW = False
 ENABLE_HARD35_ENFORCE = False
 
+# A-3 ALWAYS-PROPOSE (OD-1, 2026-08-02): kanoniczny TYP wyjścia decyzji w
+# shadow_decisions (EXECUTABLE_PROPOSAL / LEAST_DAMAGE_ALERT / OWNER_EXCEPTION /
+# COORDINATOR_ESCALATION) + inwariant „nigdy ciche nic". Klasyfikator
+# (core/proposal_output.py) jest CZYSTĄ funkcją nad wynikiem — flaga steruje TYLKO
+# emisją pól obserwacyjnych w serializerze; ZERO zmiany verdiktu/decyzji. Default
+# OFF, shadow-first; flip za ACK ownera po oknie SHADOW.
+ENABLE_ALWAYS_PROPOSE = False
+
 # ─── K05 refaktor (2026-07-06, ADR-R01): FlagSnapshot per tick ───
 # Problem: flagi czytane z dysku w TRAKCIE decyzji (nawet z perf-lazy TTL 0,25 s
 # odświeżenie może wypaść W ŚRODKU ticku) → zmiana flags.json mid-tick daje
@@ -312,6 +320,11 @@ ETAP4_DECISION_FLAGS = (
     "ENABLE_ALARM_CERTIFICATE_SHADOW",
     "ENABLE_STRATEGY2_PROBE_SHADOW",
     "ENABLE_HARD35_ENFORCE",
+    # A-3 ALWAYS-PROPOSE (OD-1, 2026-08-02): flaga DECYZYJNA (zmienia TREŚĆ emisji
+    # w shadow_decisions — typ wyjścia). Musi być w ETAP4, by conftest ją strippował
+    # w testach hermetycznych (lekcja A-4: allowlist zamiast decision-flag = prod-True
+    # cicho w regresji). Reader = C.decision_flag("ENABLE_ALWAYS_PROPOSE").
+    "ENABLE_ALWAYS_PROPOSE",
     # R3 LIVE-ETA SOURCES (2026-07-28): addytywny kontrakt per-stop
     # LIVE(gps<=120s)/WARM(last_event<=180s)/PLANNED + izolacja bad-coords.
     # OFF = legacy snapshot bajt-w-bajt. Flip dopiero po porannym ACK ownera
