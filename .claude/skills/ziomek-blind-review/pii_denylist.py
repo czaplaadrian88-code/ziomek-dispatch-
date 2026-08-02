@@ -22,14 +22,20 @@ klasy PII, bo denylista bundlera znała tylko nazwy niosące werdykt):
 GRANICE POKRYCIA (świadome; nie udajemy kompletności):
   * `path` łapie znane KLASY po ścieżce/nazwie — nie wykryje pliku nazwanego
     neutralnie (`dane.json`), jeśli treść nie odpali heurystyki;
-  * `content` skanuje wyłącznie pliki tekstowe ≤ CONTENT_MAX_BYTES o rozszerzeniu
-    ze SCANNABLE_SUFFIXES; binaria, archiwa i pliki większe NIE są skanowane
-    treściowo (do bundla i tak nie wchodzą — patrz ALLOW_SUFFIXES w driverze —
-    ale ich zawartości nie potwierdzamy);
+  * zbiór rozszerzeń, które bundler może kopiować, ma jednego właściciela:
+    BUNDLE_COPYABLE_SUFFIXES w tym module. Każdy kopiowalny plik, którego pełnej
+    treści nie da się przeskanować (za duży, NUL, nie-UTF-8 albo błąd odczytu),
+    daje trafienie `unscannable` i ODMOWĘ; można je zdjąć wyłącznie dokładnym
+    `--allow-sensitive` dla tego jednego istniejącego pliku;
+  * niekopiowalne binaria/archiwa mogą zostać sprawdzone tylko po ścieżce i nigdy
+    nie trafiają do bundla; ich treści nie potwierdzamy;
   * heurystyka „imię+nazwisko" działa TYLKO na wartościach plików strukturalnych
     (json/jsonl/csv/tsv/yaml) i wymaga NAME_VALUE_MIN_HITS różnych trafień —
-    w prozie (md/txt) nazwisk NIE wykrywamy, bo próg fałszywych alarmów byłby
-    nie do utrzymania. Prozę pokrywa `path` + dyscyplina zakresu, nie ten skaner;
+    w kopiowalnym kodzie `.py` i prozie `.md`/`.txt` nazwisk ani pól PII NIE
+    wykrywamy, bo próg fałszywych alarmów byłby nie do utrzymania. Te pliki mają
+    reguły materiału uwierzytelniającego + `path`, nie strukturalne heurystyki osobowe;
+  * nazwisko użyte jako KLUCZ struktury nie jest wykrywane; skaner rozpoznaje
+    nazwane pola PII i wartości, nie nazwiska-klucze;
   * gołe `address`/`adres` celowo NIE jest regułą — w tym repo adresy punktów
     biznesowych są wszędzie (geokoder), więc reguła dawałaby szum, który zmusza
     do hurtowego allowlistowania i psuje bramkę;
@@ -54,6 +60,7 @@ CLASS_SECRET = "secret"
 CLASS_IDENTITY_PII = "identity_pii"
 CLASS_CLIENT_DATA = "client_data"
 CLASS_SCOPE = "scope_escape"  # dowiązanie wyprowadzające bundle poza kandydata
+CLASS_UNSCANNABLE = "unscannable"  # kopiowalne, ale bez pełnego skanu treści
 
 # ── parametry skanu ──────────────────────────────────────────────────────────
 CONTENT_MAX_BYTES = 2 * 1024 * 1024
@@ -64,16 +71,21 @@ MAX_JSONL_LINES = 20_000
 
 PRUNED_DIRS = (".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cache")
 
+# JEDYNY właściciel zbioru artefaktów, które driver może skopiować do bundla.
+# Driver wywołuje `is_bundle_copyable()`; nie utrzymuje własnej listy rozszerzeń.
+BUNDLE_COPYABLE_SUFFIXES = (
+    ".md", ".json", ".yaml", ".yml", ".py", ".schema.json", ".txt",
+)
 DATA_SUFFIXES = (
     ".json", ".jsonl", ".ndjson", ".csv", ".tsv", ".yaml", ".yml", ".txt",
     ".db", ".sqlite", ".sqlite3", ".xlsx", ".xls", ".parquet",
 )
 STRUCTURED_SUFFIXES = (".json", ".jsonl", ".ndjson", ".csv", ".tsv", ".yaml", ".yml")
-SCANNABLE_SUFFIXES = DATA_SUFFIXES + (
+SCANNABLE_SUFFIXES = tuple(dict.fromkeys(DATA_SUFFIXES + BUNDLE_COPYABLE_SUFFIXES + (
     ".md", ".py", ".sh", ".bash", ".ini", ".cfg", ".conf", ".toml", ".env",
     ".sql", ".js", ".ts", ".html", ".log", ".service", ".timer", ".patch",
     ".diff", ".properties", "",
-)
+)))
 
 # ── reguły po ŚCIEŻCE ────────────────────────────────────────────────────────
 # glob dopasowywany do nazwy pliku ORAZ do ścieżki względnej (posix, lowercase).
@@ -224,6 +236,11 @@ def _glob_hit(rel_low: str, base_low: str, pattern: str) -> bool:
     return fnmatch(base_low, pattern) or fnmatch(rel_low, pattern)
 
 
+def is_bundle_copyable(rel: str) -> bool:
+    """Czy dokładnie ten typ pliku driver może skopiować do bundla."""
+    return rel.rsplit("/", 1)[-1].endswith(BUNDLE_COPYABLE_SUFFIXES)
+
+
 def classify_path(rel: str) -> list[Hit]:
     """Reguły po ścieżce/nazwie. Bez I/O — czysta funkcja, łatwa do zratchetowania."""
     rel_low = rel.lower()
@@ -273,7 +290,7 @@ def _read_text(path: Path) -> str | None:
         raw = path.read_bytes()
     except OSError:
         return None
-    if b"\x00" in raw[:8192]:
+    if b"\x00" in raw:
         return None
     try:
         return raw.decode("utf-8")
@@ -420,11 +437,12 @@ def _resolves_inside(p: Path, root_resolved: Path) -> bool:
 
 
 def iter_candidate_files(root: Path):
-    """Pliki w zakresie skanu = dokładnie te, które bundler może skopiować.
+    """Wszystkie pliki w zakresie skanu; część kopiowalną wskazuje polityka.
 
-    Ten sam iterator karmi skan i kopiowanie — inaczej powstałaby luka „coś, czego
-    nie przeskanowano, ale skopiowano". Dowiązania wskazujące POZA katalog kandydata
-    nie są tu wpuszczane; zgłasza je `iter_scope_escapes()` jako odmowę, nie cichy skip.
+    Ten sam iterator karmi skan i kopiowanie, a `is_bundle_copyable()` jest jednym
+    predykatem używanym przez skan i driver. Wrażliwy plik niekopiowalny nadal może
+    zatrzymać zbyt szeroki zakres po ścieżce. Dowiązania wskazujące POZA katalog
+    kandydata zgłasza `iter_scope_escapes()` jako odmowę, nie cichy skip.
     """
     root_resolved = root.resolve()
     for dirpath, dirnames, filenames in os.walk(root):
@@ -449,31 +467,44 @@ def iter_scope_escapes(root: Path):
                 yield p.relative_to(root).as_posix()
 
 
+def _matching_allow_entry(rel: str, allow_set: set[str]) -> str | None:
+    """Dokładny wpis allowlisty dla pliku; celowo bez globów i katalogów."""
+    return rel if rel in allow_set else None
+
+
 def screen_tree(root: Path, allow: tuple[str, ...] = ()) -> Screening:
     """FAZA 1: klasyfikuje CAŁE drzewo kandydata. Nie kopiuje i nie zapisuje nic."""
     allow_set = {a.strip().lstrip("./") for a in allow if a.strip()}
     res = Screening()
-    seen: set[str] = set()
+    matched_allow: set[str] = set()
     for path, rel in iter_candidate_files(root):
         res.scanned_files += 1
-        seen.add(rel)
-        if rel in allow_set:
+        allow_entry = _matching_allow_entry(rel, allow_set)
+        if allow_entry is not None:
             res.allowlisted.append(rel)
+            matched_allow.add(allow_entry)
             continue
         hits, content_done = screen_file(path, rel)
         if content_done:
             res.content_scanned += 1
         else:
             res.content_skipped.append(rel)
+            if is_bundle_copyable(rel):
+                res.hits.append(Hit(
+                    rel,
+                    CLASS_UNSCANNABLE,
+                    "content",
+                    "copyable-content-not-scanned",
+                    "kopiowalny plik nie przeszedł pełnego skanu treści",
+                ))
         res.hits.extend(hits)
     # Ucieczka zakresu jest CELOWO nieallowlistowalna: treści spoza katalogu kandydata
     # nie da się przeskanować jako jego części, a bundler jej nie skopiuje — jedyne
     # uczciwe wyjście to zmaterializować plik w katalogu kandydata albo zawęzić zakres.
     for rel in iter_scope_escapes(root):
-        seen.add(rel)
         res.hits.append(Hit(rel, CLASS_SCOPE, "path", "symlink-outside-candidate",
                             "dowiązanie wyprowadza zakres poza katalog kandydata"))
-    unknown = sorted(allow_set - seen)
+    unknown = sorted(allow_set - matched_allow)
     if unknown:
         # allowlista z literówką dawałaby fałszywe poczucie przejrzanego pliku
         res.hits.append(Hit(", ".join(unknown), CLASS_SECRET, "path",
@@ -485,7 +516,8 @@ def screen_tree(root: Path, allow: tuple[str, ...] = ()) -> Screening:
 def refusal_text(res: Screening, root: Path) -> str:
     """Komunikat odmowy — bezpieczny do wklejenia (zero dopasowanej treści)."""
     lines = [
-        "ODMOWA: zakres kandydata zawiera pliki klasy PII/sekret — bundle NIE powstał.",
+        "ODMOWA: zakres zawiera plik wrażliwy lub kopiowalny bez pełnego skanu "
+        "treści — bundle NIE powstał.",
         f"  kandydat: {root}",
         f"  trafienia: {len(res.hits)} (przeskanowano plików: {res.scanned_files}, "
         f"treściowo: {res.content_scanned})",

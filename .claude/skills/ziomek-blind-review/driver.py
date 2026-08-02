@@ -4,9 +4,11 @@
 Skill sam NIE jest recenzentem: recenzentem jest ŚWIEŻY subagent bez dostępu do
 wniosków autora. Driver robi trzy rzeczy, których nie wolno zostawić dyscyplinie:
 
-  blind   — weryfikuje SHA-256 wejścia (fail-closed) i buduje BLINDED bundle:
-            kopiuje TYLKO artefakty kandydata, a WYCINA raport autora, handoffy,
-            git-log i wszystko, co niesie cudzy werdykt. Wypisuje prompt recenzenta.
+  blind   — najpierw skanuje cały zakres kanoniczną polityką PII, potem weryfikuje
+            SHA-256 wejścia (fail-closed) i buduje BLINDED bundle: kopiuje TYLKO
+            artefakty kandydata, a WYCINA raport autora, handoffy, git-log i wszystko,
+            co niesie cudzy werdykt. Wypisuje prompt recenzenta.
+  screen  — uruchamia tę samą bramkę PII bez budowania bundla.
   check   — waliduje werdykt zwrócony przez recenzenta: musi cytować file:line +
             reprodukcję i mieć dyspozycję ze zbioru zamkniętego. Odrzuca "wygląda ok".
   eval    — puszcza cały proces na korpusie fixtures/ i porównuje z oczekiwaniem.
@@ -35,16 +37,13 @@ import pii_denylist  # noqa: E402
 RC_OK = 0
 RC_HOLD = 1          # integralność wejścia (pin) — fail-closed
 RC_USAGE = 2         # zły argument
-RC_SENSITIVE = 3     # zakres zawiera PII/sekret — bundle NIE powstał
+RC_SENSITIVE = 3     # trafienie polityki bezpieczeństwa — bundle NIE powstał
 
 # Pliki, które NIGDY nie trafiają do ślepego recenzenta — niosą cudzy werdykt.
 BLIND_DENY_SUBSTRINGS = (
     "report", "remediation", "handoff", "handover", "verdict", "review",
     "conclusion", "audit", "_plan", "notes", ".git",
 )
-# Rozszerzenia artefaktów kandydata, które recenzent MA widzieć.
-ALLOW_SUFFIXES = (".md", ".json", ".yaml", ".yml", ".py", ".schema.json", ".txt")
-
 VERDICT_DISPOSITIONS = ("CONFIRMED_DEFECT", "CLEAN")
 
 
@@ -96,7 +95,7 @@ def cmd_blind(args: argparse.Namespace) -> int:
     out.mkdir(parents=True, exist_ok=True)
     included, excluded = [], []
     for f, rel in pii_denylist.iter_candidate_files(src):
-        if is_blinded_out(rel) or not f.name.endswith(ALLOW_SUFFIXES):
+        if is_blinded_out(rel) or not pii_denylist.is_bundle_copyable(rel):
             excluded.append(rel)
             continue
         dst = out / rel

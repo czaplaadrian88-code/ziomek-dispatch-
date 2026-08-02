@@ -7,16 +7,19 @@ z listy oczywistych atrap, klucz „prywatny" bez materiału kryptograficznego) 
 plik bundla. Reprodukuje near-miss 2026-08-01: plik klasy PII w szerokim zakresie
 `blind .` przechodził do bundla recenzenta.
 
-Mutation ratchet: kopiuje skill do tmp, po kolei OSŁABIA politykę (kasuje reguły
-ścieżkowe / treściowe / obie) i żąda, żeby oracle po każdej mutacji ZCZERWIENIAŁ.
-Jeśli mutant przechodzi — polityka jest martwa i selftest ma paść.
+Mutation ratchet: kopiuje skill do katalogu tymczasowego, po kolei OSŁABIA
+konkretne kontrakty polityki i żąda, żeby oracle po każdej mutacji ZCZERWIENIAŁ.
+Chroni także jednego ownera rozszerzeń, odmowę pliku kopiowalnego bez skanu,
+dokładną allowlistę per plik, klasę client_data oraz formaty csv/tsv/yaml. Jeśli
+mutant przechodzi — polityka jest martwa i selftest ma paść.
 
 Uruchomienie: `python3 pii_oracle.py` (exit 0 = OK). Wywoływany z selftest.sh,
 a przez `tests/test_skills_selftest.py` — z nocnej regresji.
-Zero sieci, zero prod-state, zapisy wyłącznie do mktemp.
+Zero sieci, zero prod-state, wyłącznie samoczyszczące pliki tymczasowe.
 """
 from __future__ import annotations
 
+import ast
 import json
 import shutil
 import subprocess
@@ -29,7 +32,13 @@ PY = sys.executable or "python3"
 RC_SENSITIVE = 3
 
 # ── WABIKI — w 100% syntetyczne, żadnych prawdziwych osób ani sekretów ────────
-DECOY_NAMES = ["Jan Kowalski", "Anna Nowak", "Piotr Wisniewski", "Ewa Zielinska"]
+DECOY_NAMES = ["Ala Atrapa", "Bela Makieta", "Cela Syntetyczna", "Dora Testowa"]
+
+CLEAN_CASES = {
+    "clean-control": "config.json",
+    "boundary-code-py": "kod.py",
+    "boundary-name-keys": "dane.json",
+}
 
 FAKE_TOKEN = "1234567890:" + ("A" * 35)          # kształt tokenu bota, nie token
 FAKE_AWS = "AKIA" + ("Q" * 16)                   # kształt klucza AWS, nie klucz
@@ -38,6 +47,11 @@ FAKE_AWS = "AKIA" + ("Q" * 16)                   # kształt klucza AWS, nie kluc
 def _write(p: Path, text: str) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(text, encoding="utf-8")
+
+
+def _write_bytes(p: Path, data: bytes) -> None:
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(data)
 
 
 def build_decoys(root: Path) -> dict[str, Path]:
@@ -65,6 +79,22 @@ def build_decoys(root: Path) -> dict[str, Path]:
     _write(d / "rekordy.json", json.dumps(
         [{"pesel": "00000000000", "telefon": "000000000"}], ensure_ascii=False))
 
+    # Klasa client_data po ścieżce: neutralna treść, nazwa eksportu klienta.
+    d = case("path-client-data")
+    _write(d / "client_export.json", json.dumps({"kind": "synthetic"}))
+
+    # Klasa client_data po treści: neutralna nazwa pliku i pojedyncze pole klienta.
+    d = case("content-client-data")
+    _write(d / "dane.json", json.dumps({"customer_name": "Firma Atrapa"}))
+
+    # M-F: każdy format strukturalny ma własny wabik zależny od parsera formatu.
+    d = case("content-pii-csv")
+    _write(d / "rekordy.csv", "full_name,role\nAla Atrapa,synthetic\n")
+    d = case("content-pii-tsv")
+    _write(d / "rekordy.tsv", "full_name\trole\nBela Makieta\tsynthetic\n")
+    d = case("content-pii-yaml")
+    _write(d / "rekordy.yaml", "full_name: Cela Syntetyczna\nrole: synthetic\n")
+
     # 4. SEKRET po ŚCIEŻCE — rozszerzenie klucza
     d = case("path-secret-pem")
     _write(d / "deploy.pem", "-----BEGIN NOTHING-----\nnie-jest-kluczem\n")
@@ -79,6 +109,21 @@ def build_decoys(root: Path) -> dict[str, Path]:
     _write(d / "settings.py",
            'API_KEY = "<your_token_here>"\n'
            'password = "Qx7' + "Zk29" + 'Lm4Tb8Rv"\n')
+
+    # W1/W2: kopiowalne pliki bez pełnego skanu MUSZĄ zostać odrzucone.
+    d = case("unscannable-large")
+    large = (b'{"full_name":"Ala Atrapa","padding":"'
+             + (b"A" * (2 * 1024 * 1024 + 1)) + b'"}')
+    _write_bytes(d / "dane.json", large)
+
+    d = case("unscannable-non-utf8")
+    non_utf8 = json.dumps(
+        {"full_name": "Łata Atrapa"}, ensure_ascii=False).encode("cp1250")
+    _write_bytes(d / "dane.json", non_utf8)
+
+    d = case("unscannable-nul")
+    with_nul = b"\x00" + json.dumps({"full_name": "Cela Syntetyczna"}).encode("utf-8")
+    _write_bytes(d / "dane.json", with_nul)
 
     # 7. UCIECZKA ZAKRESU — dowiązanie do pliku PII spoza katalogu kandydata
     #    (nazwa dowiązania neutralna: sam path-matching by go nie złapał)
@@ -96,6 +141,17 @@ def build_decoys(root: Path) -> dict[str, Path]:
     # dokładnie te dwa kształty dawały fałszywy alarm na realnym repo (01.08 survey)
     _write(d / "test_zakres.py", 'secret = "sensitive-order-and-courier-data"\n')
     _write(d / "bezpieczenstwo.md", "Ustaw `BOT_TOKEN=<token_bota>` w drop-inie.\n")
+
+    # W5: jawne kontrole granic — `.py` nie ma heurystyk osobowych, a nazwiska
+    # użyte jako klucze struktury nie są dziś rozpoznawane.
+    d = case("boundary-code-py")
+    _write(d / "kod.py", "NAMES = ['Ala Atrapa', 'Bela Makieta', 'Cela Syntetyczna']\n")
+    d = case("boundary-name-keys")
+    _write(d / "dane.json", json.dumps({
+        "Ala Atrapa": {"kind": "synthetic"},
+        "Bela Makieta": {"kind": "synthetic"},
+        "Cela Syntetyczna": {"kind": "synthetic"},
+    }))
     return cases
 
 
@@ -109,21 +165,52 @@ def run_driver(skill_dir: Path, candidate: Path, out: Path,
                                "HOME": str(out.parent)})
 
 
+def policy_owner_oracle(skill_dir: Path) -> list[str]:
+    """Ratchet W1: driver konsumuje politykę rozszerzeń, nigdy jej nie definiuje."""
+    fails: list[str] = []
+    source = (skill_dir / "driver.py").read_text(encoding="utf-8")
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as exc:
+        return [f"single-owner: driver.py nie parsuje się: {exc}"]
+
+    module_names: set[str] = set()
+    for node in tree.body:
+        targets = []
+        if isinstance(node, ast.Assign):
+            targets = node.targets
+        elif isinstance(node, ast.AnnAssign):
+            targets = [node.target]
+        for target in targets:
+            if isinstance(target, ast.Name):
+                module_names.add(target.id)
+    duplicate_owners = sorted(
+        name for name in module_names
+        if "SUFFIX" in name.upper() or "COPYABLE" in name.upper()
+    )
+    if duplicate_owners:
+        fails.append(f"single-owner: driver definiuje politykę rozszerzeń: {duplicate_owners}")
+    if source.count("pii_denylist.is_bundle_copyable(rel)") != 1:
+        fails.append("single-owner: driver musi mieć dokładnie jednego konsumenta "
+                     "pii_denylist.is_bundle_copyable(rel)")
+    return fails
+
+
 def oracle(skill_dir: Path, workdir: Path, verbose: bool = True) -> list[str]:
     """Zwraca listę FAILÓW (pusta = oracle zielony)."""
-    fails: list[str] = []
+    fails: list[str] = policy_owner_oracle(skill_dir)
     cases = build_decoys(workdir / "candidates")
     outs = workdir / "out"
 
     for name, cand in sorted(cases.items()):
         out = outs / name
         r = run_driver(skill_dir, cand, out)
-        clean_expected = name == "clean-control"
+        clean_expected = name in CLEAN_CASES
         if clean_expected:
             if r.returncode != 0:
                 fails.append(f"{name}: kontrola czysta ODRZUCONA (rc={r.returncode}) "
                              f"— polityka za szeroka\n{r.stderr.strip()[:400]}")
-            elif not (out / "config.json").is_file():
+            elif not (out / CLEAN_CASES[name]).is_file():
                 fails.append(f"{name}: bundle nie zawiera artefaktu kandydata")
             continue
         if r.returncode != RC_SENSITIVE:
@@ -145,6 +232,28 @@ def oracle(skill_dir: Path, workdir: Path, verbose: bool = True) -> list[str]:
         fails.append(f"allowlist: jawny --allow-sensitive nie przepuścił (rc={r.returncode})\n"
                      f"{r.stderr.strip()[:400]}")
 
+    # W1: każdy wariant nieprzeskanowanego pliku da się odblokować TYLKO per plik.
+    for name in ("unscannable-large", "unscannable-non-utf8", "unscannable-nul"):
+        out = outs / f"allowlisted-{name}"
+        r = run_driver(skill_dir, cases[name], out, allow=("dane.json",))
+        if r.returncode != 0 or not (out / "dane.json").is_file():
+            fails.append(f"{name}: dokładna allowlista per plik nie przepuściła "
+                         f"(rc={r.returncode})")
+
+    # M-G: wzorzec/katalog nie jest wpisem per plik i MUSI zostać odrzucony.
+    out = outs / "allow-pattern"
+    r = run_driver(
+        skill_dir,
+        cases["path-pii-fullnames"],
+        out,
+        allow=("daily_accounting/*",),
+    )
+    if r.returncode != RC_SENSITIVE:
+        fails.append(f"allowlist-pattern: wzorzec odblokował plik (rc={r.returncode})")
+    leaked = sorted(p.name for p in out.rglob("*")) if out.exists() else []
+    if leaked:
+        fails.append(f"allowlist-pattern: przy odmowie powstały pliki bundla: {leaked}")
+
     # literówka w allowliście NIE może cicho przejść
     out = outs / "allow-typo"
     r = run_driver(skill_dir, cases["clean-control"], out, allow=("nie/ma/takiego.json",))
@@ -164,6 +273,29 @@ def oracle(skill_dir: Path, workdir: Path, verbose: bool = True) -> list[str]:
 
 # ── MUTATION RATCHET ─────────────────────────────────────────────────────────
 MUTANTS: dict[str, tuple[tuple[str, str], ...]] = {
+    "zduplikowany-owner-rozszerzen-w-driverze": (
+        ('VERDICT_DISPOSITIONS = ("CONFIRMED_DEFECT", "CLEAN")',
+         'ALLOW_SUFFIXES = (".json",)\n'
+         'VERDICT_DISPOSITIONS = ("CONFIRMED_DEFECT", "CLEAN")'),
+    ),
+    "wylaczona-odmowa-nieprzeskanowanego-kopiowalnego": (
+        ("            if is_bundle_copyable(rel):",
+         "            if False:  # mutant: usuwa odmowę W1"),
+    ),
+    "allowlista-wzorcowa-zamiast-per-plik": (
+        ("    return rel if rel in allow_set else None",
+         "    return next((p for p in allow_set if fnmatch(rel, p)), None)"),
+    ),
+    "wykasowana-klasa-client-data": (
+        ("CLIENT_NAME_TOKENS_DATA = (",
+         "CLIENT_NAME_TOKENS_DATA = ()\n_DEAD_CLIENT_NAME_TOKENS_DATA = ("),
+        ("CLIENT_KEY_RE = re.compile(",
+         "CLIENT_KEY_RE = re.compile(r\"(?!x)x\")\n_DEAD_CLIENT_KEY_RE = re.compile("),
+    ),
+    "formaty-strukturalne-tylko-json": (
+        ('STRUCTURED_SUFFIXES = (".json", ".jsonl", ".ndjson", ".csv", ".tsv", ".yaml", ".yml")',
+         'STRUCTURED_SUFFIXES = (".json",)'),
+    ),
     "wykasowane-reguly-sciezkowe": (
         ("SECRET_GLOBS = (", "SECRET_GLOBS = ()\n_DEAD_SECRET_GLOBS = ("),
         ("PII_NAME_TOKENS_ANY = (", "PII_NAME_TOKENS_ANY = ()\n_DEAD_PII_ANY = ("),

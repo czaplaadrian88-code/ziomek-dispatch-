@@ -71,21 +71,26 @@ go nie otworzył, bundle skasowano, ale bramka nie zadziałała, bo denylista zn
 tylko nazwy niosące **werdykt**, nie **dane osobowe**.
 
 Kanoniczna polityka: **`pii_denylist.py`** — jedyne miejsce, gdzie definiuje się
-wrażliwość. Driver woła `screen_tree()` **raz, przed jakimkolwiek zapisem**; nie ma
-i nie wolno dokładać drugiej warstwy filtrów w driverze ani w manifeście.
+wrażliwość oraz zbiór kopiowalnych rozszerzeń (`BUNDLE_COPYABLE_SUFFIXES`: `.md`,
+`.json`, `.yaml`, `.yml`, `.py`, `.schema.json`, `.txt`). Driver woła
+`screen_tree()` **raz, przed jakimkolwiek zapisem**, a potem używa predykatu
+`is_bundle_copyable()` z tego samego modułu; nie ma własnej listy rozszerzeń ani
+drugiej warstwy filtrów w manifeście.
 
 | warstwa | co łapie | czego NIE łapie |
 |---|---|---|
 | `path` — globy/katalogi/tokeny nazw | `*.env`, `*.pem`, `*.key`, `secrets/`, `credential*`, `*full_names*`, `courier_names`, `pesel`, `telefon`; katalogi danych (`identity/`, `daily_accounting/`, `grafik/`) **tylko dla plików danych** — kod o PII zostaje recenzowalny | pliku nazwanego neutralnie (`dane.json`) |
 | `scope` — ucieczka zakresu | dowiązanie (pliku lub katalogu) wskazujące POZA katalog kandydata — klasyczne przemycenie pliku, którego skan kandydata by nie objął. **Nieallowlistowalne**: zmaterializuj plik w katalogu kandydata albo zawęź zakres | — |
-| `content` — heurystyki treści | materiał w kształcie sekretu (klucz PEM, AWS/GitHub/Slack/Telegram/Anthropic, `haslo = "…"` o kształcie losowym), pola osobowe w danych (`pesel`, `nazwisko`, `telefon`, `iban`, `email`), ≥3 różne wartości w kształcie „imię+nazwisko" lub numeru telefonu | nazwisk w **prozie** (md/txt — próg fałszywych alarmów nie do utrzymania), plików binarnych i >2 MiB, gołego `adres`/`address` (świadomie: geokoder ma je wszędzie) |
+| `content` — heurystyki treści | materiał w kształcie sekretu w skanowalnym tekście; w plikach strukturalnych (`json/jsonl/csv/tsv/yaml`) także pola osobowe i klienta oraz ≥3 różne wartości w kształcie nazwiska/numeru telefonu | osobowych heurystyk w kopiowalnym kodzie `.py` i prozie `.md`/`.txt`; nazwisk użytych jako klucze struktury; gołego `adres`/`address` |
+| `unscannable` — pełność skanu | każdy **kopiowalny** plik, którego pełnej treści nie przeskanowano: `>2 MiB`, NUL, nie-UTF-8 albo błąd odczytu → odmowa | niekopiowalne binaria/archiwa nie trafiają do bundla; ich treść pozostaje niepotwierdzona |
 
-Zachowanie: trafienie = **ODMOWA budowy bundla (exit 3)**, nie cichy skip pliku —
+Zachowanie: każde trafienie (także `unscannable`) = **ODMOWA budowy bundla
+(exit 3)**, nie cichy skip pliku —
 i przy odmowie na dysku nie powstaje ani jeden bajt bundla. Komunikat odmowy
 **nigdy nie cytuje dopasowanej treści** (klasa + reguła + licznik), więc wolno go
 wkleić do raportu. Zdjęcie klasyfikacji: `--allow-sensitive <ścieżka_względna>`,
-osobno dla KAŻDEGO pliku (literówka w ścieżce = też odmowa, żeby allowlista nie
-udawała przejrzanego pliku).
+osobno dla KAŻDEGO pliku. Dopasowanie jest dokładne: literówka, katalog i wzorzec
+glob = odmowa, żeby allowlista nie udawała przejrzanego pliku.
 
 ```
 python3 .claude/skills/ziomek-blind-review/driver.py screen <katalog>   # sam skan, nic nie tworzy
@@ -133,9 +138,12 @@ python3 .claude/skills/ziomek-blind-review/pii_oracle.py   # sam negatywny oracl
 ```
 Sprawdza część mechaniczną oracle: blindowanie wycina werdykty, pin jest
 fail-closed, `check` odrzuca mętne werdykty, korpus spójny, a bramka PII odmawia
-na syntetycznych wabikach (`pii_oracle.py`: 6 klas wabików + kontrola
-fałszywie-pozytywna + **mutation ratchet** — 5 mutantów, każde osłabienie polityki
-musi zapalić oracle na czerwono). **Wpięty w nocną regresję** (`tests/test_skills_selftest.py`) — regresja zapali ALERT strażnika,
+na syntetycznych wabikach (`pii_oracle.py`: 15 przypadków odmowy + 3 jawne
+kontrole granic + **mutation ratchet 10/10**). Ratchet osobno czerwieni duplikat
+ownera rozszerzeń w driverze, usunięcie reguł path/content/scope, fail-closed,
+odmowy `unscannable`, dokładności allowlisty per plik, klasy `client_data` i
+parserów `csv/tsv/yaml`. **Wpięty w nocną
+regresję** (`tests/test_skills_selftest.py`) — regresja zapali ALERT strażnika,
 nie zostanie „zademonstrowana raz i zapomniana". Część modelowa oracle (czy
 recenzent łapie wady) → `fixtures/EVAL_RESULT.md`, nie ten skrypt.
 
