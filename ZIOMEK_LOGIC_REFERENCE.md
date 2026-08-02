@@ -1191,6 +1191,37 @@ worka zawsze zachowują identity oraz wyjątek „baseline już był ponad limit
 ale kandydat nie pogarsza”; w przeciwnym razie fizycznie spóźniony worek
 zamroziłby wszystkie późniejsze zapisy ETA albo pozwoliłby P-1 pogorszyć okno.
 
+### Case 491870 (2026-08-02) — jeden punkt odbioru, pickup-forward i ocena finalnego planu
+
+- **Jeden owner punktu odbioru:** `route_order.PICKUP_POINT_RADIUS_M=180.0` oraz
+  `same_pickup_point`/`group_same_pickup_points` są jedynym kontraktem fizycznej
+  współlokacji. Geometria wygrywa, a fallback nazwy działa tylko przy niepełnych
+  koordynatach; grupowanie jest complete-link. Usunięte konkurencyjne definicje:
+  `_pickup_rest_key`, `RELAX_COLOC_PICKUP_M` i
+  `RETURN_TO_RESTAURANT_SAME_KM`. `plan_recheck`, `feasibility_v2`,
+  `same_restaurant_grouper`, `shadow_dispatcher`, `route_podjazdy` i
+  `b_route_shadow` delegują do tego ownera. `PICKUP_MERGE_MIN=10` pozostaje
+  osobnym kontraktem czasu podjazdu, nie drugim promieniem miejsca.
+- **`ENABLE_NONCARRIED_COMMITTED_PICKUP_REORDER`** — decyzyjne rozszerzenie
+  istniejącej warstwy P-1, default **OFF** i bez klucza w `flags.json`. ON pozwala
+  przesunąć pickup do przodu także przy `n_carried=0`; OFF zachowuje sloty F6.
+  Nie powstaje nowa precedencja P-1..P-7. Każdy kandydat przechodzi pickup przed
+  własnym dropoffem, kanoniczny NO-RETURN, pełne WB2/G4 oraz R6 **per order**:
+  order poniżej capa nie może go przekroczyć, a order już ponad capem nie może
+  pogorszyć się nawet przy tej samej liczbie breachy. Ślepy
+  `_coalesce_same_pickup_nodes` pozostaje wyłącznie czystym generatorem fixture;
+  nie jest writerem planu.
+- **Finalna ocena czasu:** `core.pickup_time_rules` jest jednym czystym
+  evaluatorem R27 i opóźnienia pickup-vs-committed. Wynik
+  `dispatch.pickup_time_rules.v1` jest liczony po wszystkich transformacjach i
+  zapisany w tym samym CAS na ścieżkach `regen`, `retime`, recanon po
+  `operator_override`, bezpośredni zapis propozycji oraz `refloor`. Naive czas
+  panelu oznacza Warsaw. Odbiór opóźniony **ściśle >40 min** emituje zapisane z
+  planem zdarzenie `Alarm/PICKUP_COMMITTED_LATE`, konsumowane przez istniejące
+  `/api/coordinator/alerts` i `AlertsPanel` OPS-13. Wymaga potwierdzenia
+  koordynatora i nie wywołuje `notify_router`/Telegrama; nie jest certyfikatem
+  R6, nie podnosi HARD35 do 40 i nie uruchamia żadnej akcji automatycznej.
+
 ### Sprint WB1 + C7 (2026-07-27) — dwie flagi LOG-ONLY (obserwowalność incydentu CZASY 492)
 
 Obie są **NIEDECYZYJNE**: nie zmieniają ani jednej decyzji silnika (kolejność stopów, score,

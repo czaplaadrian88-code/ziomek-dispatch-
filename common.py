@@ -533,6 +533,9 @@ ETAP4_DECISION_FLAGS = (
     "ENABLE_LEX_WINDOW_GUARDS_V2",
     "ENABLE_RELAX_COLOC_PICKUP",
     "ENABLE_NONCARRIED_DROPOFF_REORDER",
+    # Case 491870 (2026-08-02): rozszerzenie P-1 o pickupy w worku bez
+    # niesionych. Default OFF; flip dopiero po replayu/shadow i owner ACK.
+    "ENABLE_NONCARRIED_COMMITTED_PICKUP_REORDER",
     # === D.3 fala B (2026-07-02): para atomowa V326 (common.py, oba env-default
     # "1" jednolicie ON, żaden drop-in nie nadpisuje → migracja neutralna).
     # Konsument route_simulator_v2:299/438 czyta atrybut modułu (NIE zmieniany).
@@ -865,6 +868,7 @@ ENABLE_LEX_COMMITTED_WINDOW = True
 ENABLE_LEX_WINDOW_GUARDS_V2 = False
 ENABLE_RELAX_COLOC_PICKUP = True
 ENABLE_NONCARRIED_DROPOFF_REORDER = True
+ENABLE_NONCARRIED_COMMITTED_PICKUP_REORDER = False
 # Sprint 1 NO-GPS-EQUAL (Adrian 2026-06-29 „bez kary przed zmianą"): gdy ON → zeruje
 # karę score pre_shift (`bonus_v325_pre_shift_soft`, oba źródła: stała V325 + gradient
 # _pre_shift_gradient_penalty). „Kurier dotrze później" obsługuje LEGALNA ścieżka:
@@ -1610,6 +1614,10 @@ def get_traffic_multiplier_v2(dt_utc: datetime, distance_km: float = None) -> fl
 # 35 min = p95 → hard cap obcina ogon 5.7% bez wpływu na mediana/p75.
 # 30 min = p90 → soft zone 30-35 łapie dodatkowe 5.9% orderów penalty.
 BAG_TIME_HARD_MAX_MIN = 35
+# Owner D2 2026-07-29 + case 491870: prognoza odbioru późniejsza od committed
+# o ŚCIŚLE ponad 40 min jest planowym zdarzeniem klasy Alarm w konsoli
+# koordynatora. To widoczność/ACK, nigdy certyfikat R6 ani luzowanie HARD35.
+PICKUP_PLAN_ALARM_LATE_MIN = 40.0
 BAG_TIME_SOFT_MIN = 30
 BAG_TIME_PRE_WARNING_MIN = 30    # sla_tracker alert Telegramu (krok #6)
 BAG_TIME_SOFT_PENALTY_PER_MIN = 8
@@ -4618,8 +4626,6 @@ ENABLE_R_RETURN_TO_RESTAURANT_VETO = _os.environ.get(
     "ENABLE_R_RETURN_TO_RESTAURANT_VETO", "0") == "1"
 RETURN_TO_RESTAURANT_PENALTY = float(
     _os.environ.get("RETURN_TO_RESTAURANT_PENALTY", "100.0"))
-RETURN_TO_RESTAURANT_SAME_KM = float(
-    _os.environ.get("RETURN_TO_RESTAURANT_SAME_KM", "0.08"))
 RETURN_TO_RESTAURANT_GROUP_TOL_MIN = float(
     _os.environ.get("RETURN_TO_RESTAURANT_GROUP_TOL_MIN", "5.0"))
 

@@ -606,6 +606,9 @@ def test_recanon_after_raw_save_reapplies_pin(env, monkeypatch):
     assert _order()[0] == ("pickup", "A")
     assert P.recanon_courier(CID, now=NOW, reason="assign") is True
     assert _order()[0] == ("pickup", "B")  # chokepoint re-nakłada pin
+    evaluation = PM.load_plan(CID, invalidate_on_mismatch=False)["pickup_time_rules"]
+    assert evaluation["source"] == "retime:operator_override"
+    assert evaluation["evaluated_count"] == 2
 
 
 # ── v3 (re-review Sola 20.07): L3-override, stale-ETA, grafik, walidacje ─────

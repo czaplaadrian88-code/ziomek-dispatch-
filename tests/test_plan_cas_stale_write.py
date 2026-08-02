@@ -171,8 +171,10 @@ def test_recheck_refreshes_after_refloor_and_stale_invalidation_skips(
 
     checked_versions = []
 
-    def _refloor(cid, oid, floor):
+    def _refloor(cid, oid, floor, *, orders_state=None, now=None):
         assert PM.load_plans()[cid]["plan_version"] == 1
+        assert orders_state is orders
+        assert now == datetime(2026, 7, 9, 12, 0, tzinfo=timezone.utc)
         PM.save_plan(cid, _body("refloored"), expected_version=1)
         return 5.0
 

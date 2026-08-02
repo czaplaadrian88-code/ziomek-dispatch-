@@ -35,10 +35,17 @@ carried-first.
 """
 from __future__ import annotations
 from datetime import datetime, timedelta, timezone
+import math
 from zoneinfo import ZoneInfo
 
 WARSAW = ZoneInfo("Europe/Warsaw")
 PICKUP_MERGE_MIN = 10          # jedyny próg sklejania odbiorów w jeden podjazd
+# WB3 / case 491870 (2026-08-02): JEDYNY kontrakt fizycznego punktu odbioru.
+# Wcześniej plan_recheck miał jednocześnie klucz ~1 m (`_pickup_rest_key`) i
+# osobny promień 180 m (`RELAX_COLOC_PICKUP_M`). To rozszczepiało tę samą prawdę:
+# detektor powrotu nie widział punktu, który relax uznawał za współlokalny.
+PICKUP_POINT_RADIUS_M = 180.0
+PICKUP_POINT_CONTRACT_VERSION = "pickup-point-v1"
 _SENTINEL = datetime.max.replace(tzinfo=WARSAW)
 _BIG = 1 << 30
 
@@ -63,6 +70,86 @@ def _attr(o, name):
 
 def _pickup_dt(o):
     return _iso(_attr(o, "czas_kuriera_warsaw"))
+
+
+def _pickup_coords(order):
+    """Znormalizowane ``(lat, lon)`` albo ``None``; bez sentineli i I/O."""
+    coords = _attr(order, "pickup_coords")
+    if not isinstance(coords, (list, tuple)) or len(coords) < 2:
+        return None
+    try:
+        lat, lon = float(coords[0]), float(coords[1])
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(lat) or not math.isfinite(lon):
+        return None
+    if (lat, lon) == (0.0, 0.0) or not (-90.0 <= lat <= 90.0) or not (-180.0 <= lon <= 180.0):
+        return None
+    return lat, lon
+
+
+def _pickup_name(order) -> str:
+    """Fallback tożsamości tylko gdy co najmniej jeden rekord nie ma geometrii."""
+    raw = (
+        _attr(order, "restaurant")
+        or _attr(order, "restaurant_name")
+        or _attr(order, "restaurant_address")
+        or _attr(order, "pickup_address")
+        or ""
+    )
+    return " ".join(str(raw).strip().casefold().split())
+
+
+def pickup_point_distance_m(first, second):
+    """Odległość pickup↔pickup w metrach albo ``None`` przy braku geometrii."""
+    a, b = _pickup_coords(first), _pickup_coords(second)
+    if a is None or b is None:
+        return None
+    lat1, lon1, lat2, lon2 = map(math.radians, [a[0], a[1], b[0], b[1]])
+    dlat, dlon = lat2 - lat1, lon2 - lon1
+    hav = math.sin(dlat / 2.0) ** 2 + math.cos(lat1) * math.cos(lat2) * math.sin(dlon / 2.0) ** 2
+    return 2.0 * 6_371_000.0 * math.asin(math.sqrt(hav))
+
+
+def same_pickup_point(first, second) -> bool:
+    """Kanoniczna odpowiedź „czy to ta sama fizyczna wizyta po odbiór?”.
+
+    Gdy oba rekordy mają poprawne koordynaty, geometria zawsze wygrywa nad nazwą.
+    Przy niepełnej geometrii fail-soft używa znormalizowanej nazwy restauracji.
+    Promień jest jednym dialem właściciela kontraktu, nigdy parametrem callera.
+    """
+    distance = pickup_point_distance_m(first, second)
+    if distance is not None:
+        return distance <= PICKUP_POINT_RADIUS_M
+    first_name, second_name = _pickup_name(first), _pickup_name(second)
+    return bool(first_name and second_name and first_name == second_name)
+
+
+def position_at_pickup_point(position, order) -> bool:
+    """Czy pozycja kuriera leży w kanonicznym punkcie odbioru ``order``."""
+    coords = _pickup_coords(order)
+    if coords is None or not isinstance(position, (list, tuple)) or len(position) < 2:
+        return False
+    probe = {"pickup_coords": position}
+    return same_pickup_point(probe, {"pickup_coords": coords})
+
+
+def group_same_pickup_points(orders):
+    """Stabilne grupy complete-link według kanonicznego kontraktu.
+
+    Relacja promienia nie jest przechodnia (A~B i B~C nie implikuje A~C), więc
+    kandydat trafia do grupy tylko gdy pasuje do KAŻDEGO jej członka. Eliminuje
+    łańcuchowe scalenie dwóch faktycznie odległych lokali.
+    """
+    groups = []
+    for order in orders:
+        target = next((group for group in groups
+                       if all(same_pickup_point(order, member) for member in group)), None)
+        if target is None:
+            groups.append([order])
+        else:
+            target.append(order)
+    return groups
 
 
 def _plan_pickup_clusters(plan_doc) -> dict:
@@ -149,10 +236,13 @@ def pickup_runs(to_pick, plan_doc=None, plan_aware=False):
     runs = _split_by_pickup_spread(ordered)
     out = []
     for run in runs:
-        first_seen = {}
-        for i, o in enumerate(run):
-            first_seen.setdefault(_attr(o, "restaurant") or "", i)
-        out.append(sorted(run, key=lambda o: (first_seen[_attr(o, "restaurant") or ""], _pickup_dt(o) or _SENTINEL)))
+        groups = group_same_pickup_points(run)
+        out.append([
+            order
+            for group in groups
+            for order in sorted(group, key=lambda o: (_pickup_dt(o) or _SENTINEL,
+                                                       str(_attr(o, "order_id"))))
+        ])
     return out
 
 
@@ -201,7 +291,7 @@ def _canon_order_from_plan(bag, plan_doc):
             if _attr(o, "status") == "picked_up":      # carried = brak odbioru
                 continue
             if out and out[-1][0] == "pickup" and \
-                    _attr(by_oid[out[-1][1][-1]], "restaurant") == _attr(o, "restaurant") and \
+                    same_pickup_point(by_oid[out[-1][1][-1]], o) and \
                     _pickup_spread_ok([by_oid[item] for item in out[-1][1]] + [o]):
                 out[-1][1].append(oid)                  # scal odbiory tej samej restauracji
             else:
@@ -255,10 +345,10 @@ def order_podjazdy(bag, plan_doc=None, plan_aware=False,
     for run in pickup_runs(to_pick, plan_doc, plan_aware):
         i = 0
         while i < len(run):
-            rest = _attr(run[i], "restaurant")
+            anchor = run[i]
             grp = [str(_attr(run[i], "order_id"))]
             i += 1
-            while i < len(run) and _attr(run[i], "restaurant") == rest:
+            while i < len(run) and same_pickup_point(run[i], anchor):
                 grp.append(str(_attr(run[i], "order_id")))
                 i += 1
             order.append(("pickup", grp))

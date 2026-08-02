@@ -171,7 +171,8 @@ def test_kanon_zawiera_pola_wymagane_przez_kalibracje_wb2(v2_on):
     assert r["bag"]["active_order_signature"]
     assert r["candidates"]["pool_size"] >= r["candidates"]["feasible"] >= 1
     assert set(r["candidates"]["rejected"]) == {
-        "precedence", "no_return", "metrics", "carry_cap", "breaches", "delay_tol"}
+        "precedence", "no_return", "metrics", "carry_cap", "breaches",
+        "delay_tol", "r6_per_order"}
     # progi EFEKTYWNE, nie defaulty z dokumentacji
     assert r["thresholds"]["window_tol_min"] == 5.0
     # pola guardów G1-G5 istnieją i czekają na WB2
@@ -195,7 +196,7 @@ def test_kanon_guard_on_zawiera_jawne_liczniki_wb2(v2_on, monkeypatch):
 
     legacy = {
         "precedence", "no_return", "metrics", "carry_cap", "breaches",
-        "delay_tol",
+        "delay_tol", "r6_per_order",
     }
     guard_keys = set(LWG.empty_rejection_counters())
     expected = legacy | guard_keys

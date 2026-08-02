@@ -17,11 +17,17 @@ from __future__ import annotations
 from dispatch_v2.route_order import (  # noqa: F401
     WARSAW,
     PICKUP_MERGE_MIN,
+    PICKUP_POINT_RADIUS_M,
+    PICKUP_POINT_CONTRACT_VERSION,
     _SENTINEL,
     _BIG,
     _iso,
     _attr,
     _pickup_dt,
+    pickup_point_distance_m,
+    same_pickup_point,
+    position_at_pickup_point,
+    group_same_pickup_points,
     _plan_pickup_clusters,
     stop_id_for,
     pickup_runs,
@@ -35,7 +41,9 @@ from dispatch_v2.route_order import (  # noqa: F401
 )
 
 __all__ = [
-    "WARSAW", "PICKUP_MERGE_MIN",
+    "WARSAW", "PICKUP_MERGE_MIN", "PICKUP_POINT_RADIUS_M",
+    "PICKUP_POINT_CONTRACT_VERSION", "pickup_point_distance_m",
+    "same_pickup_point", "position_at_pickup_point", "group_same_pickup_points",
     "_plan_pickup_clusters", "stop_id_for", "pickup_runs", "plan_drop_rank",
     "_canon_order_from_plan", "order_podjazdy", "order_route",
     "build_route_stops", "repair_dropoffs_after_pickups", "build_stop_sequence",

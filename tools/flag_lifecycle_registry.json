@@ -2,16 +2,16 @@
  "_meta": {
   "counts": {
    "apka": 29,
-   "engine": 439,
+   "engine": 440,
    "engine_1b_units": 13,
-   "etap4": 154,
+   "etap4": 155,
    "flags_json_keys": 268,
    "fp_extra": 37,
    "known_drift": 0,
    "numeric": 36,
    "panel": 88,
    "test_isolated": 8,
-   "total": 556,
+   "total": 557,
    "twins_concepts": 8
   },
   "generator": "tools/flag_lifecycle_seed.py",
@@ -9231,6 +9231,43 @@
    "review_date": "2026-10-10",
    "rollback": "flags.json OFF hot-reload (bez restartu)",
    "source_of_truth": "flags.json",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
+  "ENABLE_NONCARRIED_COMMITTED_PICKUP_REORDER": {
+   "carriers": [
+    "common.py:ETAP4_DECISION_FLAGS"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/plan_recheck.py",
+    "dispatch_v2/tools/b_route_shadow.py"
+   ],
+   "curated_at": "2026-08-02",
+   "current_snapshot": {
+    "default": false
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_NONCARRIED_COMMITTED_PICKUP_REORDER",
+   "notes": "Case 491870: rozszerza istniejący selector P-1 o pickup-forward dla n_carried=0. Pełne guardy: precedence, kanoniczny NO-RETURN, WB2 oraz R6 per order. Default OFF; brak wpisu w flags.json i brak zmian live.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-plan-recheck.service"
+   },
+   "removal_condition": "po replayu ON/OFF i decyzji ownera: promocja do live albo retire",
+   "review_date": "2026-08-16",
+   "rollback": "pozostawić brak klucza w flags.json / wartość false; po przyszłym flipie powrót false ładuje się przy następnym ticku przez _D3_FALA_A_FLAGS",
+   "source_of_truth": "common.py-const",
    "twin_of": [],
    "worlds": [
     "engine"

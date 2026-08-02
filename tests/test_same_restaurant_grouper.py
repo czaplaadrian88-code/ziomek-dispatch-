@@ -163,9 +163,11 @@ def test_three_orders_partial_grouping():
 
 def test_different_restaurants_not_grouped():
     """Even if czas + drops match, różne restauracje → osobne."""
-    o1 = _MockOrder("100", "Sushi 80", delivery_address="centrum 1",
+    o1 = _MockOrder("100", "Sushi 80", pickup_coords=(53.13, 23.16),
+                    delivery_address="centrum 1",
                     pickup_ready_at=_utc("2026-04-25T11:00:00+00:00"))
-    o2 = _MockOrder("101", "Mama Thai", delivery_address="centrum 5",
+    o2 = _MockOrder("101", "Mama Thai", pickup_coords=(53.14, 23.17),
+                    delivery_address="centrum 5",
                     pickup_ready_at=_utc("2026-04-25T11:00:00+00:00"))
     result = group_orders_by_restaurant([o1, o2], _resolve_zone, MOCK_ADJACENCY)
     assert len(result) == 2

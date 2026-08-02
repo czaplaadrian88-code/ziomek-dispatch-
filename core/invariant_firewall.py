@@ -19,6 +19,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional, Tuple
 from zoneinfo import ZoneInfo
 
 from dispatch_v2 import sla_anchor as _sla_anchor
+from dispatch_v2.core import pickup_time_rules as _pickup_time_rules
 
 
 WARSAW = ZoneInfo("Europe/Warsaw")
@@ -806,9 +807,15 @@ def _evaluate_final_v1(result: Any, order_event: Mapping[str, Any],
                     unknown += 1
                     missing.append(f"R27_TIMESTAMP_MISSING:{oid}:{variant}")
                     continue
-                delta = (pickup_dt - commit_dt).total_seconds() / 60.0
-                value = abs(delta)
-                direction = "pickup_early" if delta < 0 else "pickup_late"
+                timing = _pickup_time_rules.committed_pickup_delta(
+                    commit_dt, pickup_dt)
+                if timing is None:
+                    unknown += 1
+                    missing.append(f"R27_TIMESTAMP_MISSING:{oid}:{variant}")
+                    continue
+                delta = float(timing["delta_min"])
+                value = float(timing["absolute_delta_min"])
+                direction = str(timing["direction"])
                 mode = _order_mode(
                     base_mode, ctx, *variant_tags, direction, package=is_package)
                 evaluated += 1

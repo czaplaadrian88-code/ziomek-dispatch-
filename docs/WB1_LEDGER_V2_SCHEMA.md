@@ -164,7 +164,7 @@ kolejna próba). `attempt_id` jest kluczem obcym dla `write_receipt` i `served_r
 | | `sequence_lock` | bool | WB1 | stan `ENABLE_PLAN_SEQUENCE_LOCK` |
 | `candidates` | `pool_size` | int | WB1 | liczba permutacji rozważonych |
 | | `feasible` | int | WB1 | liczba przeszłych przez filtry |
-| | `rejected` | obj | WB1 | licznik odrzuceń wg przyczyny: `precedence`, `no_return`, `metrics`, `carry_cap`, `breaches`, `delay_tol` |
+| | `rejected` | obj | WB1 | licznik odrzuceń wg przyczyny: `precedence`, `no_return`, `metrics`, `carry_cap`, `breaches`, `delay_tol`, `r6_per_order` |
 | | `summary` | [obj]\|null | WB1 | do `CANDIDATE_SUMMARY_MAX` najlepszych: `{perm, window_viol, drive_min, max_carry}` |
 | `baseline` / `chosen` | `seq` | [[oid,`P`\|`D`]] | WB1 | sekwencja |
 | | `window_viol` | int | WB1 | naruszenia okna odbioru |

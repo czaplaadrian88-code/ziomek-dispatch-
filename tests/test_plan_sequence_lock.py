@@ -81,6 +81,8 @@ def test_retime_preserves_order_and_sets_times(monkeypatch):
     assert saved["retimed_at"] is not None
     assert saved["bag_signature"] == "sig"  # zachowana
     assert saved["_expected_version"] == 4
+    assert saved["pickup_time_rules"]["source"] == "retime"
+    assert saved["pickup_time_rules"]["evaluated_count"] == 1
 
 
 def test_retime_clamps_committed_pickup(monkeypatch):

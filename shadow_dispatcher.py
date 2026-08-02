@@ -1377,10 +1377,14 @@ def _probe_same_restaurant_race(oid, result: "PipelineResult", fleet: Dict,
     try:
         if not C.flag("ENABLE_SAME_RESTAURANT_RACE_PROBE", True):
             return
-        new_rest = getattr(result, "restaurant", None)
-        if not new_rest:
-            return
-        rkey = str(new_rest).strip().lower()
+        from dispatch_v2 import route_order as _route_order
+        new_order = state_all.get(str(oid)) if isinstance(state_all, dict) else None
+        if not isinstance(new_order, dict):
+            # PipelineResult nie przenosi geometrii. Gdy NEW_ORDER nie jest jeszcze
+            # w state, nadal delegujemy fallback nazwy do tego samego kontraktu.
+            new_order = {"restaurant": getattr(result, "restaurant", None)}
+        new_rest = (new_order.get("restaurant") or new_order.get("restaurant_name")
+                    or getattr(result, "restaurant", None))
         best = getattr(result, "best", None)
         best_cid = str(getattr(best, "courier_id", "") or "") if best is not None else ""
         now = datetime.now(timezone.utc)
@@ -1389,7 +1393,7 @@ def _probe_same_restaurant_race(oid, result: "PipelineResult", fleet: Dict,
         for soid, o in state_all.items():
             if str(soid) == str(oid) or not isinstance(o, dict):
                 continue
-            if str(o.get("restaurant") or "").strip().lower() != rkey:
+            if not _route_order.same_pickup_point(new_order, o):
                 continue
             fs_age = _probe_age_s(o.get("first_seen"), now)
             as_age = _probe_age_s(o.get("assigned_at"), now)

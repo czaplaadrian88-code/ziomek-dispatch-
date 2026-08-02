@@ -1,5 +1,15 @@
 # ZIOMEK AI DISPATCHER - BACKLOG ROZWOJU
 
+> **KANDYDAT 2026-08-02 — ROOT-FIX CASE 491870:** source-only w świeżych
+> worktree dispatchu i panelu. Jeden kontrakt punktu odbioru w `route_order`,
+> pickup-forward przy `n_carried=0` za nową flagą default OFF z per-order R6,
+> wspólna ewaluacja R27 po assign/regen/retime/refloor/override oraz planowy
+> `Alarm` >40 min w istniejącej konsoli koordynatora. Negatywny oracle był RED
+> przed fixem; ON≠OFF, parity i 15 sond mutacyjnych są zielone. Pełna hermetyczna
+> regresja ma delta 0: baseline i final po `2F/6455P/74S/8X`, oba F są
+> niezależnym dryftem dwóch flag live. Zero merge/push/live/flipa/restartu/
+> migracji/ledgera. Dowód: `/root/artifacts/jakub-491870-20260802/REPORT_FIX_491870.md`.
+
 > **FINAL LIVE 2026-08-01 15:57 UTC — AT-GATE/LEDGER V4 WDROŻONY, FABLE #229:**
 > jawny owner ACK „wprowadź live, audyt powdrożeniowy Fable” wykonany.
 > Provider `d0c0640b5` jest na kanonicznym masterze; ledger produkcyjny

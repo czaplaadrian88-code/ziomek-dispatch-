@@ -111,7 +111,7 @@ def test_no_orders_lost_by_coalesce():
     assert sorted(_seq_ids(after)) == sorted(_seq_ids(before))
 
 
-def test_canon_invariants_flag_off_keeps_seq_flag_on_coalesces(monkeypatch):
+def test_canon_invariants_never_blindly_applies_coalesce_without_hard_oracle(monkeypatch):
     stops = _backtrack_seq()
 
     # Flaga OFF: detekcja loguje, ale kolejność NIE zmieniona (zero ryzyka live).
@@ -120,8 +120,9 @@ def test_canon_invariants_flag_off_keeps_seq_flag_on_coalesces(monkeypatch):
     off = P._apply_canon_order_invariants(list(stops), ORDERS_STATE)
     assert P._detect_departed_pickup_revisit(off, ORDERS_STATE), "OFF zostawia powrót"
 
-    # Flaga ON: powrót wyeliminowany.
+    # Flaga ON bez start_pos/now NIE może ślepo zastosować kandydata. Case
+    # 491870 dowiódł, że taki ruch potrafi zamienić NO-RETURN na naruszenie R6.
     monkeypatch.setattr(P, "ENABLE_NO_RETURN_TO_DEPARTED_PICKUP", True)
     on = P._apply_canon_order_invariants(list(stops), ORDERS_STATE)
-    assert P._detect_departed_pickup_revisit(on, ORDERS_STATE) == []
-    assert abs(_pickup_idx(on, "480295") - _pickup_idx(on, "480434")) == 1
+    assert _seq_ids(on) == _seq_ids(off)
+    assert P._detect_departed_pickup_revisit(on, ORDERS_STATE)

@@ -174,13 +174,12 @@ def test_no_carried_returns_input(monkeypatch):
 
 def test_detect_seeds_carried_restaurant():
     """Gdy kurier wiezie jedzenie z restauracji R (carried), KAŻDY odbiór z R w trasie
-    = powrót — wykrywany TYLKO po podaniu carried_rest_keys (jedzenie w aucie)."""
+    = powrót — wykrywany TYLKO po podaniu carried_order_ids (jedzenie w aucie)."""
     os_ = {"Y": {"pickup_coords": [53.1327, 23.1577], "restaurant_name": "R"},
            "Dx": {"delivery_coords": [53.20, 23.20]}}
-    R = P._pickup_rest_key({"type": "pickup", "order_id": "Y"}, os_)
     seq = [{"order_id": "Dx", "type": "dropoff"}, {"order_id": "Y", "type": "pickup"}]
     assert P._detect_departed_pickup_revisit(seq, os_) == []          # bez seedu = brak powrotu
-    viol = P._detect_departed_pickup_revisit(seq, os_, {R})           # carried R w aucie
+    viol = P._detect_departed_pickup_revisit(seq, os_, {"Y"})         # carried R w aucie
     assert len(viol) == 1 and viol[0][2][1] == "Y" and viol[0][0] < 0
 
 

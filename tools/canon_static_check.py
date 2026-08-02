@@ -61,6 +61,10 @@ CANON_DIALS = [
      "dial O2 = 35 (parytet instrument↔silnik, test_overage_cap_equals_engine_dial)"),
     ("MAX_BAG_SANITY_CAP", "common.py", "env", "8",
      "sanity cap worka = 8"),
+    ("PICKUP_POINT_RADIUS_M", "route_order.py", "literal", 180.0,
+     "fizyczny punkt odbioru ma jeden kontrakt w route_order"),
+    ("PICKUP_PLAN_ALARM_LATE_MIN", "common.py", "literal", 40.0,
+     "planowy Alarm odbioru = ściśle >40 min vs committed"),
     ("HARD_TIER_BAG_CAP", "common.py", "dict",
      {"gold": 6, "std+": 6, "std": 5, "slow": 4, "new": 4},
      "capy worka per KLASA kuriera (tier=klasa, nie eskalacja)"),
@@ -72,6 +76,19 @@ SINGLE_SOURCE_RATCHETS = [
      "R6=35 ma JEDNO źródło (common.py); druga definicja = mode-consistency VETO"),
     (re.compile(r"^\s*def\s+_apply_canon_order_invariants\b", re.M), {"plan_recheck.py"},
      "kanon kolejności trasy: jedna definicja w silniku (plan_recheck)"),
+    (re.compile(r"^\s*PICKUP_POINT_RADIUS_M\s*=", re.M), {"route_order.py"},
+     "punkt odbioru ma JEDEN dial (route_order.PICKUP_POINT_RADIUS_M)"),
+    (re.compile(r"^\s*PICKUP_PLAN_ALARM_LATE_MIN\s*=", re.M), {"common.py"},
+     "planowy próg Alarmu odbioru ma JEDEN dial w common.py"),
+]
+
+FORBIDDEN_PICKUP_POINT_DEFINITIONS = [
+    (re.compile(r"^\s*def\s+_pickup_rest_key\b", re.M),
+     "legacy `_pickup_rest_key` (~1 m) nie może wrócić obok kanonu 180 m"),
+    (re.compile(r"^\s*RELAX_COLOC_PICKUP_M\s*=", re.M),
+     "legacy RELAX_COLOC_PICKUP_M nie może być drugim dialem punktu"),
+    (re.compile(r"^\s*RETURN_TO_RESTAURANT_SAME_KM\s*=", re.M),
+     "legacy RETURN_TO_RESTAURANT_SAME_KM nie może być trzecim dialem punktu"),
 ]
 
 
@@ -161,6 +178,39 @@ def check_ratchets(sources: dict[str, str]) -> list[str]:
             viol.append(f"RATCHET: {desc} — nielegalne definicje w: {', '.join(extra)}")
         if missing:
             viol.append(f"RATCHET: {desc} — brak definicji w: {', '.join(missing)}")
+    for rx, desc in FORBIDDEN_PICKUP_POINT_DEFINITIONS:
+        hits = [rel for rel, src in sources.items() if rx.search(src)]
+        if hits:
+            viol.append(f"RATCHET: {desc} — znaleziono w: {', '.join(hits)}")
+    plan_src = sources.get("plan_recheck.py", "")
+    try:
+        plan_tree = ast.parse(plan_src)
+    except SyntaxError:
+        plan_tree = None
+    if plan_tree is not None:
+        blind_calls = [
+            node for node in ast.walk(plan_tree)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "_coalesce_same_pickup_nodes"
+        ]
+        if blind_calls:
+            viol.append(
+                "RATCHET: `_coalesce_same_pickup_nodes` jest wyłącznie czystym "
+                "fixture/kandydatem; bezpośredni writer omija lex HARD selector"
+            )
+        if "def _lex_committed_window_reorder" in plan_src:
+            r6_calls = [
+                node for node in ast.walk(plan_tree)
+                if isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "_r6_candidate_not_worse"
+            ]
+            if len(r6_calls) != 1:
+                viol.append(
+                    "RATCHET: lex pickup selector musi dokładnie raz wywołać "
+                    "per-order `_r6_candidate_not_worse`"
+                )
     return viol
 
 
@@ -197,6 +247,10 @@ def _mutations(sources: dict[str, str]) -> list[tuple[str, dict[str, str]]]:
         '"O2_OVERAGE_CAP_MIN", "40"', "o2_dial_35_to_40")
     sub("common.py", '"MAX_BAG_SANITY_CAP", "8"',
         '"MAX_BAG_SANITY_CAP", "12"', "sanity_cap_8_to_12")
+    sub("route_order.py", "PICKUP_POINT_RADIUS_M = 180.0",
+        "PICKUP_POINT_RADIUS_M = 1.0", "pickup_point_radius_180_to_1")
+    sub("common.py", "PICKUP_PLAN_ALARM_LATE_MIN = 40.0",
+        "PICKUP_PLAN_ALARM_LATE_MIN = 35.0", "pickup_plan_alarm_40_to_35")
     sub("common.py", '"gold": 6', '"gold": 9', "tier_cap_gold_6_to_9")
     # ratchet: druga definicja stałej R6 w innym pliku silnika
     m = dict(sources)
@@ -210,6 +264,20 @@ def _mutations(sources: dict[str, str]) -> list[tuple[str, dict[str, str]]]:
     if victim:
         m2[victim] = m2[victim] + "\ndef _apply_canon_order_invariants(x):\n    return x\n"
         muts.append(("fifth_route_canon_copy", m2))
+    m4 = dict(sources)
+    if victim:
+        m4[victim] = m4[victim] + "\ndef _pickup_rest_key(stop, orders):\n    return None\n"
+        muts.append(("legacy_pickup_rest_key_returns", m4))
+    sub("plan_recheck.py",
+        "if not _r6_candidate_not_worse(br6, _r6, _alarm_cap):",
+        "if not True:",
+        "pickup_reorder_r6_per_order_guard_removed")
+    sub("plan_recheck.py",
+        "def _r6_thermal_bag_min(dt, bp, ready_rel, ready_anchor_on):",
+        "def _probe_blind_writer(seq, orders_state):\n"
+        "    return _coalesce_same_pickup_nodes(seq, orders_state)\n\n\n"
+        "def _r6_thermal_bag_min(dt, bp, ready_rel, ready_anchor_on):",
+        "blind_pickup_coalesce_writer_returns")
     # kasacja definicji dialu (usunięcie linii = też naruszenie)
     m3 = dict(sources)
     m3["common.py"] = m3["common.py"].replace(

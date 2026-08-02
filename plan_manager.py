@@ -341,6 +341,8 @@ def save_plan(
             "invalidated_at": None,
             "invalidation_reason": None,
         }
+        if "pickup_time_rules" in plan_body:
+            saved["pickup_time_rules"] = plan_body.get("pickup_time_rules")
         plans[cid] = saved
         _write_raw(plans)
     # Commit-point telemetry stays outside the plan lock. The write is already
@@ -581,7 +583,9 @@ def _parse_iso_aware(iso: Optional[str]) -> Optional[datetime]:
 
 
 def refloor_pickup(courier_id: str, order_id: str, czas_kuriera_iso: str,
-                   min_delta_sec: float = 60.0) -> float:
+                   min_delta_sec: float = 60.0, *,
+                   orders_state: Optional[Dict[str, Any]] = None,
+                   now: Optional[datetime] = None) -> float:
     """Podnieś predicted_at pickupu do podłogi czas_kuriera i przesuń o tę samą
     dodatnią deltę WSZYSTKIE kolejne stopy (kaskada w dół trasy).
 
@@ -629,6 +633,19 @@ def refloor_pickup(courier_id: str, order_id: str, czas_kuriera_iso: str,
             if sp is not None:
                 s["predicted_at"] = (sp + shift).isoformat()
         plan["stops"] = stops
+        if orders_state is not None:
+            from dispatch_v2.core import pickup_time_rules as _pickup_time_rules
+            plan["pickup_time_rules"] = _pickup_time_rules.evaluate_plan(
+                cid,
+                stops,
+                orders_state,
+                now or datetime.now(timezone.utc),
+                source="refloor",
+            )
+        else:
+            # Nie zachowuj oceny policzonej dla innych czasów. Produkcyjny caller
+            # przekazuje orders_state; brak kontekstu = jawnie brak, nigdy stale Alarm.
+            plan.pop("pickup_time_rules", None)
         plan["plan_version"] = plan.get("plan_version", 0) + 1
         plan["last_modified_at"] = _now_iso()
         _write_raw(plans)

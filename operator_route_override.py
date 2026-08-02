@@ -59,6 +59,8 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
+from dispatch_v2.core import pickup_time_rules as _pickup_time_rules
+
 _log = logging.getLogger("dispatch.operator_route_override")
 
 # Ścieżki jak w plan_recheck (żywy stan POZA repo). Testy monkeypatchują.
@@ -472,11 +474,14 @@ def emit_applied(cid: str, ctx: Dict[str, Any], final_stops: List[dict],
             if s.get("type") != "pickup":
                 continue
             oid = str(s.get("order_id"))
-            ck = _parse_iso((orders_state.get(oid) or {}).get("czas_kuriera_warsaw"))
-            pred = _parse_iso(s.get("predicted_at"))
-            if ck is None or pred is None:
+            timing = _pickup_time_rules.evaluate_committed_pickup(
+                oid,
+                (orders_state.get(oid) or {}).get("czas_kuriera_warsaw"),
+                s.get("predicted_at"),
+            )
+            if timing is None:
                 continue
-            late_min = (pred - ck).total_seconds() / 60.0
+            late_min = float(timing["late_min"])
             if late_min > COMMITTED_LATE_LOG_TOL_MIN:
                 b = {"oid": oid, "late_min": round(late_min, 1),
                      "alert": bool(late_min > thr)}

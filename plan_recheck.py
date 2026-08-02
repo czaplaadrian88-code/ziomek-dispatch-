@@ -34,6 +34,7 @@ from dispatch_v2 import common as _CF
 # Sprint 30 (2026-07-07): JEDNO ŹRÓDŁO kolejności/naprawy trasy. route_order = PURE
 # (stdlib), bez cyklu (nie importuje plan_recheck). route_podjazdy re-eksportuje z niego.
 from dispatch_v2 import route_order as _route_order
+from dispatch_v2.core import pickup_time_rules as _pickup_time_rules
 
 _log = logging.getLogger("plan_recheck")
 if not _log.handlers:
@@ -630,7 +631,6 @@ def _lex_write_receipt(ledger_ctx, cid, writer, outcome, *, expected=None,
 # carried wciąż chroniona istniejącym SOFT_MAX. Replay 06-24: 15 worków, −drive, 0 regresji
 # >SOFT_MAX. Default OFF. Wymaga ENABLE_CARRIED_FIRST_RELAX (działa wewnątrz relaxu).
 ENABLE_RELAX_COLOC_PICKUP = _CF.decision_flag("ENABLE_RELAX_COLOC_PICKUP")  # D.3 fala A: KANON=flags.json
-RELAX_COLOC_PICKUP_M = float(os.environ.get("RELAX_COLOC_PICKUP_M", "180"))
 
 # FIX M — REORDER DROPOFFÓW W WORKU BEZ NIESIONYCH (Adrian 2026-06-24, case Mateusz
 # Ostapczuk 413 Skłodowska/Lipowa): carried-first/committed/relax NIE ruszają worka bez
@@ -643,6 +643,12 @@ RELAX_COLOC_PICKUP_M = float(os.environ.get("RELAX_COLOC_PICKUP_M", "180"))
 # sama własność co relax, który już biega co tick). Replay 06-24: 18 worków, 0 pogorszeń.
 # Default OFF. Brak interakcji z relaxem (mutualnie wykluczające: relax tylko-carried).
 ENABLE_NONCARRIED_DROPOFF_REORDER = _CF.decision_flag("ENABLE_NONCARRIED_DROPOFF_REORDER")  # D.3 fala A: KANON=flags.json
+# Case 491870 / WB3: rozszerzenie ISTNIEJĄCEJ warstwy P-1. OFF zachowuje
+# dotychczasowy brak permutacji pickupów dla worka bez niesionych; ON pozwala
+# temu samemu selektorowi przesuwać pickup, ale wyłącznie pod pełnymi guardami
+# precedencji, NO-RETURN i per-order R6. Nie jest to nowa warstwa P-1..P-7.
+ENABLE_NONCARRIED_COMMITTED_PICKUP_REORDER = _CF.decision_flag(
+    "ENABLE_NONCARRIED_COMMITTED_PICKUP_REORDER")
 NONCARRIED_REORDER_MAX_STOPS = int(os.environ.get("NONCARRIED_REORDER_MAX_STOPS", "8"))
 NONCARRIED_REORDER_DRIVE_EPS_MIN = float(os.environ.get("NONCARRIED_REORDER_DRIVE_EPS_MIN", "0.3"))
 NONCARRIED_REORDER_DELAY_TOL_MIN = float(os.environ.get("NONCARRIED_REORDER_DELAY_TOL_MIN", "6"))
@@ -672,6 +678,7 @@ _D3_FALA_A_FLAGS = (
     "ENABLE_LEX_WINDOW_GUARDS_V2",  # WB2 2026-07-27: hot-flip guardów P-1
     "ENABLE_RELAX_COLOC_PICKUP",
     "ENABLE_NONCARRIED_DROPOFF_REORDER",
+    "ENABLE_NONCARRIED_COMMITTED_PICKUP_REORDER",
     "ENABLE_PLAN_RECHECK_COMMITTED_PROPAGATION",  # migracja B2 2026-07-18 (hot-reload w pw)
 )
 
@@ -1067,7 +1074,8 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
     # WB2/G4: koperta = plan sprzed CAŁEGO stosu reorderów (surowe czasy symulatora,
     # spójne ze swoją własną kolejnością). Służy dwóm rzeczom: jest bezpiecznym
     # powrotem, gdy re-czasowanie padnie, i punktem odniesienia finalnego walidatora.
-    _g4_on = bool(ENABLE_LEX_WINDOW_GUARDS_V2)
+    _g4_on = bool(ENABLE_LEX_WINDOW_GUARDS_V2 or
+                  ENABLE_NONCARRIED_COMMITTED_PICKUP_REORDER)
     _g4_envelope = [dict(s) for s in stops] if _g4_on else None
     if ENABLE_PLAN_CANON_ORDER_INVARIANTS:
         try:
@@ -1171,6 +1179,13 @@ def _gen_one_bag_plan(cid: str, oids: List[str], orders_state: Dict[str, Any],
         # = nieszkodliwa metadana; gdy ON = baza porównania).
         "bag_signature": _bag_signature(oids, orders_state),
     }
+    body["pickup_time_rules"] = _pickup_time_rules.evaluate_plan(
+        cid,
+        stops,
+        orders_state,
+        now,
+        source=("regen:operator_override" if _op_pin_ctx is not None else "regen"),
+    )
     # ── L3 (F2/K2): bramka ZAPISU regenu — compare-and-keep R6 („nie-cofa") ──
     # OFF = zapis regenu bajt-w-bajt (żadnej ścieżki poniżej). ON = świeży regen
     # łamiący R6 (carried>35), którego OBECNY plan tego samego worka NIE łamie →
@@ -1753,55 +1768,60 @@ def _repair_dropoffs_after_pickups(seq):
     return _route_order.repair_dropoffs_after_pickups(seq, kind_key="type")
 
 
-def _pickup_rest_key(stop, orders_state):
-    """Klucz restauracji odbioru = zaokrąglone pickup_coords (~1 m). Adres bywa
-    None/firmowy → coords są wiarygodne; fallback na znormalizowaną nazwę."""
-    if stop.get("type") != "pickup":
-        return None
-    o = orders_state.get(str(stop.get("order_id"))) or {}
-    pc = o.get("pickup_coords")
-    if pc and len(pc) >= 2:
-        try:
-            return ("xy", round(float(pc[0]), 5), round(float(pc[1]), 5))
-        except (TypeError, ValueError):
-            pass
-    return ("name", (o.get("restaurant_name") or o.get("restaurant") or "").strip().lower())
-
-
-def _detect_departed_pickup_revisit(seq, orders_state, carried_rest_keys=None):
+def _detect_departed_pickup_revisit(seq, orders_state, carried_order_ids=None):
     """Z-RULE detekcja: odbiór w restauracji R występujący PO ≥1 stopie pośrednim,
     gdy WCZEŚNIEJ w trasie był już odbiór w tej samej R → kurier opuścił R i ma do
     niej wrócić. Zwraca listę (first_idx, revisit_idx, [oid_first, oid_revisit]);
     pusta = OK. Dwa odbiory z R obok siebie (jedna wizyta) = brak naruszenia.
 
-    `carried_rest_keys`: restauracje, z których kurier JUŻ wiezie jedzenie (carried).
+    `carried_order_ids`: zlecenia, z których kurier JUŻ wiezie jedzenie (carried).
     Traktowane jak odwiedzone i opuszczone PRZED trasą (seed idx=-2) → KAŻDY ich
     odbiór w trasie = powrót (jedzenie w aucie, Adrian 2026-06-22). first_idx<0 =
-    pierwsza wizyta to carried (brak węzła odbioru w seq) → oid_first=None."""
+    pierwsza wizyta to carried (brak węzła odbioru w seq). Tożsamość punktu jest
+    delegowana wyłącznie do ``route_order.same_pickup_point``."""
     out = []
-    first_at = {}
-    for rk in (carried_rest_keys or ()):
-        if rk is not None:
-            first_at[rk] = -2          # odwiedzona+opuszczona przed trasą → każdy odbiór = powrót
+    visits = []
+    for oid in (carried_order_ids or ()):
+        rec = orders_state.get(str(oid))
+        if isinstance(rec, dict):
+            visits.append({"first_idx": -2, "last_idx": -2,
+                           "first_oid": str(oid), "members": [rec]})
     for i, s in enumerate(seq):
-        k = _pickup_rest_key(s, orders_state)
-        if k is None:
+        if s.get("type") != "pickup":
             continue
-        if k in first_at and (i - first_at[k]) >= 2:
-            fi = first_at[k]
-            out.append((fi, i,
-                        [(seq[fi].get("order_id") if fi >= 0 else None), s.get("order_id")]))
+        oid = str(s.get("order_id"))
+        rec = orders_state.get(oid)
+        if not isinstance(rec, dict):
+            continue
+        group = next((visit for visit in visits
+                      if all(_route_order.same_pickup_point(member, rec)
+                             for member in visit["members"])), None)
+        if group is not None and (i - group["last_idx"]) >= 2:
+            out.append((group["first_idx"], i, [group["first_oid"], oid]))
+            group["last_idx"] = i
+            group["members"].append(rec)
+        elif group is not None:
+            # Trzeci/czwarty kolejny pickup tego punktu nadal jest jedną wizytą;
+            # odległość liczymy od OSTATNIEGO węzła, nie pierwszego indeksu runu.
+            group["last_idx"] = i
+            group["members"].append(rec)
         else:
-            first_at.setdefault(k, i)
+            visits.append({"first_idx": i, "last_idx": i,
+                           "first_oid": oid, "members": [rec]})
     return out
 
 
 def _coalesce_same_pickup_nodes(seq, orders_state):
-    """Z-RULE fix: każdy odbiór w restauracji już opuszczonej przesuwany jest tuż
+    """Z-RULE kandydat: odbiór w punkcie już opuszczonym przesuwa tuż
     ZA pierwszy odbiór w tej R → oba w jednej wizycie. Dostawy wyprzedzone przez
     przesunięcie naprawia repair pass. Iteruje do zbieżności (twardy limit =
-    defense-in-depth). Przesunięcie odbioru W LEWO obok bliźniaka nie tworzy
-    nowych naruszeń tego samego typu → pętla domyka się."""
+    defense-in-depth).
+
+    UWAGA: to jest wyłącznie czysty generator kandydata/fixture compatibility.
+    Nie jest writerem kanonu: case 491870 dowiódł, że ślepe zastosowanie może
+    naprawić NO-RETURN kosztem nowego R6. Jedynym selektorem aplikującym taki ruch
+    jest `_lex_committed_window_reorder`, który ma pełny oracle HARD per order.
+    """
     out = list(seq)
     for _ in range(len(out) * len(out) + 1):
         viol = _detect_departed_pickup_revisit(out, orders_state)
@@ -1827,6 +1847,26 @@ def _r6_thermal_bag_min(dt, bp, ready_rel, ready_anchor_on):
     if ready_anchor_on and ready_rel is not None:
         return dt - ready_rel
     return (dt - bp) if bp is not None else None
+
+
+def _departed_carried_pickup_oids(carried, orders_state, start_pos):
+    """Carried pickupy rzeczywiście opuszczone przed trasą.
+
+    Jeden helper zasila relax i lex. Punkt, w którym kurier stoi, nie jest
+    jeszcze „opuszczony”; to rozstrzyga wyłącznie kanon route_order, bez drugiego
+    promienia ani klucza.
+    """
+    departed = set()
+    for oid in carried:
+        if ENABLE_RELAX_COLOC_PICKUP and start_pos is not None:
+            try:
+                if _route_order.position_at_pickup_point(
+                        start_pos, orders_state.get(oid) or {}):
+                    continue
+            except Exception:
+                pass
+        departed.add(oid)
+    return departed
 
 
 def _relax_carried_first(seq, orders_state, start_pos, now):
@@ -1907,23 +1947,8 @@ def _relax_carried_first(seq, orders_state, start_pos, now):
     # do restauracji, z której już wiezie jedzenie (carried), ani nie rozbija dwóch
     # odbiorów tej samej restauracji na osobne wizyty. carried_rest = restauracje
     # zleceń niesionych (jedzenie w aucie = restauracja opuszczona).
-    carried_rest_keys = set()
-    for o in carried:
-        rk = _pickup_rest_key({"type": "pickup", "order_id": o}, orders_state)
-        if rk is None:
-            continue
-        # FIX K: restauracja pod którą kurier WŁAŚNIE STOI (start_pos) NIE jest 'opuszczona'
-        # → współlokalny odbiór wolno wziąć od razu (jedna wizyta), to NIE powrót.
-        if ENABLE_RELAX_COLOC_PICKUP:
-            pc = (orders_state.get(o) or {}).get("pickup_coords")
-            try:
-                if _coords_ok(pc) and _haversine_m(
-                        (float(start_pos[0]), float(start_pos[1])),
-                        (float(pc[0]), float(pc[1]))) <= RELAX_COLOC_PICKUP_M:
-                    continue
-            except Exception:
-                pass
-        carried_rest_keys.add(rk)
+    carried_pickup_oids = _departed_carried_pickup_oids(
+        carried, orders_state, start_pos)
 
     def _walk(perm):
         t = 0.0
@@ -1982,7 +2007,7 @@ def _relax_carried_first(seq, orders_state, start_pos, now):
         # NO-RETURN: odrzuć permutację wracającą do restauracji już opuszczonej
         # (carried) lub rozbijającą odbiory tej samej restauracji na dwie wizyty.
         if _detect_departed_pickup_revisit([seq[i] for i in perm], orders_state,
-                                           carried_rest_keys):
+                                           carried_pickup_oids):
             continue
         w = _walk(perm)
         if w is None:
@@ -2203,6 +2228,29 @@ def _lex_canonical_carry_map(
     }
 
 
+def _r6_candidate_not_worse(baseline_by_order, candidate_by_order, cap_min):
+    """Per-order monotonic HARD guard used by every lex pickup candidate.
+
+    A count-only comparison is insufficient: ``A:36, B:34`` →
+    ``A:34, B:36`` keeps one breach while silently swapping the victim.  Every
+    order therefore owns its own baseline: a value at/below the effective HARD
+    cap may not cross it, and an already-over-cap value may not grow at all.
+    """
+    cap = float(cap_min)
+    for oid, baseline_value in baseline_by_order.items():
+        candidate_value = candidate_by_order.get(oid)
+        if candidate_value is None:
+            return False
+        baseline_value = float(baseline_value)
+        candidate_value = float(candidate_value)
+        if baseline_value <= cap:
+            if candidate_value > cap:
+                return False
+        elif candidate_value > baseline_value + 1e-9:
+            return False
+    return True
+
+
 def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
                                   ledger_ctx=None):
     """P-1 (handoff 2026-06-24): okno odbioru committed (R-DECLARED-TIME ±tol) PRZED
@@ -2212,8 +2260,7 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
     baseline, żadna INNA dostawa nie później >TOL vs baseline). SHADOW: loguje rozjazd zawsze
     (gdy flaga shadow|apply); APPLY: zmienia kolejność tylko gdy ENABLE_LEX_COMMITTED_WINDOW.
     Replay D zero-harm: eod_drafts/2026-06-24/lex_window_replay.py."""
-    if not (ENABLE_LEX_COMMITTED_WINDOW_SHADOW or ENABLE_LEX_COMMITTED_WINDOW):
-        return seq
+    _noncarried_apply = bool(ENABLE_NONCARRIED_COMMITTED_PICKUP_REORDER)
     if start_pos is None or now is None:
         return seq
     import itertools
@@ -2227,8 +2274,26 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
     kind_pick = [s.get("type") == "pickup" for s in seq]
     carried = {oid_of[i] for i in range(n) if not kind_pick[i]
                and (orders_state.get(oid_of[i]) or {}).get("status") == "picked_up"}
-    if not carried:
-        return seq                      # bez niesionych carried-first nie wiąże — to nie P-1
+    carried_pickup_oids = _departed_carried_pickup_oids(
+        carried, orders_state, start_pos)
+    # Stary NO-RETURN writer ślepo stosował `_coalesce_same_pickup_nodes`.
+    # Dla carried zachowujemy intencję istniejącej flagi, ale wybór robi już
+    # wyłącznie ten sam lex selector z pełnym oracle HARD. Dla n_carried=0
+    # jakikolwiek pickup-forward pozostaje WYŁĄCZNIE za nową flagą default OFF.
+    _no_return_repair = bool(
+        carried
+        and ENABLE_NO_RETURN_TO_DEPARTED_PICKUP
+        and _detect_departed_pickup_revisit(seq, orders_state, carried_pickup_oids)
+    )
+    if not (ENABLE_LEX_COMMITTED_WINDOW_SHADOW or ENABLE_LEX_COMMITTED_WINDOW
+            or _noncarried_apply or _no_return_repair):
+        return seq
+    if not carried and not _noncarried_apply:
+        return seq  # case 491870: pickup reorder n_carried=0 wyłącznie za nową flagą OFF
+    _apply_enabled = (
+        bool(ENABLE_LEX_COMMITTED_WINDOW or _no_return_repair)
+        if carried else _noncarried_apply
+    )
     coords = []
     for i in range(n):
         rec = orders_state.get(oid_of[i]) or {}
@@ -2274,9 +2339,6 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
     dpos = {oid_of[i]: i for i in range(n) if not kind_pick[i]}
     pairs = [(ppos[o], dpos[o]) for o in ppos]
     assigned = [o for o in dpos if o not in carried]
-    carried_rest = {_pickup_rest_key({"type": "pickup", "order_id": o}, orders_state)
-                    for o in carried}
-    carried_rest.discard(None)
     # G5 (WB2, strict-stub): tolerancja okna wraz z PROWENIENCJĄ. Bez guardów
     # zostaje stała modułu (bajt-w-bajt). Z guardami idzie przez czytnik snapshotu
     # loadgov, który dziś zawsze zwraca strict — ale zapisuje w ledgerze, DLACZEGO,
@@ -2335,7 +2397,7 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
             if any(canonical_carry.get(oid) is None for oid in carried):
                 return None
             _metric_carry_maps[tuple(perm)] = canonical_carry
-        n_viol = 0; breaches = 0; maxcarry = 0.0
+        n_viol = 0; breaches = 0; maxcarry = 0.0; r6_by_order = {}
         for i in range(n):
             if kind_pick[i]:
                 cr = committed_rel[i]
@@ -2357,14 +2419,17 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
                 bp = pick[ppos[oid]] if oid in ppos else None
                 bag = _r6_thermal_bag_min(dt, bp,
                                           committed_rel[ppos[oid]] if oid in ppos else None, _ra_on)
+            if bag is not None:
+                r6_by_order[oid] = float(bag)
             if bag is not None and bag > _alarm_cap:
                 breaches += 1
-        return drive, deliv, pick, n_viol, breaches, maxcarry, legs
+        return drive, deliv, pick, n_viol, breaches, maxcarry, legs, r6_by_order
 
     base = _metrics(tuple(range(n)))
     if base is None:
         return seq
-    bdrive, bdeliv, bpick, bviol, bbreach, bcarry, blegs = base
+    bdrive, bdeliv, bpick, bviol, bbreach, bcarry, blegs, br6 = base
+
     # Ten writer porównuje permutacje ISTNIEJĄCEGO worka. Absolutny HARD35
     # należy do granicy przydziału w core.selection/alarm_certificate; tutaj
     # kanonem jest ciągłość i brak pogorszenia fizycznego stanu. Dzięki temu
@@ -2377,7 +2442,12 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
     # delay_tol na samych `assigned`). ON ⇒ te dwa filtry ZASTĘPUJE jeden
     # spójny zestaw G1/G2/G3 z wyjątkiem D1 — nie dokładamy trzeciego
     # równoległego progu do tej samej prawdy.
-    _guards_on = bool(ENABLE_LEX_WINDOW_GUARDS_V2)
+    # Nowy non-carried pickup reorder NIE ma trybu bez guardów: od pierwszego
+    # dnia dziedziczy pełny WB2 (G1/G2/G3 + wyjątek D1 wyłącznie przy ścisłej
+    # poprawie okna). Dla istniejącej ścieżki carried flaga WB2 zachowuje
+    # dotychczasową semantykę OFF/ON.
+    _guards_on = bool(ENABLE_LEX_WINDOW_GUARDS_V2 or
+                      (not carried and _noncarried_apply))
     _thr = _alarm_thresholds if _guards_on else None
     _bfacts = _facts_of(bdeliv, dwell, kind_pick, oid_of, carried,
                         carried_age, bviol, bdrive,
@@ -2392,7 +2462,8 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
     _pool = 0
     _feasible = 0
     _rej = {"precedence": 0, "no_return": 0, "metrics": 0,
-            "carry_cap": 0, "breaches": 0, "delay_tol": 0}
+            "carry_cap": 0, "breaches": 0, "r6_per_order": 0,
+            "delay_tol": 0}
     _summary = []
     for perm in itertools.permutations(range(n)):
         _pool += 1
@@ -2402,18 +2473,22 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
         if any(pos[p] > pos[d] for p, d in pairs):
             _rej["precedence"] += 1
             continue
-        if _detect_departed_pickup_revisit([seq[i] for i in perm], orders_state, carried_rest):
+        if _detect_departed_pickup_revisit([seq[i] for i in perm], orders_state,
+                                           carried_pickup_oids):
             _rej["no_return"] += 1
             continue
         m = _metrics(perm)
         if m is None:
             _rej["metrics"] += 1
             continue
-        drive, deliv, pick, n_viol, breaches, maxcarry, _mlegs = m
+        drive, deliv, pick, n_viol, breaches, maxcarry, _mlegs, _r6 = m
         # R6 HARD zostaje bezwarunkowy w OBU trybach — SOFT nie osłabia HARD,
         # a wyjątek D1 dotyczy wyłącznie guardów SOFT (delta i zysk jazdy).
         if breaches > bbreach:
             _rej["breaches"] += 1
+            continue
+        if not _r6_candidate_not_worse(br6, _r6, _alarm_cap):
+            _rej["r6_per_order"] += 1
             continue
         _gres = None
         if _guards_on:
@@ -2457,10 +2532,12 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
             best = (key, perm, n_viol, drive, deliv, pick, breaches, maxcarry, _mlegs)
             _best_guard = _gres    # werdykty guardów ZWYCIĘZCY → ledger v2
     if best is None:
+        _log.warning("LEX_COMMITTED_WINDOW no_feasible_candidate baseline_viol=%d rejected=%s noncarried=%s",
+                     bviol, dict(_rej, **_guard_rej), not carried)
         return seq
     _bkey, bperm, dviol, ddrive, ddeliv, dpick, dbreach, dcarry, dlegs = best
     _identity = list(bperm) == list(range(n))
-    _decided = bool(ENABLE_LEX_COMMITTED_WINDOW) and not _identity
+    _decided = _apply_enabled and not _identity
 
     # WB1 (spec docs/WB1_LEDGER_V2_SCHEMA.md): JEDEN kanoniczny writer ledgera.
     # Rola wywołania przychodzi JAWNIE w `ledger_ctx` (brak = obserwator → plik
@@ -2542,7 +2619,7 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
                          G5=_lex_guards.g5_verdict(_win_tol, _g5_src))
                     if (_guards_on and _best_guard is not None) else None),
             loadgov=(_lg_meta if _guards_on else None),
-            apply_flag=bool(ENABLE_LEX_COMMITTED_WINDOW),
+            apply_flag=_apply_enabled,
             shadow_flag=bool(ENABLE_LEX_COMMITTED_WINDOW_SHADOW),
             decided=_decided,
             identity=_identity,
@@ -2556,15 +2633,15 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
         # Writer zapisuje plan dopiero wyżej (po CAS) — przekaż uchwyt, żeby fakt
         # `written` powstał osobno od faktu `decided`.
         _lex_pending_attempt(ledger_ctx, _attempt_id)
-    _log.info("LEX_COMMITTED_WINDOW base_viol=%d lex_viol=%d d_drive=%.1f apply=%s",
-              bviol, dviol, ddrive - bdrive, ENABLE_LEX_COMMITTED_WINDOW)
+    _log.info("LEX_COMMITTED_WINDOW base_viol=%d lex_viol=%d d_drive=%.1f apply=%s noncarried=%s",
+              bviol, dviol, ddrive - bdrive, _apply_enabled, not carried)
     if _guards_on:
         # Osobna linia, żeby NIE zmieniać kształtu linii wyżej (czytają ją
         # istniejące narzędzia i test odtworzenia incydentu).
         _log.info("LEX_WINDOW_GUARDS exempt=%d rejected=%s tol=%.1f cap=%.1f gain=%.1f",
                   _guard_exempt, _guard_rej, _thr.delay_tol_min,
                   _thr.carry_cap_min, _thr.min_gain_min)
-    if ENABLE_LEX_COMMITTED_WINDOW:
+    if _apply_enabled:
         return [seq[i] for i in bperm]
     return seq
 
@@ -2604,15 +2681,20 @@ def _apply_canon_order_invariants(stops, orders_state, start_pos=None, now=None,
             repaired = _repair_dropoffs_after_pickups(new_seq)
             if repaired is not None:
                 seq = repaired
-    # Z-RULE: detekcja zawsze (sygnał nawet gdy fix OFF), reorder za flagą.
+    # Z-RULE: detekcja zawsze. `_coalesce_same_pickup_nodes` NIE jest już
+    # konkurencyjnym writerem: ślepy ruch w lewo spowodowałby w 491870 nowy R6.
+    # Gdy fix jest aktywny, kandydat zostaje rozstrzygnięty niżej przez tę samą
+    # warstwę lex P-1 i jej per-order HARD oracle.
     try:
         viol = _detect_departed_pickup_revisit(seq, orders_state)
         if viol:
             _log.warning(
-                "BACK_TO_DEPARTED_RESTAURANT pairs=%s coalesce=%s",
+                "BACK_TO_DEPARTED_RESTAURANT pairs=%s delegated_to_lex=%s",
                 [v[2] for v in viol], ENABLE_NO_RETURN_TO_DEPARTED_PICKUP)
             if ENABLE_NO_RETURN_TO_DEPARTED_PICKUP:
-                seq = _coalesce_same_pickup_nodes(seq, orders_state)
+                _log.debug(
+                    "NO_RETURN repair delegated to lex HARD selector; "
+                    "pure coalesce candidate is never applied directly")
     except Exception as e:
         _log.warning("no_return_to_departed_pickup fail: %s: %s",
                      type(e).__name__, e)
@@ -2632,7 +2714,9 @@ def _apply_canon_order_invariants(stops, orders_state, start_pos=None, now=None,
         try:
             lexed = _lex_committed_window_reorder(seq, orders_state, start_pos, now,
                                                   ledger_ctx=ledger_ctx)
-            if lexed is not seq and ENABLE_LEX_COMMITTED_WINDOW and \
+            if lexed is not seq and (ENABLE_LEX_COMMITTED_WINDOW or
+                                     ENABLE_NONCARRIED_COMMITTED_PICKUP_REORDER or
+                                     ENABLE_NO_RETURN_TO_DEPARTED_PICKUP) and \
                     [s.get("order_id") for s in lexed] != [s.get("order_id") for s in seq]:
                 _log.info("LEX_COMMITTED_WINDOW applied seq=%s",
                           [(s.get("order_id"), s.get("type")) for s in lexed])
@@ -2773,7 +2857,8 @@ def _retime_one_bag_plan(cid: str, plan: Dict[str, Any], oids: List[str],
     if not stops:
         return False
     # WB2/G4: koperta świeżości = plan PRZED kanonem tego przebiegu (ostatni trwały).
-    _g4_on = bool(ENABLE_LEX_WINDOW_GUARDS_V2)
+    _g4_on = bool(ENABLE_LEX_WINDOW_GUARDS_V2 or
+                  ENABLE_NONCARRIED_COMMITTED_PICKUP_REORDER)
     _g4_envelope = [dict(s) for s in stops] if _g4_on else None
     # WB1: kontekst ledgera zawężony do tego kuriera i tej generacji planu.
     _lctx = (ledger_ctx.for_courier(cid, expected_version)
@@ -2880,6 +2965,13 @@ def _retime_one_bag_plan(cid: str, plan: Dict[str, Any], oids: List[str],
         "bag_signature": plan.get("bag_signature") or _bag_signature(oids, orders_state),
         "retimed_at": now.isoformat(),
     }
+    body["pickup_time_rules"] = _pickup_time_rules.evaluate_plan(
+        cid,
+        new_stops,
+        orders_state,
+        now,
+        source=("retime:operator_override" if _op_pin_ctx is not None else "retime"),
+    )
     def _save() -> None:
         if _raise_on_corrupt:
             plan_manager.save_plan(
@@ -3763,7 +3855,8 @@ def run_recheck(*, _current_state_fn: Optional[
                 shifted: List[float] = []
 
                 def _refloor() -> None:
-                    shifted.append(plan_manager.refloor_pickup(cid, oid, kur))
+                    shifted.append(plan_manager.refloor_pickup(
+                        cid, oid, kur, orders_state=orders_state, now=now))
 
                 if not _run_if_bag_current(
                     cid,

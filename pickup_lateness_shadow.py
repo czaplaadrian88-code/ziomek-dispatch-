@@ -33,6 +33,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 from zoneinfo import ZoneInfo
 
+from dispatch_v2.core import pickup_time_rules as _pickup_time_rules
+
 WARSAW = ZoneInfo("Europe/Warsaw")
 
 _log = logging.getLogger("pickup_lateness_shadow")
@@ -61,19 +63,8 @@ ALARM_LEAD_MIN = float(os.environ.get("PICKUP_LATENESS_ALARM_LEAD_MIN", "15"))
 
 def _parse_dt(s: Optional[str]) -> Optional[datetime]:
     """ISO-8601 → aware UTC datetime. None gdy puste/nie-str/nie-parsuje.
-    Identyczny kontrakt jak plan_recheck._parse_dt (offset-aware lub naive→UTC)."""
-    if not s or not isinstance(s, str):
-        return None
-    try:
-        v = s.strip()
-        if v.endswith("Z"):
-            v = v[:-1] + "+00:00"
-        dt = datetime.fromisoformat(v)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt
-    except ValueError:
-        return None
+    Wspólny kontrakt pickup-time: offset-aware lub naive panel→Warsaw."""
+    return _pickup_time_rules.parse_datetime(s)
 
 
 def _hhmm_warsaw(dt: datetime) -> str:
@@ -121,14 +112,15 @@ def detect_late_pickups(
             # picked_up → odbiór już się stał, nieistotne. Inne = terminal.
             if rec.get("status") != "assigned":
                 continue
-            committed = _parse_dt(rec.get("czas_kuriera_warsaw"))
-            if committed is None:
-                continue  # elastyk bez umówionego czasu — nic nie obiecujemy
-            predicted = _parse_dt(stop.get("predicted_at"))
-            if predicted is None:
+            timing = _pickup_time_rules.evaluate_committed_pickup(
+                oid, rec.get("czas_kuriera_warsaw"), stop.get("predicted_at"))
+            if timing is None:
                 continue
-
-            lateness_min = (predicted - committed).total_seconds() / 60.0
+            committed = _parse_dt(timing["committed_at"])
+            predicted = _parse_dt(timing["predicted_at"])
+            if committed is None or predicted is None:
+                continue
+            lateness_min = float(timing["delta_min"])
             lead = (committed - now).total_seconds() / 60.0
             if lateness_min < lateness_threshold_min:
                 continue  # na czas (lub w tolerancji) — nie zawracamy głowy

@@ -25,6 +25,14 @@
 ---
 
 ## Kontrakt ① — JEDNO ŹRÓDŁO NA REGUŁĘ
+- 🟢 **INV-SRC-PICKUP-POINT (case 491870, 2026-08-02):** fizyczna tożsamość
+  punktu odbioru ma jednego ownera w `route_order` (`PICKUP_POINT_RADIUS_M`,
+  `same_pickup_point`, complete-link `group_same_pickup_points`).
+  `_pickup_rest_key`, `RELAX_COLOC_PICKUP_M` i
+  `RETURN_TO_RESTAURANT_SAME_KM` są zabronione przez
+  `tools/canon_static_check`; mutation promienia 180→1 musi czerwienić.
+  `_coalesce_same_pickup_nodes` nie może być bezpośrednim writerem — wyboru
+  dokonuje wyłącznie lex selector z HARD oracle.
 - 🟢 **INV-SRC-ROUTE-ORDER** *(slot uzbrojony 2026-07-08, Sprint C — golden-fixture equivalence w CI, KAŻDA noga mutation-probed RED; dowód `eod_drafts/2026-07-08/S_C_ROUTEORDER_raport.md`)*: `proj(silnik)==proj(konsola)==proj(apka)` (równość porządku `[(typ, sorted(order_ids))]`). Kanon = `route_order.py` (JEDNO ŹRÓDŁO, PURE stdlib). Konsumenci przez KONSTRUKCJĘ: `route_podjazdy` re-eksportuje (ten sam obiekt), silnik `plan_recheck._repair_dropoffs_after_pickups` deleguje do `route_order.repair_dropoffs_after_pickups`, apka `courier_orders` deleguje (dominująca `order_podjazdy` + fallback `build_stop_sequence`; OBA flagi LIVE — drop-iny `ENABLE_APP_ROUTE_FROM_CONSOLE=1`+`ENABLE_ROUTE_ORDER_UNIFIED=1`). **Panel `fleet_state._build_route` = JEDYNA pozostała kopia** (golden-PINOWANA, nie flagą; delegacja = flip-card, 0-diff dowód 25 korpus + 9 żywych, deploy za ACK). Strażnicy (każdy mutation-probed RED 08.07): `test_route_order_golden`+`test_route_order_unify_s30` (silnik==golden), `test_route_order_parity_golden` (panel konsola==golden), `test_route_order_unified_s30` (apka delegacja), `test_route_order_live_parity` (dispatch CI, konsola==kanon na ŻYWYCH workach + dryf flag, ON od 05.07). Siatka bez daty ZASTĘPUJE wygasający `ziomek_time_route_monitor` (10.07).
 - 🟢 **INV-SRC-AVAILABLE-FROM** *(slot uzbrojony 2026-07-05, Z2; źródło = L4 LIVE od 04.07)*: `available_from` liczone w 1 miejscu (`courier_resolver.resolve_available_from*`, flaga `ENABLE_AVAILABLE_FROM_SINGLE_SOURCE` ON). Strażnik = `test_l4_available_from` (25 testów: źródło+konsumenci #1/#3/#5+chokepoint, mutation ×2 przy budowie L4).
 - 🟢 **INV-SRC-LEXQUAL** *(slot uzbrojony 2026-07-05, Z2; unifikacja 25.06 + L6.C C1 04.07)*: 3 kopie `lex_qual` → kanon `objm_lexr6.lex_qual`. Strażnik = `test_objm_lexr6_unify_2026_06_25` (pick==kanon OFF+ON, anty-redywergencja inline w pick I w cieniu, parytet cienia w obu stanach POST_SHIFT).
@@ -32,6 +40,13 @@
 - 🔴 **INV-SRC-EQUAL-TREATMENT**: brak GPS / pre_shift = identyczny bucket we WSZYSTKICH 8 bliźniakach. (łatane ≥4×)
 
 ## Kontrakt ② — KONTRAKT WARSTW (HARD przed SOFT)
+- 🟢 **INV-LAYER-PICKUP-REORDER-R6 (case 491870, 2026-08-02):** pickup-forward
+  dla `n_carried=0` istnieje wyłącznie za
+  `ENABLE_NONCARRIED_COMMITTED_PICKUP_REORDER` default OFF i pozostaje w P-1.
+  Każda permutacja zachowuje pickup→dropoff, NO-RETURN oraz R6 per order;
+  count-only zamiana ofiary 1→1 jest zabroniona. Strażnik:
+  `test_case_491870_pickup_rootfix` + statyczna mutacja usuwająca
+  `_r6_candidate_not_worse`.
 - 🟢 **INV-FEAS-SHIFT-END**: heurystyka mass-fail V328 nie proponuje po końcu zmiany → `test_v328_heuristic_shift_guard`.
 - 🟢 **INV-SEL-MULT-SIGN**: mnożnik score nie odwraca na ujemnym score → `test_v327_mult_sign_guard`.
 - 🟢 **INV-LAYER-HARD-BEFORE-SOFT (pełny)** *(reklasyfikacja S28-B 2026-07-07 — dashboard był STALE; armed L7.3)*: `_assert_feasibility_first` re-assertowany na EMIT przez `_split_layer_emit_assert` (wspólny lejek `_classify_and_set_auto_route`). Strażnik = `test_split_layer_guard_l73` (INV-LAYER-1; flaga ON≠OFF bajt-parytet, mutation-probe: zdjęcie gardy OFF → RED). ⚠ węższa re-assert PO `FEAS_CARRY_READMIT` = xfail-RATCHET `test_invariant_slots_l04` SLOT 5 (wymaga fali silnika).
@@ -87,6 +102,14 @@
 - 🔴 **INV-LIFE-RECANON-PRUNE**: każda tranzycja kurcząca worek (cancel/deliver/reassign-loser) woła prune PRZED recanon (`recanon` sam nie potrafi prune).
 
 ## Kontrakt ⑧ — KOHERENCJA (precedencja)
+- 🟢 **INV-COH-PICKUP-TIME-RULES (case 491870, 2026-08-02):** jeden evaluator
+  `core.pickup_time_rules` jest uruchamiany po finalnej transformacji na każdej
+  ścieżce zmieniającej czasy (`regen`, `retime`, operator override, zapis
+  propozycji, `refloor`) i utrwalany atomowo z wersją planu. Ściśle >40 min
+  spóźnienia vs committed daje zdarzenie klasy Alarm wyłącznie do istniejącego
+  OPS-13 koordynatora; brak Telegrama i brak relaksu HARD35. Mutation-proby
+  obejmują próg, klasę, typ, kanał, wymaganie potwierdzenia i brak każdego
+  lifecycle writera.
 - 🟢 **INV-VERDICT-CLASSIFIED**: każda bramka KOORD ma klasę {quality|operational}; quality strzeżone → `test_verdict_gate_guards`.
 - 🔴 **INV-COH-CLAMP-CHOKEPOINT**: 1 punkt precedencji clampów czasu (`effective_pickup_at`); frozen R27 ↔ floor ↔ OSRM rozstrzygane w jednym miejscu (dziś 13 klastrów konfliktów).
 - 🟢 **INV-COH-R-DECLARED (chokepoint zapisu)** *(reklasyfikacja S28-B 2026-07-07 — dashboard był STALE; armed L7.1)*: tripwier `czas_kuriera ≥ czas_odbioru_timestamp` (R-DECLARED-TIME) w JEDYNYM funnelu commitu (`state_machine.upsert_order`) — fail-loud LOG+JSONL, NIGDY reject. Strażnik = `test_r_declared_tripwire_l71` (naruszenie→wpis / cisza / flaga OFF bajt-parytet / TZ-naive=Warsaw / mutation-probe kierunku nierówności → RED). ⚠ siostrzany `_assert_r_declared_time` w SELEKCJI = xfail-RATCHET `test_invariant_slots_l04` SLOT 4 (wymaga fali silnika).

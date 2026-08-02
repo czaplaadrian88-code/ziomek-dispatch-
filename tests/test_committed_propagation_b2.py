@@ -110,6 +110,8 @@ def test_on_adopts_committed_aware_plan_off_keeps_base(monkeypatch):
     assert t_off != t_on, "flaga ON musi zmieniac zapisany plan (ON≠OFF)"
     assert t_off == NOW.isoformat()
     assert t_on == (NOW + timedelta(minutes=7)).isoformat()
+    assert saved_off["body"]["pickup_time_rules"]["source"] == "regen"
+    assert saved_on["body"]["pickup_time_rules"]["evaluated_count"] == 1
 
 
 def test_on_guard_rejects_committed_plan_worsening_sla(monkeypatch):

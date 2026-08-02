@@ -18,6 +18,7 @@ from typing import List, Tuple, Dict, Optional
 
 from dispatch_v2 import osrm_client
 from dispatch_v2 import common as C
+from dispatch_v2 import route_order as _route_order
 from dispatch_v2 import prep_bias_anchor
 from dispatch_v2 import effects_buffer as _EB  # K08 refaktoru: zapis shadow PO decyzji
 from dispatch_v2.position_model import OriginTravelEstimate
@@ -139,7 +140,6 @@ def _parse_dt_utc(val):
 
 
 def detect_return_to_restaurant(bag, new_order, plan,
-                                same_rest_km: float = 0.08,
                                 group_tol_min: float = 5.0):
     """F5 (2026-05-24) — wykrywa ZAKAZANY powrót do tej samej restauracji.
 
@@ -148,7 +148,7 @@ def detect_return_to_restaurant(bag, new_order, plan,
 
     Commit-aware (plan GRUPUJE odbiory po ETA → maskuje powrót wymuszony zamrożonym
     czas_kuriera wcześniejszego zlecenia, Case B 475698). Dla zlecenia B w bagu z TEJ
-    SAMEJ restauracji (pickup_coords < same_rest_km):
+    SAMEGO fizycznego punktu (kanon ``route_order.same_pickup_point``):
       - realny odbiór B (picked_up_at / czas_kuriera commit / plan ETA) WCZEŚNIEJSZY
         od odbioru new_order o > group_tol_min → osobna wizyta (powrót),
       - B doręczany PO odbiorze new_order → dowóz z R wciąż w bagu na powrocie → ZAKAZANE.
@@ -161,10 +161,7 @@ def detect_return_to_restaurant(bag, new_order, plan,
     if t_np is None:
         return None
     for b in bag:
-        bp = getattr(b, "pickup_coords", None)
-        if not _valid(bp):
-            continue
-        if osrm_client.haversine(bp, np_coords) >= same_rest_km:
+        if not _route_order.same_pickup_point(b, new_order):
             continue  # inna restauracja
         t_bp = (_parse_dt_utc(getattr(b, "picked_up_at", None))
                 or _parse_dt_utc(getattr(b, "czas_kuriera_warsaw", None))
@@ -999,7 +996,6 @@ def check_feasibility_v2(
         try:
             _rtr_oid = detect_return_to_restaurant(
                 bag, new_order, plan,
-                same_rest_km=getattr(C, "RETURN_TO_RESTAURANT_SAME_KM", 0.08),
                 group_tol_min=getattr(C, "RETURN_TO_RESTAURANT_GROUP_TOL_MIN", 5.0),
             )
             metrics["return_to_restaurant_oid"] = _rtr_oid

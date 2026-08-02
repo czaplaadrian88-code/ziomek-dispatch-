@@ -47,6 +47,7 @@ from dispatch_v2.common import (
 from dispatch_v2.osrm_client import haversine as _haversine_km
 from dispatch_v2.core.broadcast_handlers import dispatch_config_reload
 from dispatch_v2.core.config_reload_subscriber import BroadcastSubscriber
+from dispatch_v2.core import pickup_time_rules as _pickup_time_rules
 from dispatch_v2.event_bus import emit, emit_audit
 from dispatch_v2.parser_health import get_monitor as get_parser_health_monitor
 from dispatch_v2.parser_health_layer3 import install_layer3, record_tick_full
@@ -1207,6 +1208,22 @@ def _save_plan_on_assign(
         "stops": stops,
         "optimization_method": plan.get("strategy") or "bruteforce",
     }
+    eval_orders = {}
+    for oid in sequence:
+        try:
+            record = state_get_order(str(oid)) or {}
+        except Exception:
+            record = {}
+        if isinstance(record, dict):
+            eval_orders[str(oid)] = record
+    eval_now = _parse_iso_utc(dr.get("ts")) or datetime.now(timezone.utc)
+    body["pickup_time_rules"] = _pickup_time_rules.evaluate_plan(
+        courier_id,
+        stops,
+        eval_orders,
+        eval_now,
+        source="assign_proposal",
+    )
     try:
         if _raise_on_error:
             plan_manager.save_plan(

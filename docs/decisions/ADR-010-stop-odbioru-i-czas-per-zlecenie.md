@@ -1,7 +1,7 @@
 # ADR-010: tożsamość stopu odbioru i czas per zlecenie
 
 - Status: accepted
-- Data decyzji ownera: 2026-07-28
+- Data decyzji ownera: 2026-07-28; doprecyzowanie punktu fizycznego 2026-08-02
 - Owner kontraktu: `dispatch_v2.route_order`
 
 ## Problem
@@ -16,16 +16,21 @@ fizycznego stopu i ukrywały dokładny czas zlecenia.
 1. Grupowanie fizycznych odbiorów zostaje. Każdy klaster, także pochodzący
    z planu, musi mieć wewnętrzny rozrzut committed nie większy niż stałe
    `PICKUP_MERGE_MIN=10`.
-2. `route_order` jest jedynym ownerem membershipu. Stop niesie deterministyczne
-   `stop_id` oraz `order_ids`; koordynaty nie uczestniczą w grupowaniu.
+2. `route_order` jest jedynym ownerem membershipu i fizycznej tożsamości punktu.
+   `same_pickup_point` używa jednego promienia `PICKUP_POINT_RADIUS_M=180` oraz
+   fallbacku nazwy tylko przy brakującej geometrii; grupy są complete-link, aby
+   relacja promienia nie sklejała łańcucha A~B~C. Stop niesie deterministyczne
+   `stop_id` oraz `order_ids`. Koordynaty nie są częścią `stop_id` (tożsamość
+   dokumentu pozostaje membership-based), ale uczestniczą w decyzji, które
+   zlecenia są jedną fizyczną wizytą.
 3. Stop nie ma prezentowanego czasu grupy. Każdy krok pickup niesie własne,
    nieprzekształcone `committed_at`, a karta zlecenia własne
    `pickup_committed_at`, oba ze źródłowego `czas_kuriera_warsaw`.
 4. ETA trasy jest osobnym kontraktem. Wyjazd ze stopu może używać
    `max(arrival, latest_ready) + dwell`, ale nie może nadpisywać committed
    żadnego zlecenia.
-5. `live_eta` konsumuje `stop_id` i membership. Nie scala stopów po samych
-   koordynatach.
+5. `live_eta` konsumuje `stop_id` i membership. Nie tworzy własnego progu ani
+   lokalnego scalania po samych koordynatach; grupowanie deleguje do `route_order`.
 
 ## Skutki i granice
 

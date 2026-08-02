@@ -139,14 +139,18 @@ def test_ratchet_ignores_adjacent_claude_worktree(tmp_path):
     worktree'y, nie realny dryf źródła."""
     root = tmp_path / "dispatch_v2"
     # legalne, single-source definicje w silniku
-    _write(root, "common.py", "BAG_TIME_HARD_MAX_MIN = 35\n")
+    _write(root, "common.py", "BAG_TIME_HARD_MAX_MIN = 35\n"
+           "PICKUP_PLAN_ALARM_LATE_MIN = 40.0\n")
     _write(root, "plan_recheck.py",
            "def _apply_canon_order_invariants(x):\n    return x\n")
+    _write(root, "route_order.py", "PICKUP_POINT_RADIUS_M = 180.0\n")
     # sąsiedni worktree pod .claude — DUPLIKATY, które muszą być pominięte
     wt = ".claude/worktrees/agent-synthetic/"
-    _write(root, wt + "common.py", "BAG_TIME_HARD_MAX_MIN = 35\n")
+    _write(root, wt + "common.py", "BAG_TIME_HARD_MAX_MIN = 35\n"
+           "PICKUP_PLAN_ALARM_LATE_MIN = 40.0\n")
     _write(root, wt + "plan_recheck.py",
            "def _apply_canon_order_invariants(x):\n    return x\n")
+    _write(root, wt + "route_order.py", "PICKUP_POINT_RADIUS_M = 180.0\n")
 
     sources = csc.load_sources(root)
     # dowód pominięcia: żaden klucz źródeł nie pochodzi z `.claude`
