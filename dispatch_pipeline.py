@@ -342,6 +342,7 @@ class _V327FreshCzasKuriera(tuple):
 def _v327_committed_time_policy_snapshot() -> CommittedPickupPolicySnapshot:
     """Capture one immutable authority policy before any mutable HTTP work."""
     return CommittedPickupPolicySnapshot(
+        producer="pre_proposal_recheck",
         manual_passthrough_enabled=bool(
             C.decision_flag(MANUAL_CK_AUTHORITY_FLAG)
         ),

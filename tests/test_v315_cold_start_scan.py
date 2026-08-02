@@ -80,6 +80,7 @@ def _run_scan(parsed, state_orders=(), kurier_ids=None, raw_fetches=None,
     def fake_durable(
         event_type, *, order_id, courier_id=None, payload=None,
         state_payload=None, event_id, audit=False,
+        committed_time_policy=None,
     ):
         if emit_captures is not None:
             emit_captures.append({

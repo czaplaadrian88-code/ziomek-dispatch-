@@ -11,6 +11,27 @@ from dispatch_v2.committed_pickup_authority import (
 from dispatch_v2.tools import rutcom_committed_authority_rollback as rollback
 
 
+@pytest.fixture(autouse=True)
+def _isolate_read_only_queue_snapshot(monkeypatch):
+    """Every collect_status test owns its exact, non-production queue view."""
+    monkeypatch.setattr(
+        rollback.queue,
+        "rollback_records_snapshot",
+        lambda: {},
+    )
+    monkeypatch.setattr(
+        rollback.queue,
+        "forward_rollout_fence_status",
+        lambda: {
+            "forward_fence_present": True,
+            "forward_fence_valid": True,
+            "forward_fence_error": None,
+            "forward_fence_id": "00000000-0000-4000-8000-000000000001",
+            "forward_fence_queue_sha256": "0" * 64,
+        },
+    )
+
+
 def _queue_status(**overrides):
     status = {
         "records": 0,
@@ -1166,8 +1187,19 @@ def test_code_revert_requires_off_terminal_outbox_fence_and_legacy_queue(
             rollback_prepared=True,
         ),
     )
+    monkeypatch.setattr(
+        rollback.queue,
+        "forward_rollout_fence_status",
+        lambda: {
+            "forward_fence_present": False,
+            "forward_fence_valid": False,
+            "forward_fence_error": None,
+            "forward_fence_id": None,
+            "forward_fence_queue_sha256": None,
+        },
+    )
 
-    status = rollback.collect_status()
+    status = rollback.collect_status(writer_quiescence_verified=True)
 
     assert status["safe_to_prepare"] is False
     assert status["safe_for_code_revert"] is True
@@ -1434,3 +1466,374 @@ def test_forward_writer_probe_requires_both_loaded_and_inactive(
     assert states["dispatch-shadow.service"]["active_state"] == (
         shadow_active_state
     )
+
+
+def test_code_revert_reserves_assignment_policy_snapshot():
+    """An older reader cannot safely resume an assignment with v16 policy."""
+    assignment = {
+        "event_type": "COURIER_ASSIGNED",
+        "event_id": "assignment-policy-snapshot",
+        "order_id": "491578",
+        "courier_id": "492",
+        "payload": {
+            "czas_kuriera_warsaw": "2026-08-01T19:40:00+02:00",
+            "czas_kuriera_hhmm": "19:40",
+        },
+        "czasowka_assignment_ck_forward_authority_enabled": True,
+        "czasowka_assignment_ck_passive_guard_enabled": True,
+    }
+
+    assert is_committed_pickup_outbox_artifact(
+        _outbox_row(assignment, event_id="assignment-policy-snapshot")
+    ) is True
+
+
+def test_code_revert_safety_requires_mechanical_writer_quiescence(monkeypatch):
+    monkeypatch.setattr(rollback.C, "decision_flag", lambda _name: False)
+    monkeypatch.setattr(
+        rollback.event_bus,
+        "list_unfinished_state_applies",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        rollback.queue,
+        "legacy_rollback_status",
+        lambda: _queue_status(),
+    )
+    monkeypatch.setattr(
+        rollback.state_machine,
+        "get_all_strict",
+        lambda: {},
+    )
+
+    status = rollback.collect_status(writer_quiescence_verified=False)
+
+    assert status["safe_to_prepare"] is False
+    assert status["safe_for_code_revert"] is False
+
+
+def test_prepare_reprobes_writers_after_queue_projection(monkeypatch, capsys):
+    """A writer becoming active during prepare must turn the receipt red."""
+    probes = iter(
+        [
+            (True, {"phase": "before", "active_state": "inactive"}),
+            (False, {"phase": "after", "active_state": "active"}),
+        ]
+    )
+    seen_probes = []
+
+    def probe():
+        result = next(probes)
+        seen_probes.append(result)
+        return result
+
+    def status(*, writer_quiescence_verified=False, writer_states=None):
+        # Legacy implementation calls with no mechanical evidence and therefore
+        # falsely sees both scans as green. The fixed path binds each scan to
+        # its exact probe result.
+        legacy_unattested = writer_states is None
+        safe = bool(writer_quiescence_verified or legacy_unattested)
+        return {
+            "safe_to_prepare": safe,
+            "safe_for_code_revert": safe,
+        }
+
+    monkeypatch.setattr(rollback, "_probe_forward_writer_quiescence", probe)
+    monkeypatch.setattr(rollback, "collect_status", status)
+    monkeypatch.setattr(
+        rollback.queue,
+        "prepare_legacy_rollback",
+        lambda _path: {"projected": True},
+    )
+
+    result = rollback._cmd_prepare(
+        SimpleNamespace(
+            apply=True,
+            quiesced=True,
+            queue_backup="/root/worktrees/not-created-by-mock.json",
+        )
+    )
+
+    assert result == 3
+    assert len(seen_probes) == 2
+    assert '"prepared": false' in capsys.readouterr().out
+
+
+def test_forward_deploy_ignores_valid_unclaimed_elastic_queue_receipt(
+    monkeypatch,
+):
+    """A quiesced, explicit elastic click has identical ON/OFF semantics."""
+    oid = "elastic-queue-stable"
+    receipt = {
+        "schema": "coordinator_time_recheck.v5",
+        "request_id": "elastic-request",
+        "order_id": oid,
+        "requested_at": "2026-08-02T18:00:00+00:00",
+        "eligible_at": "2026-08-02T18:00:00+00:00",
+        "source": "coordinator_panel",
+        "continuation_depth": 0,
+    }
+    elastic = {
+        "order_id": oid,
+        "status": "assigned",
+        "courier_id": "492",
+        "order_type": "elastic",
+        "prep_minutes": 20,
+        "pickup_at_warsaw": "2026-08-02T20:00:00+02:00",
+        "czas_kuriera_warsaw": "2026-08-02T20:00:00+02:00",
+        "czas_kuriera_hhmm": "20:00",
+    }
+    monkeypatch.setattr(rollback.C, "decision_flag", lambda _name: False)
+    monkeypatch.setattr(
+        rollback.event_bus,
+        "list_unfinished_state_applies",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        rollback.queue,
+        "legacy_rollback_status",
+        lambda: _queue_status(records=1, pending_v4_records=1),
+    )
+    monkeypatch.setattr(
+        rollback.queue,
+        "rollback_records_snapshot",
+        lambda: {oid: receipt},
+        raising=False,
+    )
+    monkeypatch.setattr(
+        rollback.queue,
+        "rollback_record_is_unclaimed",
+        lambda record, *, order_id: record == receipt and order_id == oid,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        rollback.state_machine,
+        "get_all_strict",
+        lambda: {oid: elastic},
+    )
+
+    status = rollback.collect_status(writer_quiescence_verified=True)
+
+    assert status["forward_blocking_queue_records"] == 0
+    assert status["forward_ignored_elastic_queue_records"] == 1
+    assert status["safe_for_forward_deploy"] is True
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "invalid_receipt",
+        "missing_state",
+        "implicit_type",
+        "prep_promoted",
+        "terminal",
+        "committed_artifact",
+    ],
+)
+def test_forward_queue_elastic_exception_fails_closed_on_mutation(
+    monkeypatch, mutation
+):
+    """Only the full exact elastic proof may bypass the nonempty queue gate."""
+    oid = "elastic-queue-mutated"
+    receipt = {"schema": "coordinator_time_recheck.v5", "order_id": oid}
+    order = {
+        "order_id": oid,
+        "status": "assigned",
+        "order_type": "elastic",
+        "prep_minutes": 20,
+    }
+    valid_receipt = mutation != "invalid_receipt"
+    if mutation == "missing_state":
+        orders = {}
+    else:
+        if mutation == "implicit_type":
+            order.pop("order_type")
+        elif mutation == "prep_promoted":
+            order["prep_minutes"] = 60
+        elif mutation == "terminal":
+            order["status"] = "delivered"
+        elif mutation == "committed_artifact":
+            order["committed_pickup_event_key"] = "reserved"
+        orders = {oid: order}
+    monkeypatch.setattr(rollback.C, "decision_flag", lambda _name: False)
+    monkeypatch.setattr(
+        rollback.event_bus,
+        "list_unfinished_state_applies",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        rollback.queue,
+        "legacy_rollback_status",
+        lambda: _queue_status(records=1, pending_v4_records=1),
+    )
+    monkeypatch.setattr(
+        rollback.queue,
+        "rollback_records_snapshot",
+        lambda: {oid: receipt},
+    )
+    monkeypatch.setattr(
+        rollback.queue,
+        "rollback_record_is_unclaimed",
+        lambda _record, *, order_id: valid_receipt and order_id == oid,
+    )
+    monkeypatch.setattr(
+        rollback.state_machine,
+        "get_all_strict",
+        lambda: orders,
+    )
+
+    status = rollback.collect_status(writer_quiescence_verified=True)
+
+    assert status["forward_blocking_queue_records"] == 1
+    assert status["forward_ignored_elastic_queue_records"] == 0
+    assert status["safe_for_forward_deploy"] is False
+
+
+def test_forward_queue_snapshot_count_mismatch_fails_closed(monkeypatch):
+    """Two separately read queue views may agree only by exact record count."""
+    monkeypatch.setattr(rollback.C, "decision_flag", lambda _name: False)
+    monkeypatch.setattr(
+        rollback.event_bus,
+        "list_unfinished_state_applies",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        rollback.queue,
+        "legacy_rollback_status",
+        lambda: _queue_status(records=1, pending_v4_records=1),
+    )
+    monkeypatch.setattr(
+        rollback.queue,
+        "rollback_records_snapshot",
+        lambda: {},
+    )
+    monkeypatch.setattr(
+        rollback.state_machine,
+        "get_all_strict",
+        lambda: {},
+    )
+
+    status = rollback.collect_status(writer_quiescence_verified=True)
+
+    assert status["queue_record_count_matches_status"] is False
+    assert status["safe_for_forward_deploy"] is False
+
+
+def test_forward_deploy_requires_atomic_enqueue_fence(monkeypatch):
+    monkeypatch.setattr(rollback.C, "decision_flag", lambda _name: False)
+    monkeypatch.setattr(
+        rollback.event_bus,
+        "list_unfinished_state_applies",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        rollback.queue,
+        "legacy_rollback_status",
+        lambda: _queue_status(),
+    )
+    monkeypatch.setattr(
+        rollback.queue,
+        "forward_rollout_fence_status",
+        lambda: {
+            "forward_fence_present": False,
+            "forward_fence_valid": False,
+            "forward_fence_error": None,
+            "forward_fence_id": None,
+            "forward_fence_queue_sha256": None,
+        },
+    )
+    monkeypatch.setattr(
+        rollback.state_machine,
+        "get_all_strict",
+        lambda: {},
+    )
+
+    status = rollback.collect_status(writer_quiescence_verified=True)
+
+    assert status["forward_fence"]["forward_fence_valid"] is False
+    assert status["safe_for_forward_deploy"] is False
+
+
+def test_fence_forward_reprobes_writers_and_returns_exact_receipt(
+    monkeypatch, capsys
+):
+    probes = iter([(True, {"phase": "before"}), (True, {"phase": "after"})])
+    fence = {
+        "acquired": True,
+        "forward_fence_valid": True,
+        "forward_fence_id": "00000000-0000-4000-8000-000000000001",
+    }
+    monkeypatch.setattr(
+        rollback,
+        "_probe_forward_writer_quiescence",
+        lambda: next(probes),
+    )
+    monkeypatch.setattr(
+        rollback.queue,
+        "acquire_forward_rollout_fence",
+        lambda: fence,
+    )
+    monkeypatch.setattr(
+        rollback,
+        "collect_status",
+        lambda **_kwargs: {
+            "forward_fence": {"forward_fence_valid": True},
+            "safe_for_forward_deploy": True,
+        },
+    )
+
+    result = rollback._cmd_fence_forward(
+        SimpleNamespace(apply=True, quiesced=True)
+    )
+
+    assert result == 0
+    output = capsys.readouterr().out
+    assert '"ready": true' in output
+    assert fence["forward_fence_id"] in output
+
+
+def test_release_forward_fence_binds_exact_id_to_effective_flag(
+    monkeypatch, capsys
+):
+    fence_id = "00000000-0000-4000-8000-000000000001"
+    released_ids = []
+    flag_state = {"enabled": False}
+    monkeypatch.setattr(
+        rollback,
+        "_probe_forward_writer_quiescence",
+        lambda: (True, {"phase": "release"}),
+    )
+    monkeypatch.setattr(
+        rollback.C,
+        "decision_flag",
+        lambda name: flag_state["enabled"] if name == rollback.FLAG else False,
+    )
+    monkeypatch.setattr(
+        rollback.queue,
+        "release_forward_rollout_fence",
+        lambda value: released_ids.append(value) or True,
+    )
+    monkeypatch.setattr(
+        rollback.queue,
+        "forward_rollout_fence_status",
+        lambda: {
+            "forward_fence_present": False,
+            "forward_fence_valid": False,
+        },
+    )
+    args = SimpleNamespace(
+        apply=True,
+        quiesced=True,
+        authority_active=True,
+        abort_off=False,
+        fence_id=fence_id,
+    )
+
+    with pytest.raises(RuntimeError, match="mismatches OFF flag"):
+        rollback._cmd_release_forward_fence(args)
+    assert released_ids == []
+
+    flag_state["enabled"] = True
+    assert rollback._cmd_release_forward_fence(args) == 0
+    assert released_ids == [fence_id]
+    assert '"released": true' in capsys.readouterr().out

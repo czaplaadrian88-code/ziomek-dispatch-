@@ -24,11 +24,12 @@ from dispatch_v2.committed_pickup_authority import (
     CommittedPickupPolicySnapshot,
     ResolutionOutcome,
     TIME_EVENT_CAS_SCHEMA_FIELD,
+    project_time_event_order,
     time_event_cas_artifact_present,
     time_event_cas_is_versioned,
     validate_committed_pickup_event,
+    validate_committed_time_policy_source,
     validate_new_order_time_intent_event,
-    resolve_czasowka_committed_observation,
 )
 
 AUTHORITY_ATTESTATION_SCHEMA = "committed_pickup_outbox_attestation.v1"
@@ -263,13 +264,17 @@ def apply_event(
             if event_type == "CZAS_KURIERA_UPDATED"
             else payload.get("observed_source")
         )
-        if observed_source != "pre_proposal_recheck":
+        if payload.get("committed_authority") is None:
+            observed_source = payload.get("source")
+        validate_committed_time_policy_source(
+            authority_policy, observed_source
+        )
+        if (
+            payload.get("committed_authority") is not None
+            and not authority_policy.authority_enabled
+        ):
             raise ValueError(
-                "authority_policy is reserved for pre_proposal_recheck"
-            )
-        if not authority_policy.authority_enabled:
-            raise ValueError(
-                "authority-disabled pre_proposal_recheck must use legacy apply"
+                "authority-disabled policy cannot apply committed authority"
             )
 
     # Granica transportu jest ostatnim miejscem, w którym surowy CK może
@@ -286,26 +291,11 @@ def apply_event(
                 "pre_proposal authority requires existing strict state"
             )
         if isinstance(current, dict):
-            if authority_policy is None:
-                resolved = state_machine.resolve_czasowka_ck_observation(
-                    current,
-                    dict(payload),
-                )
-            else:
-                resolved = resolve_czasowka_committed_observation(
-                    current,
-                    dict(payload),
-                    is_czasowka=C.is_czasowka_order(current),
-                    passive_guard_enabled=(
-                        authority_policy.passive_guard_enabled
-                    ),
-                    manual_passthrough_enabled=(
-                        authority_policy.manual_passthrough_enabled
-                    ),
-                    rutcom_forward_authority_enabled=(
-                        authority_policy.rutcom_forward_authority_enabled
-                    ),
-                )
+            resolved = state_machine.resolve_czasowka_ck_observation(
+                current,
+                dict(payload),
+                policy_snapshot=authority_policy,
+            )
             if (
                 resolved.outcome is ResolutionOutcome.APPLY
                 and isinstance(resolved.event, Mapping)
@@ -409,7 +399,9 @@ def apply_event(
         validation = validate_committed_pickup_event(
             current,
             event,
-            is_czasowka=C.is_czasowka_order(current),
+            is_czasowka=C.is_czasowka_order(
+                project_time_event_order(current, event)
+            ),
             # Exact queue claim jest pierwszym trwalym journalem transakcji.
             # Domyka crash-window claim->outbox nawet po hot rollbacku; bez
             # claimu biezace flagi nadal sa bezwzglednie wymagane.

@@ -1581,7 +1581,11 @@ def test_cold_start_absent_czasowka_routes_initial_tuple_through_authority(
         event_id,
         audit=False,
         old_plan_release_authorized=None,
+        committed_time_policy=None,
     ):
+        if event_type == "NEW_ORDER":
+            assert committed_time_policy is not None
+            assert committed_time_policy.producer == "panel_watcher"
         state_body = dict(payload or {})
         initial_intent = None
         if event_type == "NEW_ORDER":
@@ -1629,7 +1633,7 @@ def test_cold_start_absent_czasowka_routes_initial_tuple_through_authority(
 
     monkeypatch.setattr(pw, "_emit_and_apply_state", capture)
 
-    def apply_time(order_id, event):
+    def apply_time(order_id, event, **_kwargs):
         emitted.append(dict(event))
         assert sm.update_from_event(event) is not None
         return DurableApplyOutcome(
@@ -4442,7 +4446,7 @@ def test_ENABLE_PICKUP_TIME_DETECTION_on_off_gates_real_watcher_pickup_path(
 
     applied = []
 
-    def record_time_update(_order_id, event):
+    def record_time_update(_order_id, event, **_kwargs):
         applied.append(event)
         return SimpleNamespace(
             state_ready=True,
@@ -5049,3 +5053,331 @@ def test_v13_pickup_cas_cannot_apply_after_pickup_lifecycle_progressed():
     }
 
     assert time_event_cas_status(current, event) == "superseded"
+
+
+def test_panel_new_order_uses_pre_io_policy_after_live_hot_on(
+    tmp_path, monkeypatch
+):
+    """An OFF-started detail transaction cannot gain NEW_ORDER authority."""
+    from dispatch_v2 import lifecycle_downstream
+    from dispatch_v2 import panel_watcher as pw
+    from dispatch_v2 import state_machine as sm
+    from dispatch_v2.committed_pickup_authority import (
+        NEW_ORDER_TIME_AUTHORITY_SNAPSHOT_FIELD,
+        NEW_ORDER_TIME_INTENT_FIELD,
+    )
+
+    _isolate_durable_bus(tmp_path, monkeypatch)
+    state_path = tmp_path / "orders_state.json"
+    state_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(sm, "_state_path", lambda: str(state_path))
+    monkeypatch.setattr(lifecycle_downstream, "apply", lambda _event: None)
+    # Runtime is already ON when persistence starts; the fetch began with OFF.
+    monkeypatch.setattr(pw.C, "decision_flag", lambda _name: True)
+    policy = CommittedPickupPolicySnapshot(
+        manual_passthrough_enabled=False,
+        rutcom_forward_authority_enabled=False,
+        passive_guard_enabled=True,
+        producer="panel_watcher",
+    )
+    oid = "off-started-new-order"
+
+    outcome = pw._emit_and_apply_state(
+        "NEW_ORDER",
+        order_id=oid,
+        payload={
+            "order_type": "czasowka",
+            "prep_minutes": 60,
+            "pickup_at_warsaw": "2026-08-02T19:21:00+02:00",
+            "czas_kuriera_warsaw": "2026-08-02T19:21:00+02:00",
+            "czas_kuriera_hhmm": "19:21",
+        },
+        event_id=f"{oid}_NEW_ORDER_first",
+        committed_time_policy=policy,
+    )
+
+    assert outcome.state_event[
+        NEW_ORDER_TIME_AUTHORITY_SNAPSHOT_FIELD
+    ] is False
+    assert NEW_ORDER_TIME_INTENT_FIELD not in outcome.state_event
+    stored = sm.get_order_strict(oid)
+    assert stored["pickup_at_warsaw"].endswith("T19:21:00+02:00")
+    assert stored["czas_kuriera_hhmm"] == "19:21"
+
+
+@pytest.mark.parametrize(
+    ("started_forward", "live_forward", "expected_authority"),
+    [(False, True, False), (True, False, True)],
+)
+def test_panel_ck_recheck_policy_is_frozen_across_hot_flip(
+    monkeypatch, started_forward, live_forward, expected_authority
+):
+    """The same panel policy lease governs fetch, resolve and apply."""
+    from dispatch_v2 import panel_watcher as pw
+    from dispatch_v2 import state_machine as sm
+
+    def live_decision(name):
+        return bool(
+            live_forward
+            and name == "ENABLE_CZASOWKA_RUTCOM_FORWARD_AUTHORITY"
+        )
+
+    monkeypatch.setattr(sm, "decision_flag", live_decision)
+    monkeypatch.setattr(sm, "flag", _authority_runtime_flag)
+    policy = CommittedPickupPolicySnapshot(
+        manual_passthrough_enabled=False,
+        rutcom_forward_authority_enabled=started_forward,
+        passive_guard_enabled=True,
+        producer="panel_watcher",
+    )
+
+    event = pw._diff_czas_kuriera(
+        _existing_491578(),
+        {
+            "czas_kuriera_warsaw": "2026-08-01T19:21:00+02:00",
+            "czas_kuriera_hhmm": "19:21",
+            "pickup_at_warsaw": "2026-08-01T19:15:58+02:00",
+            "status_id": 2,
+            "prep_minutes": 60,
+            "decision_deadline": "2026-08-01T18:16:58+02:00",
+            "observed_at": "2026-08-01T18:50:57+02:00",
+        },
+        oid="491578",
+        policy_snapshot=policy,
+    )
+
+    assert bool(
+        event
+        and event["payload"].get("committed_authority")
+        == "rutcom_forward_commitment"
+    ) is expected_authority
+
+
+def test_panel_pickup_producer_classifies_post_event_prep(monkeypatch):
+    """Producer and state/preflight must agree on an elastic 20→time 60 event."""
+    from dispatch_v2 import panel_watcher as pw
+    from dispatch_v2 import state_machine as sm
+
+    monkeypatch.setattr(sm, "decision_flag", _authority_decision_flag)
+    monkeypatch.setattr(sm, "flag", _authority_runtime_flag)
+    current = {
+        "order_id": "elastic-promoted-at-producer",
+        "status": "assigned",
+        "courier_id": "492",
+        "order_type": "elastic",
+        "prep_minutes": 20,
+        "pickup_at_warsaw": "2026-08-02T14:00:00+02:00",
+        "czas_kuriera_warsaw": "2026-08-02T14:00:00+02:00",
+        "czas_kuriera_hhmm": "14:00",
+        "pickup_time_revision": 0,
+    }
+
+    event = pw._diff_pickup_time(
+        current,
+        {
+            "pickup_at_warsaw": "2026-08-02T14:15:00+02:00",
+            "czas_kuriera_warsaw": "2026-08-02T14:15:00+02:00",
+            "czas_kuriera_hhmm": "14:15",
+            "prep_minutes": 60,
+            "status_id": 2,
+            "observed_at": "2026-08-02T13:30:00+02:00",
+        },
+        oid=current["order_id"],
+    )
+
+    assert event is not None
+    assert event["payload"]["committed_authority"] == "rutcom_pickup_field"
+    assert event["payload"]["new_prep_minutes"] == 60
+
+
+def test_panel_off_started_raw_ck_keeps_durable_policy_after_live_on(
+    tmp_path, monkeypatch
+):
+    """Crash recovery must read the pre-fetch OFF lease, not the live flag."""
+    from dispatch_v2 import lifecycle_downstream
+    from dispatch_v2 import panel_watcher as pw
+    from dispatch_v2 import state_machine as sm
+    from dispatch_v2.committed_pickup_authority import (
+        COMMITTED_TIME_POLICY_SNAPSHOT_FIELD,
+    )
+
+    _seed_state_491578(sm, tmp_path, monkeypatch)
+    _isolate_durable_bus(tmp_path, monkeypatch)
+    sm.upsert_order(
+        "491578",
+        {
+            "czas_kuriera_warsaw": None,
+            "czas_kuriera_hhmm": None,
+        },
+        event="TEST_CLEAR_INITIAL_CK",
+    )
+    monkeypatch.setattr(lifecycle_downstream, "apply", lambda _event: None)
+    # The process is now ON, while this already-started request owns OFF.
+    monkeypatch.setattr(sm, "decision_flag", _authority_decision_flag)
+    monkeypatch.setattr(sm, "flag", _authority_runtime_flag)
+    policy = CommittedPickupPolicySnapshot(
+        producer="panel_watcher",
+        manual_passthrough_enabled=False,
+        rutcom_forward_authority_enabled=False,
+        passive_guard_enabled=True,
+    )
+    current = sm.get_order_strict("491578")
+    event = pw._diff_czas_kuriera(
+        current,
+        {
+            "czas_kuriera_warsaw": "2026-08-01T19:21:00+02:00",
+            "czas_kuriera_hhmm": "19:21",
+            "pickup_at_warsaw": current["pickup_at_warsaw"],
+            "status_id": 2,
+            "prep_minutes": 60,
+            "observed_at": "2026-08-01T18:50:57+02:00",
+        },
+        oid="491578",
+        policy_snapshot=policy,
+    )
+
+    assert event is not None
+    assert event["event_type"] == "CZAS_KURIERA_UPDATED"
+    outcome = pw._apply_time_update_event(
+        "491578",
+        event,
+        policy_snapshot=policy,
+    )
+
+    assert outcome.state_ready is True
+    assert outcome.state_event[
+        COMMITTED_TIME_POLICY_SNAPSHOT_FIELD
+    ]["rutcom_forward_authority_enabled"] is False
+    stored = sm.get_order_strict("491578")
+    assert stored["czas_kuriera_hhmm"] == "19:21"
+    assert stored.get("committed_pickup_authority") is None
+    assert sm.event_effect_status(outcome.state_event, stored) == "applied"
+
+
+def test_panel_on_started_authority_finishes_after_live_off(
+    tmp_path, monkeypatch
+):
+    """An ON lease remains sufficient through canonical seal and state apply."""
+    from dispatch_v2 import lifecycle_downstream
+    from dispatch_v2 import panel_watcher as pw
+    from dispatch_v2 import state_machine as sm
+
+    _seed_state_491578(sm, tmp_path, monkeypatch)
+    _isolate_durable_bus(tmp_path, monkeypatch)
+    monkeypatch.setattr(lifecycle_downstream, "apply", lambda _event: None)
+    monkeypatch.setattr(sm, "decision_flag", lambda _name: False)
+    monkeypatch.setattr(sm, "flag", lambda _name, default=None: False)
+    policy = CommittedPickupPolicySnapshot(
+        producer="panel_watcher",
+        manual_passthrough_enabled=False,
+        rutcom_forward_authority_enabled=True,
+        passive_guard_enabled=True,
+    )
+    event = pw._diff_czas_kuriera(
+        sm.get_order_strict("491578"),
+        {
+            "czas_kuriera_warsaw": "2026-08-01T19:21:00+02:00",
+            "czas_kuriera_hhmm": "19:21",
+            "pickup_at_warsaw": "2026-08-01T19:15:58+02:00",
+            "status_id": 2,
+            "prep_minutes": 60,
+            "observed_at": "2026-08-01T18:50:57+02:00",
+        },
+        oid="491578",
+        policy_snapshot=policy,
+    )
+
+    assert event["payload"]["committed_authority"] == (
+        "rutcom_forward_commitment"
+    )
+    outcome = pw._apply_time_update_event(
+        "491578",
+        event,
+        policy_snapshot=policy,
+    )
+
+    assert outcome.state_ready is True
+    stored = sm.get_order_strict("491578")
+    assert stored["pickup_at_warsaw"].endswith("T19:21:00+02:00")
+    assert stored["czas_kuriera_hhmm"] == "19:21"
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ["drop_producer", "wrong_schema", "non_boolean"],
+)
+def test_durable_time_policy_mutations_fail_closed(mutation):
+    """Any partial lease remains reserved and cannot fall back to live flags."""
+    from dispatch_v2 import state_machine as sm
+    from dispatch_v2.committed_pickup_authority import (
+        COMMITTED_TIME_POLICY_SNAPSHOT_FIELD,
+        deserialize_committed_time_policy,
+        serialize_committed_time_policy,
+    )
+
+    snapshot = serialize_committed_time_policy(
+        CommittedPickupPolicySnapshot(
+            producer="panel_watcher",
+            manual_passthrough_enabled=False,
+            rutcom_forward_authority_enabled=False,
+            passive_guard_enabled=True,
+        )
+    )
+    if mutation == "drop_producer":
+        snapshot.pop("producer")
+    elif mutation == "wrong_schema":
+        snapshot["schema"] = "committed_pickup.policy_snapshot.v0"
+    else:
+        snapshot["passive_guard_enabled"] = 1
+    event = {
+        "event_type": "CZAS_KURIERA_UPDATED",
+        "order_id": "491578",
+        "payload": {
+            "source": "first_acceptance",
+            "new_ck_iso": "2026-08-01T19:21:00+02:00",
+            "new_ck_hhmm": "19:21",
+        },
+        COMMITTED_TIME_POLICY_SNAPSHOT_FIELD: snapshot,
+    }
+
+    with pytest.raises((TypeError, ValueError)):
+        deserialize_committed_time_policy(snapshot)
+    assert sm.event_effect_status(event, _existing_491578()) == "superseded"
+
+
+def test_raw_coordinator_claim_does_not_gain_unclaimed_policy_metadata(
+    monkeypatch,
+):
+    """The exact queue claim hash remains identical across durable transport."""
+    from dispatch_v2 import panel_watcher as pw
+    from dispatch_v2.committed_pickup_authority import (
+        COMMITTED_TIME_POLICY_SNAPSHOT_FIELD,
+    )
+
+    captured = {}
+
+    def emit_and_apply(*_args, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(state_ready=True)
+
+    monkeypatch.setattr(pw.durable_event_apply, "emit_and_apply", emit_and_apply)
+    policy = CommittedPickupPolicySnapshot(
+        producer="panel_watcher",
+        manual_passthrough_enabled=False,
+        rutcom_forward_authority_enabled=False,
+        passive_guard_enabled=True,
+    )
+    pw._emit_and_apply_state(
+        "PICKUP_TIME_UPDATED",
+        order_id="elastic-claim",
+        payload={
+            "source": "coordinator_force",
+            "new_pickup_at_warsaw": "2026-08-02T20:00:00+02:00",
+        },
+        event_id="elastic-claim-event",
+        audit=True,
+        committed_time_policy=policy,
+    )
+
+    metadata = captured.get("state_event_metadata") or {}
+    assert COMMITTED_TIME_POLICY_SNAPSHOT_FIELD not in metadata

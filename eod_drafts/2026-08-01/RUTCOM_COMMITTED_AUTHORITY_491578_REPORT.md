@@ -1,4 +1,4 @@
-# RUTCOM committed pickup authority — raport kandydata v22, 2026-08-02
+# RUTCOM committed pickup authority — raport kandydata v23, 2026-08-02
 
 ## Wynik
 
@@ -12,6 +12,42 @@ Rutcom. Granica transportu przed zapisem outboxa zamienia legalny CK na jeden
 kanoniczny `PICKUP_TIME_UPDATED`. Jeden handler state atomowo zapisuje pickup,
 CK, HH:MM, monotoniczną rewizję oraz provenance. Plan, scoring po potwierdzonym
 apply i aplikacja dziedziczą tę samą prawdę.
+
+## Co domknięto w v23
+
+Dwa blind review v22 ponownie prawidłowo zatrzymały live. Authority verdict
+`ba2e70835ee1d95fbc0caf4fde2e364b2bb1ce19d12d6233e379943f70fac12a` i
+rollout verdict
+`3591101bad6e5293febd86ddf1db96401742b35d54352049f7335593752e9aa8`
+wydały `CONFIRMED_DEFECT`. Po deduplikacji sześć klas obejmowało późny odczyt
+flagi NEW_ORDER, nieprzeniesiony panelowy snapshot, klasyfikację sprzed zmiany
+prep, pozorne `--quiesced`, brak assignment snapshotu w rollback classifierze
+i zbyt szeroką blokadę kolejki. MAIN odtworzył osiem czerwonych przypadków,
+łącznie z enqueue między preflightem i flipem oraz brakującą mapą consumera.
+
+V23 ustanawia jeden trwały policy lease dla obu producerów. Snapshot jest
+chwytany przed mutable I/O, związany exact producer/source, zapisany w raw
+evencie i czytany przez handler/oracle po crashu. Wspólny projector klasyfikuje
+post-observation aggregate. Rollout ma trwały UUID+SHA forward fence pod tym
+samym flockiem co wszystkie mutatory kolejki, a operator CLI reprobuje exact
+unity i wiąże release z efektywnym ON albo jawnym abortem OFF.
+
+Po fixie integracja ma 428/428, queue+rollback 111/111, ratchet 27/27 i flagi
+33/33. Pierwsza pełna suita miała 6740 pass i jeden słuszny fail AST consumer
+mapy; po naprawie źródłowego specu i `seed --merge` finalny wynik to 6741
+passed, 74 skipped, 8 xfailed, 153 warnings, 0 failed w 465,95 s. Produkcja
+pozostaje bez zmian/OFF. Dwa świeże final-byte `CLEAN` są kolejną bramką.
+
+### Mapa kompletności v23
+
+| Miejsce | Rola | Dotknięte | Dowód |
+|---|---|---|---|
+| authority/apply/state | jeden policy owner, durable transport i coupled writer | TAK | exact producer/source lease, post-observation projection, crash/hot-flip oracles |
+| panel_watcher/dispatch_pipeline | dwa producenci obserwacji | TAK | capture przed I/O, ten sam obiekt/event przez resolver i apply |
+| coordinator_time_recheck | jedyny owner kolejki | TAK | UUID+SHA fence blokuje każdy mutator pod jednym flockiem |
+| rollback tool | release gate | TAK | exact writer reprobe, valid fence, flag-bound exact release |
+| lifecycle registry | mechaniczna mapa flag | TAK | AST/spec/test/registry 557/557 po kontrolnym failu |
+| plan/scoring/serializer/apka | konsumenci state | N-D | brak render override, brak konkurencyjnego writera |
 
 ## Co domknięto w v22
 
@@ -755,14 +791,15 @@ ACK na docelowy stan `ON` i wymagane kontrolowane restarty, lecz kod nie został
 wdrożony, procesy nie były
 restartowane, a runtime nie został zmieniony.
 
-Operacja live wymaga quiesce wyłącznie panel-watcher i shadow, zielonego
-`forward-status --quiesced`, backupu, wdrożenia jawnego commita oraz
-`py_compile`/import
-check przy zatrzymanych writerach. Flaga musi zostać ustawiona atomowo na
-`true` przed uruchomieniem nowych procesów; dopiero potem start, health/PID/
-NRestarts/fingerprint i replay/smoke 491578. Eliminuje to okno nowy-kod/OFF,
-które mogłoby stworzyć kolejny legacy `NEW_ORDER`. `dispatch-telegram` nie jest
-częścią zakresu.
+Operacja live wymaga backupu, quiesce wyłącznie panel-watcher i shadow,
+wdrożenia jawnego commita oraz `py_compile`/import check przy zatrzymanych
+writerach. `fence-forward --apply --quiesced` zakłada exact UUID+SHA fence i
+wykonuje pełny preflight. Przy `ready=true` flaga jest ustawiana atomowo na
+`true`, po czym `release-forward-fence --apply --quiesced --authority-active
+--fence-id <id>` sprawdza efektywny ON i zwalnia wyłącznie ten receipt. Dopiero
+potem start, health/PID/NRestarts/fingerprint i replay/smoke 491578.
+`nadajesz-panel` nie wymaga restartu: jego subprocess enqueue jest blokowany
+przez fence. `dispatch-telegram` nie jest częścią zakresu.
 
 Rollback zachowania jest hot: nowa flaga `false`. Revert kodu pre-v4 wymaga
 OFF każdej flagi z kanonicznej listy authority, quiesce, terminalnego authority
@@ -770,10 +807,11 @@ outboxa, zweryfikowanego fence-last receiptu,
 trwałego backupu i mechanicznej bramki
 `tools/rutcom_committed_authority_rollback.py`; prosty revert jest zabroniony.
 Forward deploy nie wymaga migracji danych, ale po zatrzymaniu starych writerów
-musi przejść read-only `forward-status --quiesced` schema v4: mechanicznie
+musi przejść fenced preflight schema v4: mechanicznie
 potwierdzone loaded+inactive `dispatch-panel-watcher.service` i
 `dispatch-shadow.service`, flaga OFF, pusta kolejka,
-zero pending writerów CK/pickup czasówki, zero czasowych `NEW_ORDER`, zero
+ważny forward fence, zero blokujących rekordów kolejki, zero pending writerów
+CK/pickup czasówki, zero czasowych `NEW_ORDER`, zero
 unfinished pre-v4 raw eventów, zero pre-v16 assignmentów z CK bez snapshotów
 polityki oraz zero aktywnych niepełnych kontraktów czasówki. Dopiero potem wolno
 podmienić kod.
@@ -783,8 +821,9 @@ ACK, post-pickup/stale-generation/revision i spójności pickup↔CK.
 
 ## Identyfikacja kandydata
 
-- Wersja: v21, po pełnej regresji, przed dwoma świeżymi review exact-byte
+- Wersja: v23, po pełnej regresji, przed dwoma świeżymi review exact-byte
 - Branch: `fix/rutcom-committed-provenance-v20-20260802`
 - Worktree: `/root/worktrees/dispatch_v2/active/20260802-rutcom-v17-integration-pkgroot/dispatch_v2`
-- Zintegrowany base produkcyjny: `b8bf3f8d3`
+- Base przed v23: `16ec386845c34f947959c42c00a736d82d1a57d3`
+- Zintegrowany produkcyjny master: `64f773ddc`
 - Produkcja: bez zmian; zero deployu, restartu, migracji i flipu.

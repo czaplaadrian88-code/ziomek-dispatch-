@@ -356,7 +356,7 @@ def test_both_producers_and_defense_route_to_one_resolver():
     assert "state_machine.resolve_czasowka_ck_observation(" in _source(
         "committed_pickup_apply.py"
     )
-    assert "resolve_czasowka_committed_observation(" in _source(
+    assert "resolve_czasowka_committed_observation(" not in _source(
         "committed_pickup_apply.py"
     )
     assert "build_czasowka_manual_ck_pickup_event(" not in watcher
@@ -395,7 +395,46 @@ def test_preproposal_policy_is_frozen_once_across_async_and_apply_boundaries():
     assert "authority_policy: CommittedPickupPolicySnapshot | None" in boundary
     assert "authority_policy.passive_guard_enabled" in boundary
     assert "policy_snapshot=authority_policy" in state
-    assert "authority-enabled pre_proposal_recheck requires durable apply" in state
+    assert "validate_committed_time_policy_source(" in state
+    assert 'producer="pre_proposal_recheck"' in snapshot
+
+
+def test_panel_policy_is_captured_before_io_and_bound_through_durable_apply():
+    watcher = _source("panel_watcher.py")
+    state = _source("state_machine.py")
+    authority = _source("committed_pickup_authority.py")
+    tree = ast.parse(watcher)
+    functions = {
+        node.name: ast.get_source_segment(watcher, node) or ""
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    snapshot = functions["_panel_committed_time_policy_snapshot"]
+    diff = functions["_diff_and_emit"]
+    cold = functions["_post_restart_cold_start_scan"]
+    emitter = functions["_emit_and_apply_state"]
+
+    assert 'producer="panel_watcher"' in snapshot
+    assert "C.decision_flag(MANUAL_CK_AUTHORITY_FLAG)" in snapshot
+    assert "C.decision_flag(RUTCOM_FORWARD_AUTHORITY_FLAG)" in snapshot
+    assert diff.count("_panel_committed_time_policy_snapshot()") == 1
+    assert diff.index("_panel_committed_time_policy_snapshot()") < diff.index(
+        "durable_event_apply.drain_pending("
+    )
+    assert diff.index("_panel_committed_time_policy_snapshot()") < diff.index(
+        "_pdp.prefetch_details("
+    )
+    assert diff.count("policy_snapshot=") >= 4
+    assert diff.count("_committed_time_policy") >= 8
+    assert "committed_time_policy=_committed_time_policy" in diff
+    assert cold.index("_panel_committed_time_policy_snapshot()") < cold.index(
+        "fetch_order_details("
+    )
+    assert "committed_time_policy=committed_time_policy" in cold
+    assert "serialize_committed_time_policy(committed_time_policy)" in emitter
+    assert "deserialize_committed_time_policy(" in state
+    assert "COMMITTED_TIME_POLICY_SNAPSHOT_FIELD in event" in state
+    assert "def validate_committed_time_policy_source(" in authority
 
 
 def test_coordinator_authority_is_receipt_bound_end_to_end():
@@ -498,7 +537,22 @@ def test_code_rollback_is_mechanically_gated_across_queue_and_outbox():
     assert "FORWARD_WRITER_UNITS = (" in tool
     assert "def _probe_forward_writer_quiescence(" in tool
     assert "and writer_quiescence_verified" in tool
+    assert tool.count("_probe_forward_writer_quiescence()") >= 4
     assert 'forward_status.add_argument("--quiesced"' in tool
+    assert 'status.add_argument("--quiesced"' in tool
+    assert "queue.rollback_records_snapshot()" in tool
+    assert "queue.rollback_record_is_unclaimed(" in tool
+    assert "and forward_blocking_queue_records == 0" in tool
+    assert "queue_record_count_matches_status" in tool
+    assert "def rollback_records_snapshot(" in queue
+    assert "def rollback_record_is_unclaimed(" in queue
+    assert "def acquire_forward_rollout_fence(" in queue
+    assert "def release_forward_rollout_fence(" in queue
+    assert "def forward_rollout_fence_status(" in queue
+    assert "coordinator time queue fenced for forward authority rollout" in queue
+    assert 'and forward_fence["forward_fence_valid"]' in tool
+    assert "def _cmd_fence_forward(" in tool
+    assert "def _cmd_release_forward_fence(" in tool
     assert "projection[oid] = str(base[ELIGIBLE_AT_FIELD])" in queue
     assert '"safe_for_forward_deploy": safe_for_forward_deploy' in tool
     assert 'sub.add_parser(\n        "forward-status"' in tool
@@ -561,7 +615,8 @@ def test_cold_start_and_null_pickup_cannot_bypass_canonical_time_owner():
     assert "continue" in cold_start[
         cold_start.index("if not _initialized.state_ready:") : assign_at
     ]
-    assert "if new_iso and C.is_czasowka_order(old_state):" in pickup
+    assert "if new_iso:" in pickup
+    assert "policy_snapshot=policy_snapshot" in pickup
     assert "if old_iso and new_iso and C.is_czasowka_order(old_state):" not in pickup
     assert "def _initialize_new_order_time_contract(" in watcher
     assert watcher.count("_initialize_new_order_time_contract(") >= 3
@@ -892,7 +947,7 @@ def test_event_producers_are_closed_over_known_funnels():
     watcher = _source("panel_watcher.py")
     pipeline = _source("dispatch_pipeline.py")
     boundary = _source("committed_pickup_apply.py")
-    assert "return apply_event(event)" in watcher
+    assert "return apply_event(event, authority_policy=policy_snapshot)" in watcher
     assert "outcome = _durable_apply(" in pipeline
     assert "durable_event_apply.emit_and_apply(" in boundary
 
@@ -992,10 +1047,10 @@ def test_protected_writer_scanner_catches_static_join_key():
 def test_semantic_literal_closure_blocks_constant_alias_bypass():
     expected = {
         "PICKUP_TIME_UPDATED": (
-            "3b6a795052f2dfe7ca89e53bc1f643f19e7ed48f357a80986e454fa26384142c"
+            "1f6392af8dd0cd581a96be921b9278f273662a33e312fc19bb8c9f0977a5b156"
         ),
         "CZAS_KURIERA_UPDATED": (
-            "18cf5797d2a998bba3e8323dc585d07f6640e2288ada7a1f472fc3f9b647202a"
+            "8fe4c3a4a8d8ad1274066912b306f8e635e5dd4e316e4f5ca646f25b88eafdf9"
         ),
         "pickup_at_warsaw": (
             "2672d9f69eb106272ee116c4482ea2215f27e1957c4451886ec24bbea0bc8e48"

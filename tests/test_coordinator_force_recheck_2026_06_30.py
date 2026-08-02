@@ -583,11 +583,87 @@ def test_elastic_coordinator_event_never_enters_czasowka_receipt_policy(
             "source": "coordinator_panel",
         }
     )
+    payload["observed_prep_minutes"] = 20
 
     resolution = sm.resolve_czasowka_ck_observation(existing, payload)
 
     assert resolution.outcome.value == "not_applicable"
     assert resolution.reason == "not_czasowka"
+
+
+def test_forward_rollout_fence_atomically_blocks_new_enqueue(tmp_queue):
+    """A coordinator click cannot appear between green preflight and flip."""
+    receipt = ctr.acquire_forward_rollout_fence()
+
+    assert receipt["acquired"] is True
+    assert receipt["forward_fence_valid"] is True
+    with pytest.raises(RuntimeError, match="forward authority rollout"):
+        ctr.enqueue(["8"], source="coordinator_panel")
+    status = ctr.forward_rollout_fence_status()
+    assert status["forward_fence_valid"] is True
+    with pytest.raises(RuntimeError, match="id mismatch"):
+        ctr.release_forward_rollout_fence(
+            "00000000-0000-4000-8000-000000000001"
+        )
+
+    assert ctr.release_forward_rollout_fence(
+        receipt["forward_fence_id"]
+    ) is True
+    assert ctr.forward_rollout_fence_status()[
+        "forward_fence_present"
+    ] is False
+    assert ctr.enqueue(["8"], source="coordinator_panel") == 1
+
+
+def test_forward_rollout_fence_detects_queue_mutation(tmp_queue):
+    """Any non-cooperating queue writer invalidates the rollout receipt."""
+    receipt = ctr.acquire_forward_rollout_fence()
+    Path(tmp_queue).write_text(
+        json.dumps({"unexpected": "mutation"}),
+        encoding="utf-8",
+    )
+
+    status = ctr.forward_rollout_fence_status()
+
+    assert receipt["forward_fence_valid"] is True
+    assert status["forward_fence_valid"] is False
+    assert status["forward_fence_error"] == "fenced_queue_changed"
+
+
+def test_forward_rollout_fence_blocks_every_queue_mutator(tmp_queue):
+    """The rollout receipt freezes the whole queue, not only new clicks."""
+    assert ctr.enqueue(["8"], source="coordinator_panel") == 1
+    pending = ctr.pending_with_receipts()["8"]
+    queue_data = json.loads(Path(tmp_queue).read_text(encoding="utf-8"))
+    queue_data["9"] = datetime.now(timezone.utc).isoformat()
+    Path(tmp_queue).write_text(
+        json.dumps(queue_data, sort_keys=True), encoding="utf-8"
+    )
+    event = {
+        "event_type": "CZAS_KURIERA_UPDATED",
+        "order_id": "8",
+        "courier_id": "1",
+        "payload": {
+            "old_ck_iso": "2026-06-30T16:00:00+02:00",
+            "old_ck_hhmm": "16:00",
+            "new_ck_iso": "2026-06-30T16:05:00+02:00",
+            "new_ck_hhmm": "16:05",
+            "delta_min": 5.0,
+            "source": "coordinator_force",
+        },
+    }
+    fence = ctr.acquire_forward_rollout_fence()
+    before = Path(tmp_queue).read_bytes()
+
+    assert ctr.pending_with_receipts() == {}
+    assert ctr.upgrade_legacy_receipt("9") is None
+    assert ctr.claim_receipt(pending, order_id="8", event=event) is None
+    assert ctr.ack_receipts({"8": pending}) == 0
+    assert Path(tmp_queue).read_bytes() == before
+    assert ctr.forward_rollout_fence_status()["forward_fence_valid"] is True
+    assert ctr.release_forward_rollout_fence(
+        fence["forward_fence_id"]
+    ) is True
 
 
 def test_receipt_claim_is_exact_one_shot_and_crash_retry_is_identical(

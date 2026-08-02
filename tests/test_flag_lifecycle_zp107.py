@@ -261,13 +261,13 @@ def test_committed_authority_flags_have_exact_source_bound_runtime_consumers(
     expected = [
         "dispatch_v2/committed_pickup_apply.py",
         "dispatch_v2/dispatch_pipeline.py",
+        "dispatch_v2/panel_watcher.py",
         "dispatch_v2/state_machine.py",
         "dispatch_v2/tools/rutcom_committed_authority_rollback.py",
     ]
     if flag_name == "ENABLE_CZASOWKA_RUTCOM_FORWARD_AUTHORITY":
         expected[2:2] = [
             "dispatch_v2/durable_event_apply.py",
-            "dispatch_v2/panel_watcher.py",
         ]
     spec = SD.ENGINE_SYMBOLIC_CONSUMERS[flag_name]
     entry = _registry()["flags"][flag_name]

@@ -254,6 +254,16 @@ def collect_status(
         if is_committed_pickup_outbox_artifact(row)
     ]
     queue_status = queue.legacy_rollback_status()
+    try:
+        forward_fence = queue.forward_rollout_fence_status()
+    except Exception:
+        forward_fence = {
+            "forward_fence_present": False,
+            "forward_fence_valid": False,
+            "forward_fence_error": "fence_status_unreadable",
+            "forward_fence_id": None,
+            "forward_fence_queue_sha256": None,
+        }
     authority_flag_states = {
         MANUAL_CK_AUTHORITY_FLAG: C.decision_flag(
             MANUAL_CK_AUTHORITY_FLAG
@@ -279,6 +289,40 @@ def collect_status(
     except Exception:
         orders_state = {}
         state_scan_ok = False
+    try:
+        queue_records = queue.rollback_records_snapshot()
+        queue_records_scan_ok = isinstance(queue_records, dict)
+        if not queue_records_scan_ok:
+            queue_records = {}
+    except Exception:
+        queue_records = {}
+        queue_records_scan_ok = False
+    forward_blocking_queue_records = 0
+    forward_ignored_elastic_queue_records = 0
+    for raw_order_id, record in queue_records.items():
+        order_id = str(raw_order_id)
+        order = orders_state.get(order_id)
+        stable_unclaimed_elastic = bool(
+            queue.rollback_record_is_unclaimed(
+                record,
+                order_id=order_id,
+            )
+            and isinstance(order, Mapping)
+            and str(order.get("order_type") or "").strip().lower()
+            == "elastic"
+            and order.get("status")
+            not in {"delivered", "returned_to_pool", "cancelled"}
+            and not C.is_czasowka_order(dict(order))
+            and not state_has_committed_pickup_artifact(order)
+        )
+        if stable_unclaimed_elastic:
+            forward_ignored_elastic_queue_records += 1
+        else:
+            forward_blocking_queue_records += 1
+    queue_record_count_matches_status = bool(
+        queue_records_scan_ok
+        and len(queue_records) == int(queue_status.get("records", -1))
+    )
     active_committed_state_count = sum(
         1
         for order in orders_state.values()
@@ -333,8 +377,11 @@ def collect_status(
     safe_for_forward_deploy = bool(
         not flag_enabled
         and writer_quiescence_verified
+        and forward_fence["forward_fence_valid"]
         and state_scan_ok
-        and queue_status["records"] == 0
+        and queue_records_scan_ok
+        and queue_record_count_matches_status
+        and forward_blocking_queue_records == 0
         # Każdy unfinished row z kanonicznej klasy authority/raw CK musi
         # terminalizować się przed flipem. Inaczej ten sam durable event może
         # mieć inny handler/oracle outcome po zmianie flagi. Szczegółowe
@@ -349,6 +396,8 @@ def collect_status(
     common_safe = bool(
         not enabled_authority_flags
         and not authority_rows
+        and writer_quiescence_verified
+        and not forward_fence["forward_fence_present"]
         and queue_status["safe_queue_projection"]
         and state_scan_ok
         and active_committed_state_count == 0
@@ -411,6 +460,17 @@ def collect_status(
             for row in pre_v16_assignment_ck_rows
         ],
         "queue": queue_status,
+        "forward_fence": forward_fence,
+        "queue_records_scan_ok": queue_records_scan_ok,
+        "queue_record_count_matches_status": (
+            queue_record_count_matches_status
+        ),
+        "forward_blocking_queue_records": (
+            forward_blocking_queue_records
+        ),
+        "forward_ignored_elastic_queue_records": (
+            forward_ignored_elastic_queue_records
+        ),
         "writer_quiescence_verified": bool(writer_quiescence_verified),
         "writer_states": dict(writer_states or {}),
         "safe_for_forward_deploy": safe_for_forward_deploy,
@@ -423,8 +483,15 @@ def _print(value: dict) -> None:
     print(json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2))
 
 
-def _cmd_status(_args: argparse.Namespace) -> int:
-    status = collect_status()
+def _cmd_status(args: argparse.Namespace) -> int:
+    quiesced = False
+    writer_states = None
+    if args.quiesced:
+        quiesced, writer_states = _probe_forward_writer_quiescence()
+    status = collect_status(
+        writer_quiescence_verified=quiesced,
+        writer_states=writer_states,
+    )
     _print(status)
     return 0 if status["safe_for_code_revert"] else 1
 
@@ -444,18 +511,96 @@ def _cmd_forward_status(args: argparse.Namespace) -> int:
     return 0 if status["safe_for_forward_deploy"] else 1
 
 
+def _cmd_fence_forward(args: argparse.Namespace) -> int:
+    if not args.apply or not args.quiesced:
+        raise RuntimeError(
+            "fence-forward requires both --apply and --quiesced after "
+            "stopping all forward writer units"
+        )
+    before_quiesced, before_states = _probe_forward_writer_quiescence()
+    if not before_quiesced:
+        status = collect_status(
+            writer_quiescence_verified=False,
+            writer_states=before_states,
+        )
+        _print({"fenced": False, "status": status})
+        return 2
+    fence_receipt = queue.acquire_forward_rollout_fence()
+    after_quiesced, after_states = _probe_forward_writer_quiescence()
+    status = collect_status(
+        writer_quiescence_verified=after_quiesced,
+        writer_states=after_states,
+    )
+    result = {
+        "fenced": bool(status["forward_fence"]["forward_fence_valid"]),
+        "ready": bool(status["safe_for_forward_deploy"]),
+        "fence_receipt": fence_receipt,
+        "status": status,
+    }
+    _print(result)
+    return 0 if result["ready"] else 3
+
+
+def _cmd_release_forward_fence(args: argparse.Namespace) -> int:
+    if not args.apply or not args.quiesced:
+        raise RuntimeError(
+            "release-forward-fence requires --apply and --quiesced"
+        )
+    if bool(args.authority_active) == bool(args.abort_off):
+        raise RuntimeError(
+            "release-forward-fence requires exactly one of "
+            "--authority-active or --abort-off"
+        )
+    quiesced, writer_states = _probe_forward_writer_quiescence()
+    if not quiesced:
+        _print(
+            {
+                "released": False,
+                "writer_quiescence_verified": False,
+                "writer_states": writer_states,
+            }
+        )
+        return 2
+    flag_enabled = bool(C.decision_flag(FLAG))
+    if args.authority_active and not flag_enabled:
+        raise RuntimeError("authority-active acknowledgement mismatches OFF flag")
+    if args.abort_off and flag_enabled:
+        raise RuntimeError("abort-off acknowledgement mismatches ON flag")
+    released = queue.release_forward_rollout_fence(args.fence_id)
+    after = queue.forward_rollout_fence_status()
+    result = {
+        "released": bool(released and not after["forward_fence_present"]),
+        "flag_enabled": flag_enabled,
+        "after": after,
+    }
+    _print(result)
+    return 0 if result["released"] else 3
+
+
 def _cmd_prepare(args: argparse.Namespace) -> int:
     if not args.apply or not args.quiesced:
         raise RuntimeError(
             "prepare requires both --apply and --quiesced; quiesce all code "
             "writers and verify the effective OFF fingerprint first"
         )
-    before = collect_status()
+    before_quiesced, before_writer_states = (
+        _probe_forward_writer_quiescence()
+    )
+    before = collect_status(
+        writer_quiescence_verified=before_quiesced,
+        writer_states=before_writer_states,
+    )
     if not before["safe_to_prepare"]:
         _print({"prepared": False, "before": before})
         return 2
     receipt = queue.prepare_legacy_rollback(args.queue_backup)
-    after = collect_status()
+    after_quiesced, after_writer_states = (
+        _probe_forward_writer_quiescence()
+    )
+    after = collect_status(
+        writer_quiescence_verified=after_quiesced,
+        writer_states=after_writer_states,
+    )
     result = {
         "prepared": after["safe_for_code_revert"],
         "queue_conversion_receipt": receipt,
@@ -495,6 +640,7 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
     status = sub.add_parser("status", help="read-only rollback preflight")
+    status.add_argument("--quiesced", action="store_true")
     status.set_defaults(func=_cmd_status)
 
     forward_status = sub.add_parser(
@@ -503,6 +649,25 @@ def _parser() -> argparse.ArgumentParser:
     )
     forward_status.add_argument("--quiesced", action="store_true")
     forward_status.set_defaults(func=_cmd_forward_status)
+
+    fence_forward = sub.add_parser(
+        "fence-forward",
+        help="atomically fence coordinator enqueue before forward flag flip",
+    )
+    fence_forward.add_argument("--quiesced", action="store_true")
+    fence_forward.add_argument("--apply", action="store_true")
+    fence_forward.set_defaults(func=_cmd_fence_forward)
+
+    release_forward = sub.add_parser(
+        "release-forward-fence",
+        help="release the exact forward fence after ON or an OFF abort",
+    )
+    release_forward.add_argument("--fence-id", required=True)
+    release_forward.add_argument("--quiesced", action="store_true")
+    release_forward.add_argument("--authority-active", action="store_true")
+    release_forward.add_argument("--abort-off", action="store_true")
+    release_forward.add_argument("--apply", action="store_true")
+    release_forward.set_defaults(func=_cmd_release_forward_fence)
 
     prepare = sub.add_parser(
         "prepare",

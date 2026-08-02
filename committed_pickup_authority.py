@@ -142,6 +142,7 @@ class CommittedPickupPolicySnapshot:
     manual_passthrough_enabled: bool
     rutcom_forward_authority_enabled: bool
     passive_guard_enabled: bool
+    producer: str = "pre_proposal_recheck"
 
     def __post_init__(self) -> None:
         for field_name in (
@@ -151,6 +152,10 @@ class CommittedPickupPolicySnapshot:
         ):
             if type(getattr(self, field_name)) is not bool:
                 raise TypeError(f"{field_name} must be exact bool")
+        if self.producer not in _COMMITTED_TIME_POLICY_SOURCES:
+            raise ValueError(
+                f"unsupported committed time policy producer: {self.producer!r}"
+            )
 
     @property
     def authority_enabled(self) -> bool:
@@ -158,6 +163,83 @@ class CommittedPickupPolicySnapshot:
             self.manual_passthrough_enabled
             or self.rutcom_forward_authority_enabled
         )
+
+
+_COMMITTED_TIME_POLICY_SOURCES = {
+    "pre_proposal_recheck": frozenset({"pre_proposal_recheck"}),
+    "panel_watcher": frozenset(
+        {
+            "coordinator_force",
+            "first_acceptance",
+            "panel_pickup_recheck",
+            "panel_re_check",
+        }
+    ),
+}
+COMMITTED_TIME_POLICY_SNAPSHOT_FIELD = "committed_time_policy_snapshot"
+COMMITTED_TIME_POLICY_SNAPSHOT_SCHEMA = "committed_pickup.policy_snapshot.v1"
+_COMMITTED_TIME_POLICY_SNAPSHOT_KEYS = frozenset(
+    {
+        "schema",
+        "producer",
+        "manual_passthrough_enabled",
+        "rutcom_forward_authority_enabled",
+        "passive_guard_enabled",
+    }
+)
+
+
+def validate_committed_time_policy_source(
+    policy: CommittedPickupPolicySnapshot,
+    source: object,
+) -> None:
+    """Bind a captured policy lease to one registered producer source."""
+    if type(policy) is not CommittedPickupPolicySnapshot:
+        raise TypeError("policy must be CommittedPickupPolicySnapshot")
+    if source not in _COMMITTED_TIME_POLICY_SOURCES[policy.producer]:
+        raise ValueError(
+            "committed time policy producer/source mismatch: "
+            f"{policy.producer!r}/{source!r}"
+        )
+
+
+def serialize_committed_time_policy(
+    policy: CommittedPickupPolicySnapshot,
+) -> dict:
+    """Create the exact durable representation used by raw time events."""
+    if type(policy) is not CommittedPickupPolicySnapshot:
+        raise TypeError("policy must be CommittedPickupPolicySnapshot")
+    return {
+        "schema": COMMITTED_TIME_POLICY_SNAPSHOT_SCHEMA,
+        "producer": policy.producer,
+        "manual_passthrough_enabled": policy.manual_passthrough_enabled,
+        "rutcom_forward_authority_enabled": (
+            policy.rutcom_forward_authority_enabled
+        ),
+        "passive_guard_enabled": policy.passive_guard_enabled,
+    }
+
+
+def deserialize_committed_time_policy(
+    value: object,
+) -> CommittedPickupPolicySnapshot:
+    """Validate an exact durable policy; partial markers never downgrade."""
+    if not isinstance(value, Mapping):
+        raise ValueError("committed time policy snapshot must be an object")
+    if frozenset(value) != _COMMITTED_TIME_POLICY_SNAPSHOT_KEYS:
+        raise ValueError("committed time policy snapshot has invalid shape")
+    if value.get("schema") != COMMITTED_TIME_POLICY_SNAPSHOT_SCHEMA:
+        raise ValueError("committed time policy snapshot has invalid schema")
+    return CommittedPickupPolicySnapshot(
+        producer=value.get("producer"),
+        manual_passthrough_enabled=value.get(
+            "manual_passthrough_enabled"
+        ),
+        rutcom_forward_authority_enabled=value.get(
+            "rutcom_forward_authority_enabled"
+        ),
+        passive_guard_enabled=value.get("passive_guard_enabled"),
+    )
 
 
 def project_time_event_order(
@@ -180,6 +262,27 @@ def project_time_event_order(
         if new_value is not None:
             projected[state_field] = new_value
     return projected
+
+
+def project_time_observation_order(
+    current: Mapping[str, object] | None,
+    observation: Mapping[str, object] | None,
+) -> dict:
+    """Project a producer observation through the canonical coupled writer."""
+    observation = observation or {}
+    return project_time_event_order(
+        current,
+        {
+            "new_order_type": observation.get("observed_order_type"),
+            "new_prep_minutes": observation.get("observed_prep_minutes"),
+            "new_decision_deadline": observation.get(
+                "observed_decision_deadline"
+            ),
+            "new_zmiana_czasu_odbioru": observation.get(
+                "new_zmiana_czasu_odbioru"
+            ),
+        },
+    )
 
 
 ASSIGNMENT_CK_FORWARD_SNAPSHOT_FIELD = (
@@ -212,6 +315,8 @@ _NEW_ORDER_TIME_INTENT_FIELDS = frozenset(
 )
 _AUTHORITY_EVENT_EXACT_KEYS = frozenset(
     {
+        ASSIGNMENT_CK_FORWARD_SNAPSHOT_FIELD,
+        ASSIGNMENT_CK_PASSIVE_SNAPSHOT_FIELD,
         "committed_authority_attestation",
     }
 )
@@ -335,6 +440,11 @@ def is_committed_pickup_artifact(
     if not event:
         return True
     if _event_has_authority_artifact(event):
+        return True
+    if COMMITTED_TIME_POLICY_SNAPSHOT_FIELD in event:
+        # Raw time work carrying a v23 policy lease is safe to resume only in
+        # code that understands that lease.  Presence, even malformed, blocks
+        # a code-contract revert instead of silently restoring live flags.
         return True
     event_type = event.get("event_type")
     if not isinstance(event_type, str) or not event_type.strip():
@@ -1913,6 +2023,8 @@ __all__ = [
     "COMMITTED_PICKUP_COUPLED_FIELDS",
     "COMMITTED_PICKUP_EVENT_ID_MARKER",
     "COMMITTED_PICKUP_STATE_FIELDS",
+    "COMMITTED_TIME_POLICY_SNAPSHOT_FIELD",
+    "COMMITTED_TIME_POLICY_SNAPSHOT_SCHEMA",
     "CommittedPickupPolicySnapshot",
     "CommittedPickupResolution",
     "NEW_ORDER_TIME_INTENT_FIELD",
@@ -1930,6 +2042,7 @@ __all__ = [
     "committed_pickup_effect_applied",
     "committed_pickup_event_id",
     "committed_time_contract_is_complete",
+    "deserialize_committed_time_policy",
     "is_committed_pickup_artifact",
     "is_committed_pickup_outbox_artifact",
     "is_forward_authority_outbox_artifact",
@@ -1937,14 +2050,17 @@ __all__ = [
     "new_order_time_intent_is_valid",
     "pickup_payload_requires_coordinator_receipt",
     "project_time_event_order",
+    "project_time_observation_order",
     "resolve_czasowka_committed_observation",
     "resolve_czasowka_initial_time_intent",
     "resolve_czasowka_assignment_ck",
     "resolve_czasowka_pickup_observation",
     "state_has_committed_pickup_artifact",
+    "serialize_committed_time_policy",
     "time_event_cas_artifact_present",
     "time_event_cas_is_versioned",
     "time_event_cas_status",
     "validate_committed_pickup_event",
+    "validate_committed_time_policy_source",
     "validate_new_order_time_intent_event",
 ]

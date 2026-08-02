@@ -42,6 +42,7 @@ from dispatch_v2.committed_pickup_authority import (
     CK_CHANGE_REVISION_OBSERVATION_FIELD,
     CK_CHANGE_REVISION_STATE_FIELD,
     COMMITTED_PICKUP_COUPLED_FIELDS,
+    COMMITTED_TIME_POLICY_SNAPSHOT_FIELD,
     MANUAL_CK_AUTHORITY_FLAG,
     NEW_ORDER_TIME_AUTHORITY_SNAPSHOT_FIELD,
     NEW_ORDER_TIME_INTENT_FIELD,
@@ -54,11 +55,13 @@ from dispatch_v2.committed_pickup_authority import (
     ResolutionOutcome,
     committed_pickup_effect_applied,
     committed_time_contract_is_complete,
+    deserialize_committed_time_policy,
     new_order_time_intent_is_valid,
     normalize_pickup_revision,
     pickup_event_has_authority_artifact,
     pickup_payload_requires_coordinator_receipt,
     project_time_event_order,
+    project_time_observation_order,
     resolve_czasowka_assignment_ck,
     resolve_czasowka_committed_observation,
     resolve_czasowka_pickup_observation as _resolve_pickup_observation,
@@ -66,6 +69,7 @@ from dispatch_v2.committed_pickup_authority import (
     time_event_cas_is_versioned,
     time_event_cas_status,
     validate_committed_pickup_event,
+    validate_committed_time_policy_source,
 )
 from dispatch_v2.core.jsonl_appender import append_jsonl
 from dispatch_v2.order_fsm import FsmOutcome, FsmVerdict, validate_order_event
@@ -226,10 +230,9 @@ def resolve_czasowka_ck_observation(
             raise TypeError(
                 "policy_snapshot must be CommittedPickupPolicySnapshot"
             )
-        if payload.get("source") != "pre_proposal_recheck":
-            raise ValueError(
-                "policy_snapshot is reserved for pre_proposal_recheck"
-            )
+        validate_committed_time_policy_source(
+            policy_snapshot, payload.get("source")
+        )
         manual_enabled = policy_snapshot.manual_passthrough_enabled
         forward_enabled = policy_snapshot.rutcom_forward_authority_enabled
         passive_enabled = policy_snapshot.passive_guard_enabled
@@ -239,7 +242,9 @@ def resolve_czasowka_ck_observation(
             RUTCOM_FORWARD_AUTHORITY_FLAG
         )
         passive_enabled = flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True)
-    is_czasowka = _is_czasowka_order(existing)
+    is_czasowka = _is_czasowka_order(
+        project_time_observation_order(existing, payload)
+    )
     if is_czasowka and payload.get("source") == "coordinator_force":
         from dispatch_v2 import coordinator_time_recheck as receipt_store
 
@@ -252,7 +257,9 @@ def resolve_czasowka_ck_observation(
             validation = validate_committed_pickup_event(
                 existing,
                 claimed_event,
-                is_czasowka=_is_czasowka_order(existing),
+                is_czasowka=_is_czasowka_order(
+                    project_time_event_order(existing, claimed_event)
+                ),
                 # Exact claim jest dziennikiem transakcji sprzed outboxa.
                 # Rollback blokuje nowe claimy, ale nie gubi juz zwiazanej
                 # intencji po crashu w oknie claim -> SQLite outbox.
@@ -395,6 +402,8 @@ def _new_order_time_authority_enabled(event: dict) -> bool:
 def resolve_czasowka_pickup_observation(
     existing: Optional[dict],
     pickup_payload: Optional[dict],
+    *,
+    policy_snapshot: Optional[CommittedPickupPolicySnapshot] = None,
 ) -> CommittedPickupResolution:
     """Powiąż pickup z tym samym exact-claimem co CK koordynatora.
 
@@ -405,12 +414,26 @@ def resolve_czasowka_pickup_observation(
     """
     existing = existing or {}
     payload = dict(pickup_payload or {})
-    is_czasowka = _is_czasowka_order(existing)
-    manual_enabled = decision_flag(MANUAL_CK_AUTHORITY_FLAG)
-    forward_enabled = decision_flag(
-        RUTCOM_FORWARD_AUTHORITY_FLAG
+    if policy_snapshot is not None:
+        if type(policy_snapshot) is not CommittedPickupPolicySnapshot:
+            raise TypeError(
+                "policy_snapshot must be CommittedPickupPolicySnapshot"
+            )
+        validate_committed_time_policy_source(
+            policy_snapshot, payload.get("source")
+        )
+        manual_enabled = policy_snapshot.manual_passthrough_enabled
+        forward_enabled = policy_snapshot.rutcom_forward_authority_enabled
+        passive_enabled = policy_snapshot.passive_guard_enabled
+    else:
+        manual_enabled = decision_flag(MANUAL_CK_AUTHORITY_FLAG)
+        forward_enabled = decision_flag(
+            RUTCOM_FORWARD_AUTHORITY_FLAG
+        )
+        passive_enabled = flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True)
+    is_czasowka = _is_czasowka_order(
+        project_time_observation_order(existing, payload)
     )
-    passive_enabled = flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True)
     if is_czasowka and payload.get("source") == "coordinator_force":
         from dispatch_v2 import coordinator_time_recheck as receipt_store
 
@@ -423,7 +446,9 @@ def resolve_czasowka_pickup_observation(
             validation = validate_committed_pickup_event(
                 existing,
                 claimed_event,
-                is_czasowka=_is_czasowka_order(existing),
+                is_czasowka=_is_czasowka_order(
+                    project_time_event_order(existing, claimed_event)
+                ),
                 passive_guard_enabled=True,
                 manual_passthrough_enabled=manual_enabled,
                 rutcom_forward_authority_enabled=True,
@@ -1272,7 +1297,9 @@ def _pickup_time_event_status(event: dict, current: dict) -> str:
     validation = validate_committed_pickup_event(
         current,
         event,
-        is_czasowka=_is_czasowka_order(current),
+        is_czasowka=_is_czasowka_order(
+            project_time_event_order(current, event)
+        ),
         passive_guard_enabled=passive_enabled,
         manual_passthrough_enabled=manual_enabled,
         rutcom_forward_authority_enabled=forward_enabled,
@@ -1295,6 +1322,29 @@ def event_effect_status(
     zatrzymuje stale/out-of-order retry. Funkcja jest read-only; weryfikację
     wersji ``updated_at`` robi durable outbox.
     """
+    durable_policy = None
+    if COMMITTED_TIME_POLICY_SNAPSHOT_FIELD in event:
+        try:
+            durable_policy = deserialize_committed_time_policy(
+                event.get(COMMITTED_TIME_POLICY_SNAPSHOT_FIELD)
+            )
+            policy_payload = event.get("payload")
+            if (
+                event.get("event_type")
+                not in {"CZAS_KURIERA_UPDATED", "PICKUP_TIME_UPDATED"}
+                or not isinstance(policy_payload, dict)
+            ):
+                return "superseded"
+            validate_committed_time_policy_source(
+                durable_policy,
+                (
+                    policy_payload.get("observed_source")
+                    if policy_payload.get("committed_authority") is not None
+                    else policy_payload.get("source")
+                ),
+            )
+        except (TypeError, ValueError):
+            return "superseded"
     oid = event.get("order_id")
     if not oid:
         return "pending"
@@ -1473,8 +1523,14 @@ def event_effect_status(
             return "superseded"
         source = payload.get("source")
         resolution = None
-        if _is_czasowka_order(current):
-            resolution = resolve_czasowka_ck_observation(current, payload)
+        if _is_czasowka_order(
+            project_time_observation_order(current, payload)
+        ):
+            resolution = resolve_czasowka_ck_observation(
+                current,
+                payload,
+                policy_snapshot=durable_policy,
+            )
         if (
             resolution is not None
             and (source in _CK_PASSIVE_SOURCES or source == "coordinator_force")
@@ -1491,7 +1547,11 @@ def event_effect_status(
                 return "superseded"
         if (
             resolution is not None
-            and _czasowka_raw_ck_writer_is_retired(current, resolution)
+            and _czasowka_raw_ck_writer_is_retired(
+                current,
+                resolution,
+                policy_snapshot=durable_policy,
+            )
         ):
             return "superseded"
         legacy_claim = _legacy_time_claim_status(event)
@@ -1843,24 +1903,46 @@ def update_from_event(
 ) -> Optional[dict]:
     """Konsumuje event z event busa i aktualizuje state machine.
     Zwraca zaktualizowany rekord lub None."""
+    durable_policy = None
+    if COMMITTED_TIME_POLICY_SNAPSHOT_FIELD in event:
+        try:
+            durable_policy = deserialize_committed_time_policy(
+                event.get(COMMITTED_TIME_POLICY_SNAPSHOT_FIELD)
+            )
+        except (TypeError, ValueError) as exc:
+            _log.error(
+                "TIME_POLICY_SNAPSHOT_INVALID oid=%s error=%s",
+                event.get("order_id"),
+                exc,
+            )
+            return None
     if authority_policy is not None:
         if type(authority_policy) is not CommittedPickupPolicySnapshot:
             raise TypeError(
                 "authority_policy must be CommittedPickupPolicySnapshot"
             )
+        if durable_policy is not None and durable_policy != authority_policy:
+            raise ValueError(
+                "in-process and durable committed time policies differ"
+            )
+    else:
+        authority_policy = durable_policy
+    if authority_policy is not None:
         policy_payload = event.get("payload")
         if (
-            event.get("event_type") != "CZAS_KURIERA_UPDATED"
+            event.get("event_type")
+            not in {"CZAS_KURIERA_UPDATED", "PICKUP_TIME_UPDATED"}
             or not isinstance(policy_payload, dict)
-            or policy_payload.get("source") != "pre_proposal_recheck"
         ):
-            raise ValueError(
-                "authority_policy is reserved for raw pre_proposal_recheck"
-            )
-        if authority_policy.authority_enabled:
-            raise ValueError(
-                "authority-enabled pre_proposal_recheck requires durable apply"
-            )
+            raise ValueError("authority_policy is reserved for time events")
+        policy_source = (
+            policy_payload.get("observed_source")
+            if policy_payload.get("committed_authority") is not None
+            else policy_payload.get("source")
+        )
+        validate_committed_time_policy_source(
+            authority_policy, policy_source
+        )
 
     # Z-P1-01 Phase A: formal FSM shadow.  It is intentionally fail-open and
     # log-only; legacy behavior below (including current fallbacks/exceptions)

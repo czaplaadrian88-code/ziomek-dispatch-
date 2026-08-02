@@ -138,6 +138,7 @@ ENGINE_SYMBOLIC_CONSUMERS = {
         "consumers": [
             "dispatch_v2/committed_pickup_apply.py",
             "dispatch_v2/dispatch_pipeline.py",
+            "dispatch_v2/panel_watcher.py",
             "dispatch_v2/state_machine.py",
             "dispatch_v2/tools/rutcom_committed_authority_rollback.py",
         ],

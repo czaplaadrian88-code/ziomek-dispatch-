@@ -63,6 +63,8 @@ _LEGACY_DURABLE_BOOLEAN_KEYS = {
 _FUTURE_SKEW = timedelta(seconds=30)
 _ROLLBACK_FENCE_SCHEMA = "coordinator_time_recheck.rollback_fence.v2"
 _ROLLBACK_TARGET = "pre-v4-legacy-queue"
+_FORWARD_FENCE_SCHEMA = "coordinator_time_recheck.forward_fence.v1"
+_FORWARD_FENCE_TARGET = "rutcom-forward-authority-rollout"
 _QUEUE_RECEIPT_SOURCES = frozenset(
     {"coordinator_panel", "coordinator_console", "legacy_coordinator_queue"}
 )
@@ -90,6 +92,10 @@ _V4_UNCLAIMED_RECEIPT_FIELDS_NO_DEPTH = (
 
 def _rollback_fence_path() -> str:
     return QUEUE_PATH + ".legacy-rollback-fence"
+
+
+def _forward_fence_path() -> str:
+    return QUEUE_PATH + ".forward-authority-fence"
 
 
 def _utc_now() -> datetime:
@@ -169,6 +175,16 @@ def _receipt_clock_pair(
 def _json_copy(value: object):
     """Detached JSON value; public queue APIs never leak mutable live records."""
     return json.loads(json.dumps(value, ensure_ascii=False))
+
+
+def _queue_snapshot_sha256(data: Mapping[str, object]) -> str:
+    payload = json.dumps(
+        data,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _new_receipt(
@@ -427,6 +443,21 @@ def _load() -> dict:
     return d
 
 
+def rollback_records_snapshot() -> dict:
+    """Return an exact, detached queue view without TTL cleanup or writes."""
+    with _lockfile():
+        return _json_copy(_load())
+
+
+def rollback_record_is_unclaimed(
+    record: object,
+    *,
+    order_id: str,
+) -> bool:
+    """Expose the runtime's exact unclaimed-envelope oracle to preflight."""
+    return _valid_unclaimed_receipt_shape(record, order_id=str(order_id))
+
+
 def _save(data: dict) -> None:
     """Atomic write (temp + fsync + rename). Caller trzyma lock."""
     p = Path(QUEUE_PATH)
@@ -512,6 +543,135 @@ def _write_once(path: Path, payload: bytes) -> None:
         raise
 
 
+def _forward_rollout_fence_status_unlocked(
+    queue_data: Optional[Mapping[str, object]] = None,
+) -> dict:
+    """Validate the crash-safe fence that closes enqueue→flag-flip TOCTOU."""
+    fence = Path(_forward_fence_path())
+    result = {
+        "forward_fence_present": fence.exists(),
+        "forward_fence_valid": False,
+        "forward_fence_error": None,
+        "forward_fence_id": None,
+        "forward_fence_queue_sha256": None,
+    }
+    if not result["forward_fence_present"]:
+        return result
+    try:
+        receipt = json.loads(fence.read_text(encoding="utf-8"))
+    except (OSError, TypeError, ValueError, json.JSONDecodeError):
+        result["forward_fence_error"] = "fence_unreadable_or_invalid_json"
+        return result
+    expected_keys = {
+        "schema",
+        "created_at",
+        "target",
+        "fence_id",
+        "queue_sha256",
+    }
+    if not isinstance(receipt, Mapping) or set(receipt) != expected_keys:
+        result["forward_fence_error"] = "fence_invalid_shape"
+        return result
+    if receipt.get("schema") != _FORWARD_FENCE_SCHEMA:
+        result["forward_fence_error"] = "fence_schema_mismatch"
+        return result
+    if receipt.get("target") != _FORWARD_FENCE_TARGET:
+        result["forward_fence_error"] = "fence_target_mismatch"
+        return result
+    try:
+        created_at = datetime.fromisoformat(str(receipt.get("created_at")))
+        fence_id = str(uuid.UUID(str(receipt.get("fence_id"))))
+    except (TypeError, ValueError):
+        result["forward_fence_error"] = "fence_identity_invalid"
+        return result
+    if created_at.tzinfo is None:
+        result["forward_fence_error"] = "fence_created_at_naive"
+        return result
+    expected_sha = str(receipt.get("queue_sha256") or "")
+    if len(expected_sha) != 64:
+        result["forward_fence_error"] = "fence_queue_sha256_invalid"
+        return result
+    if queue_data is None:
+        try:
+            queue_data = _load()
+        except RuntimeError:
+            result["forward_fence_error"] = "queue_unreadable"
+            return result
+    if _queue_snapshot_sha256(queue_data) != expected_sha:
+        result["forward_fence_error"] = "fenced_queue_changed"
+        return result
+    result.update(
+        {
+            "forward_fence_valid": True,
+            "forward_fence_id": fence_id,
+            "forward_fence_queue_sha256": expected_sha,
+        }
+    )
+    return result
+
+
+def forward_rollout_fence_status() -> dict:
+    """Read-only proof that no new coordinator request can cross the flip."""
+    with _lockfile():
+        data = _load()
+        return _forward_rollout_fence_status_unlocked(data)
+
+
+def acquire_forward_rollout_fence() -> dict:
+    """Atomically freeze enqueue against the exact current queue snapshot."""
+    with _lockfile():
+        if os.path.exists(_rollback_fence_path()):
+            raise RuntimeError("legacy rollback fence is already active")
+        current = _forward_rollout_fence_status_unlocked(_load())
+        if current["forward_fence_present"]:
+            if not current["forward_fence_valid"]:
+                raise RuntimeError(
+                    "existing forward rollout fence is invalid: "
+                    + str(current["forward_fence_error"])
+                )
+            return {"acquired": False, **current}
+        data = _load()
+        receipt = {
+            "schema": _FORWARD_FENCE_SCHEMA,
+            "created_at": _utc_now().isoformat(),
+            "target": _FORWARD_FENCE_TARGET,
+            "fence_id": str(uuid.uuid4()),
+            "queue_sha256": _queue_snapshot_sha256(data),
+        }
+        payload = json.dumps(
+            receipt,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8") + b"\n"
+        _write_once(Path(_forward_fence_path()), payload)
+        status = _forward_rollout_fence_status_unlocked(data)
+        if not status["forward_fence_valid"]:
+            raise RuntimeError(
+                "forward rollout fence postcondition failed: "
+                + str(status["forward_fence_error"])
+            )
+        return {"acquired": True, **status}
+
+
+def release_forward_rollout_fence(fence_id: str) -> bool:
+    """Release only the exact supervised fence receipt after success/abort."""
+    expected_id = str(uuid.UUID(str(fence_id)))
+    with _lockfile():
+        status = _forward_rollout_fence_status_unlocked(_load())
+        if not status["forward_fence_present"]:
+            return False
+        if not status["forward_fence_valid"]:
+            raise RuntimeError(
+                "cannot release invalid forward rollout fence: "
+                + str(status["forward_fence_error"])
+            )
+        if status["forward_fence_id"] != expected_id:
+            raise RuntimeError("forward rollout fence id mismatch")
+        _unlink_durable(Path(_forward_fence_path()))
+        return True
+
+
 def enqueue(oids, *, source: str = "coordinator_panel") -> int:
     """Dopisz oid(y) do kolejki ze stemplem teraz (UTC). Zwraca liczbę dopisanych.
     Wołane przez panel (subprocess) po kliknięciu „Odśwież czas". Ponowny klik
@@ -524,6 +684,10 @@ def enqueue(oids, *, source: str = "coordinator_panel") -> int:
         raise ValueError(f"unsupported coordinator receipt source: {source!r}")
     now = _utc_now().isoformat()
     with _lockfile():
+        if os.path.exists(_forward_fence_path()):
+            raise RuntimeError(
+                "coordinator time queue fenced for forward authority rollout"
+            )
         if os.path.exists(_rollback_fence_path()):
             raise RuntimeError(
                 "coordinator time queue fenced for legacy code rollback"
@@ -628,6 +792,8 @@ def upgrade_legacy_receipt(
     now = now or _utc_now()
     oid = str(order_id)
     with _lockfile():
+        if os.path.exists(_forward_fence_path()):
+            return None
         data = _load()
         current = data.get(oid)
         if isinstance(current, Mapping):
@@ -691,6 +857,8 @@ def claim_receipt(
         event_copy, order_id=oid
     ) is not None
     with _lockfile():
+        if os.path.exists(_forward_fence_path()):
+            return None
         if os.path.exists(_rollback_fence_path()):
             return None
         data = _load()
@@ -841,6 +1009,8 @@ def pending_with_receipts(
     cutoff = now - timedelta(minutes=ttl_min)
     fresh: dict[str, dict | None] = {}
     with _lockfile():
+        if os.path.exists(_forward_fence_path()):
+            return fresh
         data = _load()
         if not data:
             return fresh
@@ -903,6 +1073,8 @@ def ack_receipts(receipts: dict[str, dict | None]) -> int:
         return 0
     removed = 0
     with _lockfile():
+        if os.path.exists(_forward_fence_path()):
+            return 0
         data = _load()
         for oid, claimed in receipts.items():
             oid = str(oid)
@@ -1092,6 +1264,7 @@ def _persistent_rollback_backup_path(value: object) -> Optional[Path]:
     if resolved in {
         Path(QUEUE_PATH).resolve(strict=False),
         Path(_rollback_fence_path()).resolve(strict=False),
+        Path(_forward_fence_path()).resolve(strict=False),
     }:
         return None
     return resolved
@@ -1196,6 +1369,8 @@ def prepare_legacy_rollback(backup_path: str) -> dict:
         raise FileExistsError(str(backup))
 
     with _lockfile():
+        if os.path.exists(_forward_fence_path()):
+            raise RuntimeError("forward rollout fence is already active")
         data = _load()
         projection, status = _legacy_rollback_projection(data)
         if not status["safe_queue_projection"]:

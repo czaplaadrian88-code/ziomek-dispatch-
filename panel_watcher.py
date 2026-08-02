@@ -49,15 +49,19 @@ from dispatch_v2.core.broadcast_handlers import dispatch_config_reload
 from dispatch_v2.core.config_reload_subscriber import BroadcastSubscriber
 from dispatch_v2.event_bus import emit, emit_audit
 from dispatch_v2.committed_pickup_authority import (
+    COMMITTED_TIME_POLICY_SNAPSHOT_FIELD,
+    MANUAL_CK_AUTHORITY_FLAG,
     NEW_ORDER_TIME_AUTHORITY_SNAPSHOT_FIELD,
     NEW_ORDER_TIME_INTENT_FIELD,
     RUTCOM_FORWARD_AUTHORITY_FLAG,
+    CommittedPickupPolicySnapshot,
     ResolutionOutcome,
     build_new_order_time_intent,
     build_time_event_cas_snapshot,
     committed_time_contract_is_complete,
     normalize_pickup_revision,
     resolve_czasowka_initial_time_intent,
+    serialize_committed_time_policy,
     state_has_committed_pickup_artifact,
 )
 from dispatch_v2.parser_health import get_monitor as get_parser_health_monitor
@@ -178,6 +182,23 @@ _STATE_OUTBOX_SWEEPER_TICK_SNAPSHOT: ContextVar[Optional[bool]] = ContextVar(
 )
 
 
+def _panel_committed_time_policy_snapshot(
+) -> CommittedPickupPolicySnapshot:
+    """Capture one panel transaction policy before its first mutable fetch."""
+    return CommittedPickupPolicySnapshot(
+        producer="panel_watcher",
+        manual_passthrough_enabled=bool(
+            C.decision_flag(MANUAL_CK_AUTHORITY_FLAG)
+        ),
+        rutcom_forward_authority_enabled=bool(
+            C.decision_flag(RUTCOM_FORWARD_AUTHORITY_FLAG)
+        ),
+        passive_guard_enabled=bool(
+            C.flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True)
+        ),
+    )
+
+
 def _emit_and_apply_state(
     event_type: str,
     *,
@@ -188,23 +209,42 @@ def _emit_and_apply_state(
     event_id: str,
     audit: bool = False,
     old_plan_release_authorized: Optional[bool] = None,
+    committed_time_policy: Optional[
+        CommittedPickupPolicySnapshot
+    ] = None,
 ) -> _EventApplyOutcome:
     """Atomowy event+outbox, exact-payload state apply i trwały downstream."""
     emitter = emit_audit if audit else emit
     state_body = (payload or {}) if state_payload is None else (state_payload or {})
     state_event_metadata = {}
+    if committed_time_policy is not None and type(
+        committed_time_policy
+    ) is not CommittedPickupPolicySnapshot:
+        raise TypeError(
+            "committed_time_policy must be CommittedPickupPolicySnapshot"
+        )
     if event_type == "NEW_ORDER":
         # The initial raw Rutcom tuple and its policy snapshot belong to one
         # durable intent.  ON creates only an aggregate shell; the canonical
         # PICKUP_TIME_UPDATED owner resolves the full tuple immediately after.
-        initial_authority_enabled = True
-        try:
-            initial_authority_enabled = bool(
-                C.decision_flag(RUTCOM_FORWARD_AUTHORITY_FLAG)
-            )
-        except Exception:
-            # Ambiguous flag reads must not revive the competing raw writer.
-            pass
+        if (
+            committed_time_policy is not None
+            and committed_time_policy.producer != "panel_watcher"
+        ):
+            raise ValueError("NEW_ORDER requires panel_watcher time policy")
+        initial_authority_enabled = (
+            committed_time_policy.rutcom_forward_authority_enabled
+            if committed_time_policy is not None
+            else True
+        )
+        if committed_time_policy is None:
+            try:
+                initial_authority_enabled = bool(
+                    C.decision_flag(RUTCOM_FORWARD_AUTHORITY_FLAG)
+                )
+            except Exception:
+                # Ambiguous flag reads must not revive the competing raw writer.
+                pass
         state_event_metadata[
             NEW_ORDER_TIME_AUTHORITY_SNAPSHOT_FIELD
         ] = initial_authority_enabled
@@ -229,6 +269,20 @@ def _emit_and_apply_state(
                 sanitized_state_payload[field] = None
             state_payload = sanitized_state_payload
             state_body = sanitized_state_payload
+    elif event_type in {"CZAS_KURIERA_UPDATED", "PICKUP_TIME_UPDATED"}:
+        if (
+            committed_time_policy is not None
+            and state_body.get("source") != "coordinator_force"
+        ):
+            # coordinator_force is already bound to an exact durable queue
+            # claim before this boundary.  Raw claimed events are explicitly
+            # elastic and policy-invariant; adding transport metadata would
+            # change the claim hash and strand its ACK.
+            state_event_metadata[
+                COMMITTED_TIME_POLICY_SNAPSHOT_FIELD
+            ] = serialize_committed_time_policy(committed_time_policy)
+    elif committed_time_policy is not None:
+        raise ValueError("committed time policy is reserved for time events")
     # R2: capture assignment-time truth immediately BEFORE the canonical state
     # mutation.  Preparation and commit are both fail-safe; the instrument can
     # neither veto nor alter an operator assignment.
@@ -1913,17 +1967,31 @@ def _update_plan_on_picked_up(
             raise
 
 
-def _time_event_cas_enabled(old_state: dict) -> bool:
+def _time_event_cas_enabled(
+    old_state: dict,
+    policy_snapshot: Optional[CommittedPickupPolicySnapshot] = None,
+) -> bool:
     """New writes are versioned while rollout or persisted provenance is live."""
+    if policy_snapshot is not None and type(
+        policy_snapshot
+    ) is not CommittedPickupPolicySnapshot:
+        raise TypeError("policy_snapshot must be CommittedPickupPolicySnapshot")
     return bool(
-        C.decision_flag(RUTCOM_FORWARD_AUTHORITY_FLAG)
+        (
+            policy_snapshot.rutcom_forward_authority_enabled
+            if policy_snapshot is not None
+            else C.decision_flag(RUTCOM_FORWARD_AUTHORITY_FLAG)
+        )
         or state_has_committed_pickup_artifact(old_state)
     )
 
 
 def _diff_czas_kuriera(old_state: dict, fresh_response: dict,
                       oid: str, deliberate: bool = False,
-                      authority_receipt: Optional[dict] = None) -> Optional[dict]:
+                      authority_receipt: Optional[dict] = None,
+                      policy_snapshot: Optional[
+                          CommittedPickupPolicySnapshot
+                      ] = None) -> Optional[dict]:
     """V3.19g1: detect czas_kuriera change for already-assigned order.
 
     deliberate=True omija forward-only elastyka. Dla czasowki wymagany jest
@@ -1984,8 +2052,7 @@ def _diff_czas_kuriera(old_state: dict, fresh_response: dict,
         from dispatch_v2.common import flag as _flag
     except Exception:
         _flag = None
-    if _is_czas:
-        _authority_payload = {
+    _authority_payload = {
             "oid": oid,
             "courier_id": old_state.get("courier_id"),
             "old_ck_iso": old_ck_iso,
@@ -2025,26 +2092,28 @@ def _diff_czas_kuriera(old_state: dict, fresh_response: dict,
                 old_state.get("pickup_time_revision", 0)
             ),
             "authority_receipt": authority_receipt,
-        }
-        _authority = resolve_czasowka_ck_observation(
-            old_state, _authority_payload
+    }
+    _authority = resolve_czasowka_ck_observation(
+        old_state,
+        _authority_payload,
+        policy_snapshot=policy_snapshot,
+    )
+    if _authority.outcome is ResolutionOutcome.APPLY:
+        return _authority.event
+    if _authority.outcome is ResolutionOutcome.SUPPRESS:
+        _delta_label = (
+            "no-baseline"
+            if delta_min is None
+            else f"{delta_min:+.1f}min"
         )
-        if _authority.outcome is ResolutionOutcome.APPLY:
-            return _authority.event
-        if _authority.outcome is ResolutionOutcome.SUPPRESS:
-            _delta_label = (
-                "no-baseline"
-                if delta_min is None
-                else f"{delta_min:+.1f}min"
-            )
-            _log.info(
-                f"CK_COMMITTED_SUPPRESSED oid={oid} czasówka ck "
-                f"{old_ck_hhmm}→{new_ck_hhmm} Δ={_delta_label} "
-                f"src={_authority_payload['source']} "
-                f"reason={_authority.reason} (no emit)"
-            )
-            return None
-    else:
+        _log.info(
+            f"CK_COMMITTED_SUPPRESSED oid={oid} czasówka ck "
+            f"{old_ck_hhmm}→{new_ck_hhmm} Δ={_delta_label} "
+            f"src={_authority_payload['source']} "
+            f"reason={_authority.reason} (no emit)"
+        )
+        return None
+    if not _is_czas:
         # Elastyk forward-only (Adrian 2026-06-24, opcja B): pasywny re-odczyt
         # NIE cofa committed czas_kuriera („przyjazd wcześniej niż umówiono" =
         # wobble ETA). Forward (koordynatorski +15 / spóźnienie) przechodzi.
@@ -2079,7 +2148,7 @@ def _diff_czas_kuriera(old_state: dict, fresh_response: dict,
             else "panel_re_check"
         ),
     }
-    if _time_event_cas_enabled(old_state):
+    if _time_event_cas_enabled(old_state, policy_snapshot):
         payload.update(
             build_time_event_cas_snapshot(
                 old_state, "CZAS_KURIERA_UPDATED"
@@ -2098,7 +2167,10 @@ def _diff_czas_kuriera(old_state: dict, fresh_response: dict,
 
 def _diff_pickup_time(old_state: dict, fresh_response: dict,
                       oid: str, deliberate: bool = False,
-                      authority_receipt: Optional[dict] = None) -> Optional[dict]:
+                      authority_receipt: Optional[dict] = None,
+                      policy_snapshot: Optional[
+                          CommittedPickupPolicySnapshot
+                      ] = None) -> Optional[dict]:
     """Detect pickup_at_warsaw change (restaurant-declared pickup time).
 
     deliberate=True (force-recheck koordynatora): source="coordinator_force"
@@ -2155,7 +2227,7 @@ def _diff_pickup_time(old_state: dict, fresh_response: dict,
         if abs(delta_min) < PICKUP_TIME_DELTA_THRESHOLD_MIN:
             return None  # noise floor
 
-    if new_iso and C.is_czasowka_order(old_state):
+    if new_iso:
         authority_payload = {
             "oid": oid,
             "courier_id": old_state.get("courier_id"),
@@ -2190,6 +2262,7 @@ def _diff_pickup_time(old_state: dict, fresh_response: dict,
         authority = resolve_czasowka_pickup_observation(
             old_state,
             authority_payload,
+            policy_snapshot=policy_snapshot,
         )
         if authority.outcome is ResolutionOutcome.APPLY:
             return authority.event
@@ -2221,7 +2294,7 @@ def _diff_pickup_time(old_state: dict, fresh_response: dict,
             old_state.get("pickup_time_revision", 0)
         ),
     }
-    if _time_event_cas_enabled(old_state):
+    if _time_event_cas_enabled(old_state, policy_snapshot):
         payload.update(
             build_time_event_cas_snapshot(
                 old_state, "PICKUP_TIME_UPDATED"
@@ -2252,13 +2325,18 @@ def _time_update_event_key(order_id: str, event: dict) -> str:
     return time_update_event_key(order_id, event)
 
 
-def _apply_time_update_event(order_id: str, event: dict):
+def _apply_time_update_event(
+    order_id: str,
+    event: dict,
+    *,
+    policy_snapshot: Optional[CommittedPickupPolicySnapshot] = None,
+):
     """Jeden wybor durable transportu dla obu detektorow czasu."""
     payload = event.get("payload") or {}
     if payload.get("committed_authority"):
         from dispatch_v2.committed_pickup_apply import apply_event
 
-        return apply_event(event)
+        return apply_event(event, authority_policy=policy_snapshot)
     return _emit_and_apply_state(
         str(event.get("event_type") or ""),
         order_id=str(order_id),
@@ -2270,6 +2348,7 @@ def _apply_time_update_event(order_id: str, event: dict):
         payload=payload,
         event_id=_time_update_event_key(str(order_id), event),
         audit=True,
+        committed_time_policy=policy_snapshot,
     )
 
 
@@ -3013,6 +3092,20 @@ def _diff_and_emit(
         "errors": 0,
     }
 
+    # One lease owns every time decision made from this tick's panel fetches.
+    # Capture it before drain, prefetch or detail I/O; a hot flip can affect
+    # only the next transaction, never reinterpret work already in flight.
+    try:
+        _committed_time_policy = _panel_committed_time_policy_snapshot()
+    except Exception as exc:
+        stats["errors"] += 1
+        _log.error(
+            "PANEL_TIME_POLICY_CAPTURE_FAILED error=%s: %s",
+            type(exc).__name__,
+            exc,
+        )
+        return stats
+
     # Zachowaj baseline OFF: dotychczasowy opportunistyczny drain biegl po
     # udanym fetchu/parse. Flaga ON przenosi recovery na poczatek ticku, dodaje
     # age gate i dziala takze przy awarii panelu; nie wolno wtedy wykonywac
@@ -3200,6 +3293,7 @@ def _diff_and_emit(
             order_id=zid,
             payload=ev_payload,
             event_id=event_id,
+            committed_time_policy=_committed_time_policy,
         )
         if not result.state_ready:
             stats["errors"] += 1
@@ -4032,12 +4126,9 @@ def _diff_and_emit(
     except Exception:
         ENABLE_V319G_CK_DETECTION = False
         ENABLE_PICKUP_TIME_DETECTION = False
-    try:
-        _forward_time_authority_on = C.decision_flag(
-            RUTCOM_FORWARD_AUTHORITY_FLAG
-        )
-    except Exception:
-        _forward_time_authority_on = False
+    _forward_time_authority_on = (
+        _committed_time_policy.rutcom_forward_authority_enabled
+    )
     # FORCE-RECHECK na żądanie koordynatora (przycisk „Odśwież czas" w konsoli):
     # czytaj trwale kolejke coordinator_time_recheck (panel dopisal oid). Receipt
     # znika dopiero po udanym fetch/apply; crash lub blad HTTP zostawia retry.
@@ -4187,6 +4278,9 @@ def _diff_and_emit(
                                          authority_receipt=(
                                              _force_receipts.get(zid)
                                              if _force else None
+                                         ),
+                                         policy_snapshot=(
+                                             _committed_time_policy
                                          ))
                 if evt is not None:
                     if _force and _ctr is not None:
@@ -4207,7 +4301,11 @@ def _diff_and_emit(
                         _force_receipts[zid] = claimed_receipt
                         _force_event_claimed = True
                     try:
-                        time_outcome = _apply_time_update_event(zid, evt)
+                        time_outcome = _apply_time_update_event(
+                            zid,
+                            evt,
+                            policy_snapshot=_committed_time_policy,
+                        )
                     except Exception as _e:  # noqa: BLE001 — receipt zostaje
                         _log.warning(
                             f"order-time apply fail oid={zid} "
@@ -4271,6 +4369,9 @@ def _diff_and_emit(
                                           authority_receipt=(
                                               _force_receipts.get(zid)
                                               if _force else None
+                                          ),
+                                          policy_snapshot=(
+                                              _committed_time_policy
                                           ))
                 if evt_p is not None:
                     if _force and _ctr is not None:
@@ -4291,7 +4392,11 @@ def _diff_and_emit(
                         _force_receipts[zid] = claimed_receipt
                         _force_event_claimed = True
                     try:
-                        pickup_outcome = _apply_time_update_event(zid, evt_p)
+                        pickup_outcome = _apply_time_update_event(
+                            zid,
+                            evt_p,
+                            policy_snapshot=_committed_time_policy,
+                        )
                     except Exception as _e:  # noqa: BLE001 — receipt zostaje
                         _log.warning(
                             f"pickup-time apply fail oid={zid}: {_e}"
@@ -4349,6 +4454,16 @@ def _post_restart_cold_start_scan(parsed: dict, csrf: str) -> dict:
     fetch fail → skip+counter, ambiguous nick → skip+warn.
     """
     stats = {"cold_start_scanned": 0, "cold_start_emitted": 0, "cold_start_errors": 0}
+    try:
+        committed_time_policy = _panel_committed_time_policy_snapshot()
+    except Exception as exc:
+        stats["cold_start_errors"] += 1
+        _log.error(
+            "COLD_START_TIME_POLICY_CAPTURE_FAILED error=%s: %s",
+            type(exc).__name__,
+            exc,
+        )
+        return stats
     packs = parsed.get("courier_packs") or {}
     if not packs:
         return stats
@@ -4441,6 +4556,7 @@ def _post_restart_cold_start_scan(parsed: dict, csrf: str) -> dict:
                     order_id=_oid_str,
                     payload=_new_order_payload,
                     event_id=f"{_oid_str}_NEW_ORDER_first",
+                    committed_time_policy=committed_time_policy,
                 )
                 if not _initialized.state_ready:
                     _log.warning(
