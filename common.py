@@ -73,6 +73,31 @@ ENABLE_LEX_WINDOW_LEDGER_V2 = False
 # i MUSI zostac przeniesiona do ETAP4_DECISION_FLAGS.
 ENABLE_LOADGOV_SNAPSHOT_PUBLISH = False
 
+# NOTIFY channel-split (2026-08-02, sesja notify round-3 b0546fb88): niedecyzyjne
+# kill-switche ROUTINGU/OBSERWACJI powiadomien (`notify_router.py`) — sterują
+# tylko KANALEM/kategoria wiadomosci, nie TRESCIA decyzji dispatchu (kto/kiedy/
+# score/ETA), wiec poza ETAP4_DECISION_FLAGS (precedens ENABLE_LEX_WINDOW_LEDGER_V2
+# / ENABLE_STAGE_TIMING_OBSERVATION). Stala-fallback = literal OFF = default
+# czytelnika `notify_router.flag(..., default=False)`; kanon po flipie = flags.json
+# (hot-reload). Sa tez w _FINGERPRINT_EXTRA_FLAGS (widocznosc metryk/alertow) i w
+# TEST_ISOLATED_INFRA_FLAGS (conftest wycina zywy flip -> testy deterministyczne).
+# CHANNEL_SPLIT_SHADOW nie ma jeszcze klucza w flags.json -> konsta-lustro defaultu
+# czytelnika (wzorzec ENABLE_GPS_QUALITY_SHADOW z komentarza _FINGERPRINT_EXTRA_FLAGS).
+ENABLE_NOTIFY_CHANNEL_SPLIT = False
+ENABLE_NOTIFY_CHANNEL_SPLIT_SHADOW = False
+
+# GPS merge-lock A-1 (2026-08-02, sesja GPS): niedecyzyjny kill-switch CONCURRENCY
+# kanonicznego writera pozycji PWA (`gps_pwa_store.py`, jedyny literalny czytelnik
+# `flag("ENABLE_GPS_MERGE_LOCK", False)`). OFF (default) = LEGACY bajt-parytet
+# (threading.Lock + atomic write, bez dedykowanego lockfile/merge/telemetrii);
+# ON = dedykowany lockfile + reload-pod-lockiem + merge-by-timestamp. Czytelnicy
+# GPS (courier_resolver/plan_recheck/panel) dostaja NIEZMIENIONY schemat rekordu —
+# merge zmienia tylko KTORE wpisy przezyja rownolegly zapis, nie TRESC decyzji
+# dispatchu. Dlatego poza ETAP4_DECISION_FLAGS (ten sam wzorzec write-path
+# kill-switch co ENABLE_LEX_WINDOW_LEDGER_V2 / ENABLE_LOADGOV_SNAPSHOT_PUBLISH).
+# Stala-fallback = literal OFF = default czytelnika; kanon po flipie = flags.json.
+ENABLE_GPS_MERGE_LOCK = False
+
 # Noc 2026-07-28 — drabina eskalacji S1→S2→S3. Wszystkie cztery przełączniki
 # startują OFF i są w ETAP4_DECISION_FLAGS, bo nawet shadow producer stanie się
 # wejściem decyzji po odczycie certyfikatu przez plan-recheck/selection.
@@ -987,6 +1012,23 @@ TEST_ISOLATED_INFRA_FLAGS = (
     # 28.07). Z dniem powstania Alarm certificate flaga staje się decyzyjna
     # i przechodzi do ETAP4_DECISION_FLAGS.
     "ENABLE_LOADGOV_SNAPSHOT_PUBLISH",
+    # NOTIFY channel-split (2026-08-02, notify round-3 b0546fb88): niedecyzyjne
+    # kill-switche routingu powiadomien. Bez tego wpisu zywa wartosc
+    # (ENABLE_NOTIFY_CHANNEL_SPLIT=true we flags.json) przechodzila przez sito
+    # `_isolate_flags_json` i zostawala survivorem poza pokryciem strip ->
+    # ratchet INV-FLAG-CONFTEST-STRIP padal. Ten sam wzorzec co
+    # ENABLE_LEX_WINDOW_LEDGER_V2 / ENABLE_LOADGOV_SNAPSHOT_PUBLISH wyzej.
+    # CHANNEL_SPLIT_SHADOW jeszcze bez klucza w flags.json — wpis daje pokrycie
+    # z wyprzedzeniem na shadow-first rollout (kanon notify-channels-canon).
+    "ENABLE_NOTIFY_CHANNEL_SPLIT",
+    "ENABLE_NOTIFY_CHANNEL_SPLIT_SHADOW",
+    # GPS merge-lock A-1 (2026-08-02, sesja GPS, origin opus-a1-gps): niedecyzyjny
+    # kill-switch CONCURRENCY writera GPS PWA (`gps_pwa_store.py`). Flipniety ON
+    # w live flags.json -> survivor poza pokryciem strip -> ratchet padal. W fixturach
+    # hermetycznych NIE ma wspolbieznych writerow GPS, wiec flaga nie ma wplywu na
+    # decyzje -> determinizm zachowany bez zywej wartosci. Ten sam wzorzec allowlist
+    # co ENABLE_LEX_WINDOW_LEDGER_V2 / ENABLE_NOTIFY_CHANNEL_SPLIT (non-behavioral).
+    "ENABLE_GPS_MERGE_LOCK",
 )
 
 # Flagi zunifikowane już wcześniej wzorcem runtime (E2 audytu 10.06) — wchodzą
