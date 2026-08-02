@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import inspect
 import json
+import os
 import shlex
 import sqlite3
 import stat
@@ -12,7 +13,7 @@ import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -23,6 +24,9 @@ TOOLS = Path(__file__).resolve().parents[1] / "tools"
 sys.path.insert(0, str(TOOLS))
 
 from process_debt_gate import (  # noqa: E402
+    AT_CANCEL_CLAIM_STALE_SECONDS,
+    AT_RUN_CLAIM_STALE_SECONDS,
+    MAX_PRIVATE_FILE_BYTES,
     CASConflict,
     ClaimConflict,
     GateError,
@@ -31,10 +35,13 @@ from process_debt_gate import (  # noqa: E402
     ReceiptError,
     StorageError,
     ValidationError,
+    canonical_argv_hash,
     export_payload,
     load_claim_receipt,
     read_private_bytes,
     render_open_gates,
+    runner_auth_binding,
+    runner_auth_tag,
 )
 
 
@@ -105,6 +112,113 @@ def register_legacy_fixture(
         )
         connection.commit()
     return store.show_at_job(job_key)
+
+
+def register_sealed_fixture(
+    store: GateStore,
+    tmp_path: Path,
+    *,
+    suffix: str,
+    queue_id: str,
+    scheduled_for: str = "2026-07-22T10:00:00Z",
+    command: list[str] | None = None,
+    tag_token: str | None = None,
+    tag_binding_overrides: dict | None = None,
+) -> dict:
+    """Sealed auth v2 job w stanie SCHEDULED, bez uruchamiania `at`.
+
+    `tag_token` / `tag_binding_overrides` służą wyłącznie do podrobienia HMAC:
+    tag liczony jest wtedy innym tokenem albo nad zmienionym bindingiem, przy
+    rejestracji reszty pól bez zmian.
+    """
+
+    token = f"sealed-token-{suffix}"
+    command = command or ["/bin/true", suffix]
+    job_key = f"job-{suffix}"
+    gate_id = f"at.sealed.{suffix}"
+    payload = (tmp_path / f"payload-{suffix}.json").absolute()
+    payload.write_bytes(f"sealed payload {suffix}".encode("utf-8"))
+    payload.chmod(0o600)
+    info = os.stat(payload, follow_symlinks=False)
+    identity = {
+        "sha256": hashlib.sha256(payload.read_bytes()).hexdigest(),
+        "device": info.st_dev,
+        "inode": info.st_ino,
+        "ctime_ns": info.st_ctime_ns,
+        "size": info.st_size,
+    }
+    artifact_root = str((tmp_path / f"artifacts-{suffix}").absolute())
+    binding = runner_auth_binding(
+        job_key=job_key,
+        gate_id=gate_id,
+        scheduled_for=scheduled_for,
+        command_sha256=canonical_argv_hash(command),
+        payload_sha256=str(identity["sha256"]),
+        artifact_root=artifact_root,
+    )
+    tagged_binding = dict(binding, **(tag_binding_overrides or {}))
+    store.register_at_job(
+        gate_id=gate_id,
+        title=f"Sealed fixture {suffix}",
+        owner="pytest",
+        due_at="2026-07-30T00:00:00Z",
+        blocker="Oczekiwanie na fixture",
+        code_sha=CODE_SHA,
+        evidence_hash=EVIDENCE,
+        opened_at="2026-07-21T09:00:00Z",
+        actor="pytest",
+        job_key=job_key,
+        runner_token_hash=hashlib.sha256(token.encode("utf-8")).hexdigest(),
+        scheduled_for=scheduled_for,
+        command=command,
+        runner_auth_hmac=runner_auth_tag(tag_token or token, tagged_binding),
+        payload_path=str(payload),
+        payload_identity=identity,
+        artifact_root=artifact_root,
+        now=datetime(2026, 7, 21, 9, 0, tzinfo=timezone.utc),
+    )
+    store.confirm_at_job(
+        job_key,
+        queue_id,
+        now=datetime(2026, 7, 21, 9, 1, tzinfo=timezone.utc),
+    )
+    return {
+        "job_key": job_key,
+        "gate_id": gate_id,
+        "token": token,
+        "command": command,
+        "payload_path": str(payload),
+        "identity": identity,
+        "artifact_root": artifact_root,
+        "binding": binding,
+        "scheduled_for": scheduled_for,
+    }
+
+
+def sealed_claim_kwargs(record: dict) -> dict:
+    """Dokładnie te argumenty `claim_at_job`, które MUSZĄ przejść."""
+
+    return {
+        "runner_token": str(record["token"]),
+        "command": list(record["command"]),
+        "payload_path": str(record["payload_path"]),
+        "payload_identity": dict(record["identity"]),
+        "artifact_root": str(record["artifact_root"]),
+        "require_auth_version": 2,
+    }
+
+
+def assert_no_claim_and_job_unchanged(store: GateStore, job_key: str) -> None:
+    """Fail-closed: odrzucony pre-exec nie zostawia claimu ani nie rusza joba."""
+
+    with sqlite3.connect(store.db_path) as connection:
+        claims = connection.execute(
+            "SELECT COUNT(*) FROM at_job_claims WHERE job_key = ?", (job_key,)
+        ).fetchone()[0]
+    assert claims == 0
+    job = store.show_at_job(job_key)
+    assert job["status"] == "SCHEDULED"
+    assert str(job["reconcile_note"] or "") == ""
 
 
 def write_fixture_receipt(
@@ -2398,3 +2512,580 @@ def test_early_runner_then_submission_cancel_removes_exact_sealed_payload(
     assert claim["binding"]["early_runner_aborted"] is True
     assert not Path(job["payload_path"]).exists()
     assert popen_calls == []
+
+
+def test_sealed_auth_v2_forged_hmac_is_rejected_before_any_claim(
+    tmp_path: Path,
+) -> None:
+    """A-D1: podrobiony sealed HMAC nigdy nie przyznaje RUN claimu.
+
+    Chroni `claim_at_job` -> `hmac.compare_digest(runner_auth_tag(...), expected_tag)`.
+    Trzy niezależne drogi podrobienia (cudzy token, przetagowany binding,
+    uszkodzony digest w DB) plus kontrola pozytywna, żeby test nie mógł
+    przejść samym erroringiem.
+    """
+
+    now = datetime(2026, 7, 22, 10, 1, tzinfo=timezone.utc)
+
+    # (a) Napastnik zna binding, ale nie zna tokenu wykonawcy.
+    foreign = GateStore(tmp_path / "hmac-foreign-token.sqlite3")
+    forged_token = register_sealed_fixture(
+        foreign,
+        tmp_path,
+        suffix="hmac-token",
+        queue_id="901",
+        tag_token="token-napastnika",
+    )
+    with pytest.raises(ValidationError, match="sealed payload HMAC"):
+        foreign.claim_at_job(
+            forged_token["job_key"], now=now, **sealed_claim_kwargs(forged_token)
+        )
+    assert_no_claim_and_job_unchanged(foreign, forged_token["job_key"])
+
+    # (b) Tag policzony nad INNYM argv — zapieczętowanie nie przenosi się na
+    #     inne polecenie, choć wszystkie kolumny joba są poprawne.
+    retagged_argv = GateStore(tmp_path / "hmac-retagged-argv.sqlite3")
+    forged_argv = register_sealed_fixture(
+        retagged_argv,
+        tmp_path,
+        suffix="hmac-argv",
+        queue_id="902",
+        tag_binding_overrides={"command_sha256": canonical_argv_hash(["/bin/false"])},
+    )
+    with pytest.raises(ValidationError, match="sealed payload HMAC"):
+        retagged_argv.claim_at_job(
+            forged_argv["job_key"], now=now, **sealed_claim_kwargs(forged_argv)
+        )
+    assert_no_claim_and_job_unchanged(retagged_argv, forged_argv["job_key"])
+
+    # (c) Tag policzony nad INNYM artifact_root — przekierowanie drzewa
+    #     artefaktów nie jest objęte pieczęcią.
+    retagged_root = GateStore(tmp_path / "hmac-retagged-root.sqlite3")
+    forged_root = register_sealed_fixture(
+        retagged_root,
+        tmp_path,
+        suffix="hmac-root",
+        queue_id="903",
+        tag_binding_overrides={"artifact_root": str((tmp_path / "obcy-root").absolute())},
+    )
+    with pytest.raises(ValidationError, match="sealed payload HMAC"):
+        retagged_root.claim_at_job(
+            forged_root["job_key"], now=now, **sealed_claim_kwargs(forged_root)
+        )
+    assert_no_claim_and_job_unchanged(retagged_root, forged_root["job_key"])
+
+    # (d) Uszkodzony digest w DB (obcięty / pusty) NIE degeneruje się do
+    #     porównania prefiksu — leci ValidationError na kształcie hasha.
+    for index, (label, tampered_tag) in enumerate(
+        (
+            ("truncated", "a" * 32),
+            ("empty", ""),
+            ("nonhex", "z" * 64),
+        )
+    ):
+        corrupt = GateStore(tmp_path / f"hmac-db-{label}.sqlite3")
+        record = register_sealed_fixture(
+            corrupt,
+            tmp_path,
+            suffix=f"hmac-db-{label}",
+            queue_id=f"91{index}",
+        )
+        with sqlite3.connect(corrupt.db_path) as connection:
+            connection.execute(
+                "UPDATE at_jobs SET runner_auth_tag = ? WHERE job_key = ?",
+                (tampered_tag, record["job_key"]),
+            )
+            connection.commit()
+        with pytest.raises(ValidationError, match="evidence_hash"):
+            corrupt.claim_at_job(
+                record["job_key"], now=now, **sealed_claim_kwargs(record)
+            )
+        assert_no_claim_and_job_unchanged(corrupt, record["job_key"])
+
+    # Kontrola pozytywna: nietknięta pieczęć nadal przyznaje dokładnie
+    # jeden RUN claim. Bez tego cały test przechodziłby po zaślepieniu
+    # `claim_at_job` dowolnym wyjątkiem.
+    healthy = GateStore(tmp_path / "hmac-healthy.sqlite3")
+    good = register_sealed_fixture(
+        healthy, tmp_path, suffix="hmac-ok", queue_id="904"
+    )
+    claim = healthy.claim_at_job(
+        good["job_key"], now=now, **sealed_claim_kwargs(good)
+    )
+    assert claim["status"] == "CLAIMED"
+    assert claim["binding"]["command_sha256"] == canonical_argv_hash(good["command"])
+
+
+def test_sealed_auth_v2_rejects_every_unsealed_argument_mismatch(
+    tmp_path: Path,
+) -> None:
+    """A-D1: token, auth_version, artifact_root, payload_path i payload identity.
+
+    Każdy z tych checków w `claim_at_job` był bez oracle — wycięcie go
+    przechodziło suitę na zielono.
+    """
+
+    now = datetime(2026, 7, 22, 10, 1, tzinfo=timezone.utc)
+    store = GateStore(tmp_path / "sealed-mismatch.sqlite3")
+    record = register_sealed_fixture(
+        store, tmp_path, suffix="mismatch", queue_id="905"
+    )
+    job_key = str(record["job_key"])
+
+    def reject(message: str, **overrides) -> None:
+        kwargs = dict(sealed_claim_kwargs(record))
+        kwargs.update(overrides)
+        with pytest.raises(ValidationError, match=message):
+            store.claim_at_job(job_key, now=now, **kwargs)
+        assert_no_claim_and_job_unchanged(store, job_key)
+
+    reject("niepoprawny token wykonawcy", runner_token="nie-ten-token")
+    reject("command identity mismatch", command=["/bin/false"])
+    reject("wymagany auth_version=1", require_auth_version=1)
+    reject(
+        "artifact_root nie zgadza się",
+        artifact_root=str((tmp_path / "inny-root").absolute()),
+    )
+    reject(
+        "artifact_root musi być kanoniczną ścieżką absolutną",
+        artifact_root=f"{tmp_path}/./niekanoniczny",
+    )
+    reject("payload path nie zgadza się", payload_path=None)
+    reject(
+        "payload path nie zgadza się",
+        payload_path=str((tmp_path / "obcy-payload.json").absolute()),
+    )
+    for field, value in (
+        ("sha256", "b" * 64),
+        ("device", int(record["identity"]["device"]) + 1),
+        ("ctime_ns", int(record["identity"]["ctime_ns"]) + 1),
+        ("size", int(record["identity"]["size"]) + 1),
+    ):
+        reject(
+            "payload identity nie zgadza się",
+            payload_identity=dict(record["identity"], **{field: value}),
+        )
+
+    # Bliźniacza ścieżka: job auth v1 nie może przyjąć sealed argumentów.
+    legacy = GateStore(tmp_path / "sealed-legacy.sqlite3")
+    add_gate(legacy, "at.legacy-sealed")
+    register_legacy_fixture(
+        legacy,
+        gate_id="at.legacy-sealed",
+        job_key="job-legacy-sealed",
+        token="legacy-token",
+        scheduled_for="2026-07-22T10:00:00Z",
+        command=["/bin/true"],
+    )
+    legacy.confirm_at_job("job-legacy-sealed", "906")
+    with pytest.raises(ValidationError, match="auth v1 nie przyjmuje sealed payload"):
+        legacy.claim_at_job(
+            "job-legacy-sealed",
+            runner_token="legacy-token",
+            command=["/bin/true"],
+            payload_path=str((tmp_path / "payload-mismatch.json").absolute()),
+            now=now,
+        )
+    assert_no_claim_and_job_unchanged(legacy, "job-legacy-sealed")
+
+    # Kontrola pozytywna na TYM SAMYM jobie: komplet poprawnych argumentów
+    # nadal przechodzi, więc powyższe odrzucenia nie są skutkiem złego fixture.
+    assert (
+        store.claim_at_job(job_key, now=now, **sealed_claim_kwargs(record))["status"]
+        == "CLAIMED"
+    )
+
+
+def read_claim_rows(store: GateStore, job_key: str) -> list[dict]:
+    """Surowe wiersze claimu — łapią też pola, których `show_at_claim` nie pokazuje."""
+
+    connection = sqlite3.connect(store.db_path)
+    try:
+        connection.row_factory = sqlite3.Row
+        return [
+            dict(row)
+            for row in connection.execute(
+                "SELECT * FROM at_job_claims WHERE job_key = ? ORDER BY claim_id",
+                (job_key,),
+            )
+        ]
+    finally:
+        connection.close()
+
+
+def count_gate_events(store: GateStore, gate_id: str, actor: str) -> int:
+    connection = sqlite3.connect(store.db_path)
+    try:
+        return int(
+            connection.execute(
+                "SELECT COUNT(*) FROM gate_events WHERE gate_id = ? AND actor = ?",
+                (gate_id, actor),
+            ).fetchone()[0]
+        )
+    finally:
+        connection.close()
+
+
+def claimed_sealed_job(
+    store: GateStore,
+    tmp_path: Path,
+    *,
+    suffix: str,
+    queue_id: str,
+) -> tuple[dict, dict]:
+    record = register_sealed_fixture(
+        store, tmp_path, suffix=suffix, queue_id=queue_id
+    )
+    claim = store.claim_at_job(
+        str(record["job_key"]),
+        now=datetime(2026, 7, 22, 10, 1, tzinfo=timezone.utc),
+        **sealed_claim_kwargs(record),
+    )
+    return record, claim
+
+
+def test_record_at_receipt_retry_is_idempotent_and_blocks_divergent_second(
+    tmp_path: Path,
+) -> None:
+    """A-D2: powtórka runnera po timeoucie nie duplikuje i nie mutuje receiptu.
+
+    Retry z INNYM `now` musi wrócić przez early-return (`updated_at` bez zmian),
+    a rozbieżny drugi receipt musi zostać odrzucony bez tknięcia wiersza.
+    """
+
+    store = GateStore(tmp_path / "receipt-idempotent.sqlite3")
+    record, claim = claimed_sealed_job(
+        store, tmp_path, suffix="receipt-retry", queue_id="920"
+    )
+    job_key = str(record["job_key"])
+    identity, receipt = write_fixture_receipt(store, job_key, claim, exit_code=0)
+    record_kwargs = {
+        "claim_id": str(claim["claim_id"]),
+        "receipt_path": str(claim["receipt_path"]),
+        "receipt_identity": identity,
+        "exit_code": 0,
+        "stdout_sha256": str(receipt["stdout"]["sha256"]),
+        "stderr_sha256": str(receipt["stderr"]["sha256"]),
+    }
+
+    first = store.record_at_receipt(
+        job_key,
+        now=datetime(2026, 7, 22, 10, 2, tzinfo=timezone.utc),
+        **record_kwargs,
+    )
+    assert first["status"] == "RECEIPT_READY"
+    after_first = read_claim_rows(store, job_key)
+    assert len(after_first) == 1
+
+    # Retry z późniejszym zegarem: exact-match musi wrócić BEZ zapisu, więc
+    # `updated_at` zostaje przy pierwszym timestampie.
+    second = store.record_at_receipt(
+        job_key,
+        now=datetime(2026, 7, 22, 11, 30, tzinfo=timezone.utc),
+        **record_kwargs,
+    )
+    assert second == first
+    assert read_claim_rows(store, job_key) == after_first
+    assert after_first[0]["updated_at"] == "2026-07-22T10:02:00Z"
+
+    # Rozbieżny drugi receipt (inny exit_code, spójny z plikiem na dysku)
+    # musi zostać odrzucony i nie może nadpisać zapisanego wyniku.
+    divergent_identity, divergent_receipt = write_fixture_receipt(
+        store, job_key, claim, exit_code=1
+    )
+    assert divergent_identity["sha256"] != identity["sha256"]
+    with pytest.raises(ReceiptError, match="drugi receipt różni się od zapisanego"):
+        store.record_at_receipt(
+            job_key,
+            claim_id=str(claim["claim_id"]),
+            receipt_path=str(claim["receipt_path"]),
+            receipt_identity=divergent_identity,
+            exit_code=1,
+            stdout_sha256=str(divergent_receipt["stdout"]["sha256"]),
+            stderr_sha256=str(divergent_receipt["stderr"]["sha256"]),
+            now=datetime(2026, 7, 22, 11, 31, tzinfo=timezone.utc),
+        )
+    assert read_claim_rows(store, job_key) == after_first
+
+
+def test_finalize_at_claim_retry_is_idempotent_and_detects_inconsistent_job(
+    tmp_path: Path,
+) -> None:
+    """A-D2: powtórzony finalize nie rozlicza joba drugi raz.
+
+    Druga próba musi wrócić przez gałąź FINALIZED (bez nowego `gate_events`),
+    a niespójny terminalny job musi ją zablokować.
+    """
+
+    store = GateStore(tmp_path / "finalize-idempotent.sqlite3")
+    record, claim = claimed_sealed_job(
+        store, tmp_path, suffix="finalize-retry", queue_id="921"
+    )
+    job_key = str(record["job_key"])
+    gate_id = str(record["gate_id"])
+    identity, receipt = write_fixture_receipt(store, job_key, claim, exit_code=0)
+    store.record_at_receipt(
+        job_key,
+        claim_id=str(claim["claim_id"]),
+        receipt_path=str(claim["receipt_path"]),
+        receipt_identity=identity,
+        exit_code=0,
+        stdout_sha256=str(receipt["stdout"]["sha256"]),
+        stderr_sha256=str(receipt["stderr"]["sha256"]),
+        now=datetime(2026, 7, 22, 10, 2, tzinfo=timezone.utc),
+    )
+
+    first = store.finalize_at_claim(
+        job_key,
+        claim_id=str(claim["claim_id"]),
+        receipt_identity=identity,
+        now=datetime(2026, 7, 22, 10, 3, tzinfo=timezone.utc),
+    )
+    assert first["status"] == "SUCCEEDED"
+    after_first = read_claim_rows(store, job_key)
+    events_after_first = count_gate_events(store, gate_id, "at_gate/run")
+    assert events_after_first == 1
+    gate_after_first = store.show_gate(gate_id)
+
+    second = store.finalize_at_claim(
+        job_key,
+        claim_id=str(claim["claim_id"]),
+        receipt_identity=identity,
+        now=datetime(2026, 7, 22, 12, 0, tzinfo=timezone.utc),
+    )
+    assert second == first
+    assert read_claim_rows(store, job_key) == after_first
+    assert count_gate_events(store, gate_id, "at_gate/run") == events_after_first
+    assert store.show_gate(gate_id) == gate_after_first
+    assert after_first[0]["finalized_at"] == "2026-07-22T10:03:00Z"
+
+    # Rozjazd claim↔job (cudzy writer ruszył terminalny job) musi być błędem,
+    # nie cichym „już zrobione".
+    with sqlite3.connect(store.db_path) as connection:
+        connection.execute(
+            "UPDATE at_jobs SET exit_code = 7 WHERE job_key = ?", (job_key,)
+        )
+        connection.commit()
+    with pytest.raises(ReceiptError, match="FINALIZED claim i terminalny job"):
+        store.finalize_at_claim(
+            job_key,
+            claim_id=str(claim["claim_id"]),
+            receipt_identity=identity,
+            now=datetime(2026, 7, 22, 12, 1, tzinfo=timezone.utc),
+        )
+    assert read_claim_rows(store, job_key) == after_first
+
+
+def test_concurrent_receipt_and_finalize_have_exactly_one_effect(
+    tmp_path: Path,
+) -> None:
+    """A-D2: dwa równoległe runnery dają dokładnie jeden skutek, nie dwa."""
+
+    store = GateStore(tmp_path / "receipt-concurrent.sqlite3")
+    record, claim = claimed_sealed_job(
+        store, tmp_path, suffix="concurrent", queue_id="922"
+    )
+    job_key = str(record["job_key"])
+    gate_id = str(record["gate_id"])
+    identity, receipt = write_fixture_receipt(store, job_key, claim, exit_code=0)
+
+    def record_receipt(offset: int) -> str:
+        barrier.wait()
+        GateStore(store.db_path).record_at_receipt(
+            job_key,
+            claim_id=str(claim["claim_id"]),
+            receipt_path=str(claim["receipt_path"]),
+            receipt_identity=identity,
+            exit_code=0,
+            stdout_sha256=str(receipt["stdout"]["sha256"]),
+            stderr_sha256=str(receipt["stderr"]["sha256"]),
+            now=datetime(2026, 7, 22, 10, 2, offset, tzinfo=timezone.utc),
+        )
+        return "OK"
+
+    barrier = threading.Barrier(2)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert list(pool.map(record_receipt, (0, 1))) == ["OK", "OK"]
+    rows = read_claim_rows(store, job_key)
+    assert len(rows) == 1 and rows[0]["status"] == "RECEIPT_READY"
+    # Dokładnie jeden zapis: `updated_at` pochodzi od zwycięzcy, przegrany
+    # wrócił przez exact-match i nie nadpisał wiersza drugą sekundą.
+    written_at = str(rows[0]["updated_at"])
+    assert written_at in {"2026-07-22T10:02:00Z", "2026-07-22T10:02:01Z"}
+
+    def finalize(offset: int) -> str:
+        finalize_barrier.wait()
+        GateStore(store.db_path).finalize_at_claim(
+            job_key,
+            claim_id=str(claim["claim_id"]),
+            receipt_identity=identity,
+            now=datetime(2026, 7, 22, 10, 3, offset, tzinfo=timezone.utc),
+        )
+        return "OK"
+
+    finalize_barrier = threading.Barrier(2)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert list(pool.map(finalize, (0, 1))) == ["OK", "OK"]
+    final_rows = read_claim_rows(store, job_key)
+    assert len(final_rows) == 1 and final_rows[0]["status"] == "FINALIZED"
+    assert count_gate_events(store, gate_id, "at_gate/run") == 1
+    job = store.show_at_job(job_key)
+    assert job["status"] == "SUCCEEDED" and int(job["exit_code"]) == 0
+
+
+@pytest.mark.parametrize(
+    "age_seconds, expect_alarm",
+    [
+        (AT_CANCEL_CLAIM_STALE_SECONDS - 1, False),
+        (AT_CANCEL_CLAIM_STALE_SECONDS, False),
+        (AT_CANCEL_CLAIM_STALE_SECONDS + 1, True),
+    ],
+)
+def test_cancel_claim_stale_threshold_alarms_exactly_after_five_minutes(
+    tmp_path: Path,
+    age_seconds: int,
+    expect_alarm: bool,
+) -> None:
+    """A-D4: CANCEL claim ma WŁASNY, krótki próg — nie dwunastogodzinny RUN.
+
+    Bez tego oracle odwrócenie ternary wybierającego próg (albo podniesienie
+    stałej) zostawia zawieszony CANCEL bez alarmu przez pół doby.
+    """
+
+    store = GateStore(tmp_path / f"cancel-stale-{age_seconds}.sqlite3")
+    record = register_sealed_fixture(
+        store, tmp_path, suffix=f"cancel-stale-{age_seconds}", queue_id="930"
+    )
+    job_key = str(record["job_key"])
+    gate = store.show_gate(str(record["gate_id"]))
+    claimed_at = datetime(2026, 7, 22, 10, 0, tzinfo=timezone.utc)
+    store.begin_at_job_cancellation(
+        job_key,
+        "930",
+        expected_gate_version=int(gate["version"]),
+        actor="pytest",
+        reason="logiczny cancel",
+        now=claimed_at,
+    )
+    assert store.show_at_claim(job_key)["binding"]["operation"] == "CANCEL"
+
+    result = store.reconcile_at_jobs(
+        {"930"},
+        now=claimed_at + timedelta(seconds=age_seconds),
+    )
+    claim_status = store.show_at_claim(job_key)["status"]
+    if not expect_alarm:
+        assert result["outcome_unknown"] == []
+        assert claim_status == "CLAIMED"
+        return
+    assert result["outcome_unknown"] == [job_key]
+    assert claim_status == "OUTCOME_UNKNOWN"
+    alarm_reason = str(store.show_gate(str(record["gate_id"]))["alarm_reason"])
+    # Literalna liczba, nie stała z modułu: podniesienie progu zaczerwieni test.
+    assert "CANCEL claim ma OUTCOME_UNKNOWN" in alarm_reason
+    assert "ponad 300 sekund" in alarm_reason
+
+
+@pytest.mark.parametrize(
+    "age_seconds, expect_alarm",
+    [
+        (AT_RUN_CLAIM_STALE_SECONDS, False),
+        (AT_RUN_CLAIM_STALE_SECONDS + 1, True),
+    ],
+)
+def test_run_claim_stale_threshold_alarms_exactly_after_twelve_hours(
+    tmp_path: Path,
+    age_seconds: int,
+    expect_alarm: bool,
+) -> None:
+    """A-D4: granica progu RUN, dotąd testowana tylko 1 s i 13 h od progu."""
+
+    store = GateStore(tmp_path / f"run-stale-{age_seconds}.sqlite3")
+    record = register_sealed_fixture(
+        store, tmp_path, suffix=f"run-stale-{age_seconds}", queue_id="931"
+    )
+    job_key = str(record["job_key"])
+    claimed_at = datetime(2026, 7, 22, 10, 1, tzinfo=timezone.utc)
+    store.claim_at_job(job_key, now=claimed_at, **sealed_claim_kwargs(record))
+
+    result = store.reconcile_at_jobs(
+        {"931"},
+        now=claimed_at + timedelta(seconds=age_seconds),
+    )
+    if not expect_alarm:
+        assert result["outcome_unknown"] == []
+        assert result["running"] == [job_key]
+        assert store.show_at_claim(job_key)["status"] == "CLAIMED"
+        return
+    assert result["outcome_unknown"] == [job_key]
+    assert result["running"] == []
+    assert store.show_at_claim(job_key)["status"] == "OUTCOME_UNKNOWN"
+    alarm_reason = str(store.show_gate(str(record["gate_id"]))["alarm_reason"])
+    assert "RUN claim ma OUTCOME_UNKNOWN" in alarm_reason
+    assert "ponad 43200 sekund" in alarm_reason
+
+
+def test_private_reader_enforces_owner_mode_size_and_regular_file(
+    tmp_path: Path,
+) -> None:
+    """A-D4: guardy `read_private_bytes` poza symlinkiem katalogu pośredniego.
+
+    Dotąd żaden test nie czerwieniał po wycięciu warunku owner/mode/size ani
+    limitu bajtów; receipt z prawami 0644 przechodził bez śladu.
+    """
+
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+
+    good = private / "ok.bin"
+    good.write_bytes(b"kanoniczny artefakt")
+    good.chmod(0o600)
+    data, identity = read_private_bytes(good)
+    assert data == b"kanoniczny artefakt"
+    assert identity["size"] == len(data)
+
+    loose = private / "loose.bin"
+    loose.write_bytes(b"za szerokie prawa")
+    loose.chmod(0o644)
+    with pytest.raises(ReceiptError, match="owner/mode/size"):
+        read_private_bytes(loose)
+
+    group_readable = private / "group.bin"
+    group_readable.write_bytes(b"grupa czyta")
+    group_readable.chmod(0o640)
+    with pytest.raises(ReceiptError, match="owner/mode/size"):
+        read_private_bytes(group_readable)
+
+    # Nie-zwykły plik: katalog. (FIFO celowo pominięte — `read_private_bytes`
+    # otwiera bez O_NONBLOCK, więc test na FIFO wieszałby suitę zamiast
+    # udowodnić guard S_ISREG.)
+    not_regular = private / "podkatalog"
+    not_regular.mkdir(mode=0o700)
+    with pytest.raises(ReceiptError, match="owner/mode/size"):
+        read_private_bytes(not_regular)
+
+    oversize = private / "oversize.bin"
+    oversize.write_bytes(b"x" * (MAX_PRIVATE_FILE_BYTES + 1))
+    oversize.chmod(0o600)
+    with pytest.raises(ReceiptError, match="owner/mode/size"):
+        read_private_bytes(oversize)
+
+    absent = private / "nie-ma.bin"
+    with pytest.raises(ReceiptError, match="prywatny artefakt jest niedostępny"):
+        read_private_bytes(absent)
+
+    final_symlink = private / "link.bin"
+    final_symlink.symlink_to(good)
+    with pytest.raises(ReceiptError, match="prywatny artefakt jest niedostępny"):
+        read_private_bytes(final_symlink)
+
+    with pytest.raises(ValidationError, match="ścieżkę absolutną"):
+        read_private_bytes(Path("wzgledna.bin"))
+
+    loose_dir = tmp_path / "loose-dir"
+    loose_dir.mkdir(mode=0o755)
+    inside = loose_dir / "receipt.bin"
+    inside.write_bytes(b"katalog za szeroki")
+    inside.chmod(0o600)
+    with pytest.raises(ValidationError, match="mode 0700"):
+        read_private_bytes(inside)

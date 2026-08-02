@@ -461,7 +461,19 @@ def test_export_rejects_unknown_columns_and_projection_is_allowlisted(
     assert injected is True
 
 
-def test_corrupt_v2_claim_rolls_back_whole_migration(tmp_path: Path) -> None:
+def test_corrupt_binding_sha_still_hits_nonempty_v2_claims_guard(tmp_path: Path) -> None:
+    """Uszkodzony `binding_sha256` NIE otwiera obejścia guarda niepustych claimów.
+
+    A-D5: poprzednia nazwa (`..._rolls_back_whole_migration`) obiecywała dowód
+    rollbacku uszkodzonego claimu, którego ten test nie przeprowadza —
+    wstrzyknięte uszkodzenie nigdy nie jest ewaluowane, bo wcześniej wyzwala
+    się guard „at_job_claims nie jest puste" (potwierdza to jego własny
+    `match`). Faktyczna teza: nawet z uszkodzonym rekordem migracja v2→v4 nie
+    rusza z miejsca i zostawia bazę na `user_version = 2` z kolumnami v2.
+    Realny rollback po awarii w trakcie migracji pokrywa fault-injection
+    w `test_initialize_accepts_v2_and_never_downgrades`.
+    """
+
     db = tmp_path / "corrupt-v2.sqlite3"
     _make_v2_db(db, with_legacy_job=True)
     _insert_valid_legacy_claim(db, "FINALIZED")
