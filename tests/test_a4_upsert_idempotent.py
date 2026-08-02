@@ -37,11 +37,11 @@ def _rec(cid="A"):
 
 
 def _set_flag(monkeypatch, value):
-    """Steruj flagą przez patch `common.flag` (flaga NIE jest w live flags.json —
-    default OFF; test steruje jawnie, deterministycznie)."""
-    real = C.flag
-    monkeypatch.setattr(
-        C, "flag", lambda n, d=False: value if n == FLAG else real(n, d))
+    """Steruj flagą ETAP4 przez patch stałej modułu `common.ENABLE_UPSERT_PROPOSALS_IDEMPOTENT`
+    — `decision_flag()` czyta ją przez globals() gdy klucza brak w flags.json (a nie ma:
+    zero live). To kanoniczny wzorzec sterowania flagą decyzyjną w testach (conftest
+    wycina ETAP4 z tmp-kopii flags.json, więc stała modułu wygrywa)."""
+    monkeypatch.setattr(C, FLAG, value)
 
 
 # ── FLAGA OFF = LEGACY (parytet z baseline) ──────────────────────────────────────
@@ -49,7 +49,7 @@ def test_off_default_is_legacy_restamp(tmp_path):
     """Flaga OFF (default; brak klucza w live flags.json): re-upsert TEJ SAMEJ
     propozycji RE-STEMPLUJE sent_at (historyczne, bajt-parytet)."""
     p = str(tmp_path / "pp.json")
-    assert C.flag(FLAG, False) is False, "flaga NIE może być w live flags.json (zero live)"
+    assert C.decision_flag(FLAG) is False, "domyślnie OFF (const fallback; nie w live flags.json)"
     n1 = S.upsert_proposals([("o1", _rec("A"))], _N, path=p)
     t1 = json.load(open(p))["o1"]["sent_at"]
     n2 = S.upsert_proposals([("o1", _rec("A"))], _N + timedelta(minutes=5), path=p)
@@ -159,14 +159,13 @@ def test_flag_on_differs_from_off(tmp_path, monkeypatch):
 
 # ── WYŚCIG: współbieżny upsert tej samej propozycji (flaga ON) ───────────────────
 def _idem_worker(path, oid, cid, now_iso):
-    """Worker w OSOBNYM PROCESIE (realny fcntl cross-process). Ustawia flagę ON
-    lokalnie (flaga nie jest w flags.json → subprocess musi ją włączyć sam)."""
+    """Worker w OSOBNYM PROCESIE (realny fcntl cross-process). Ustawia flagę ETAP4 ON
+    lokalnie przez stałą modułu (decision_flag czyta ją przez globals(); flaga nie jest
+    w flags.json → subprocess musi ją włączyć sam)."""
     from datetime import datetime as _dt
     import dispatch_v2.common as _C
     import dispatch_v2.pending_proposals_store as _s
-    _real = _C.flag
-    _C.flag = lambda n, d=False: (
-        True if n == "ENABLE_UPSERT_PROPOSALS_IDEMPOTENT" else _real(n, d))
+    _C.ENABLE_UPSERT_PROPOSALS_IDEMPOTENT = True
     rec = {"verdict": "PROPOSE", "best": {"courier_id": cid}}
     return _s.upsert_proposals([(oid, rec)], _dt.fromisoformat(now_iso), path=path)
 

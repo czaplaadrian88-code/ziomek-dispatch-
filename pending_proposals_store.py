@@ -293,7 +293,7 @@ def upsert_proposals(
     ups = [(str(o), r) for (o, r) in upserts if o is not None and r is not None]
     if not ups:
         return 0
-    if C.flag("ENABLE_UPSERT_PROPOSALS_IDEMPOTENT", False):
+    if C.decision_flag("ENABLE_UPSERT_PROPOSALS_IDEMPOTENT"):
         # ON: idempotentny no-op na niezmienionej propozycji; błąd PROPAGUJE.
         with _locked(path):
             pending = sweep_expired(load(path), now)

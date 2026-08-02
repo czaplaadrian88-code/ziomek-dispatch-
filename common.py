@@ -94,18 +94,19 @@ ENABLE_NOTIFY_CHANNEL_SPLIT_SHADOW = False
 # Stala-fallback = literal OFF = default czytelnika; kanon po flipie = flags.json.
 ENABLE_GPS_MERGE_LOCK = False
 
-# UPSERT idempotent A-4 (2026-08-02, sesja a4-upsert-idempotent): niedecyzyjny
-# kill-switch IDEMPOTENCJI + PROPAGACJI BLEDU kanonicznego writera pending_proposals
-# (`pending_proposals_store.upsert_proposals`, jedyny literalny czytelnik
-# `C.flag("ENABLE_UPSERT_PROPOSALS_IDEMPOTENT", False)`). OFF (default) = LEGACY
+# UPSERT idempotent A-4 (2026-08-02, sesja a4-upsert-idempotent): flaga DECYZYJNA
+# (ETAP4 — patrz ETAP4_DECISION_FLAGS) idempotencji + propagacji bledu kanonicznego
+# writera pending_proposals (`pending_proposals_store.upsert_proposals`; czytelnik
+# `C.decision_flag("ENABLE_UPSERT_PROPOSALS_IDEMPOTENT")`). OFF (default) = LEGACY
 # bajt-parytet (kazdy upsert re-stemplowal sent_at/expires_at; blad zapisu polkniety
 # -> 0); ON = powtorny upsert TEJ SAMEJ propozycji (best.courier_id niezmieniony) =
 # NO-OP (sent_at/wiek claimu nietkniety), a blad zapisu PROPAGUJE do callera.
-# Zmienia tylko KTORE wpisy pending przezyja re-upsert + widocznosc bledu, NIE TRESC
-# decyzji dispatchu (kto/kiedy/score/ETA — te liczy silnik PRZED zapisem). Dlatego
-# poza ETAP4_DECISION_FLAGS — TEN SAM wzorzec write-path kill-switch co
-# ENABLE_GPS_MERGE_LOCK / ENABLE_LEX_WINDOW_LEDGER_V2 / ENABLE_LOADGOV_SNAPSHOT_PUBLISH
-# wyzej. Stala-fallback = literal OFF = default czytelnika; kanon po flipie = flags.json.
+# WHY ETAP4 (nie infra jak ENABLE_GPS_MERGE_LOCK): sent_at -> active_proposal_claims
+# `age_s` vs PROPOSAL_CLAIM_TTL_SEC -> _apply_persistent_proposal_claims tentative_assign
+# na FLOCIE -> ON≠OFF ZMIENIA dostepna flote = tresc decyzji, i to JEDNOWATKOWO (dedup
+# odpala bez wspolbieznosci -> replay ON vs OFF rozjezdza sie -> MUSI byc w fingerprincie).
+# Konsument LIVE = ENABLE_PROPOSAL_CLAIM_PERSISTENCE (sam ETAP4). Stala = fallback
+# module-OFF czytany przez decision_flag() globals(); kanon po flipie = flags.json (za ACK).
 ENABLE_UPSERT_PROPOSALS_IDEMPOTENT = False
 
 # Noc 2026-07-28 — drabina eskalacji S1→S2→S3. Wszystkie cztery przełączniki
@@ -696,6 +697,14 @@ ETAP4_DECISION_FLAGS = (
     # manual_overrides_daily_reset kasuje `excluded`/`working`. OFF = rekord
     # bezterminowy bajt-w-bajt jak dziś. Mapa: docs/R4_OPERATOR_ON_MAP.md.
     "ENABLE_OPERATOR_AVAILABILITY_EXPIRY",
+    # UPSERT idempotent A-4 (2026-08-02): DECYZYJNA. upsert_proposals ON zachowuje
+    # `sent_at` przy re-propozycji (OFF re-stemplował) → `active_proposal_claims`
+    # liczy `age_s` z sent_at vs PROPOSAL_CLAIM_TTL_SEC → `_apply_persistent_proposal_claims`
+    # robi `tentative_assign` (claim capacity) na FLOCIE selektora. Więc ON≠OFF ZMIENIA
+    # dostępną flotę → treść decyzji (kogo wybrać), i to JEDNOWĄTKOWO (nie wymaga
+    # współbieżności jak ENABLE_GPS_MERGE_LOCK). Konsument LIVE = ENABLE_PROPOSAL_CLAIM_PERSISTENCE
+    # (sam ETAP4). Musi być w decyzyjnym fingerprincie (replay ON vs OFF rozjeżdża się).
+    "ENABLE_UPSERT_PROPOSALS_IDEMPOTENT",
 )
 
 # Stałe-fallback (module-level OFF) dla flag dodanych do ETAP4_DECISION_FLAGS
@@ -1030,14 +1039,6 @@ TEST_ISOLATED_INFRA_FLAGS = (
     # decyzje -> determinizm zachowany bez zywej wartosci. Ten sam wzorzec allowlist
     # co ENABLE_LEX_WINDOW_LEDGER_V2 / ENABLE_NOTIFY_CHANNEL_SPLIT (non-behavioral).
     "ENABLE_GPS_MERGE_LOCK",
-    # UPSERT idempotent A-4 (2026-08-02, sesja a4-upsert-idempotent): niedecyzyjny
-    # kill-switch idempotencji writera pending_proposals (`upsert_proposals`).
-    # Shadow-first, DZIS BEZ klucza w flags.json (kod-default OFF) -> wpis daje
-    # pokrycie strip Z WYPRZEDZENIEM na przyszly flip ON za ACK (analogicznie do
-    # ENABLE_NOTIFY_CHANNEL_SPLIT_SHADOW). W fixturach hermetycznych brak retry/
-    # wspolbieznego upsertu -> flaga bez wplywu na determinizm. Ten sam wzorzec
-    # allowlist co ENABLE_GPS_MERGE_LOCK wyzej (non-behavioral).
-    "ENABLE_UPSERT_PROPOSALS_IDEMPOTENT",
 )
 
 # Flagi zunifikowane już wcześniej wzorcem runtime (E2 audytu 10.06) — wchodzą
