@@ -211,12 +211,16 @@ def log_signals(since):
 def flag_state():
     try:
         d = json.load(open(FLAGS))
+        auto_assign = d.get("ENABLE_AUTO_ASSIGN")
         return {
             "select_on": bool(d.get("ENABLE_OBJM_LEXR6_SELECT", False)),
             "shadow_on": bool(d.get("ENABLE_OBJM_LEXR6_SELECT_SHADOW", False)),
+            # Flaga egzekutora pochodzi z engine-world flags.json. Brak lub
+            # nie-bool pozostaje jawnie nieustalony; nie podstawiamy defaultu.
+            "auto_assign_on": auto_assign if isinstance(auto_assign, bool) else None,
         }
     except Exception:
-        return {"select_on": None, "shadow_on": None}
+        return {"select_on": None, "shadow_on": None, "auto_assign_on": None}
 
 
 def compute_tod_curve(days, cutoff):
@@ -341,7 +345,9 @@ def gates(cur, log, flags, base, since, now):
         out.append(("G2a-KOORD", "INFO", f"sel {koord_sel_pct:.1f}% (brak baseline){_raw}"))
 
     # G2b auto-route
-    if base and base.get("ack_alert_pct") is not None:
+    if flags.get("auto_assign_on") is False:
+        out.append(("G2b-auto-route", "INFO", "N/A (auto-assign OFF)"))
+    elif base and base.get("ack_alert_pct") is not None:
         d = cur["ack_alert_pct"] - base["ack_alert_pct"]
         st = "STOP" if d > ACKALERT_STOP_PP else "GO"
         out.append(("G2b-auto-route", st, f"ACK+ALERT {cur['ack_alert_pct']:.1f}% vs {base['ack_alert_pct']:.1f}% (Δ{d:+.1f}pp, limit +{ACKALERT_STOP_PP:.0f}); AUTO {cur['auto_pct']:.1f}%"))
