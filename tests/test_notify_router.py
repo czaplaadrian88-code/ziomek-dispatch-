@@ -94,11 +94,13 @@ def test_category_critical_by_keyword(tmp_feed):
     assert nr.classify_category("Awaria integracji restauracji Foodage") == "critical"
 
 
-def test_category_source_override_wins(tmp_feed):
-    # source=alert_onfailure → technical, nawet gdyby treść mówiła 'płatność'
-    assert nr.classify_category("płatność", source="alert_onfailure") == "technical"
-    # backup_sentinel → technical
+def test_category_source_override_only_nonbusiness(tmp_feed):
+    # source_category działa TYLKO dla treści nie-biznesowej. Biznes wygrywa PRZED
+    # source (P0-1): 'płatność' + tech source = critical, NIE technical.
+    assert nr.classify_category("płatność", source="alert_onfailure") == "critical"
+    # treść nie-biznesowa + tech source → technical
     assert nr.classify_category("cokolwiek", source="backup_sentinel") == "technical"
+    assert nr.classify_category("restart serwisu", source="alert_onfailure") == "technical"
 
 
 def test_category_business_wins_over_technical(tmp_feed):
@@ -135,14 +137,14 @@ def test_route_flags_off_always_proceeds_main(tmp_feed, monkeypatch):
     rows = _feed_rows(tmp_feed)
     assert len(rows) == 1
     assert rows[0]["priority"] == "low"
-    assert rows[0]["category"] == "info"       # kategoria zapisana nawet OFF (shadow)
     assert rows[0]["sent_main"] is True         # nie odcięte (flagi off)
     assert rows[0]["sent_silent"] is False
-    assert rows[0]["sent_repairs"] is False
+    # BYTE-PARITY (P1-5): OFF/OFF = legacy schema, ZERO nowych kluczy.
+    assert set(rows[0]) == {"ts", "priority", "source", "text", "sent_main", "sent_silent"}
 
 
 def test_route_split_off_technical_stays_main(tmp_feed, monkeypatch):
-    # ON≠OFF: ten sam alert techniczny przy split OFF zostaje na main...
+    # ON≠OFF: ten sam alert techniczny przy split OFF zostaje na main (legacy).
     _flags(monkeypatch)  # obie OFF
     monkeypatch.setattr(
         nr, "_send_repairs",
@@ -150,9 +152,28 @@ def test_route_split_off_technical_stays_main(tmp_feed, monkeypatch):
     )
     assert nr.route("🔴 OnFailure awaria", source="alert_onfailure", priority="high") is True
     rows = _feed_rows(tmp_feed)
-    assert rows[0]["category"] == "technical"    # shadow: DOKĄD BY poszło
     assert rows[0]["sent_main"] is True
-    assert rows[0]["sent_repairs"] is False
+    # BYTE-PARITY (P1-5): OFF/OFF = legacy schema (category BY było technical, ale nie w feedzie).
+    assert set(rows[0]) == {"ts", "priority", "source", "text", "sent_main", "sent_silent"}
+
+
+def test_route_shadow_flag_adds_category_without_routing(tmp_feed, monkeypatch):
+    # SHADOW: category w feedzie do obserwacji PRZED aktywacją, ZERO routingu
+    # (nie tknie cichego ani napraw). Byte-parity łamane świadomie za tą flagą.
+    _flags(monkeypatch, ENABLE_NOTIFY_CHANNEL_SPLIT_SHADOW=True)
+    monkeypatch.setattr(
+        nr, "_send_repairs",
+        lambda text: pytest.fail("shadow NIE rutuje na kanał napraw"),
+    )
+    monkeypatch.setattr(
+        nr, "_send_silent",
+        lambda text: pytest.fail("shadow NIE rutuje na cichy bot"),
+    )
+    assert nr.route("🔴 OnFailure awaria", source="alert_onfailure", priority="high") is True
+    row = _feed_rows(tmp_feed)[0]
+    assert row["category"] == "technical"       # obserwacja: DOKĄD BY poszło
+    assert row["sent_main"] is True              # ale realnie zostaje na main
+    assert row["sent_repairs"] is False
 
 
 # ── routing: LOW→cichy (ENABLE_NOTIFY_PRIORITY_ROUTING) ───────────────────
@@ -163,9 +184,10 @@ def test_route_low_routing_on_low_diverted(tmp_feed, monkeypatch):
     assert nr.route("Briefing dzienny", source="daily_briefing") is False
     rows = _feed_rows(tmp_feed)
     assert rows[0]["priority"] == "low"
-    assert rows[0]["category"] == "info"
     assert rows[0]["sent_main"] is False       # odcięte od głównego bota
     assert rows[0]["sent_silent"] is True
+    # split OFF → feed legacy (category dopisywane tylko przy split/shadow ON)
+    assert "category" not in rows[0]
 
 
 def test_route_low_routing_on_fails_open_when_silent_fails(tmp_feed, monkeypatch):
@@ -308,3 +330,70 @@ def test_route_both_flags_on_are_independent(tmp_feed, monkeypatch):
     assert [r["sent_main"] for r in rows] == [False, False, True]
     assert [r["sent_silent"] for r in rows] == [True, False, False]
     assert [r["sent_repairs"] for r in rows] == [False, True, False]
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# KILL-TEST Sol 2026-08-02 — adwersarialne oracle bezpieczeństwa (TWARDA BRAMKA)
+# Wciągnięte z worktree Sola (notify-split-killtest). P0-4 (writery omijające
+# choke-point: shift_notifications/worker.py, delivered_integrity_monitor.py) jest
+# POZA zakresem splitu — osobna bramka ownera (decyzja Fable 2026-08-02), route()
+# fail-open wystarcza dla ścieżki choke-point.
+# ═══════════════════════════════════════════════════════════════════════════
+
+@pytest.mark.parametrize("text", [
+    "płatność P24 failed exit=1",
+    "restauracja Foodage padła — OnFailure",
+    "nowy kurier niesparowany — awaria serwisu",
+])
+def test_kill_business_critical_beats_technical_source_override(
+        tmp_feed, monkeypatch, text):
+    """P0-1: biznes krytyczny nigdy nie trafia do NAPRAW, także z tech source."""
+    _flags(monkeypatch, ENABLE_NOTIFY_CHANNEL_SPLIT=True)
+    monkeypatch.setattr(
+        nr, "_send_repairs",
+        lambda _text: pytest.fail("biznes krytyczny trafił do kanału NAPRAW"),
+    )
+    assert nr.classify_category(text, source="alert_onfailure",
+                                priority="high") == "critical"
+    assert nr.route(text, source="alert_onfailure", priority="high") is True
+
+
+def test_kill_business_critical_cannot_be_forced_low_and_silent(
+        tmp_feed, monkeypatch):
+    """P0-2: jawny priorytet LOW nie może schować płatności na cichym kanale."""
+    _flags(monkeypatch, ENABLE_NOTIFY_PRIORITY_ROUTING=True,
+           ENABLE_NOTIFY_CHANNEL_SPLIT=True)
+    monkeypatch.setattr(
+        nr, "_send_silent",
+        lambda _text: pytest.fail("biznes krytyczny został wysłany tylko cicho"),
+    )
+    text = "Problem z płatnością P24 zamówienia"
+    assert nr.classify_category(text, priority="low") == "critical"
+    assert nr.route(text, priority="low") is True
+
+
+def test_kill_unknown_high_is_critical_even_if_config_requests_technical(
+        tmp_feed, monkeypatch):
+    """P0-3: hot-config nie może osłabić fail-safe unknown HIGH -> critical."""
+    monkeypatch.setattr(
+        nr, "_config_cache",
+        {**nr._DEFAULT_CONFIG, "default_category": "technical"},
+    )
+    monkeypatch.setattr(nr, "_config_mtime", 9e18)
+    _flags(monkeypatch, ENABLE_NOTIFY_CHANNEL_SPLIT=True)
+    monkeypatch.setattr(
+        nr, "_send_repairs",
+        lambda _text: pytest.fail("nieznany HIGH trafił do kanału NAPRAW"),
+    )
+    text = "zupełnie nieznany alert bez słów kluczowych"
+    assert nr.classify_category(text, priority="high") == "critical"
+    assert nr.route(text, priority="high") is True
+
+
+def test_kill_flags_off_off_preserves_legacy_feed_schema(tmp_feed, monkeypatch):
+    """P1-5: OFF/OFF byte-parity — legacy feed nie może dostać nowych kluczy."""
+    _flags(monkeypatch)
+    assert nr.route("Briefing dzienny", source="daily_briefing") is True
+    assert set(_feed_rows(tmp_feed)[0]) == {
+        "ts", "priority", "source", "text", "sent_main", "sent_silent",
+    }
