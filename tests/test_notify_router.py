@@ -82,10 +82,12 @@ def test_category_low_is_info(tmp_feed):
     assert nr.classify_category("⚠ warning: divergence shadow") == "info"
 
 
-def test_category_technical_by_keyword(tmp_feed):
-    assert nr.classify_category("🔴 dispatch-shadow.service OnFailure exit=1") == "technical"
-    assert nr.classify_category("OSRM degraded — timeout na routingu") == "technical"
-    assert nr.classify_category("backup_sentinel: brak snapshotu 24h") == "technical"
+def test_category_technical_by_source(tmp_feed):
+    # SOURCE-PRIMARY: źródło techniczne → technical (deterministycznie, nie z treści).
+    assert nr.classify_category("cokolwiek", source="alert_onfailure") == "technical"
+    assert nr.classify_category("parser timeout", source="parser_health", priority="high") == "technical"
+    assert nr.classify_category("brak snapshotu 24h", source="backup_sentinel") == "technical"
+    assert nr.classify_category("degraded routing", source="osrm_client") == "technical"
 
 
 def test_category_critical_by_keyword(tmp_feed):
@@ -115,10 +117,27 @@ def test_category_unknown_high_is_critical_failsafe(tmp_feed):
     assert nr.classify_category("zupełnie nietypowy komunikat bez słów kluczowych") == "critical"
 
 
-def test_category_source_override_only_for_high(tmp_feed):
-    # gdy priorytet wymuszony LOW, kategoria = info NIEZALEŻNIE od source_category
-    assert nr.classify_category("cokolwiek", source="alert_onfailure",
-                                priority="low") == "info"
+def test_category_technical_source_ignores_low_priority(tmp_feed):
+    # SOURCE-PRIMARY: źródło techniczne → technical NAWET przy priority=low
+    # (source decyduje, nie priorytet). Bez treści biznesowej.
+    assert nr.classify_category("rutynowy heartbeat", source="alert_onfailure",
+                                priority="low") == "technical"
+
+
+def test_category_unknown_source_high_is_critical(tmp_feed):
+    # SOURCE-PRIMARY: nieznane/puste źródło + HIGH → critical (fail-safe do ownera).
+    assert nr.classify_category("cokolwiek nietypowe", source="ZUPELNIE_INNE", priority="high") == "critical"
+    assert nr.classify_category("cokolwiek", source=None, priority="high") == "critical"
+    assert nr.classify_category("cokolwiek", source="", priority="high") == "critical"
+
+
+def test_category_business_beats_unknown_low_but_narrow(tmp_feed):
+    # WĄSKI biznes → critical nawet przy nieznanym źródle + priority=low (P0-2)...
+    assert nr.classify_category("Problem z płatnością P24", source=None, priority="low") == "critical"
+    # ...i eskaluje źródło techniczne (payment po angielsku) — round-2 P0.
+    assert nr.classify_category("payment-gateway down", source="alert_onfailure", priority="high") == "critical"
+    # ...ale SZEROKIE 'zamówieni' NIE przejmuje technicznego alertu (round-2 P1 regresja).
+    assert nr.classify_category("parser timeout zamówienia 5", source="parser_health", priority="high") == "technical"
 
 
 # ── routing: obie flagi OFF (legacy) ──────────────────────────────────────

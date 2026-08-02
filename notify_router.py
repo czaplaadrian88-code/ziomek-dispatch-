@@ -5,41 +5,40 @@ ZAKRES (uzgodniony z Adrianem 2026-06-14):
   KOORD zostaje na głównym bocie bez zmian.
 - Działa WYŁĄCZNIE na alertach idących przez telegram_utils.send_admin_alert
   (sla_tracker, parse_continuity_guard, observability.alert_onfailure,
-  daily_briefing, courier_ranking, ...). To jest pojedynczy choke-point dla
-  ~512 WARNING/dzień + alerty infra + briefingi.
+  daily_briefing, courier_ranking, ...). Pojedynczy choke-point.
 
-DWA ORTOGONALNE WYMIARY KLASYFIKACJI (jeden kanoniczny owner: ten moduł + config):
-1. priority ∈ {high, low}  (klasyfikacja LEGACY, bez zmian — decyduje głośny vs
-   cichy): HIGH = głośny (główna grupa lub kanał napraw), LOW = cichy bot + feed.
-2. category ∈ {technical, critical, info}  (NOWY wymiar — decyduje KTÓRY głośny
-   kanał, wprowadzony 2026-08-02 na ACK Adriana):
-     - info      = LOW nie-biznesowy (cichy bot @DajeszBot + kafel panelu).
-     - technical = HIGH TECHNICZNY (awarie/OnFailure/service-down/liveness/
-                   backup_sentinel/parser-health) → kanał NAPRAW.
-     - critical  = HIGH BIZNESOWO-KRYTYCZNY (płatności/restauracje/nowy kurier)
-                   → główna grupa Adriana (natychmiastowa interwencja).
+DWA ORTOGONALNE WYMIARY:
+1. priority ∈ {high, low}  (LEGACY, bez zmian — decyduje głośny vs cichy).
+2. category ∈ {technical, critical, info}  (od 2026-08-02 — decyduje KTÓRY kanał):
+     - info      = cichy bot @DajeszBot + kafel panelu.
+     - technical = kanał NAPRAW (infra/health).
+     - critical  = główna grupa Adriana (biznes + fail-safe).
 
-PRECEDENCJA NIEKONFIGUROWALNA (patrz classify_category — kolejność zahardkodowana,
-hot-config stroi tylko LISTY słów, NIGDY kolejność ani fail-safe):
-  BIZNES-KRYTYCZNY (treść) > LOW→info > source_category > TECHNICAL (treść) >
-  FAIL-SAFE 'critical'. Alertu biznesowego NIE da się zdegradować do NAPRAW ani
-  schować na cichym bocie — ani przez source, ani przez jawny priority=low
-  (kill-test P0-1/P0-2). Nieznany HIGH → 'critical' zahardkodowane (kill-test P0-3).
+KLASYFIKACJA KATEGORII = SOURCE-PRIMARY (owner 02.08 — decyzja policy zamykająca
+dwie rundy defektów keyword-precedence). ŹRÓDŁO decyduje deterministycznie:
+  1. source ∈ _SOURCE_TECHNICAL → 'technical' (→ NAPRAW); TREŚĆ biznesowa z WĄSKIEGO
+     zbioru _BUSINESS_ESCALATION ESKALUJE technical → 'critical' (NIGDY odwrotnie).
+  2. source ∈ _SOURCE_CRITICAL  → 'critical'.
+  3. treść biznesowa (wąski zbiór) → 'critical' — nawet przy nieznanym źródle i
+     jawnym priority=low (biznesu nie da się schować).
+  4. source nieznane/puste, nie-biznes: priorytet LOW → 'info'; inaczej → 'critical'.
+  Wątpliwe/kolizja/nieznany HIGH → 'critical' (fail-safe do ownera). Mapy source i
+  zbiór eskalacji są ZAHARDKODOWANE (nie z hot-configu) — to była przyczyna obu
+  rund defektów. Treść eskaluje TYLKO w górę (technical→critical), NIGDY w dół.
+  ⚠ Zbiór eskalacji jest WĄSKI (płatność/payment/P24/gateway, restauracja, nowy
+  kurier) — świadomie BEZ szerokiego „zamówienie" (to był P1 regresji).
 
-Klasyfikacja LIST słów: config dispatch_state/notify_routing.json (hot-reload).
-Fail-safe classify(): tekst bez dopasowania → HIGH (nigdy nie chowamy alertu).
+Klasyfikacja priority (high/low) — config notify_routing.json (hot-reload).
 
-Gating — TRZY niezależne flagi (flags.json, wszystkie default OFF; niezależny rollback):
-- ENABLE_NOTIFY_PRIORITY_ROUTING:     odcina info/LOW od głównego bota (→ cichy bot + feed).
-- ENABLE_NOTIFY_CHANNEL_SPLIT:        odcina TECHNICAL od głównej grupy (→ kanał NAPRAW).
-- ENABLE_NOTIFY_CHANNEL_SPLIT_SHADOW: NIE rutuje; dopisuje category do feedu dla
-                                      obserwacji PRZED aktywacją (bez łamania byte-parity).
-Każda flaga OFF = pełne zachowanie legacy dla swojego wymiaru (zero production impact).
-BYTE-PARITY (kill-test P1-5): przy OFF/OFF (split i shadow OFF) feed = DOKŁADNIE legacy
-schema (ts/priority/source/text/sent_main/sent_silent). category+sent_repairs dodawane
-TYLKO gdy split ON lub shadow ON.
-Fail-open: gdy transport kanału pobocznego (cichy/napraw) zawiedzie, alert wraca na
-główną grupę — nigdy nie ginie. Biznes-krytyczny (critical) NIGDY nie jest odcinany.
+Gating — TRZY niezależne flagi (flags.json, wszystkie default OFF):
+- ENABLE_NOTIFY_PRIORITY_ROUTING:     info → cichy bot + feed.
+- ENABLE_NOTIFY_CHANNEL_SPLIT:        technical → kanał NAPRAW.
+- ENABLE_NOTIFY_CHANNEL_SPLIT_SHADOW: dopisuje category do feedu bez routingu (obserwacja).
+BYTE-PARITY: przy OFF/OFF/OFF (wszystkie trzy OFF) nowy classifier NIE JEST WYKONYWANY,
+a feed = DOKŁADNIE legacy schema (ts/priority/source/text/sent_main/sent_silent).
+category+sent_repairs dodawane TYLKO gdy split ON lub shadow ON.
+Fail-open: transport kanału pobocznego zawiedzie → alert wraca na główną grupę.
+Critical NIGDY nie jest odcinany (ani na cichy, ani na NAPRAW).
 
 Lekcje projektu: atomic writes (temp+fsync+rename dla trim), urllib-only (brak
 requests w venv), pytest guard (Lekcja #75 — żaden realny send w testach).
@@ -62,25 +61,48 @@ _STATE_DIR = Path("/root/.openclaw/workspace/dispatch_state")
 FEED_PATH = _STATE_DIR / "notify_feed.jsonl"
 CONFIG_PATH = _STATE_DIR / "notify_routing.json"
 _ASSISTANT_ENV_PATH = "/root/.openclaw/workspace/.secrets/assistant_telegram.env"
-# Kanał NAPRAW (technical). Owner wpina wartości w telegram_bots.env — patrz
-# raport aktywacji. TOKEN opcjonalny (fallback na główny bot postujący na osobną
-# grupę); CHAT_ID wymagany (osobny cel). Bez CHAT_ID → _send_repairs zwraca False
-# → fail-open na główną grupę (alert nie ginie).
+# Kanał NAPRAW (technical). Owner wpina wartości w telegram_bots.env. TOKEN opcjonalny
+# (fallback na główny bot na osobną grupę); CHAT_ID wymagany. Bez CHAT_ID → _send_repairs
+# zwraca False → fail-open na główną grupę (alert nie ginie).
 _REPAIRS_ENV_PATH = "/root/.openclaw/workspace/.secrets/telegram_bots.env"
 _MAIN_ENV_PATH = "/root/.openclaw/workspace/.secrets/telegram.env"
 _REPAIRS_TOKEN_KEY = "REPAIRS_BOT_TOKEN"
 _REPAIRS_CHAT_KEY = "REPAIRS_CHAT_ID"
 
+# ── SOURCE-PRIMARY: mapy źródło→kategoria (HARDKOD, deterministyczne, owner 02.08) ──
+# Źródła TECHNICZNE (infra/health) → kanał NAPRAW.
+_SOURCE_TECHNICAL = frozenset({
+    "alert_onfailure",
+    "backup_sentinel",
+    "data_alerts",
+    "parser_health",
+    "parser_health_layer3",
+    "liveness_probe",
+    "detector_419",
+    "osrm_client",
+    "state_panel_monitor",
+})
+# Źródła BIZNESOWO-KRYTYCZNE → główna grupa (owner). (Reszta biznesu i tak wpada
+# w critical przez fail-safe / eskalację treści; ta mapa to jawna intencja.)
+_SOURCE_CRITICAL = frozenset({
+    "new_courier_pairing",
+})
+# TREŚĆ eskaluje technical→critical WYŁĄCZNIE na WĄSKI, wysokopewny zbiór biznesowy
+# (owner 02.08). Case-insensitive (substring na .lower()). ⚠ NIGDY szerokie słowa
+# typu „zamówienie/zamówieni" — to był P1 regresji. Eskalacja tylko w górę.
+_BUSINESS_ESCALATION = (
+    "płatnoś", "platnos", "payment", "p24", "gateway",
+    "restauracj", "restaurant",
+    "nowy kurier", "new courier", "new_courier",
+)
+
 # Cap rozrostu feedu: gdy przekroczy próg, trim do ostatnich N wpisów.
 _FEED_MAX_BYTES = 4_000_000
 _FEED_TRIM_KEEP = 2000
 
-# Fallback config (gdy plik notify_routing.json nie istnieje). Adrian tuninguje
-# przez edycję pliku JSON — hot-reload, bez restartu. Klucze *_keywords /
-# source_category są mergowane per-klucz z żywym JSON (brakujące → default),
-# więc kategoryzacja działa od razu z tych defaultów, a JSON tylko dostraja LISTY.
-# UWAGA: config stroi tylko LISTY — kolejność precedencji i fail-safe unknown→critical
-# są zahardkodowane w classify_category (kill-test P0-1/P0-2/P0-3).
+# Fallback config priorytetu (gdy plik notify_routing.json nie istnieje). Adrian
+# tuninguje przez edycję JSON — hot-reload. Dotyczy TYLKO classify() (high/low);
+# kategoria (technical/critical/info) jest source-primary i NIE z configu.
 _DEFAULT_CONFIG = {
     # HIGH wygrywa gdy KTÓRYKOLWIEK keyword pasuje (sprawdzane PRZED low).
     "high_keywords": [
@@ -99,34 +121,6 @@ _DEFAULT_CONFIG = {
     ],
     # Gdy nic nie pasuje — bezpiecznie HIGH.
     "default_priority": "high",
-    # --- Wymiar KANAŁU (od 2026-08-02) — tylko dla HIGH. LOW zawsze = info. ---
-    # BIZNES (critical) sprawdzany PRZED source i PRZED techniką (business wins,
-    # precedencja zahardkodowana). Nieznany HIGH → critical (fail-safe HARDKOD).
-    "critical_keywords": [
-        "płatnoś", "platnos", "p24", "iban", "wypłat", "wyplat", "pobrani",
-        "restauracj", "nowy kurier", "sparuj", "/nowy", "niesparowany",
-        "krytycz", "klient", "zamówieni", "zamowieni",
-    ],
-    "technical_keywords": [
-        "onfailure", "awaria", "awarii", "padł", "padla", "failed", "fail (",
-        "exit=", "result=", "traceback", "exception", "liveness",
-        "[ziomek liveness]", "service", "systemd", "backup", "backup_sentinel",
-        "parser", "degraded", "osrm", "health", "watchdog", "timeout",
-        "unit ", "restart", "disk", "oom",
-    ],
-    # Wymuszenie kategorii per źródło — tylko dla NIE-biznesowego HIGH; biznes-
-    # krytyczna treść i tak wygrywa PRZED source (precedencja niekonfigurowalna).
-    "source_category": {
-        "alert_onfailure": "technical",
-        "backup_sentinel": "technical",
-        "data_alerts": "technical",
-        "parser_health": "technical",
-        "liveness_probe": "technical",
-        "detector_419": "technical",
-        "osrm_client": "technical",
-    },
-    # UWAGA: fail-safe „nieznany HIGH → critical" jest HARDKODOWANY w
-    # classify_category (NIE z configu) — kill-test P0-3. Brak klucza default_category.
 }
 
 _config_cache: dict | None = None
@@ -162,7 +156,7 @@ def classify(text: str, source: str | None = None) -> str:
     """Zwróć 'high' lub 'low'. Fail-safe: nieznane → high.
 
     source (opcjonalny) pozwala callerowi wymusić priorytet przez config
-    source_priority map (np. alert_onfailure → high niezależnie od treści).
+    source_priority map (np. daily_briefing → low niezależnie od treści).
     """
     cfg = _load_config()
     src_map = cfg.get("source_priority", {})
@@ -181,47 +175,46 @@ def classify(text: str, source: str | None = None) -> str:
     return "low" if dp == "low" else "high"
 
 
+def _is_business_escalation(low_text: str) -> bool:
+    """Czy treść zawiera WĄSKI, wysokopewny sygnał biznesowy (eskalacja do ownera)."""
+    return any(kw in low_text for kw in _BUSINESS_ESCALATION)
+
+
 def classify_category(text: str, source: str | None = None,
                       priority: str | None = None) -> str:
-    """Zwróć kanał: 'technical' | 'critical' | 'info'.
+    """Zwróć kanał: 'technical' | 'critical' | 'info'. SOURCE-PRIMARY (owner 02.08).
 
-    PRECEDENCJA NIEKONFIGUROWALNA (kolejność zahardkodowana; hot-config stroi tylko
-    LISTY słów, nie kolejność ani fail-safe):
-      1. BIZNES-KRYTYCZNY (treść: płatności/restauracje/nowy kurier) → 'critical'
-         — wygrywa PRZED source_category i PRZED jawnym priority=low. Alertu
-         biznesowego nie da się zdegradować do NAPRAW ani schować na cichym bocie
-         (kill-test P0-1/P0-2).
-      2. LOW (nie-biznesowy) → 'info' (cichy bot + feed).
-      3. source_category[source] (technical/critical) — tylko HIGH, nie-biznes.
-      4. TECHNICAL po treści (awarie/OnFailure/service/parser/...) → 'technical'.
-      5. FAIL-SAFE HARDKOD: HIGH bez dopasowania → 'critical' (Adrian widzi;
-         NIGDY z configu — kill-test P0-3).
+    Precedencja deterministyczna (mapy ZAHARDKODOWANE, nie z hot-configu):
+      1. source ∈ _SOURCE_TECHNICAL → 'technical'; treść biznesowa (wąski zbiór)
+         ESKALUJE → 'critical' (nigdy odwrotnie).
+      2. source ∈ _SOURCE_CRITICAL  → 'critical'.
+      3. treść biznesowa (wąski zbiór) → 'critical' — nawet przy nieznanym źródle
+         i jawnym priority=low (biznesu nie da się schować; kill-test P0-2).
+      4. source nieznane, nie-biznes: LOW → 'info'; inaczej → 'critical' (fail-safe).
 
-    priority (opcjonalny) — jeśli caller policzył już high/low, przekaż dla spójności.
+    Treść eskaluje TYLKO w górę (technical→critical). Nieznane/kolizja/nieznany HIGH
+    → 'critical' (do ownera). priority (opcjonalny) — high/low dla ścieżki nieznanego
+    źródła; jeśli caller już policzył, przekaż dla spójności.
     """
-    cfg = _load_config()
+    src = (source or "").strip()
     low_text = (text or "").lower()
-    # 1. BIZNES-KRYTYCZNY wygrywa bezwarunkowo (przed source i przed degradacją LOW).
-    for kw in cfg.get("critical_keywords", []):
-        if kw in low_text:
-            return "critical"
-    # 2. Priorytet LOW (nie-biznesowy) → info.
+    business = _is_business_escalation(low_text)
+
+    # 1. Źródło techniczne → NAPRAW; treść biznesowa eskaluje do ownera.
+    if src in _SOURCE_TECHNICAL:
+        return "critical" if business else "technical"
+    # 2. Źródło jawnie biznesowe → owner.
+    if src in _SOURCE_CRITICAL:
+        return "critical"
+    # 3. Treść biznesowa → owner (nieznane źródło, także przy priority=low).
+    if business:
+        return "critical"
+    # 4. Nieznane źródło, nie-biznes: LOW → info, inaczej fail-safe critical.
     pri = (priority or "").lower()
     if pri not in ("high", "low"):
         pri = classify(text, source)
     if pri == "low":
         return "info"
-    # 3. source_category — tylko HIGH, nie-biznes.
-    cat_map = cfg.get("source_category", {})
-    if source and source in cat_map:
-        c = str(cat_map[source]).lower()
-        if c in ("technical", "critical"):
-            return c
-    # 4. TECHNICAL po treści.
-    for kw in cfg.get("technical_keywords", []):
-        if kw in low_text:
-            return "technical"
-    # 5. FAIL-SAFE HARDKOD (nie z configu): nieznany HIGH → critical.
     return "critical"
 
 
@@ -232,8 +225,8 @@ def _append_feed(text: str, priority: str, source: str | None,
     """Dopisz wpis do feedu (kafel panelu czyta tail). Best-effort, nigdy nie
     wysadza ścieżki alertu.
 
-    BYTE-PARITY (kill-test P1-5): przy OFF/OFF (split i shadow OFF) schemat = DOKŁADNIE
-    legacy (ts/priority/source/text/sent_main/sent_silent). Klucze category/sent_repairs
+    BYTE-PARITY (kill-test P1-5): przy OFF/OFF/OFF schemat = DOKŁADNIE legacy
+    (ts/priority/source/text/sent_main/sent_silent). Klucze category/sent_repairs
     dodawane WYŁĄCZNIE gdy include_split_fields=True (split ON lub shadow ON)."""
     try:
         entry = {
@@ -335,46 +328,44 @@ def route(text: str, source: str | None = None, priority: str | None = None) -> 
     """Zaklasyfikuj + zrutuj alert. Zwraca True gdy GŁÓWNA GRUPA ma wysłać,
     False gdy alert przejęty przez kanał poboczny (cichy=info / napraw=technical).
 
-    Routing sterowany KATEGORIĄ (nie surowym priority) — dzięki temu biznes-krytyczny
-    (category=critical) ZAWSZE idzie na główną grupę: nigdy na cichy bot, nigdy na
-    kanał napraw (kill-test P0-2). Bezpieczniki:
-    - info→cichy / technical→napraw: odcięcie od main DOPIERO po potwierdzonym
-      delivery; transport fail/wyjątek → fail-open na główną grupę.
-    - feed: byte-parity legacy przy OFF/OFF; category+sent_repairs tylko gdy
-      split ON lub shadow ON (kill-test P1-5).
-
-    Wołane z telegram_utils.send_admin_alert. Zawsze zapisuje wpis do feedu.
+    OFF/OFF/OFF (wszystkie 3 flagi OFF): nowy classifier NIE jest wykonywany, a feed
+    = DOKŁADNIE legacy schema (kill-test P1-5). Routing sterowany KATEGORIĄ — critical
+    ZAWSZE na główną grupę (nigdy silent/napraw). Transport poboczny fail/wyjątek →
+    fail-open na główną grupę. Wołane z telegram_utils.send_admin_alert.
     """
     from dispatch_v2.common import flag
-
-    pri = (priority or "").lower()
-    if pri not in ("high", "low"):
-        pri = classify(text, source)
-    category = classify_category(text, source, priority=pri)
 
     low_routing_on = flag("ENABLE_NOTIFY_PRIORITY_ROUTING", default=False)
     channel_split_on = flag("ENABLE_NOTIFY_CHANNEL_SPLIT", default=False)
     shadow_on = flag("ENABLE_NOTIFY_CHANNEL_SPLIT_SHADOW", default=False)
 
+    pri = (priority or "").lower()
+    if pri not in ("high", "low"):
+        pri = classify(text, source)
+
     sent_silent = False
     sent_repairs = False
     proceed_main = True
+    category = ""
 
-    if category == "info":
-        if low_routing_on:
-            try:
-                sent_silent = _send_silent(text)
-            except Exception as e:  # noqa: BLE001 — transport info nie może zablokować main
-                log.warning(f"notify_router: cichy bot exception — fail-open main: {e}")
-            proceed_main = not sent_silent  # fail-open: odetnij main dopiero po sukcesie
-    elif category == "technical":
-        if channel_split_on:
-            try:
-                sent_repairs = _send_repairs(text)
-            except Exception as e:  # noqa: BLE001 — transport napraw nie może zablokować main
-                log.warning(f"notify_router: kanał napraw exception — fail-open main: {e}")
-            proceed_main = not sent_repairs  # fail-open: odetnij main dopiero po sukcesie
-    # category == "critical": proceed_main pozostaje True — NIGDY silent/napraw.
+    # OFF/OFF/OFF → nowy classifier NIE jest osiągany (byte-parity, kill-test P1-5).
+    if low_routing_on or channel_split_on or shadow_on:
+        category = classify_category(text, source, priority=pri)
+        if category == "info":
+            if low_routing_on:
+                try:
+                    sent_silent = _send_silent(text)
+                except Exception as e:  # noqa: BLE001 — transport info nie blokuje main
+                    log.warning(f"notify_router: cichy bot exception — fail-open main: {e}")
+                proceed_main = not sent_silent  # fail-open: odetnij dopiero po sukcesie
+        elif category == "technical":
+            if channel_split_on:
+                try:
+                    sent_repairs = _send_repairs(text)
+                except Exception as e:  # noqa: BLE001 — transport napraw nie blokuje main
+                    log.warning(f"notify_router: kanał napraw exception — fail-open main: {e}")
+                proceed_main = not sent_repairs  # fail-open: odetnij dopiero po sukcesie
+        # category == "critical": proceed_main pozostaje True — NIGDY silent/napraw.
 
     _append_feed(text, pri, source, sent_main=proceed_main, sent_silent=sent_silent,
                  category=category, sent_repairs=sent_repairs,
