@@ -330,6 +330,48 @@ def test_forward_deploy_does_not_block_unrelated_unfinished_outbox(
     assert status["safe_for_forward_deploy"] is True
 
 
+def test_forward_deploy_blocks_unbound_czasowka_new_order(monkeypatch):
+    """A pre-v19 NEW_ORDER may persist a split tuple after the hot flip."""
+    new_order = {
+        "event_type": "NEW_ORDER",
+        "event_id": "time-new-order",
+        "order_id": "491578",
+        "payload": {
+            "order_type": "czasowka",
+            "prep_minutes": 60,
+            "pickup_at_warsaw": "2026-08-02T14:00:00+02:00",
+            "czas_kuriera_warsaw": "2026-08-02T14:05:00+02:00",
+            "czas_kuriera_hhmm": "14:05",
+        },
+    }
+    monkeypatch.setattr(rollback.C, "decision_flag", lambda _name: False)
+    monkeypatch.setattr(
+        rollback.event_bus,
+        "list_unfinished_state_applies",
+        lambda: [
+            _outbox_row(
+                new_order,
+                event_id="time-new-order",
+                event_key="time-new-order-key",
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        rollback.queue,
+        "legacy_rollback_status",
+        lambda: _queue_status(),
+    )
+    monkeypatch.setattr(
+        rollback.state_machine,
+        "get_all_strict",
+        lambda: {},
+    )
+
+    status = rollback.collect_status()
+    assert status["unfinished_unbound_new_order_time_outbox"] == 1
+    assert status["safe_for_forward_deploy"] is False
+
+
 def test_forward_deploy_blocks_unassigned_legacy_czasowka_missing_contract(
     monkeypatch,
 ):
@@ -365,6 +407,111 @@ def test_forward_deploy_blocks_unassigned_legacy_czasowka_missing_contract(
     assert rollback.C.is_czasowka_order(legacy_planned) is True
     assert status["active_incomplete_time_contract_count"] == 1
     assert status["safe_for_forward_deploy"] is False
+
+
+def test_forward_deploy_blocks_split_active_time_contract(monkeypatch):
+    """Three populated fields are unsafe when they encode two truths."""
+    split = {
+        "order_id": "491578",
+        "status": "planned",
+        "order_type": "czasowka",
+        "prep_minutes": 60,
+        "pickup_at_warsaw": "2026-08-02T14:00:00+02:00",
+        "czas_kuriera_warsaw": "2026-08-02T14:05:00+02:00",
+        "czas_kuriera_hhmm": "14:05",
+    }
+    monkeypatch.setattr(rollback.C, "decision_flag", lambda _name: False)
+    monkeypatch.setattr(
+        rollback.event_bus,
+        "list_unfinished_state_applies",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        rollback.queue,
+        "legacy_rollback_status",
+        lambda: _queue_status(),
+    )
+    monkeypatch.setattr(
+        rollback.state_machine,
+        "get_all_strict",
+        lambda: {split["order_id"]: split},
+    )
+
+    assert rollback._active_time_contract_incomplete(split) is True
+    status = rollback.collect_status()
+    assert status["active_incomplete_time_contract_count"] == 1
+    assert status["safe_for_forward_deploy"] is False
+
+
+def test_forward_deploy_blocks_malformed_active_time_contract():
+    malformed = {
+        "order_id": "491578",
+        "status": "assigned",
+        "courier_id": "492",
+        "order_type": "czasowka",
+        "pickup_at_warsaw": "not-an-iso",
+        "czas_kuriera_warsaw": "2026-08-02T14:05:00+02:00",
+        "czas_kuriera_hhmm": "19:99",
+    }
+
+    assert rollback._active_time_contract_incomplete(malformed) is True
+
+
+def test_forward_deploy_ignores_well_formed_elastic_raw_ck(monkeypatch):
+    """Forward flag cannot change an explicitly elastic raw CK receipt."""
+    raw_ck = {
+        "event_type": "CZAS_KURIERA_UPDATED",
+        "event_id": "elastic-raw-ck",
+        "order_id": "elastic-1",
+        "courier_id": "492",
+        "payload": {
+            "old_ck_iso": "2026-08-02T14:00:00+02:00",
+            "old_ck_hhmm": "14:00",
+            "new_ck_iso": "2026-08-02T14:05:00+02:00",
+            "new_ck_hhmm": "14:05",
+            "delta_min": 5.0,
+            "source": "panel_re_check",
+        },
+    }
+    row = _outbox_row(
+        raw_ck,
+        event_id="elastic-raw-ck",
+        event_key="elastic-raw-ck-key",
+        order_id="elastic-1",
+    )
+    elastic = {
+        "order_id": "elastic-1",
+        "status": "assigned",
+        "order_type": "elastic",
+        "courier_id": "492",
+        "pickup_at_warsaw": "2026-08-02T14:00:00+02:00",
+        "czas_kuriera_warsaw": "2026-08-02T14:00:00+02:00",
+        "czas_kuriera_hhmm": "14:00",
+    }
+    monkeypatch.setattr(rollback.C, "decision_flag", lambda _name: False)
+    monkeypatch.setattr(
+        rollback.event_bus,
+        "list_unfinished_state_applies",
+        lambda: [row],
+    )
+    monkeypatch.setattr(
+        rollback.queue,
+        "legacy_rollback_status",
+        lambda: _queue_status(),
+    )
+    monkeypatch.setattr(
+        rollback.state_machine,
+        "get_all_strict",
+        lambda: {elastic["order_id"]: elastic},
+    )
+
+    status = rollback.collect_status()
+    # Code revert remains deliberately conservative for every raw CK row.
+    assert status["unfinished_authority_outbox"] == 1
+    assert status["safe_for_code_revert"] is False
+    # Forward rollout changes only czasowka semantics, not this exact receipt.
+    assert status["unfinished_forward_authority_outbox"] == 0
+    assert status["safe_for_forward_deploy"] is True
 
 
 def test_forward_deploy_blocks_unfinished_pre_v4_coordinator_time_event(
@@ -620,8 +767,8 @@ def test_forward_assignment_gate_does_not_block_semantically_stable_rows(
             "order_type": "czasowka",
             "courier_id": "1",
             "pickup_at_warsaw": "2026-08-01T19:15:58+02:00",
-            "czas_kuriera_warsaw": "2026-08-01T19:21:00+02:00",
-            "czas_kuriera_hhmm": "19:21",
+            "czas_kuriera_warsaw": "2026-08-01T19:15:58+02:00",
+            "czas_kuriera_hhmm": "19:15",
         },
     ],
 )

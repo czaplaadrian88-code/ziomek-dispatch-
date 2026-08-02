@@ -450,6 +450,11 @@ def test_code_rollback_is_mechanically_gated_across_queue_and_outbox():
     assert "def _pre_v4_coordinator_time_row_blocks_forward(" in tool
     assert "def _pre_v16_assignment_ck_row_blocks_forward(" in tool
     assert "def _active_time_contract_incomplete(" in tool
+    assert "committed_time_contract_is_complete(order)" in tool
+    assert "is_forward_authority_outbox_artifact(" in tool
+    assert "def _unbound_new_order_time_row_blocks_forward(" in tool
+    assert "and not forward_authority_rows" in tool
+    assert "and not unbound_new_order_time_rows" in tool
     assert "and not pre_v16_assignment_ck_rows" in tool
     assert "and active_incomplete_time_contract_count == 0" in tool
     assert "projection[oid] = str(base[ELIGIBLE_AT_FIELD])" in queue
@@ -459,6 +464,7 @@ def test_code_rollback_is_mechanically_gated_across_queue_and_outbox():
 
 def test_cold_start_and_null_pickup_cannot_bypass_canonical_time_owner():
     watcher = _source("panel_watcher.py")
+    state = _source("state_machine.py")
     cold_start = watcher.split(
         "def _post_restart_cold_start_scan(", 1
     )[1].split("\ndef _should_skip_empty_packs_write(", 1)[0]
@@ -472,11 +478,27 @@ def test_cold_start_and_null_pickup_cannot_bypass_canonical_time_owner():
     assert "if _oid_str not in current_state:" in cold_start
     assert initialize_at < assign_at
     assert "if not _initialized.state_ready:" in cold_start
+    assert "_initialize_new_order_time_contract(" in cold_start
     assert "continue" in cold_start[
         cold_start.index("if not _initialized.state_ready:") : assign_at
     ]
     assert "if new_iso and C.is_czasowka_order(old_state):" in pickup
     assert "if old_iso and new_iso and C.is_czasowka_order(old_state):" not in pickup
+    assert "def _initialize_new_order_time_contract(" in watcher
+    assert watcher.count("_initialize_new_order_time_contract(") >= 3
+    assert "NEW_ORDER_TIME_AUTHORITY_SNAPSHOT_FIELD" in watcher
+    assert "def _new_order_time_authority_enabled(" in state
+    assert "None if initial_time_owned" in state
+
+
+def test_pruned_versioned_time_event_has_terminal_oracle():
+    state = _source("state_machine.py")
+    missing_branch = state.split("if not current:", 1)[1].split(
+        "etype = event.get(\"event_type\")", 1
+    )[0]
+
+    assert "time_event_cas_is_versioned(event_type, payload)" in missing_branch
+    assert 'return "superseded"' in missing_branch
 
 
 def test_v13_review_findings_remain_closed_by_single_contract_owners():
@@ -598,7 +620,11 @@ def test_production_ast_has_one_provenance_writer_and_one_state_file_funnel():
     protected_fields = {
         "pickup_at_warsaw": {
             (Path("state_machine.py"), "update_from_event"): 3,
-            (Path("panel_watcher.py"), "_diff_and_emit"): 2,
+                (Path("panel_watcher.py"), "_diff_and_emit"): 2,
+                (
+                    Path("panel_watcher.py"),
+                    "_initialize_new_order_time_contract",
+                ): 1,
             (Path("shadow_dispatcher.py"), "_build_order_event"): 1,
             (Path("shadow_dispatcher.py"), "_tick"): 1,
             (Path("panel_client.py"), "normalize_order"): 1,
@@ -615,7 +641,11 @@ def test_production_ast_has_one_provenance_writer_and_one_state_file_funnel():
         "czas_kuriera_warsaw": {
             (Path("state_machine.py"), "_r_declared_tripwire"): 1,
             (Path("state_machine.py"), "update_from_event"): 4,
-            (Path("panel_watcher.py"), "_diff_and_emit"): 3,
+                (Path("panel_watcher.py"), "_diff_and_emit"): 3,
+                (
+                    Path("panel_watcher.py"),
+                    "_initialize_new_order_time_contract",
+                ): 1,
             (Path("core/candidates.py"), "eval_courier_inner"): 2,
             (Path("shadow_dispatcher.py"), "_serialize_candidate"): 1,
             (Path("shadow_dispatcher.py"), "_build_order_event"): 1,
@@ -645,7 +675,11 @@ def test_production_ast_has_one_provenance_writer_and_one_state_file_funnel():
         "czas_kuriera_hhmm": {
             (Path("state_machine.py"), "_r_declared_tripwire"): 1,
             (Path("state_machine.py"), "update_from_event"): 4,
-            (Path("panel_watcher.py"), "_diff_and_emit"): 3,
+                (Path("panel_watcher.py"), "_diff_and_emit"): 3,
+                (
+                    Path("panel_watcher.py"),
+                    "_initialize_new_order_time_contract",
+                ): 1,
             (Path("tools/ziomek_pred_calibration.py"), "run_tick"): 3,
             (Path("core/candidates.py"), "eval_courier_inner"): 2,
             (Path("shadow_dispatcher.py"), "_serialize_candidate"): 1,
@@ -850,22 +884,22 @@ def test_protected_writer_scanner_catches_static_join_key():
 def test_semantic_literal_closure_blocks_constant_alias_bypass():
     expected = {
         "PICKUP_TIME_UPDATED": (
-            "65276c338b18b9cec111b1eb02e86cd8788dd887dc409ee095f042c1c6b9c08f"
+            "f1cf418b70b2168a8b96fe5b96bb217bde376b2c33966069b2a072817aa97246"
         ),
         "CZAS_KURIERA_UPDATED": (
-            "11b069c18e4b2284d0d5e273d400a638f1f768e2ea8be79a13b5be4842f9a1aa"
+            "5c98b59d38fcdf5a811ed66edc71b13a5145d4a373f9cf30036798e2f5091f4f"
         ),
         "pickup_at_warsaw": (
-            "6e55fc7484869790620696d640e02cf1cfd6f697f55af13a8b5999b768cdbe2c"
+            "1948ba3ab79099cfc0a1fdbfe30e09bf68cc4fd831c620bff0a48ca36d72392f"
         ),
         "czas_kuriera_warsaw": (
-            "ee5cf4812beba288757e130bac33bb9102e04734705e2f0037df74eabfd6c32b"
+            "3b7d557e02c7069594074ee6b9547bed9118ecd9ca3a1a9ed0cd275c720914ea"
         ),
         "czas_kuriera_hhmm": (
-            "6c72a5955424e9f5735286583e800c4a44ebc1e861883cabd1e6a845f1c9e57b"
+            "92a937460eda14bf3f90cff3dfa45a94c75556a92c45620392a5035ec4f5dd45"
         ),
         "committed_pickup_authority": (
-            "19b491cc200713fa2305c883698af6d30c2862b8804d582add4ec0ed6d872e93"
+            "b8ee93c09667747c07e44a617ca56e66f09bda1de984618a1b470d1bcdce9b0a"
         ),
         "pickup_time_revision": (
             "c667a3202b516b72d70067a82f4a5cab5a5a6193dcece3727c9724c4b56bfbf1"

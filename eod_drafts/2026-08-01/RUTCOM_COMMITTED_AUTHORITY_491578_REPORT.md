@@ -1,4 +1,4 @@
-# RUTCOM committed pickup authority — raport kandydata v18, 2026-08-02
+# RUTCOM committed pickup authority — raport kandydata v19, 2026-08-02
 
 ## Wynik
 
@@ -12,6 +12,45 @@ Rutcom. Granica transportu przed zapisem outboxa zamienia legalny CK na jeden
 kanoniczny `PICKUP_TIME_UPDATED`. Jeden handler state atomowo zapisuje pickup,
 CK, HH:MM, monotoniczną rewizję oraz provenance. Plan, scoring po potwierdzonym
 apply i aplikacja dziedziczą tę samą prawdę.
+
+## Co domknięto w v19
+
+Dwa świeże review exact-byte v18 poprawnie zatrzymały live. MAIN odtworzył
+wszystkie findings na zamrożonym commicie `46f221e94`: initialny `NEW_ORDER`
+i cold start nadal potrafiły utrwalić pickup oraz CK jako dwie prawdy, a
+statusowy re-stamp CK mógł zostawić inicjalizację bez legalnego domknięcia;
+forward preflight uznawał każdy niepusty tuple za kompletny, więc przepuszczał
+rozjazd lub malformed ISO/HH:MM; bezkontekstowy raw-CK classifier fałszywie
+blokował jawny event elastyka; po legalnym prune w pełni wersjonowany, jeszcze
+nieclaimowany event czasu pozostawał `pending` na zawsze.
+
+V19 usuwa przyczyny w ownerach ingestu, kontraktu, preflightu i durable oracle.
+`NEW_ORDER` niesie trwały snapshot polityki; przy ON tworzy tylko aggregate
+shell bez surowych pól czasu, po czym CK i pickup przechodzą przez jeden
+resolver i jeden `PICKUP_TIME_UPDATED` writer. Ten sam forward flag wymusza oba
+detektory recovery nawet przy starych kill-switchach OFF, dlatego crash między
+shell a inicjalizatorem domyka się na kolejnym ticku. OFF zachowuje dokładny
+legacy tuple. Jeden walidator pełnego kontraktu sprawdza aware ISO, projekcję
+HH:MM, zgodność pickup↔CK i kompletną tożsamość provenance. Forward gate
+rozróżnia kontekstowo tylko w pełni związany, poprawny raw CK jawnego elastyka;
+code revert pozostaje konserwatywny dla całej klasy raw CK. Osobna bramka
+blokuje niedomknięty pre-v19 czasowy `NEW_ORDER`. Wspólny oracle terminalizuje
+oba wersjonowane typy eventów czasu po usunięciu agregatu.
+
+Siedem celowych mutacji zostało zabitych przez właściwe oracles: wyłączenie
+sanityzacji, inicjalizatora, walidacji split tuple, kontekstowego forward gate,
+bramki starego `NEW_ORDER`, terminalizacji po prune oraz recovery obu
+detektorów dało odpowiednio 1F/1F/1F/1F/1F/2F/1F+1P. Po każdym restore cztery
+moduły wróciły do exact SHA-256; zestaw mutacyjny ma 30/30 PASS, a rozszerzony
+klaster 432/432 PASS. Pełna kanoniczna regresja `HERMETIC_STRICT=1` ma
+6610 passed, 74 skipped, 8 xfailed, 149 warnings i 0 failed w 466,95 s — profil
+skip/xfail/warnings identyczny z v18, delta +11 testów.
+
+Read-only `forward-status` o 2026-08-02T16:31Z wykazał pustą kolejkę i zero
+unfinished outboxa, ale dwie aktywne legacy czasówki z rozbieżnym pickup/CK,
+więc prawidłowo zwrócił `safe_for_forward_deploy=false`. Nie wykonano migracji,
+flipu, restartu ani deployu. Live pozostaje na HOLD do naturalnej terminalizacji
+tych rekordów, ponownego preflightu po quiesce i dwóch świeżych `CLEAN` v19.
 
 ## Co domknięto w v18
 
@@ -477,6 +516,15 @@ Pełny kontrakt i mapa writerów/konsumentów są w
 
 ## Dowody bramki
 
+- Review v18: authority verdict SHA
+  `19de319abc4764be7327d4bcc3828707aba66907e31ad8143ac7d39bdfcc42ae`
+  i completeness verdict SHA
+  `d5080f8d1cbf7a9dca1bd25d9f03f54d045ad43149c094cb899e189354721247`;
+  oba driver-check OK i `CONFIRMED_DEFECT`, zero live.
+- Finalny pre-review v19: 6610 passed, 74 skipped, 8 xfailed, 149 warnings,
+  0 failed w 466,95 s na base `49aed3215`; siedem mutation kills, exact
+  restore 30/30 i focused 432/432. Read-only preflight live ma pustą kolejkę i
+  outbox, lecz dwie aktywne niepełne czasówki, więc flip pozostaje na HOLD.
 - Review v17: authority verdict SHA
   `3ac4fbd0b06ab4cc6c59620c2ad9d8f86a8cca7456e85a331aa9295337d8ef5c`
   i completeness verdict SHA
@@ -564,8 +612,8 @@ ACK, post-pickup/stale-generation/revision i spójności pickup↔CK.
 
 ## Identyfikacja kandydata
 
-- Wersja: v18, przed dwoma świeżymi review exact-byte
-- Branch: `fix/rutcom-committed-provenance-v18-20260802`
+- Wersja: v19, przed dwoma świeżymi review exact-byte
+- Branch: `fix/rutcom-committed-provenance-v19-20260802`
 - Worktree: `/root/worktrees/dispatch_v2/active/20260802-rutcom-v17-integration-pkgroot/dispatch_v2`
 - Base: `49aed3215ff3ef3c730a0260807804de8b6543da`
 - Produkcja: bez zmian; zero deployu, restartu, migracji i flipu.
