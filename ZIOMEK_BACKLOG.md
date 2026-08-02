@@ -1,6 +1,6 @@
 # ZIOMEK AI DISPATCHER - BACKLOG ROZWOJU
 
-> **KANDYDAT v18 2026-08-02 — RUTCOM COMMITTED PICKUP AUTHORITY / OID 491578:**
+> **KANDYDAT v19 2026-08-02 — RUTCOM COMMITTED PICKUP AUTHORITY / OID 491578:**
 > root cause potwierdzony: guard pasywny 52 razy stłumił zmianę umówionego
 > czasu Rutcom 19:16→19:21, przez co aplikacja poprawnie pokazywała stary stan
 > 19:16. Jeden resolver autorytetu zastępuje rozproszoną politykę; akceptuje
@@ -115,8 +115,24 @@
 > u gate/queue/wspólnego classifiera/authority. Oracles: 6F+1P przed, 7/7 po;
 > sześć mutation probes po 1F; focused 376/376; pełna regresja na aktualnym
 > masterze `49aed3215`: `6599P/0F/74S/8X/149W` w 452,70 s.
-> Dwa świeże `CLEAN` v18 są wymagane przed commitem i live;
-> produkcja pozostaje bez zmian.
+> Dwa świeże review v18 ponownie poprawnie zatrzymały live: initialny
+> `NEW_ORDER`/cold-start był konkurencyjnym writerem split pickup/CK, preflight
+> przepuszczał niepusty lecz rozjechany lub malformed tuple, bezkontekstowy raw
+> CK fałszywie blokował jawnego elastyka, a wersjonowany event po prune wisiał
+> `pending`. V19 wiąże `NEW_ORDER` z durable snapshotem; ON tworzy shell bez raw
+> czasu i materializuje initial tuple wyłącznie przez kanoniczny resolver/
+> `PICKUP_TIME_UPDATED`, a forward flag wymusza oba detektory recovery po
+> crashu. Jeden complete-contract validator i kontekstowy forward classifier
+> z osobną bramką starego `NEW_ORDER` zastępują duplikaty preflightu; code
+> revert nadal failuje closed dla każdego raw CK. Oba wersjonowane eventy po
+> prune terminalizują się jako `superseded`. Siedem mutacji zostało zabitych,
+> exact zestaw ma 30/30, focused 432/432, pełna regresja
+> `6610P/0F/74S/8X/149W` w 466,95 s przy identycznym profilu v18.
+> Dwa świeże `CLEAN` v19 są wymagane przed commitem i live. Read-only preflight
+> 16:31Z ma pustą kolejkę/outbox, ale dwie aktywne legacy czasówki z rozbieżnym
+> pickup/CK, więc `safe_for_forward_deploy=false`; bez migracji, deployu,
+> restartu i flipu. Produkcja pozostaje bez zmian do naturalnej terminalizacji
+> tych rekordów, quiesce i ponownego zielonego preflightu.
 > Flaga
 > `ENABLE_CZASOWKA_RUTCOM_FORWARD_AUTHORITY` jest default OFF; owner wydał ACK
 > na docelowe ON po wdrożeniu. Kod nie jest jeszcze wdrożony, procesy nie były

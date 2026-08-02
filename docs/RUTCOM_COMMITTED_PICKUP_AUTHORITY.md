@@ -1,8 +1,19 @@
 # Rutcom committed pickup authority
 
-Status: kandydat v18 niewdrożony, kod ciemny, nowa flaga domyślnie `OFF`.
+Status: kandydat v19 niewdrożony, kod ciemny, nowa flaga domyślnie `OFF`.
 Owner 2026-08-01 polecił docelowo włączyć ją `ON`, ale wdrożenie kodu,
 kontrolowane restarty i weryfikacja runtime pozostają osobną operacją live.
+
+V19 wiąże również pierwszy zapis czasu z trwałym snapshotem polityki.
+`NEW_ORDER` przy ON tworzy aggregate shell bez pickup/CK, a ten sam kanoniczny
+resolver natychmiast materializuje pełny tuple przez `PICKUP_TIME_UPDATED`.
+Forward flag wymusza oba detektory na kolejnych tickach, więc crash pomiędzy
+tymi krokami nie zostawia martwego shell. Preflight uznaje kontrakt za gotowy
+wyłącznie po aware ISO, zgodnym HH:MM, jednej wartości pickup/CK i kompletnej
+tożsamości provenance; stary czasowy `NEW_ORDER` bez snapshotu blokuje flip.
+Wyjątek forward-rolloutu dotyczy tylko w pełni związanego raw CK jawnego
+elastyka, podczas gdy code revert nadal blokuje każdy raw CK. Wersjonowany CK
+lub pickup po legalnym prune agregatu kończy się `superseded`, nie `pending`.
 
 ## Root cause i granica kontraktu
 
@@ -171,16 +182,16 @@ Po zmianie obowiązuje jedna granica:
 | `coordinator_time_recheck.py` | trwała kolejka intencji | writer/reader receiptu | TAK | v5 rozdziela immutable audit `requested_at` od epoki wykonania `eligible_at`; successor zaczyna TTL dopiero po exact ACK poprzednika. Czytnik zachowuje kompatybilność v4. Immutable claimed head, exact-event claim, bounded continuation, claim-aware drain, poison/corrupt retention i rollback fence pozostają wspólne; odwrócony/partial zegar nie jest wykonywany ani usuwany. Projekcja v5→legacy przy rollbacku używa `eligible_at`, nigdy wcześniejszego `requested_at`, więc świeżo promowany successor nie wygasa natychmiast po cofnięciu kodu. V18 przed każdym re-clickiem weryfikuje exact claimed head i istniejącego successora tym samym oraclem co recovery/ACK; poison pozostaje bajtowo bez zmian. Prepare rollbacku jest transakcją projection+fence: każdy błąd przywraca exact bajty kolejki, a cleanup usuwa wyłącznie własny fence. |
 | `panel_watcher._diff_czas_kuriera` | cykliczna obserwacja CK | producer eventu | TAK | Deleguje do resolvera, nie ma własnej polityki; `null→wartość` i `wartość→wartość` mają ten sam authority path, a raw first-acceptance istnieje tylko w parytecie OFF. Wspólny próg szumu 3 min obowiązuje delty z baseline i bliźniaka. Przy rolloucie emituje wspólny status/courier/assignment/revision CAS dla CK. |
 | `panel_watcher._diff_pickup_time` | równoległa obserwacja pickup | producer eventu | TAK | Deleguje do resolvera pickup zarówno dla `null→wartość`, jak i `wartość→wartość`, i blokuje stale baseline po CK-derived authority. |
-| `panel_watcher._claim_forced_time_event` / `_apply_time_update_event` / `_diff_and_emit` / `_post_restart_cold_start_scan` | watcher transport/recovery | consumer eventu | TAK | Każdy force event jest claimowany przed side effectem; claimed kolejka jest odtwarzana przed `current_state`, a ACK zależy od exact terminalnego rekordu outbox state+downstream. Drugi legacy field przechodzi przez promowaną continuation, nie przez batch/fallback. Cold start bez rekordu najpierw emituje kanoniczny `NEW_ORDER` z pełnym kontraktem czasówki, sprawdza `state_ready`, a dopiero potem `COURIER_ASSIGNED`; nie tworzy już cienkiego assignment-only state. |
+| `panel_watcher._claim_forced_time_event` / `_apply_time_update_event` / `_diff_and_emit` / `_post_restart_cold_start_scan` | watcher transport/recovery | consumer eventu | TAK | Każdy force event jest claimowany przed side effectem; claimed kolejka jest odtwarzana przed `current_state`, a ACK zależy od exact terminalnego rekordu outbox state+downstream. Drugi legacy field przechodzi przez promowaną continuation, nie przez batch/fallback. V19 wiąże initial/cold-start `NEW_ORDER` z durable snapshotem: ON zapisuje shell bez raw czasu, a przed assignmentem prowadzi pełny tuple przez kanoniczny resolver. Forward flag wymusza CK i pickup recovery na kolejnych tickach, więc crash po shell nie pozostawia martwego kontraktu. OFF utrwala dokładny legacy tuple. |
 | `dispatch_pipeline._v327_emit_pre_recheck_event` | pre-proposal re-check | bliźniaczy producer | TAK | Ten sam resolver/transport/event key, bieżący courier lane i CK baseline z aktualnego state; wynik scoringowy wyłącznie po apply; oba flags OFF = exact legacy bez nowego odczytu state. Przy rolloucie używa tego samego CK CAS buildera co watcher. |
-| `committed_pickup_authority.py` | polityka CK i pickup | jedyny policy/CAS owner | TAK | Incydent 491578, ochrona 483023, próg 3 min, kolejny forward, kontekstowy receipt koordynatora, rzeczywista klasa czasówki, oba courier IDs, assignment/pickup-revision/CK-revision/old-CK CAS, pełny proof/koperta/key, presence-based artifact i durable-row oracle. V16 dodała jeden resolver CK assignmentu oraz `order_type=czasowka` do kanonicznej mapy proof/CAS/write/postcondition; v17 usunęła pickup bypass i naprawiła cold start. V18 ustanawia jawny `None` causal baseline dla pierwszego pełnego tuple po NEW_ORDER: CK i pickup nadal idą przez ten sam proof-bound writer, niepusty malformed baseline failuje closed, a parallel snapshot nie oscyluje. |
+| `committed_pickup_authority.py` | polityka CK i pickup | jedyny policy/CAS owner | TAK | Incydent 491578, ochrona 483023, próg 3 min, kolejny forward, kontekstowy receipt koordynatora, rzeczywista klasa czasówki, oba courier IDs, assignment/pickup-revision/CK-revision/old-CK CAS, pełny proof/koperta/key, presence-based artifact i durable-row oracle. V16 dodała jeden resolver CK assignmentu oraz `order_type=czasowka` do kanonicznej mapy proof/CAS/write/postcondition; v17 usunęła pickup bypass i naprawiła cold start. V18 ustanowiła jawny `None` causal baseline. V19 dodaje jeden complete-contract validator aware ISO/HH:MM/pickup=CK/provenance oraz kontekstowy forward classifier: tylko w pełni związany, poprawny raw CK jawnego elastyka nie blokuje flipu; code revert pozostaje fail-closed dla każdego raw CK. |
 | `committed_pickup_apply.py` | kanoniczna granica/outbox/apply/lifecycle | jedyny transport eventów czasu | TAK | Tłumaczy legalny raw CK przed outboxem, używa strict state read przed kanonizacją, odrzuca malformed CAS przed outboxem, wiąże generację w event key, weryfikuje proof i seal'uje pełną trwałą kopertę po zamrożeniu markerów downstream. |
 | `durable_event_apply.emit_and_apply` / `resume_exact` / `is_terminal_outcome` | durable bridge i recovery rozpoczętej transakcji | metadata writer / exact receipt consumer | TAK | Opcjonalny sealer działa po finalnych markerach i przed outboxem; resume wznawia tylko wskazany rekord, a terminal oracle wymaga superseded albo applied+downstream applied przed ACK. COURIER_ASSIGNED zamraża dwa exact bool snapshoty polityki CK, więc handler i oracle nie rozjeżdżają się przy hot flipie; brak/korupcja failuje closed dla CK, nie dla assignmentu. |
 | `event_bus.list_unfinished_state_applies` | pełny rollback audit | consumer outboxa | TAK | Bez limitu zwraca każdy układ poza jawnie terminalnym; nieznany/corrupt status i malformed state_event są widoczne i blokują revert kodu. |
 | `state_machine.CZAS_KURIERA_UPDATED` / `COURIER_ASSIGNED` | legacy defense-in-depth dla raw CK | consumer/delegat | TAK | Bez `event_id` deleguje do kanonu; raw CK sources są jawnie wygaszone przy ON. Assignment i jego terminalny oracle używają tego samego resolvera oraz durable snapshotu flag: kurier zawsze jest zapisany, a równoległy CK wyłącznie według jednej receipt-bound decyzji. Historyczny durable raw row jest terminalnie superseded. |
 | `state_machine._pickup_time_event_status` | apply/recovery oracle | consumer wszystkich pickup eventów | TAK | Wspólny freeze, CAS, courier/assignment/revision i exact postcondition dla authority i legacy; receipt source jest blokowany bez proofu tylko dla czasówki, więc deliberate elastyk zachowuje legacy apply; ABA fail-closed. |
 | `state_machine.PICKUP_TIME_UPDATED` | kanon czasu | jedyny state writer | TAK | Atomowy pickup+CK+HH:MM+revision+provenance; authority mirror niezależny od starej flagi. |
-| `state_machine.event_effect_status` | durable recovery | consumer postcondition | TAK | Pending/applied/superseded bez fałszywego sukcesu po częściowym zapisie. |
+| `state_machine.event_effect_status` | durable recovery | consumer postcondition | TAK | Pending/applied/superseded bez fałszywego sukcesu po częściowym zapisie. Po legalnym prune oba typy eventów czasu z pełnym `time_update_cas.v1` kończą się `superseded`, bo nie mogą odtworzyć usuniętego agregatu. |
 | lifecycle downstream / plan invalidation | odświeżenie widoków i planu | consumer eventu | TAK | Jeden istniejący callback po durable apply; usunięto martwy, duplikujący touch w pipeline. |
 | `plan_manager`, `plan_recheck` | plan i ETA | consumer kanonicznego state | N-D | Nie czytają raw Rutcom; test committed propagation pozostaje zielony. |
 | `route_simulator_v2`, `route_order`, `route_podjazdy` | trasa | consumer pickup/CK | N-D | Algorytm i progi bez zmian; dostaje atomowo nową prawdę wejściową. |
@@ -189,12 +200,20 @@ Po zmianie obowiązuje jedna granica:
 | courier API serializer | kontrakt aplikacji | consumer CK/HH:MM | N-D | Czyta sprzężone pola ze state; brak render override lub drugiego writera. |
 | Android `RouteLogic` | prezentacja kurierowi | consumer API | N-D | Zachowuje istniejącą precedencję; 19:21 pochodzi z jednego kanonicznego zapisu. |
 | `common.py`, lifecycle registry/checkery | rollout/fingerprint | owner flagi | TAK | Decision flag, const default OFF, rejestr i effect coverage; predeploy source to `common.py-const`. Obie authority flags są przypięte do `committed_pickup_apply`, `dispatch_pipeline`, `state_machine` i rollback tool; forward flag dodatkowo do `durable_event_apply` oraz `panel_watcher`. AST equality rozpoznaje import/module/local aliases i named arguments oraz zatrzymuje brakującego lub ukrytego consumera. |
-| `tools/rutcom_committed_authority_rollback.py` | rollback/roll-forward | operator gate | TAK | Wymaga OFF każdej flagi z kanonicznej listy authority, terminalnego authority outboxa, bezpiecznej kolejki i jawnego quiesce/apply. `forward-status` schema v3 wymaga ciemnej flagi, pustej kolejki, zera całej kanonicznej klasy unfinished authority/raw-CK rows, zera niedomkniętych raw `coordinator_force` eventów czasówki sprzed v4, zera unfinished pre-v16 `COURIER_ASSIGNED` z CK bez trwałych snapshotów polityki oraz zera aktywnych, niepełnych kontraktów sklasyfikowanych przez `common.is_czasowka_order`/nieznanej cienkiej tożsamości. Kompletne czasówki, terminalne rekordy, elastyki, paczki i niezwiązany outbox nie są fałszywie blokowane. Kompatybilność jest bramką wydania, nie fallbackiem runtime; code-revert classifier wiąże pełny row i failuje closed. |
+| `tools/rutcom_committed_authority_rollback.py` | rollback/roll-forward | operator gate | TAK | Wymaga OFF każdej flagi z kanonicznej listy authority, terminalnego authority outboxa, bezpiecznej kolejki i jawnego quiesce/apply. `forward-status` schema v3 wymaga ciemnej flagi, pustej kolejki, zera kontekstowej klasy unfinished forward-authority rows, zera starych czasowych `NEW_ORDER` bez snapshotu, zera pre-v4 force eventów, zera pre-v16 assignmentów oraz zera aktywnych kontraktów, które nie przechodzą wspólnego complete-contract validatora. Jawny, związany i poprawny elastyk nie blokuje forward, ale nadal blokuje code revert. Kompatybilność jest bramką wydania, nie fallbackiem runtime. |
 | logi/outbox/provenance | audyt i recovery | consumer zdarzenia | TAK | Pełny proof key, revision i exact attestation pozwalają mierzyć/retry bez nowego źródła prawdy. |
-| testy incident/ratchet/twins/rollback | bramka regresji | verifier | TAK | Findings v15 zostały odtworzone jako 4/4 RED i zamknięte w v16. Review v16 dały sześć czerwonych przypadków zamkniętych w v17. Review v17 dały cztery klasy: unfinished authority gate, poison claimed head/successor, zdublowany classifier i brak pierwszego null baseline. V18 ma 6F+1P przed/7P po, sześć jednoelementowych mutation kills, focused 376/376 i pełną regresję 6599/6599. Ratchet blokuje nowy writer i nieudokumentowanego consumera. |
+| testy incident/ratchet/twins/rollback | bramka regresji | verifier | TAK | Findings v15 zostały odtworzone jako 4/4 RED i zamknięte w v16. Review v16 i v17 zatrzymały kolejne luki przed live. V18 ma 6F+1P przed/7P po i 6599/6599. Review v18 wykryły initial split writer, niepełny preflight, false block elastyka i wieczny pending po prune. V19 ma siedem mutation kills, exact zestaw 30/30, focused 432/432 i pełną regresję 6610/6610. Ratchet blokuje nowy writer i nieudokumentowanego consumera. |
 
 ## Dowody przed wydaniem
 
+- Dwa niezależne review exact-byte v18 poprawnie zatrzymały live. Authority
+  verdict SHA `19de319abc4764be7327d4bcc3828707aba66907e31ad8143ac7d39bdfcc42ae`,
+  completeness verdict SHA
+  `d5080f8d1cbf7a9dca1bd25d9f03f54d045ad43149c094cb899e189354721247`;
+  oba driver-check OK i `CONFIRMED_DEFECT`. Findings odtworzono przed fixem.
+  V19 ma siedem skutecznych mutation probes, exact restore 30/30, focused
+  432/432 i pełną hermetyczną regresję 6610 passed, 74 skipped, 8 xfailed,
+  149 warnings, 0 failed w 466,95 s na base `49aed3215`.
 - Dwa niezależne review exact-byte v17 poprawnie zatrzymały live. Authority
   verdict SHA `3ac4fbd0b06ab4cc6c59620c2ad9d8f86a8cca7456e85a331aa9295337d8ef5c`,
   completeness verdict SHA
@@ -314,8 +333,9 @@ Po zmianie obowiązuje jedna granica:
   V11 zamknęła je jednym presence+identity contractem, row-level rollback
   classifierem, kontekstowym source oracle i AST-equality registry gate. Dwa
   review v11 wykryły wyżej opisane luki. V12 je zamknęła, lecz dwa review v12
-  wykryły osiem kolejnych klas opisanych wyżej. V18 wymaga nowego podwójnego
-  `CLEAN` exact final-byte v18 przed commitem i live.
+  wykryły osiem kolejnych klas opisanych wyżej. Review v18 zatrzymały live z
+  czterema klasami opisanymi w dowodach v19. V19 wymaga nowego podwójnego
+  `CLEAN` exact final-byte przed commitem i live.
 
 ## Rollout, obserwacja i rollback
 
@@ -333,6 +353,10 @@ Po zmianie obowiązuje jedna granica:
   i outbox są addytywne, a runtime nie
   dostaje kompatybilności przez source-label fallback. Hot rollback zachowania
   to flaga `false` i jest podstawowym rollbackiem.
+  Odczyt 2026-08-02T16:31Z wykazał dwa aktywne legacy kontrakty z rozbieżnym
+  pickup/CK, dlatego flip pozostaje na `HOLD` do ich naturalnej terminalizacji,
+  quiesce writerów i ponownego zielonego preflightu; nie wykonuje się migracji
+  ani renderowego obejścia tej bramki.
 - Revert kodu do czytnika pre-v4 jest osobną operacją i **nie może** być prostym
   `git revert`. Po OFF wszystkich flag z kanonicznej listy authority oraz
   potwierdzeniu fingerprintu trzeba quiesce'ować
@@ -341,9 +365,9 @@ Po zmianie obowiązuje jedna granica:
   `prepare --apply --quiesced --queue-backup <trwała-ścieżka>` zakłada trwały
   fence, robi exact backup 0600 i konwertuje wyłącznie nieclaimowane v4 receipts
   do timestampów czytelnych przez stary kod. Każdy claim, corrupt rekord albo
-  niedomknięty authority outbox daje `HOLD`; wtedy kod v18 zostaje, flaga OFF.
+  niedomknięty authority outbox daje `HOLD`; wtedy kod v19 zostaje, flaga OFF.
   Dopiero `safe_for_code_revert=true` zezwala na jawny revert i kontrolowany
-  restart za ACK. Po roll-forward do v18 fence zwalnia się wyłącznie przez
+  restart za ACK. Po roll-forward do v19 fence zwalnia się wyłącznie przez
   `release-fence --apply --v4-code-active` przy OFF i pustym authority outboxie.
   SQLite przed operacją nadal wymaga backupu przez API `.backup`.
   `dispatch-telegram` pozostaje nietknięty.

@@ -49,9 +49,11 @@ from dispatch_v2.core.broadcast_handlers import dispatch_config_reload
 from dispatch_v2.core.config_reload_subscriber import BroadcastSubscriber
 from dispatch_v2.event_bus import emit, emit_audit
 from dispatch_v2.committed_pickup_authority import (
+    NEW_ORDER_TIME_AUTHORITY_SNAPSHOT_FIELD,
     RUTCOM_FORWARD_AUTHORITY_FLAG,
     ResolutionOutcome,
     build_time_event_cas_snapshot,
+    committed_time_contract_is_complete,
     normalize_pickup_revision,
     state_has_committed_pickup_artifact,
 )
@@ -187,6 +189,43 @@ def _emit_and_apply_state(
     """Atomowy event+outbox, exact-payload state apply i trwały downstream."""
     emitter = emit_audit if audit else emit
     state_body = (payload or {}) if state_payload is None else (state_payload or {})
+    state_event_metadata = {}
+    if event_type == "NEW_ORDER":
+        # The initial raw Rutcom tuple and its policy snapshot belong to one
+        # durable intent.  ON creates only an aggregate shell; the canonical
+        # PICKUP_TIME_UPDATED owner resolves the full tuple immediately after.
+        initial_authority_enabled = True
+        try:
+            initial_authority_enabled = bool(
+                C.decision_flag(RUTCOM_FORWARD_AUTHORITY_FLAG)
+            )
+        except Exception:
+            # Ambiguous flag reads must not revive the competing raw writer.
+            pass
+        state_event_metadata[
+            NEW_ORDER_TIME_AUTHORITY_SNAPSHOT_FIELD
+        ] = initial_authority_enabled
+        if initial_authority_enabled and C.is_czasowka_order(state_body):
+            sanitized_payload = dict(payload or {})
+            for field in (
+                "pickup_at_warsaw",
+                "czas_kuriera_warsaw",
+                "czas_kuriera_hhmm",
+            ):
+                sanitized_payload[field] = None
+            payload = sanitized_payload
+            if state_payload is None:
+                state_body = sanitized_payload
+            else:
+                sanitized_state_payload = dict(state_payload or {})
+                for field in (
+                    "pickup_at_warsaw",
+                    "czas_kuriera_warsaw",
+                    "czas_kuriera_hhmm",
+                ):
+                    sanitized_state_payload[field] = None
+                state_payload = sanitized_state_payload
+                state_body = sanitized_state_payload
     # R2: capture assignment-time truth immediately BEFORE the canonical state
     # mutation.  Preparation and commit are both fail-safe; the instrument can
     # neither veto nor alter an operator assignment.
@@ -211,7 +250,6 @@ def _emit_and_apply_state(
                 _assignment_episode_exc,
             )
     source = str(state_body.get("source") or "")
-    state_event_metadata = {}
     if event_type == "COURIER_ASSIGNED" and source in _PANEL_LEARNING_SOURCES:
         # pending_proposals/learning_log sa zmienne i nie naleza do orders_state.
         # Ich causalny snapshot musi jednak wejsc do TEJ SAMEJ trwalej intencji
@@ -2232,6 +2270,63 @@ def _apply_time_update_event(order_id: str, event: dict):
     )
 
 
+def _initialize_new_order_time_contract(
+    order_id: str,
+    normalized: dict,
+    new_order_outcome: _EventApplyOutcome,
+) -> bool:
+    """Resolve one initial Rutcom tuple through the canonical time owner.
+
+    The durable NEW_ORDER receipt decides whether the raw tuple belongs to the
+    new owner.  CK is evaluated first; status-2 may establish a forward
+    commitment, while a status restamp is rejected and the independent pickup
+    observation becomes the canonical pickup+CK tuple.  Reloading state between
+    observations gives the second resolver the exact committed baseline.
+    """
+    if not new_order_outcome.state_ready:
+        return False
+    state_event = getattr(new_order_outcome, "state_event", None)
+    snapshot = (
+        state_event.get(NEW_ORDER_TIME_AUTHORITY_SNAPSHOT_FIELD)
+        if isinstance(state_event, dict)
+        else None
+    )
+    if snapshot is not True or not C.is_czasowka_order(normalized):
+        return True
+    oid = str(order_id)
+    current = state_get_order_strict(oid)
+    if not isinstance(current, dict):
+        return False
+    observed_at = datetime.now(timezone.utc).isoformat()
+    fresh = {
+        "pickup_at_warsaw": normalized.get("pickup_at_warsaw"),
+        "czas_kuriera_warsaw": normalized.get("czas_kuriera_warsaw"),
+        "czas_kuriera_hhmm": normalized.get("czas_kuriera_hhmm"),
+        "status_id": normalized.get("status_id"),
+        "prep_minutes": normalized.get("prep_minutes"),
+        "decision_deadline": normalized.get("decision_deadline"),
+        "zmiana_czasu_odbioru": normalized.get("zmiana_czasu_odbioru"),
+        "observed_at": observed_at,
+    }
+    ck_event = _diff_czas_kuriera(current, fresh, oid=oid)
+    if ck_event is not None:
+        ck_outcome = _apply_time_update_event(oid, ck_event)
+        if not getattr(ck_outcome, "state_ready", False):
+            return False
+        current = state_get_order_strict(oid)
+        if not isinstance(current, dict):
+            return False
+    pickup_event = _diff_pickup_time(current, fresh, oid=oid)
+    if pickup_event is not None:
+        pickup_outcome = _apply_time_update_event(oid, pickup_event)
+        if not getattr(pickup_outcome, "state_ready", False):
+            return False
+        current = state_get_order_strict(oid)
+        if not isinstance(current, dict):
+            return False
+    return committed_time_contract_is_complete(current)
+
+
 def _claim_forced_time_event(
     order_id: str,
     event: dict,
@@ -3072,6 +3167,15 @@ def _diff_and_emit(
             stats["errors"] += 1
         if result.event_created:
             stats["new"] += 1
+        if not result.state_ready:
+            continue
+        if not _initialize_new_order_time_contract(zid, norm, result):
+            stats["errors"] += 1
+            _log.warning(
+                "NEW_ORDER initial time contract pending oid=%s",
+                zid,
+            )
+            continue
         if result.event_created and result.state_ready:
             _log.info(f"NEW {zid} {norm['order_type']} {norm['restaurant']} pickup={norm['pickup_at_warsaw']}")
 
@@ -3890,6 +3994,12 @@ def _diff_and_emit(
     except Exception:
         ENABLE_V319G_CK_DETECTION = False
         ENABLE_PICKUP_TIME_DETECTION = False
+    try:
+        _forward_time_authority_on = C.decision_flag(
+            RUTCOM_FORWARD_AUTHORITY_FLAG
+        )
+    except Exception:
+        _forward_time_authority_on = False
     # FORCE-RECHECK na żądanie koordynatora (przycisk „Odśwież czas" w konsoli):
     # czytaj trwale kolejke coordinator_time_recheck (panel dopisal oid). Receipt
     # znika dopiero po udanym fetch/apply; crash lub blad HTTP zostawia retry.
@@ -3967,7 +4077,12 @@ def _diff_and_emit(
                 f"{getattr(claimed_outcome, 'superseded', False)}"
             )
 
-    if ENABLE_V319G_CK_DETECTION or ENABLE_PICKUP_TIME_DETECTION or _force_ids:
+    if (
+        ENABLE_V319G_CK_DETECTION
+        or ENABLE_PICKUP_TIME_DETECTION
+        or _forward_time_authority_on
+        or _force_ids
+    ):
         for zid, state_order in list(current_state.items()):
             if zid in _claimed_force_ids:
                 continue
@@ -4010,7 +4125,11 @@ def _diff_and_emit(
             _observed_at = datetime.now(timezone.utc).isoformat()
 
             # ---- Detekcja A: czas_kuriera (V3.19g1) ----
-            if ENABLE_V319G_CK_DETECTION or _force:
+            if (
+                ENABLE_V319G_CK_DETECTION
+                or (_forward_time_authority_on and _is_czasowka)
+                or _force
+            ):
                 fresh_snippet = {
                     "czas_kuriera_warsaw": norm_ck.get("czas_kuriera_warsaw"),
                     "czas_kuriera_hhmm": norm_ck.get("czas_kuriera_hhmm"),
@@ -4092,7 +4211,11 @@ def _diff_and_emit(
 
             # ---- Detekcja B: pickup_at_warsaw (PICKUP_TIME_UPDATED) ----
             if (
-                (ENABLE_PICKUP_TIME_DETECTION or _force)
+                (
+                    ENABLE_PICKUP_TIME_DETECTION
+                    or (_forward_time_authority_on and _is_czasowka)
+                    or _force
+                )
                 and not (_force and _force_event_claimed)
             ):
                 pickup_snippet = {
@@ -4286,6 +4409,17 @@ def _post_restart_cold_start_scan(parsed: dict, csrf: str) -> dict:
                         "cold_start_scan NEW_ORDER pending oid=%s stage=%s",
                         _oid_str,
                         _initialized.failure_stage,
+                    )
+                    stats["cold_start_errors"] += 1
+                    continue
+                if not _initialize_new_order_time_contract(
+                    _oid_str,
+                    _norm,
+                    _initialized,
+                ):
+                    _log.warning(
+                        "cold_start_scan initial time contract pending oid=%s",
+                        _oid_str,
                     )
                     stats["cold_start_errors"] += 1
                     continue

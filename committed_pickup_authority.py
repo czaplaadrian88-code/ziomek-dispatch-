@@ -135,6 +135,9 @@ ASSIGNMENT_CK_FORWARD_SNAPSHOT_FIELD = (
 ASSIGNMENT_CK_PASSIVE_SNAPSHOT_FIELD = (
     "czasowka_assignment_ck_passive_guard_enabled"
 )
+NEW_ORDER_TIME_AUTHORITY_SNAPSHOT_FIELD = (
+    "czasowka_new_order_time_authority_enabled"
+)
 _AUTHORITY_EVENT_EXACT_KEYS = frozenset(
     {
         "committed_authority_attestation",
@@ -326,6 +329,72 @@ def is_committed_pickup_outbox_artifact(
     return is_committed_pickup_artifact(event)
 
 
+def is_forward_authority_outbox_artifact(
+    row: Mapping[str, object] | None,
+    current_order: Mapping[str, object] | None,
+) -> bool:
+    """Contextual forward-rollout classifier without weakening code rollback.
+
+    Code rollback remains deliberately conservative for every unfinished raw
+    CK row because a pre-authority reader cannot reconstruct its class.  A
+    forward flip, however, changes only ``czasowka`` semantics and runs while
+    writers are quiesced with a strict current-state snapshot.  One fully
+    bound, well-formed raw CK receipt for an explicitly elastic aggregate is
+    therefore provably unaffected; malformed, missing, authority-bearing or
+    ambiguously classified work still blocks.
+    """
+    if not is_committed_pickup_outbox_artifact(row):
+        return False
+    if not isinstance(row, Mapping) or not row:
+        return True
+    event = row.get("state_event")
+    if not isinstance(event, Mapping) or not event:
+        return True
+    payload = event.get("payload")
+    if (
+        event.get("event_type") != "CZAS_KURIERA_UPDATED"
+        or not isinstance(payload, Mapping)
+        or not isinstance(current_order, Mapping)
+        or current_order.get("order_type") != "elastic"
+        or state_has_committed_pickup_artifact(current_order)
+        or _event_has_authority_artifact(event)
+        or _payload_has_authority_artifact(payload)
+    ):
+        return True
+    row_order_id = _clean_id(row.get("order_id"))
+    event_order_id = _clean_id(event.get("order_id"))
+    if (
+        not row_order_id
+        or row_order_id != event_order_id
+        or _clean_id(current_order.get("order_id")) != row_order_id
+        or str(row.get("event_id") or "").strip()
+        != str(event.get("event_id") or "").strip()
+    ):
+        return True
+    old_iso = payload.get("old_ck_iso")
+    old_hhmm = payload.get("old_ck_hhmm")
+    new_iso = payload.get("new_ck_iso")
+    new_hhmm = payload.get("new_ck_hhmm")
+    old_is_null = old_iso is None and old_hhmm is None
+    old_dt = None if old_is_null else _parse_aware(old_iso)
+    new_dt = _parse_aware(new_iso)
+    if (
+        (not old_is_null and old_dt is None)
+        or new_dt is None
+        or (not old_is_null and old_dt.strftime("%H:%M") != old_hhmm)
+        or new_dt.strftime("%H:%M") != new_hhmm
+        or not isinstance(payload.get("source"), str)
+        or not str(payload.get("source") or "").strip()
+    ):
+        return True
+    delta = payload.get("delta_min")
+    if delta is not None and (
+        isinstance(delta, bool) or not isinstance(delta, (int, float))
+    ):
+        return True
+    return False
+
+
 def _resolution(
     outcome: ResolutionOutcome,
     reason: str,
@@ -344,6 +413,48 @@ def _parse_aware(value: object) -> Optional[datetime]:
     if parsed.tzinfo is None or parsed.utcoffset() is None:
         return None
     return parsed
+
+
+def committed_time_contract_is_complete(
+    order: Mapping[str, object] | None,
+) -> bool:
+    """Validate the one pickup/CK tuple consumed by planning and the app.
+
+    Populated strings are not enough: both ISO values must be timezone-aware,
+    denote the same instant and agree with the HH:MM projection.  Legacy rows
+    without authority provenance may be a valid rollout baseline.  If any
+    provenance is present, its structural identity must be complete as well;
+    partial authority state never becomes evidence for a safe flip.
+    """
+    if not isinstance(order, Mapping):
+        return False
+    pickup = _parse_aware(order.get("pickup_at_warsaw"))
+    ck = _parse_aware(order.get("czas_kuriera_warsaw"))
+    ck_hhmm = order.get("czas_kuriera_hhmm")
+    if (
+        pickup is None
+        or ck is None
+        or not isinstance(ck_hhmm, str)
+        or ck.strftime("%H:%M") != ck_hhmm
+        or pickup != ck
+    ):
+        return False
+    if not state_has_committed_pickup_artifact(order):
+        return True
+    if any(field not in order for field in COMMITTED_PICKUP_STATE_FIELDS):
+        return False
+    return bool(
+        order.get("committed_pickup_authority") in ALL_COMMITTED_AUTHORITIES
+        and order.get("committed_pickup_authority_proof_schema")
+        == AUTHORITY_PROOF_SCHEMA
+        and _parse_aware(order.get("committed_pickup_observed_at"))
+        is not None
+        and isinstance(order.get("committed_pickup_observed_source"), str)
+        and bool(str(order.get("committed_pickup_observed_source") or "").strip())
+        and _has_committed_pickup_event_identity(
+            order.get("committed_pickup_event_key")
+        )
+    )
 
 
 def _clean_id(value: object) -> str:
@@ -1543,6 +1654,7 @@ __all__ = [
     "COMMITTED_PICKUP_EVENT_ID_MARKER",
     "COMMITTED_PICKUP_STATE_FIELDS",
     "CommittedPickupResolution",
+    "NEW_ORDER_TIME_AUTHORITY_SNAPSHOT_FIELD",
     "PASSIVE_CK_SOURCES",
     "RECEIPT_REQUIRED_PICKUP_SOURCES",
     "RETIRED_CZASOWKA_CK_ONLY_SOURCES",
@@ -1552,8 +1664,10 @@ __all__ = [
     "build_time_event_cas_snapshot",
     "committed_pickup_effect_applied",
     "committed_pickup_event_id",
+    "committed_time_contract_is_complete",
     "is_committed_pickup_artifact",
     "is_committed_pickup_outbox_artifact",
+    "is_forward_authority_outbox_artifact",
     "normalize_pickup_revision",
     "pickup_payload_requires_coordinator_receipt",
     "resolve_czasowka_committed_observation",

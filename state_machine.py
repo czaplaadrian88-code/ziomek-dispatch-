@@ -43,6 +43,7 @@ from dispatch_v2.committed_pickup_authority import (
     CK_CHANGE_REVISION_STATE_FIELD,
     COMMITTED_PICKUP_COUPLED_FIELDS,
     MANUAL_CK_AUTHORITY_FLAG,
+    NEW_ORDER_TIME_AUTHORITY_SNAPSHOT_FIELD,
     PASSIVE_CK_SOURCES,
     RETIRED_CZASOWKA_CK_ONLY_SOURCES,
     RUTCOM_FORWARD_AUTHORITY_FLAG,
@@ -341,6 +342,22 @@ def _assignment_ck_resolution(
         passive_guard_enabled=passive_enabled,
         rutcom_forward_authority_enabled=forward_enabled,
     )
+
+
+def _new_order_time_authority_enabled(event: dict) -> bool:
+    """Read one receipt-bound policy for initial pickup/CK persistence."""
+    snapshot = event.get(NEW_ORDER_TIME_AUTHORITY_SNAPSHOT_FIELD)
+    if isinstance(snapshot, bool):
+        return snapshot
+    if snapshot is not None:
+        # A malformed durable marker must not recover a competing raw writer.
+        return True
+    try:
+        return bool(decision_flag(RUTCOM_FORWARD_AUTHORITY_FLAG))
+    except Exception:
+        # Direct/legacy callers without a durable snapshot fail closed for the
+        # ambiguous time tuple. Forward deploy drains every old NEW_ORDER row.
+        return True
 
 
 def resolve_czasowka_pickup_observation(
@@ -1250,6 +1267,14 @@ def event_effect_status(
             # Błąd odczytu nie trafia tutaj — durable layer rozróżnia go i
             # pozostawia receipt pending.
             return "superseded"
+        event_type = str(event.get("event_type") or "")
+        if event_type in {"CZAS_KURIERA_UPDATED", "PICKUP_TIME_UPDATED"}:
+            payload = event.get("payload")
+            if time_event_cas_is_versioned(event_type, payload):
+                # A versioned observation proves that an aggregate existed at
+                # capture time. Once it is pruned, neither handler can recreate
+                # it; retry is impossible work and must terminalize.
+                return "superseded"
         legacy_claim = _legacy_time_claim_status(event)
         if legacy_claim == "verified":
             # Exact claim może przeżyć terminalizację i prune rekordu. Każdy
@@ -1749,8 +1774,22 @@ def update_from_event(event: dict) -> Optional[dict]:
 
     if etype == "NEW_ORDER":
         # V3.19f: sanity check czas_kuriera consistency przed persist.
-        ck_iso = payload.get("czas_kuriera_warsaw")
-        ck_hhmm = payload.get("czas_kuriera_hhmm")
+        initial_time_owned = bool(
+            _is_czasowka_order(payload)
+            and _new_order_time_authority_enabled(event)
+        )
+        # Under the new owner NEW_ORDER creates only the aggregate shell. The
+        # exact Rutcom tuple is resolved immediately by PICKUP_TIME_UPDATED;
+        # raw pickup and CK can never become two independently persisted truths.
+        pickup_at_warsaw = (
+            None if initial_time_owned else payload.get("pickup_at_warsaw")
+        )
+        ck_iso = (
+            None if initial_time_owned else payload.get("czas_kuriera_warsaw")
+        )
+        ck_hhmm = (
+            None if initial_time_owned else payload.get("czas_kuriera_hhmm")
+        )
         if not _verify_czas_kuriera_consistency(ck_iso, ck_hhmm, oid):
             # Skip persist czas_kuriera fields; log ERROR w helper; raise signal.
             # Inne pola persistowane bez zmian (order dalej trafia do state).
@@ -1767,7 +1806,7 @@ def update_from_event(event: dict) -> Optional[dict]:
                 "address_id": payload.get("address_id"),
                 "pickup_coords": payload.get("pickup_coords"),
                 "delivery_coords": payload.get("delivery_coords"),
-                "pickup_at_warsaw": payload.get("pickup_at_warsaw"),
+                "pickup_at_warsaw": pickup_at_warsaw,
                 "prep_minutes": payload.get("prep_minutes"),
                 "order_type": payload.get("order_type"),
                 "bag_time_alerted": False,
@@ -1793,7 +1832,7 @@ def update_from_event(event: dict) -> Optional[dict]:
             "address_id": payload.get("address_id"),
             "pickup_coords": payload.get("pickup_coords"),
             "delivery_coords": payload.get("delivery_coords"),
-            "pickup_at_warsaw": payload.get("pickup_at_warsaw"),
+            "pickup_at_warsaw": pickup_at_warsaw,
             "prep_minutes": payload.get("prep_minutes"),
             "order_type": payload.get("order_type"),
             "uwagi": payload.get("uwagi"),

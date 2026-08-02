@@ -33,7 +33,10 @@ from dispatch_v2.committed_pickup_authority import (  # noqa: E402
     ASSIGNMENT_CK_PASSIVE_SNAPSHOT_FIELD,
     COMMITTED_PICKUP_AUTHORITY_FLAGS,
     MANUAL_CK_AUTHORITY_FLAG,
+    NEW_ORDER_TIME_AUTHORITY_SNAPSHOT_FIELD,
     RUTCOM_FORWARD_AUTHORITY_FLAG,
+    committed_time_contract_is_complete,
+    is_forward_authority_outbox_artifact,
     is_committed_pickup_outbox_artifact,
     state_has_committed_pickup_artifact,
 )
@@ -131,20 +134,41 @@ def _active_time_contract_incomplete(order: object) -> bool:
     # i FSM. Legacy rekord może nie mieć order_type, a nadal być czasówką z
     # kanonicznego prep>=60; brak kuriera nie zmienia jego kontraktu czasu.
     if C.is_czasowka_order(dict(order)):
-        return any(
-            order.get(field) in (None, "")
-            for field in (
-                "pickup_at_warsaw",
-                "czas_kuriera_warsaw",
-                "czas_kuriera_hhmm",
-            )
-        )
+        return not committed_time_contract_is_complete(order)
     order_type = str(order.get("order_type") or "")
     if order_type == "elastic":
         return False
     # Historyczny thin cold-start nie utrwalił order_type ani źródła, ale ma
     # aktywne przypisanie. Nie zgadujemy jego klasy przy zmianie authority.
     return bool(order.get("courier_id"))
+
+
+def _unbound_new_order_time_row_blocks_forward(row: object) -> bool:
+    """Detect NEW_ORDER work that could create a split tuple after the flip."""
+    if not isinstance(row, Mapping):
+        return False
+    event = row.get("state_event")
+    if not isinstance(event, Mapping) or event.get("event_type") != "NEW_ORDER":
+        return False
+    payload = event.get("payload")
+    if not isinstance(payload, Mapping):
+        return True
+    if payload.get("order_type") in {"elastic", "parcel"}:
+        return False
+    looks_like_time_order = bool(
+        C.is_czasowka_order(dict(payload))
+        or any(
+            payload.get(field) not in (None, "")
+            for field in (
+                "pickup_at_warsaw",
+                "czas_kuriera_warsaw",
+                "czas_kuriera_hhmm",
+            )
+        )
+    )
+    if not looks_like_time_order:
+        return False
+    return event.get(NEW_ORDER_TIME_AUTHORITY_SNAPSHOT_FIELD) is not True
 
 
 def collect_status() -> dict:
@@ -193,6 +217,21 @@ def collect_status() -> dict:
         for order in orders_state.values()
         if _active_time_contract_incomplete(order)
     )
+    forward_authority_rows = [
+        row
+        for row in unfinished
+        if is_forward_authority_outbox_artifact(
+            row,
+            orders_state.get(str(row.get("order_id") or ""))
+            if isinstance(row, Mapping)
+            else None,
+        )
+    ]
+    unbound_new_order_time_rows = [
+        row
+        for row in unfinished
+        if _unbound_new_order_time_row_blocks_forward(row)
+    ]
     pre_v4_coordinator_time_rows = [
         row
         for row in unfinished
@@ -212,7 +251,8 @@ def collect_status() -> dict:
         # mieć inny handler/oracle outcome po zmianie flagi. Szczegółowe
         # pre-v4/pre-v16 liczniki niżej są diagnostyką, nie konkurencyjną
         # definicją bezpieczeństwa.
-        and not authority_rows
+        and not forward_authority_rows
+        and not unbound_new_order_time_rows
         and not pre_v4_coordinator_time_rows
         and not pre_v16_assignment_ck_rows
         and active_incomplete_time_contract_count == 0
@@ -246,6 +286,20 @@ def collect_status() -> dict:
         "unfinished_authority_outbox": len(authority_rows),
         "unfinished_authority_event_ids": [
             str(row.get("event_id") or "") for row in authority_rows
+        ],
+        "unfinished_forward_authority_outbox": len(
+            forward_authority_rows
+        ),
+        "unfinished_forward_authority_event_ids": [
+            str(row.get("event_id") or "")
+            for row in forward_authority_rows
+        ],
+        "unfinished_unbound_new_order_time_outbox": len(
+            unbound_new_order_time_rows
+        ),
+        "unfinished_unbound_new_order_time_event_ids": [
+            str(row.get("event_id") or "")
+            for row in unbound_new_order_time_rows
         ],
         "state_scan_ok": state_scan_ok,
         "active_committed_state_count": active_committed_state_count,
