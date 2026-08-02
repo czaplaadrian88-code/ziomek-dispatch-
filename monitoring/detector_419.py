@@ -116,7 +116,7 @@ def _maybe_alert(count: int) -> None:
         "3) Jak nowy moduł wprowadza bg_refresh → wyłącz: ENABLE_PANEL_BG_REFRESH=0"
     )
     _log.warning(f"ALERT 419 storm: count={count} src={src_str}")
-    ok = send_admin_alert(text)
+    ok = send_admin_alert(text, source="detector_419")
     if not ok:
         _log.error("send_admin_alert failed (fall-through to journal log)")
 

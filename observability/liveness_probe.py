@@ -316,7 +316,7 @@ def _send_alert(unit: str, detail: str) -> bool:
     text = f"[ZIOMEK LIVENESS] {unit} DOWN -- {detail} @ {_utcstamp()}"
     try:
         from dispatch_v2.telegram_utils import send_admin_alert
-        return bool(send_admin_alert(text))
+        return bool(send_admin_alert(text, source="liveness_probe"))
     except Exception as e:  # noqa: BLE001 - alert path failure must not crash probe
         logger.error("send_alert fail for %s: %s", unit, e)
         return False

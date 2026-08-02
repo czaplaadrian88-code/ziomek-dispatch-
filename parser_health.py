@@ -588,7 +588,7 @@ class ParserHealthMonitor:
             # Type techniczny zostaje w log.error/warning powyżej dla parsability.
             try:
                 from dispatch_v2.telegram_utils import send_admin_alert
-                ok = send_admin_alert(msg)
+                ok = send_admin_alert(msg, source="parser_health")
                 if not ok:
                     log.warning(f"ParserHealthMonitor: send_admin_alert returned False dla {alert_type}")
             except Exception as e:
