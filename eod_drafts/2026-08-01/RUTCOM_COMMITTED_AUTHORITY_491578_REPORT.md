@@ -668,5 +668,5 @@ ACK, post-pickup/stale-generation/revision i spójności pickup↔CK.
 - Wersja: v20, po pełnej regresji, przed dwoma świeżymi review exact-byte
 - Branch: `fix/rutcom-committed-provenance-v20-20260802`
 - Worktree: `/root/worktrees/dispatch_v2/active/20260802-rutcom-v17-integration-pkgroot/dispatch_v2`
-- Base produkcyjny przed v18–v20: `df162f62e`
+- Zintegrowany base produkcyjny: `82be9833d`
 - Produkcja: bez zmian; zero deployu, restartu, migracji i flipu.

@@ -358,6 +358,8 @@ def is_committed_pickup_outbox_artifact(
 def is_forward_authority_outbox_artifact(
     row: Mapping[str, object] | None,
     current_order: Mapping[str, object] | None,
+    *,
+    is_czasowka: bool,
 ) -> bool:
     """Fence every pending time writer whose semantics change at forward ON.
 
@@ -397,6 +399,7 @@ def is_forward_authority_outbox_artifact(
         not isinstance(current_order, Mapping)
         or _clean_id(current_order.get("order_id")) != row_order_id
         or current_order.get("order_type") != "elastic"
+        or is_czasowka
         or state_has_committed_pickup_artifact(current_order)
         or _event_has_authority_artifact(event)
         or _payload_has_authority_artifact(payload)

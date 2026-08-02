@@ -216,26 +216,19 @@ def _emit_and_apply_state(
                     observed_at=datetime.now(timezone.utc).isoformat(),
                 )
             )
-            sanitized_payload = dict(payload or {})
+            # The audit/queue event remains the immutable source observation.
+            # Only the orders_state projection is stripped: downstream
+            # NEW_ORDER consumers must not receive a tuple rewritten merely
+            # because the canonical state writer owns it in two phases.
+            sanitized_state_payload = dict(state_body)
             for field in (
                 "pickup_at_warsaw",
                 "czas_kuriera_warsaw",
                 "czas_kuriera_hhmm",
             ):
-                sanitized_payload[field] = None
-            payload = sanitized_payload
-            if state_payload is None:
-                state_body = sanitized_payload
-            else:
-                sanitized_state_payload = dict(state_payload or {})
-                for field in (
-                    "pickup_at_warsaw",
-                    "czas_kuriera_warsaw",
-                    "czas_kuriera_hhmm",
-                ):
-                    sanitized_state_payload[field] = None
-                state_payload = sanitized_state_payload
-                state_body = sanitized_state_payload
+                sanitized_state_payload[field] = None
+            state_payload = sanitized_state_payload
+            state_body = sanitized_state_payload
     # R2: capture assignment-time truth immediately BEFORE the canonical state
     # mutation.  Preparation and commit are both fail-safe; the instrument can
     # neither veto nor alter an operator assignment.
@@ -4111,31 +4104,10 @@ def _diff_and_emit(
             )
             if not in_scope:
                 continue
-            if zid not in html_order_ids:
-                if _force:
-                    _log.info(f"force-recheck oid={zid} nie ma na boardzie — pomijam")
-                continue  # terminal or vanished — skip
-            try:
-                # PANEL-SCRAPE-01: ten scope to WIĘKSZOŚĆ fetchy/tick — prefetch-first
-                raw_ck = _details(zid)
-                stats["fetched_details"] = stats.get("fetched_details", 0) + 1
-            except Exception as e:
-                _log.debug(f"order-time fetch fail zid={zid}: {e}")
-                continue
-            if not raw_ck:
-                continue
-            try:
-                # V3.19g1 hotfix: uses GLOBAL normalize_order (line 35).
-                # Previously had `from dispatch_v2.panel_client import normalize_order`
-                # here → Python marked normalize_order as LOCAL for whole _diff_and_emit
-                # function, shadowing global used earlier (line 423) → UnboundLocalError
-                # on every tick → 25-min crash loop 2026-04-21.
-                norm_ck = normalize_order(raw_ck) or {}
-            except Exception as e:
-                _log.debug(f"order-time normalize fail zid={zid}: {e}")
-                continue
-
             if _pending_initial_time:
+                # This recovery consumes only orders_state + the hash-bound
+                # NEW_ORDER outbox receipt. Board presence and detail HTTP are
+                # later mutable observations and cannot gate durable liveness.
                 try:
                     initial_ready = _resume_new_order_time_contract(
                         zid,
@@ -4160,6 +4132,29 @@ def _diff_and_emit(
                     # Finish the receipt-bound ON transaction after hot-OFF,
                     # but do not create a new authority decision in this tick.
                     continue
+            if zid not in html_order_ids:
+                if _force:
+                    _log.info(f"force-recheck oid={zid} nie ma na boardzie — pomijam")
+                continue  # terminal or vanished — skip
+            try:
+                # PANEL-SCRAPE-01: ten scope to WIĘKSZOŚĆ fetchy/tick — prefetch-first
+                raw_ck = _details(zid)
+                stats["fetched_details"] = stats.get("fetched_details", 0) + 1
+            except Exception as e:
+                _log.debug(f"order-time fetch fail zid={zid}: {e}")
+                continue
+            if not raw_ck:
+                continue
+            try:
+                # V3.19g1 hotfix: uses GLOBAL normalize_order (line 35).
+                # Previously had `from dispatch_v2.panel_client import normalize_order`
+                # here → Python marked normalize_order as LOCAL for whole _diff_and_emit
+                # function, shadowing global used earlier (line 423) → UnboundLocalError
+                # on every tick → 25-min crash loop 2026-04-21.
+                norm_ck = normalize_order(raw_ck) or {}
+            except Exception as e:
+                _log.debug(f"order-time normalize fail zid={zid}: {e}")
+                continue
 
             _force_ack_ready = bool(_force)
             _force_event_claimed = False

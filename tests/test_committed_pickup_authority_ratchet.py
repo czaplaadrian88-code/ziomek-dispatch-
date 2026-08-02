@@ -457,9 +457,45 @@ def test_code_rollback_is_mechanically_gated_across_queue_and_outbox():
     assert "and not unbound_new_order_time_rows" in tool
     assert "and not pre_v16_assignment_ck_rows" in tool
     assert "and active_incomplete_time_contract_count == 0" in tool
+    assert "FORWARD_WRITER_UNITS = (" in tool
+    assert "def _probe_forward_writer_quiescence(" in tool
+    assert "and writer_quiescence_verified" in tool
+    assert 'forward_status.add_argument("--quiesced"' in tool
     assert "projection[oid] = str(base[ELIGIBLE_AT_FIELD])" in queue
     assert '"safe_for_forward_deploy": safe_for_forward_deploy' in tool
     assert 'sub.add_parser(\n        "forward-status"' in tool
+
+
+def test_new_order_intent_is_outbox_bound_and_recovers_before_panel_io():
+    watcher = _source("panel_watcher.py")
+    apply = _source("committed_pickup_apply.py")
+    state = _source("state_machine.py")
+
+    emitter = watcher.split("def _emit_and_apply_state(", 1)[1].split(
+        "\ndef _load_coords(", 1
+    )[0]
+    assert "state_payload = sanitized_state_payload" in emitter
+    assert "payload = sanitized_payload" not in emitter
+
+    recovery = watcher.split(
+        "# This recovery consumes only orders_state", 1
+    )[1].split("_force_ack_ready = bool(_force)", 1)[0]
+    assert recovery.index("_resume_new_order_time_contract(") < (
+        recovery.index("if zid not in html_order_ids:")
+    )
+    assert recovery.index("if zid not in html_order_ids:") < (
+        recovery.index("raw_ck = _details(zid)")
+    )
+
+    assert "def verify_new_order_time_intent_receipt(" in apply
+    assert 'current.get("last_lifecycle_event_id_new_order")' in apply
+    assert "event_bus.get_state_apply_outbox(marker)" in apply
+    assert 'row.get("state_status") == "applied"' in apply
+    assert "initial_intent_claimed and not initial_intent_verified" in apply
+
+    assert "pending_initial_intent = current.get(" in state
+    assert "NEW_ORDER_TIME_INTENT_ID_FIELD" in state
+    assert "blocked by pending NEW_ORDER intent" in state
 
 
 def test_cold_start_and_null_pickup_cannot_bypass_canonical_time_owner():
@@ -919,13 +955,13 @@ def test_semantic_literal_closure_blocks_constant_alias_bypass():
             "5c98b59d38fcdf5a811ed66edc71b13a5145d4a373f9cf30036798e2f5091f4f"
         ),
         "pickup_at_warsaw": (
-            "958e291dec476ae25308a6234d3e518078d39207e790b75a320cf0a1263e2587"
+            "2672d9f69eb106272ee116c4482ea2215f27e1957c4451886ec24bbea0bc8e48"
         ),
         "czas_kuriera_warsaw": (
-            "a125e9382b1978bcb2595de79b925af10473d0ecd24dd3413670ad8365e04575"
+            "5955ba81da75513c505ee3555eefeeef9854bec58836fec8ccaa7e18f0c47978"
         ),
         "czas_kuriera_hhmm": (
-            "621594346743a8bc92a4a36b5871117f1e4bb6c2b4a5843bab769f54ac296250"
+            "8b3ac2022a394820435167ac7286b3df6c63bd90b3f31a788451c5a8691d004d"
         ),
         "committed_pickup_authority": (
             "b8ee93c09667747c07e44a617ca56e66f09bda1de984618a1b470d1bcdce9b0a"

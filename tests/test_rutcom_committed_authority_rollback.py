@@ -323,7 +323,7 @@ def test_forward_deploy_does_not_block_unrelated_unfinished_outbox(
         lambda: {},
     )
 
-    status = rollback.collect_status()
+    status = rollback.collect_status(writer_quiescence_verified=True)
 
     assert status["unfinished_outbox_total"] == 1
     assert status["unfinished_authority_outbox"] == 0
@@ -417,6 +417,58 @@ def test_forward_deploy_blocks_pending_sanitized_czasowka_new_order(
 
     assert status["unfinished_unbound_new_order_time_outbox"] == 1
     assert status["safe_for_forward_deploy"] is False
+
+
+def test_receipt_bound_new_order_blocks_code_revert_even_if_payload_is_elastic(
+    monkeypatch,
+):
+    """Pre-v20 code cannot consume a top-level initial-time receipt safely."""
+    event_id = "receipt-bound-new-order"
+    new_order = {
+        "event_type": "NEW_ORDER",
+        "event_id": event_id,
+        "order_id": "receipt-bound-order",
+        "czasowka_new_order_time_authority_enabled": True,
+        "pending_committed_time_intent": {"schema": "receipt-present"},
+        "payload": {
+            "order_type": "elastic",
+            "prep_minutes": 15,
+            "pickup_at_warsaw": None,
+            "czas_kuriera_warsaw": None,
+            "czas_kuriera_hhmm": None,
+        },
+    }
+    monkeypatch.setattr(rollback.C, "decision_flag", lambda _name: False)
+    monkeypatch.setattr(
+        rollback.event_bus,
+        "list_unfinished_state_applies",
+        lambda: [
+            _outbox_row(
+                new_order,
+                event_id=event_id,
+                event_key=f"{event_id}-key",
+                order_id="receipt-bound-order",
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        rollback.queue,
+        "legacy_rollback_status",
+        lambda: _queue_status(
+            rollback_fence_present=True,
+            rollback_prepared=True,
+        ),
+    )
+    monkeypatch.setattr(
+        rollback.state_machine,
+        "get_all_strict",
+        lambda: {},
+    )
+
+    status = rollback.collect_status()
+
+    assert status["unfinished_unbound_new_order_time_outbox"] == 1
+    assert status["safe_for_code_revert"] is False
 
 
 def test_forward_deploy_blocks_pending_legacy_pickup_for_czasowka(
@@ -608,13 +660,70 @@ def test_forward_deploy_ignores_well_formed_elastic_raw_ck(monkeypatch):
         lambda: {elastic["order_id"]: elastic},
     )
 
-    status = rollback.collect_status()
+    status = rollback.collect_status(writer_quiescence_verified=True)
     # Code revert remains deliberately conservative for every raw CK row.
     assert status["unfinished_authority_outbox"] == 1
     assert status["safe_for_code_revert"] is False
     # Forward rollout changes only czasowka semantics, not this exact receipt.
     assert status["unfinished_forward_authority_outbox"] == 0
     assert status["safe_for_forward_deploy"] is True
+
+
+def test_forward_deploy_blocks_explicit_elastic_with_canonical_prep60(
+    monkeypatch,
+):
+    """The canonical prep classifier wins over a stale order_type label."""
+    event_id = "mislabelled-czasowka-raw-ck"
+    raw_ck = {
+        "event_type": "CZAS_KURIERA_UPDATED",
+        "event_id": event_id,
+        "order_id": "mislabelled-czasowka",
+        "payload": {
+            "old_ck_iso": "2026-08-02T14:00:00+02:00",
+            "old_ck_hhmm": "14:00",
+            "new_ck_iso": "2026-08-02T14:05:00+02:00",
+            "new_ck_hhmm": "14:05",
+            "delta_min": 5.0,
+            "source": "panel_re_check",
+        },
+    }
+    row = _outbox_row(
+        raw_ck,
+        event_id=event_id,
+        event_key=f"{event_id}-key",
+        order_id="mislabelled-czasowka",
+    )
+    mislabeled = {
+        "order_id": "mislabelled-czasowka",
+        "status": "assigned",
+        "order_type": "elastic",
+        "prep_minutes": 60,
+        "courier_id": "492",
+        "pickup_at_warsaw": "2026-08-02T14:00:00+02:00",
+        "czas_kuriera_warsaw": "2026-08-02T14:00:00+02:00",
+        "czas_kuriera_hhmm": "14:00",
+    }
+    monkeypatch.setattr(rollback.C, "decision_flag", lambda _name: False)
+    monkeypatch.setattr(
+        rollback.event_bus,
+        "list_unfinished_state_applies",
+        lambda: [row],
+    )
+    monkeypatch.setattr(
+        rollback.queue,
+        "legacy_rollback_status",
+        lambda: _queue_status(),
+    )
+    monkeypatch.setattr(
+        rollback.state_machine,
+        "get_all_strict",
+        lambda: {mislabeled["order_id"]: mislabeled},
+    )
+
+    status = rollback.collect_status(writer_quiescence_verified=True)
+
+    assert status["unfinished_forward_authority_outbox"] == 1
+    assert status["safe_for_forward_deploy"] is False
 
 
 def test_forward_deploy_blocks_unfinished_pre_v4_coordinator_time_event(
@@ -689,7 +798,7 @@ def test_forward_deploy_requires_dark_flag_empty_queue_and_no_old_events(
         lambda: {},
     )
 
-    status = rollback.collect_status()
+    status = rollback.collect_status(writer_quiescence_verified=True)
 
     assert status["safe_for_forward_deploy"] is True
 
@@ -1114,3 +1223,84 @@ def test_prepare_cli_requires_explicit_apply_and_quiesced(monkeypatch, capsys):
 
     assert exit_code == 4
     assert "requires both --apply and --quiesced" in capsys.readouterr().out
+
+
+def test_forward_status_requires_explicit_quiescence_ack(monkeypatch, capsys):
+    monkeypatch.setattr(
+        rollback,
+        "collect_status",
+        lambda **_kwargs: {"safe_for_forward_deploy": True},
+    )
+
+    assert rollback.main(["forward-status"]) == 4
+    assert "forward-status requires --quiesced" in capsys.readouterr().out
+
+
+def test_forward_status_mechanically_rejects_active_writer(
+    monkeypatch, capsys
+):
+    monkeypatch.setattr(
+        rollback,
+        "_probe_forward_writer_quiescence",
+        lambda: (
+            False,
+            {
+                "dispatch-panel-watcher.service": {
+                    "load_state": "loaded",
+                    "active_state": "active",
+                },
+                "dispatch-shadow.service": {
+                    "load_state": "loaded",
+                    "active_state": "inactive",
+                },
+            },
+        ),
+        raising=False,
+    )
+
+    def status(*, writer_quiescence_verified=False, writer_states=None):
+        return {
+            "writer_quiescence_verified": writer_quiescence_verified,
+            "writer_states": writer_states,
+            "safe_for_forward_deploy": writer_quiescence_verified,
+        }
+
+    monkeypatch.setattr(rollback, "collect_status", status)
+
+    assert rollback.main(["forward-status", "--quiesced"]) == 1
+    output = capsys.readouterr().out
+    assert '"writer_quiescence_verified": false' in output
+    assert '"active_state": "active"' in output
+
+
+@pytest.mark.parametrize(
+    ("shadow_active_state", "expected"),
+    [("inactive", True), ("active", False)],
+)
+def test_forward_writer_probe_requires_both_loaded_and_inactive(
+    monkeypatch, shadow_active_state, expected
+):
+    def run(command, **_kwargs):
+        unit = command[2]
+        active_state = (
+            shadow_active_state
+            if unit == "dispatch-shadow.service"
+            else "inactive"
+        )
+        return SimpleNamespace(
+            returncode=0,
+            stdout=(
+                "LoadState=loaded\n"
+                f"ActiveState={active_state}\n"
+            ),
+        )
+
+    monkeypatch.setattr(rollback.subprocess, "run", run)
+
+    verified, states = rollback._probe_forward_writer_quiescence()
+
+    assert verified is expected
+    assert set(states) == set(rollback.FORWARD_WRITER_UNITS)
+    assert states["dispatch-shadow.service"]["active_state"] == (
+        shadow_active_state
+    )

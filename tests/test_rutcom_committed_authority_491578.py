@@ -896,6 +896,46 @@ def _isolate_durable_bus(tmp_path, monkeypatch):
     return events_db
 
 
+def _seed_pending_initial_time_contract(tmp_path, monkeypatch, *, oid):
+    """Create the exact crash state: NEW_ORDER shell plus durable raw intent."""
+    from dispatch_v2 import panel_watcher as pw
+    from dispatch_v2 import state_machine as sm
+    from dispatch_v2.committed_pickup_authority import (
+        RUTCOM_FORWARD_AUTHORITY_FLAG,
+    )
+
+    _isolate_durable_bus(tmp_path, monkeypatch)
+    state_path = tmp_path / "orders_state.json"
+    state_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(sm, "_state_path", lambda: str(state_path))
+
+    def decision(name):
+        return name == RUTCOM_FORWARD_AUTHORITY_FLAG
+
+    monkeypatch.setattr(pw.C, "decision_flag", decision)
+    monkeypatch.setattr(sm, "decision_flag", decision)
+    monkeypatch.setattr(sm, "flag", _authority_runtime_flag)
+    payload = {
+        "order_type": "czasowka",
+        "prep_minutes": 60,
+        "pickup_at_warsaw": "2099-08-02T19:16:00+02:00",
+        "czas_kuriera_warsaw": "2099-08-02T19:21:00+02:00",
+        "czas_kuriera_hhmm": "19:21",
+        "status_id": 2,
+        "restaurant": "fixture",
+        "pickup_address": "fixture",
+        "delivery_address": "fixture",
+    }
+    initialized = pw._emit_and_apply_state(
+        "NEW_ORDER",
+        order_id=oid,
+        payload=payload,
+        event_id=f"{oid}_NEW_ORDER_first",
+    )
+    assert initialized.state_ready is True
+    return pw, sm, payload
+
+
 def _isolate_coordinator_queue(tmp_path, monkeypatch):
     from dispatch_v2 import coordinator_time_recheck as ctr
 
@@ -1602,9 +1642,18 @@ def test_real_durable_new_order_sanitizes_and_commits_initial_tuple(
     assert initialized.state_event["payload"]["czas_kuriera_hhmm"] is None
     semantic = event_bus.get_pending(limit=10, event_types=["NEW_ORDER"])
     assert len(semantic) == 1
-    assert semantic[0]["payload"]["pickup_at_warsaw"] is None
-    assert semantic[0]["payload"]["czas_kuriera_warsaw"] is None
-    assert semantic[0]["payload"]["czas_kuriera_hhmm"] is None
+    # Broadcast/audit keeps the source tuple. Only the state projection is
+    # sanitized; otherwise a crash between shell creation and canonical time
+    # recovery permanently changes what NEW_ORDER consumers observe.
+    assert semantic[0]["payload"]["pickup_at_warsaw"] == (
+        payload["pickup_at_warsaw"]
+    )
+    assert semantic[0]["payload"]["czas_kuriera_warsaw"] == (
+        payload["czas_kuriera_warsaw"]
+    )
+    assert semantic[0]["payload"]["czas_kuriera_hhmm"] == (
+        payload["czas_kuriera_hhmm"]
+    )
 
     assert pw._initialize_new_order_time_contract(
         oid, normalized, initialized
@@ -1709,6 +1758,81 @@ def test_new_order_time_intent_hash_rejects_tuple_tampering():
     assert resolution.outcome is ResolutionOutcome.SUPPRESS
     assert resolution.reason == "invalid_new_order_time_intent"
     assert resolution.event is None
+
+
+def test_coherently_rehashed_state_intent_cannot_forge_new_order_receipt(
+    tmp_path, monkeypatch
+):
+    """A valid self-hash is not authority without the original outbox row."""
+    from dispatch_v2.committed_pickup_apply import apply_event
+    from dispatch_v2.committed_pickup_authority import (
+        NEW_ORDER_TIME_INTENT_FIELD,
+        ResolutionOutcome,
+        build_new_order_time_intent,
+        resolve_czasowka_initial_time_intent,
+    )
+
+    oid = "coherent-intent-tamper"
+    _pw, sm, original = _seed_pending_initial_time_contract(
+        tmp_path, monkeypatch, oid=oid
+    )
+    current = sm.get_order_strict(oid)
+    original_intent = current[NEW_ORDER_TIME_INTENT_FIELD]
+    forged = build_new_order_time_intent(
+        oid,
+        {
+            **original,
+            "czas_kuriera_warsaw": "2099-08-02T19:26:00+02:00",
+            "czas_kuriera_hhmm": "19:26",
+        },
+        observed_at=original_intent["observed_at"],
+    )
+    sm.upsert_order(
+        oid,
+        {NEW_ORDER_TIME_INTENT_FIELD: forged},
+        event="TEST_COHERENT_INTENT_TAMPER",
+    )
+    tampered = sm.get_order_strict(oid)
+    resolution = resolve_czasowka_initial_time_intent(tampered, forged)
+    assert resolution.outcome is ResolutionOutcome.APPLY
+
+    with pytest.raises(ValueError, match="NEW_ORDER receipt"):
+        apply_event(resolution.event)
+
+    stored = sm.get_order_strict(oid)
+    assert stored["pickup_at_warsaw"] is None
+    assert stored[NEW_ORDER_TIME_INTENT_FIELD] == forged
+
+
+def test_pending_initial_intent_rejects_sibling_legacy_pickup_writer(
+    tmp_path, monkeypatch
+):
+    """Only the exact intent-id authority event may consume the shell."""
+    from dispatch_v2.committed_pickup_authority import (
+        NEW_ORDER_TIME_INTENT_FIELD,
+    )
+
+    oid = "pending-intent-sibling-writer"
+    _pw, sm, _payload = _seed_pending_initial_time_contract(
+        tmp_path, monkeypatch, oid=oid
+    )
+    before = sm.get_order_strict(oid)
+    sibling = {
+        "event_type": "PICKUP_TIME_UPDATED",
+        "order_id": oid,
+        "payload": {
+            "old_pickup_at_warsaw": None,
+            "new_pickup_at_warsaw": "2099-08-02T19:26:00+02:00",
+            "source": "panel_re_check",
+        },
+    }
+
+    assert sm.update_from_event(sibling) is None
+    stored = sm.get_order_strict(oid)
+    assert stored["pickup_at_warsaw"] is None
+    assert stored[NEW_ORDER_TIME_INTENT_FIELD] == before[
+        NEW_ORDER_TIME_INTENT_FIELD
+    ]
 
 
 def test_new_order_forward_receipt_survives_on_to_off_flip(
@@ -1888,6 +2012,150 @@ def test_real_tick_recovers_pending_initial_intent_before_later_restamp(
     assert stored["czas_kuriera_warsaw"] == original["czas_kuriera_warsaw"]
     assert stored["czas_kuriera_hhmm"] == "19:21"
     assert stored["pending_committed_time_intent"] is None
+
+
+def test_restart_tick_recovers_initial_intent_even_when_order_left_board(
+    tmp_path, monkeypatch
+):
+    """Durable recovery cannot depend on a mutable board/details response."""
+    from dispatch_v2 import panel_detail_prefetch
+    from dispatch_v2 import parse_continuity_guard
+    from dispatch_v2.committed_pickup_authority import (
+        NEW_ORDER_TIME_INTENT_FIELD,
+    )
+
+    oid = "initial-recovery-absent-board"
+    pw, sm, original = _seed_pending_initial_time_contract(
+        tmp_path, monkeypatch, oid=oid
+    )
+    monkeypatch.setattr(
+        pw.C,
+        "flag",
+        lambda name, default=None: (
+            False
+            if name == "ENABLE_COORDINATOR_FORCE_TIME_RECHECK"
+            else _authority_runtime_flag(name, default)
+        ),
+    )
+    monkeypatch.setattr(
+        panel_detail_prefetch,
+        "prefetch_details",
+        lambda *_args, **_kwargs: ({}, {"prefetch_enabled": False}),
+    )
+    monkeypatch.setattr(
+        parse_continuity_guard,
+        "evaluate",
+        lambda *_args, **_kwargs: {
+            "freeze_new": False,
+            "suspicious": False,
+        },
+    )
+    monkeypatch.setattr(
+        pw,
+        "_heal_missing_order_details",
+        lambda *_args, **_kwargs: None,
+    )
+
+    stats = pw._diff_and_emit(
+        {
+            "order_ids": [],
+            "assigned_ids": set(),
+            "unassigned_ids": [],
+            "rest_names": {},
+            "courier_packs": {},
+            "courier_load": {},
+            "html_times": {},
+            "closed_ids": set(),
+            "pickup_addresses": {},
+            "delivery_addresses": {},
+        },
+        csrf="test",
+        _state_outbox_sweeper_on=True,
+    )
+
+    stored = sm.get_order_strict(oid)
+    assert stats["errors"] == 0
+    assert stored["pickup_at_warsaw"] == original["czas_kuriera_warsaw"]
+    assert stored["czas_kuriera_warsaw"] == original[
+        "czas_kuriera_warsaw"
+    ]
+    assert stored["czas_kuriera_hhmm"] == "19:21"
+    assert stored[NEW_ORDER_TIME_INTENT_FIELD] is None
+
+
+def test_restart_tick_recovers_initial_intent_before_detail_fetch_failure(
+    tmp_path, monkeypatch
+):
+    """A transient Rutcom detail failure happens after durable recovery."""
+    from dispatch_v2 import panel_detail_prefetch
+    from dispatch_v2 import parse_continuity_guard
+    from dispatch_v2.committed_pickup_authority import (
+        NEW_ORDER_TIME_INTENT_FIELD,
+    )
+
+    oid = "initial-recovery-detail-failure"
+    pw, sm, original = _seed_pending_initial_time_contract(
+        tmp_path, monkeypatch, oid=oid
+    )
+    monkeypatch.setattr(
+        pw.C,
+        "flag",
+        lambda name, default=None: (
+            False
+            if name == "ENABLE_COORDINATOR_FORCE_TIME_RECHECK"
+            else _authority_runtime_flag(name, default)
+        ),
+    )
+    monkeypatch.setattr(
+        panel_detail_prefetch,
+        "prefetch_details",
+        lambda *_args, **_kwargs: ({}, {"prefetch_enabled": False}),
+    )
+    monkeypatch.setattr(
+        parse_continuity_guard,
+        "evaluate",
+        lambda *_args, **_kwargs: {
+            "freeze_new": False,
+            "suspicious": False,
+        },
+    )
+    monkeypatch.setattr(
+        pw,
+        "_heal_missing_order_details",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        pw,
+        "fetch_order_details",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("fixture detail outage")
+        ),
+    )
+
+    pw._diff_and_emit(
+        {
+            "order_ids": [oid],
+            "assigned_ids": set(),
+            "unassigned_ids": [oid],
+            "rest_names": {},
+            "courier_packs": {},
+            "courier_load": {},
+            "html_times": {},
+            "closed_ids": set(),
+            "pickup_addresses": {},
+            "delivery_addresses": {},
+        },
+        csrf="test",
+        _state_outbox_sweeper_on=True,
+    )
+
+    stored = sm.get_order_strict(oid)
+    assert stored["pickup_at_warsaw"] == original["czas_kuriera_warsaw"]
+    assert stored["czas_kuriera_warsaw"] == original[
+        "czas_kuriera_warsaw"
+    ]
+    assert stored["czas_kuriera_hhmm"] == "19:21"
+    assert stored[NEW_ORDER_TIME_INTENT_FIELD] is None
 
 
 def test_real_durable_new_order_off_preserves_legacy_initial_tuple(

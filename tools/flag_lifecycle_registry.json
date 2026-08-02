@@ -2665,13 +2665,13 @@
    "lifecycle": "live",
    "lifecycle_seeded": false,
    "name": "DEADMAN_DRY_RUN",
-   "notes": "DRIFT-RECONCILE 2026-08-02: dodana przy re-seedzie A-1 (pre-existing master<->kod drift, NIE A-1)",
+   "notes": "Zweryfikowane 2026-08-02: shadow-first jest aktywny; realna wysyłka wymaga osobnego ACK ownera.",
    "owner": {
     "business": "Adrian",
     "service": "dispatch-deadman-watchdog.service"
    },
-   "removal_condition": "DRIFT-RECONCILE 2026-08-02 (nie A-1): flaga zywego dispatch-deadman-watchdog.service nieobecna w rejestrze mastera przy re-seedzie; kuracja heurystyczna do przegladu sesji-wlasciciela (dead-man alert (Z0-3))",
-   "review_date": "2026-09-10",
+   "removal_condition": "n/d dopóki live",
+   "review_date": "2026-08-10",
    "rollback": "rm drop-in dispatch-deadman-watchdog.service + restart dispatch-deadman-watchdog.service ZA ACK",
    "source_of_truth": "drop-in:dispatch-deadman-watchdog.service",
    "twin_of": [],
@@ -2700,13 +2700,13 @@
    "lifecycle": "planned",
    "lifecycle_seeded": false,
    "name": "DEADMAN_ENABLED",
-   "notes": "DRIFT-RECONCILE 2026-08-02: dodana przy re-seedzie A-1 (pre-existing master<->kod drift, NIE A-1)",
+   "notes": "Zweryfikowane 2026-08-02: realna wysyłka jest OFF; aktywacja pozostaje osobną bramką ACK.",
    "owner": {
     "business": "Adrian",
     "service": "dispatch-deadman-watchdog.service"
    },
-   "removal_condition": "DRIFT-RECONCILE 2026-08-02 (nie A-1): flaga zywego dispatch-deadman-watchdog.service nieobecna w rejestrze mastera przy re-seedzie; kuracja heurystyczna do przegladu sesji-wlasciciela (dead-man alert (Z0-3))",
-   "review_date": "2026-09-10",
+   "removal_condition": "aktywacja lub retire wg roadmapy (ACK Adrian)",
+   "review_date": "2026-08-10",
    "rollback": "rm drop-in dispatch-deadman-watchdog.service + restart dispatch-deadman-watchdog.service ZA ACK",
    "source_of_truth": "drop-in:dispatch-deadman-watchdog.service",
    "twin_of": [],
@@ -4987,13 +4987,13 @@
    "lifecycle": "planned",
    "lifecycle_seeded": false,
    "name": "ENABLE_COURIER_DELIVERY_LEDGER_ENFORCE",
-   "notes": "DRIFT-RECONCILE 2026-08-02: dodana przy re-seedzie A-1 (pre-existing master<->kod drift, NIE A-1)",
+   "notes": "Zweryfikowane 2026-08-02: ENFORCE jest OFF; promocja wymaga osobnego ACK i restartu courier-api.",
    "owner": {
     "business": "Adrian",
     "service": "courier-api.service"
    },
-   "removal_condition": "DRIFT-RECONCILE 2026-08-02 (nie A-1): flaga zywego courier-api.service nieobecna w rejestrze mastera przy re-seedzie; kuracja heurystyczna do przegladu sesji-wlasciciela (delivery-ledger)",
-   "review_date": "2026-09-10",
+   "removal_condition": "aktywacja lub retire wg roadmapy (ACK Adrian)",
+   "review_date": "2026-08-10",
    "rollback": "env ENABLE_COURIER_DELIVERY_LEDGER_ENFORCE OFF + restart courier-api.service ZA ACK",
    "source_of_truth": "courier_api/config.py",
    "twin_of": [],
@@ -5023,13 +5023,13 @@
    "lifecycle": "shadow",
    "lifecycle_seeded": false,
    "name": "ENABLE_COURIER_DELIVERY_LEDGER_SHADOW",
-   "notes": "DRIFT-RECONCILE 2026-08-02: dodana przy re-seedzie A-1 (pre-existing master<->kod drift, NIE A-1)",
+   "notes": "Zweryfikowane 2026-08-02: SHADOW jest efektywnie ON i zachowuje legacy DTO/authority.",
    "owner": {
     "business": "Adrian",
     "service": "courier-api.service"
    },
-   "removal_condition": "DRIFT-RECONCILE 2026-08-02 (nie A-1): flaga zywego courier-api.service nieobecna w rejestrze mastera przy re-seedzie; kuracja heurystyczna do przegladu sesji-wlasciciela (delivery-ledger)",
-   "review_date": "2026-09-10",
+   "removal_condition": "po walidacji shadow: flip lub retire (ACK Adrian)",
+   "review_date": "2026-08-10",
    "rollback": "rm drop-in delivery-ledger-shadow.conf + restart courier-api.service ZA ACK",
    "source_of_truth": "drop-in:courier-api.service.d/delivery-ledger-shadow.conf",
    "twin_of": [],
@@ -12216,6 +12216,7 @@
   },
   "ENABLE_PROPOSAL_CLAIM_PERSISTENCE": {
    "carriers": [
+    "flags.json",
     "common.py:ETAP4_DECISION_FLAGS"
    ],
    "consumers": [
@@ -12224,7 +12225,7 @@
    ],
    "curated_at": "2026-07-28",
    "current_snapshot": {
-    "default": false
+    "flags.json": true
    },
    "default": false,
    "intentional_per_process": {
@@ -12244,7 +12245,7 @@
    "removal_condition": "po zastąpieniu przez kanoniczny proposal_assignment Etapu 2 albo retire za ACK",
    "review_date": "2026-08-10",
    "rollback": "flags.json false/brak klucza (hot-reload, bez restartu)",
-   "source_of_truth": "common.py-const",
+   "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [
     "engine"
@@ -18773,6 +18774,7 @@
   },
   "PROPOSAL_CLAIM_TTL_SEC": {
    "carriers": [
+    "flags.json",
     "common.py:FLAGS_JSON_NUMERIC_OVERRIDES"
    ],
    "consumers": [
@@ -18781,7 +18783,7 @@
    ],
    "curated_at": "2026-07-28",
    "current_snapshot": {
-    "default": 240
+    "flags.json": 240
    },
    "default": 240,
    "intentional_per_process": {
@@ -18801,7 +18803,7 @@
    "removal_condition": "razem z ENABLE_PROPOSAL_CLAIM_PERSISTENCE przy przejściu na proposal_assignment Etapu 2",
    "review_date": "2026-08-10",
    "rollback": "usunąć klucz z flags.json; fallback 240 s hot-reload",
-   "source_of_truth": "common.py-const",
+   "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [
     "engine"

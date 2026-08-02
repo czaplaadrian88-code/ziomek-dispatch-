@@ -45,6 +45,7 @@ from dispatch_v2.committed_pickup_authority import (
     MANUAL_CK_AUTHORITY_FLAG,
     NEW_ORDER_TIME_AUTHORITY_SNAPSHOT_FIELD,
     NEW_ORDER_TIME_INTENT_FIELD,
+    NEW_ORDER_TIME_INTENT_ID_FIELD,
     PASSIVE_CK_SOURCES,
     RETIRED_CZASOWKA_CK_ONLY_SOURCES,
     RUTCOM_FORWARD_AUTHORITY_FLAG,
@@ -1106,6 +1107,21 @@ def _pickup_time_event_status(event: dict, current: dict) -> str:
         target_dt = datetime.fromisoformat(str(target))
     except (ValueError, TypeError):
         return "superseded"
+
+    pending_initial_intent = current.get(NEW_ORDER_TIME_INTENT_FIELD)
+    if pending_initial_intent is not None:
+        # A NEW_ORDER shell is an exclusive write lease for the exact durable
+        # initial intent. No sibling legacy pickup event may consume/erase it,
+        # even if that event would otherwise pass the ordinary pickup CAS.
+        if (
+            not new_order_time_intent_is_valid(
+                pending_initial_intent,
+                order_id=current.get("order_id"),
+            )
+            or payload.get(NEW_ORDER_TIME_INTENT_ID_FIELD)
+            != pending_initial_intent.get("intent_id")
+        ):
+            return "superseded"
 
     authority = payload.get("committed_authority")
     if not authority:
@@ -2291,6 +2307,20 @@ def update_from_event(event: dict) -> Optional[dict]:
         if existing is None:
             _log.warning(f"PICKUP_TIME_UPDATED for unknown oid={oid}, skipping")
             return None
+        pending_initial_intent = existing.get(NEW_ORDER_TIME_INTENT_FIELD)
+        if pending_initial_intent is not None and (
+            not new_order_time_intent_is_valid(
+                pending_initial_intent,
+                order_id=oid,
+            )
+            or payload.get(NEW_ORDER_TIME_INTENT_ID_FIELD)
+            != pending_initial_intent.get("intent_id")
+        ):
+            _log.warning(
+                "PICKUP_TIME_UPDATED blocked by pending NEW_ORDER intent "
+                f"oid={oid}"
+            )
+            return None
         committed_authority = payload.get("committed_authority")
         pickup_effect = _pickup_time_event_status(event, existing)
         if pickup_effect == "applied":
@@ -2368,7 +2398,8 @@ def update_from_event(event: dict) -> Optional[dict]:
                 # Consumption of the initial receipt is part of this exact
                 # atomic pickup+CK write.  No crash can leave a complete tuple
                 # with a replayable stale NEW_ORDER intent.
-                update_fields[NEW_ORDER_TIME_INTENT_FIELD] = None
+                if pending_initial_intent is not None:
+                    update_fields[NEW_ORDER_TIME_INTENT_FIELD] = None
             except (ValueError, TypeError):
                 pass  # new_pickup już zwalidowany wyżej; defensywnie
         # Wszystkie pola sprzężone są własnością jednego kontraktu policy/CAS.

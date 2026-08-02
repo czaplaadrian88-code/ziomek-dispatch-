@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 from typing import Mapping, Sequence
 
@@ -33,6 +34,8 @@ from dispatch_v2.committed_pickup_authority import (  # noqa: E402
     ASSIGNMENT_CK_PASSIVE_SNAPSHOT_FIELD,
     COMMITTED_PICKUP_AUTHORITY_FLAGS,
     MANUAL_CK_AUTHORITY_FLAG,
+    NEW_ORDER_TIME_AUTHORITY_SNAPSHOT_FIELD,
+    NEW_ORDER_TIME_INTENT_FIELD,
     RUTCOM_FORWARD_AUTHORITY_FLAG,
     committed_time_contract_is_complete,
     is_forward_authority_outbox_artifact,
@@ -47,6 +50,11 @@ AUTHORITY_FLAGS = (
 )
 if AUTHORITY_FLAGS != COMMITTED_PICKUP_AUTHORITY_FLAGS:
     raise RuntimeError("committed authority flag tuple drift")
+
+FORWARD_WRITER_UNITS = (
+    "dispatch-panel-watcher.service",
+    "dispatch-shadow.service",
+)
 
 
 def _pre_v4_coordinator_time_row_blocks_forward(
@@ -149,10 +157,24 @@ def _unbound_new_order_time_row_blocks_forward(row: object) -> bool:
     event = row.get("state_event")
     if not isinstance(event, Mapping) or event.get("event_type") != "NEW_ORDER":
         return False
+    # Presence is enough. Older readers do not understand either top-level
+    # field, regardless of the sanitized payload or truthiness of its value.
+    if (
+        NEW_ORDER_TIME_AUTHORITY_SNAPSHOT_FIELD in event
+        or NEW_ORDER_TIME_INTENT_FIELD in event
+    ):
+        return True
     payload = event.get("payload")
     if not isinstance(payload, Mapping):
         return True
-    if payload.get("order_type") in {"elastic", "parcel"}:
+    if (
+        payload.get("source") == "parcel"
+        or payload.get("order_type") == "parcel"
+    ):
+        return False
+    if C.is_czasowka_order(dict(payload)):
+        return True
+    if payload.get("order_type") == "elastic":
         return False
     looks_like_time_order = bool(
         C.is_czasowka_order(dict(payload))
@@ -174,7 +196,56 @@ def _unbound_new_order_time_row_blocks_forward(row: object) -> bool:
     return True
 
 
-def collect_status() -> dict:
+def _probe_forward_writer_quiescence() -> tuple[bool, dict]:
+    """Verify the exact production writer units are loaded and inactive."""
+    states = {}
+    for unit in FORWARD_WRITER_UNITS:
+        try:
+            result = subprocess.run(
+                [
+                    "systemctl",
+                    "show",
+                    unit,
+                    "--property=LoadState",
+                    "--property=ActiveState",
+                    "--no-pager",
+                ],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            parsed = {}
+            for line in result.stdout.splitlines():
+                key, separator, value = line.partition("=")
+                if separator:
+                    parsed[key] = value
+            states[unit] = {
+                "load_state": parsed.get("LoadState"),
+                "active_state": parsed.get("ActiveState"),
+                "probe_exit": result.returncode,
+            }
+        except Exception as exc:  # fail closed; expose only exception class
+            states[unit] = {
+                "load_state": None,
+                "active_state": None,
+                "probe_exit": None,
+                "probe_error": type(exc).__name__,
+            }
+    verified = all(
+        state.get("load_state") == "loaded"
+        and state.get("active_state") == "inactive"
+        and state.get("probe_exit") == 0
+        for state in states.values()
+    ) and set(states) == set(FORWARD_WRITER_UNITS)
+    return bool(verified), states
+
+
+def collect_status(
+    *,
+    writer_quiescence_verified: bool = False,
+    writer_states: Mapping[str, object] | None = None,
+) -> dict:
     unfinished = event_bus.list_unfinished_state_applies()
     authority_rows = [
         row
@@ -220,16 +291,22 @@ def collect_status() -> dict:
         for order in orders_state.values()
         if _active_time_contract_incomplete(order)
     )
-    forward_authority_rows = [
-        row
-        for row in unfinished
-        if is_forward_authority_outbox_artifact(
-            row,
+    forward_authority_rows = []
+    for row in unfinished:
+        current_order = (
             orders_state.get(str(row.get("order_id") or ""))
             if isinstance(row, Mapping)
-            else None,
+            else None
         )
-    ]
+        if is_forward_authority_outbox_artifact(
+            row,
+            current_order,
+            is_czasowka=bool(
+                isinstance(current_order, Mapping)
+                and C.is_czasowka_order(dict(current_order))
+            ),
+        ):
+            forward_authority_rows.append(row)
     unbound_new_order_time_rows = [
         row
         for row in unfinished
@@ -247,6 +324,7 @@ def collect_status() -> dict:
     ]
     safe_for_forward_deploy = bool(
         not flag_enabled
+        and writer_quiescence_verified
         and state_scan_ok
         and queue_status["records"] == 0
         # Każdy unfinished row z kanonicznej klasy authority/raw CK musi
@@ -266,6 +344,7 @@ def collect_status() -> dict:
         and queue_status["safe_queue_projection"]
         and state_scan_ok
         and active_committed_state_count == 0
+        and not unbound_new_order_time_rows
     )
     safe_to_prepare = bool(
         common_safe and not queue_status["rollback_fence_present"]
@@ -279,7 +358,7 @@ def collect_status() -> dict:
         and queue_status["successor_records"] == 0
     )
     return {
-        "schema": "rutcom_committed_authority.rollback_preflight.v3",
+        "schema": "rutcom_committed_authority.rollback_preflight.v4",
         "flag": FLAG,
         "flag_enabled": flag_enabled,
         "authority_flags": list(AUTHORITY_FLAGS),
@@ -324,6 +403,8 @@ def collect_status() -> dict:
             for row in pre_v16_assignment_ck_rows
         ],
         "queue": queue_status,
+        "writer_quiescence_verified": bool(writer_quiescence_verified),
+        "writer_states": dict(writer_states or {}),
         "safe_for_forward_deploy": safe_for_forward_deploy,
         "safe_to_prepare": safe_to_prepare,
         "safe_for_code_revert": safe_for_code_revert,
@@ -340,8 +421,17 @@ def _cmd_status(_args: argparse.Namespace) -> int:
     return 0 if status["safe_for_code_revert"] else 1
 
 
-def _cmd_forward_status(_args: argparse.Namespace) -> int:
-    status = collect_status()
+def _cmd_forward_status(args: argparse.Namespace) -> int:
+    if not args.quiesced:
+        raise RuntimeError(
+            "forward-status requires --quiesced after stopping all forward "
+            "writer units; the tool also verifies systemd mechanically"
+        )
+    quiesced, writer_states = _probe_forward_writer_quiescence()
+    status = collect_status(
+        writer_quiescence_verified=quiesced,
+        writer_states=writer_states,
+    )
     _print(status)
     return 0 if status["safe_for_forward_deploy"] else 1
 
@@ -403,6 +493,7 @@ def _parser() -> argparse.ArgumentParser:
         "forward-status",
         help="read-only dark-deploy compatibility preflight",
     )
+    forward_status.add_argument("--quiesced", action="store_true")
     forward_status.set_defaults(func=_cmd_forward_status)
 
     prepare = sub.add_parser(

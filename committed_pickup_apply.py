@@ -17,6 +17,9 @@ from dispatch_v2 import durable_event_apply, event_bus, lifecycle_downstream
 from dispatch_v2.committed_pickup_authority import (
     CK_CHANGE_REVISION_OBSERVATION_FIELD,
     MANUAL_CK_AUTHORITY_FLAG,
+    NEW_ORDER_TIME_AUTHORITY_SNAPSHOT_FIELD,
+    NEW_ORDER_TIME_INTENT_FIELD,
+    NEW_ORDER_TIME_INTENT_ID_FIELD,
     RUTCOM_FORWARD_AUTHORITY_FLAG,
     ResolutionOutcome,
     TIME_EVENT_CAS_SCHEMA_FIELD,
@@ -97,6 +100,47 @@ def verify_durable_authority_attestation(
     row = event_bus.get_state_apply_outbox(event_id)
     stored = row.get("state_event") if isinstance(row, dict) else None
     return bool(isinstance(stored, dict) and stored == dict(event))
+
+
+def verify_new_order_time_intent_receipt(
+    current: Mapping[str, object] | None,
+    event: Mapping[str, object] | None,
+) -> bool:
+    """Bind a pending state intent to the original durable NEW_ORDER row.
+
+    The intent hash protects accidental corruption, but it is deliberately not
+    a signature: anyone able to alter state could recompute it. Authority comes
+    from the independent event-bus row whose event id was atomically persisted
+    in orders_state by NEW_ORDER.
+    """
+    if not isinstance(current, Mapping) or not isinstance(event, Mapping):
+        return False
+    if not validate_new_order_time_intent_event(current, event):
+        return False
+    order_id = str(current.get("order_id") or "")
+    marker = str(current.get("last_lifecycle_event_id_new_order") or "")
+    intent = current.get(NEW_ORDER_TIME_INTENT_FIELD)
+    if not order_id or not marker or not isinstance(intent, Mapping):
+        return False
+    row = event_bus.get_state_apply_outbox(marker)
+    stored = row.get("state_event") if isinstance(row, Mapping) else None
+    if not isinstance(stored, Mapping):
+        return False
+    return bool(
+        str(row.get("event_id") or "") == marker
+        and str(row.get("event_key") or "")
+        and str(row.get("order_id") or "") == order_id
+        and row.get("state_status") == "applied"
+        and stored.get("event_type") == "NEW_ORDER"
+        and str(stored.get("event_id") or "") == marker
+        and str(stored.get("order_id") or "") == order_id
+        and stored.get(NEW_ORDER_TIME_AUTHORITY_SNAPSHOT_FIELD) is True
+        and stored.get(NEW_ORDER_TIME_INTENT_FIELD) == intent
+        and (event.get("payload") or {}).get(
+            NEW_ORDER_TIME_INTENT_ID_FIELD
+        )
+        == intent.get("intent_id")
+    )
 
 
 def time_update_event_key(order_id: str, event: Mapping[str, object]) -> str:
@@ -282,10 +326,17 @@ def apply_event(event: Mapping[str, object]):
             receipt_verified = coordinator_time_recheck.verify_claimed_event(
                 event
             )
-        initial_intent_verified = validate_new_order_time_intent_event(
+        initial_intent_claimed = (
+            payload.get(NEW_ORDER_TIME_INTENT_ID_FIELD) is not None
+        )
+        initial_intent_verified = verify_new_order_time_intent_receipt(
             current,
             event,
         )
+        if initial_intent_claimed and not initial_intent_verified:
+            raise ValueError(
+                "committed pickup NEW_ORDER receipt rejected"
+            )
         claim_authorized = bool(
             receipt_verified or initial_intent_verified
         )
@@ -348,4 +399,5 @@ __all__ = [
     "apply_event",
     "time_update_event_key",
     "verify_durable_authority_attestation",
+    "verify_new_order_time_intent_receipt",
 ]
