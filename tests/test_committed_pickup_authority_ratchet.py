@@ -622,8 +622,8 @@ def test_production_ast_has_one_provenance_writer_and_one_state_file_funnel():
             (Path("state_machine.py"), "update_from_event"): 3,
                 (Path("panel_watcher.py"), "_diff_and_emit"): 2,
                 (
-                    Path("panel_watcher.py"),
-                    "_initialize_new_order_time_contract",
+                    Path("committed_pickup_authority.py"),
+                    "build_new_order_time_intent",
                 ): 1,
             (Path("shadow_dispatcher.py"), "_build_order_event"): 1,
             (Path("shadow_dispatcher.py"), "_tick"): 1,
@@ -643,8 +643,8 @@ def test_production_ast_has_one_provenance_writer_and_one_state_file_funnel():
             (Path("state_machine.py"), "update_from_event"): 4,
                 (Path("panel_watcher.py"), "_diff_and_emit"): 3,
                 (
-                    Path("panel_watcher.py"),
-                    "_initialize_new_order_time_contract",
+                    Path("committed_pickup_authority.py"),
+                    "build_new_order_time_intent",
                 ): 1,
             (Path("core/candidates.py"), "eval_courier_inner"): 2,
             (Path("shadow_dispatcher.py"), "_serialize_candidate"): 1,
@@ -677,8 +677,8 @@ def test_production_ast_has_one_provenance_writer_and_one_state_file_funnel():
             (Path("state_machine.py"), "update_from_event"): 4,
                 (Path("panel_watcher.py"), "_diff_and_emit"): 3,
                 (
-                    Path("panel_watcher.py"),
-                    "_initialize_new_order_time_contract",
+                    Path("committed_pickup_authority.py"),
+                    "build_new_order_time_intent",
                 ): 1,
             (Path("tools/ziomek_pred_calibration.py"), "run_tick"): 3,
             (Path("core/candidates.py"), "eval_courier_inner"): 2,
@@ -739,9 +739,38 @@ def test_production_ast_has_one_provenance_writer_and_one_state_file_funnel():
         assert actual[field] == Counter(expected), field
     assert guarded_state_writers == Counter(
         {
-            (Path("state_machine.py"), "upsert_order"): 2,
+                (Path("state_machine.py"), "upsert_order"): 3,
             (Path("state_machine.py"), "touch_check_cursor"): 1,
             (Path("state_machine.py"), "delete_order"): 1,
+        }
+    )
+
+
+def test_pending_new_order_time_intent_has_closed_writer_set():
+    """The pending receipt may only be captured, backfilled, or consumed."""
+    actual = Counter()
+    for path in _production_sources():
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        parents = _parents(tree)
+        relative = path.relative_to(ROOT)
+        for node in ast.walk(tree):
+            if not (
+                isinstance(node, ast.Subscript)
+                and isinstance(node.ctx, ast.Store)
+                and isinstance(node.slice, ast.Name)
+                and node.slice.id == "NEW_ORDER_TIME_INTENT_FIELD"
+            ):
+                continue
+            actual[(relative, _enclosing_function(node, parents))] += 1
+
+    assert actual == Counter(
+        {
+            (Path("panel_watcher.py"), "_emit_and_apply_state"): 1,
+            (
+                Path("state_machine.py"),
+                "_merge_new_order_time_intent_backfill",
+            ): 1,
+            (Path("state_machine.py"), "update_from_event"): 3,
         }
     )
 
@@ -884,25 +913,25 @@ def test_protected_writer_scanner_catches_static_join_key():
 def test_semantic_literal_closure_blocks_constant_alias_bypass():
     expected = {
         "PICKUP_TIME_UPDATED": (
-            "f1cf418b70b2168a8b96fe5b96bb217bde376b2c33966069b2a072817aa97246"
+            "3b6a795052f2dfe7ca89e53bc1f643f19e7ed48f357a80986e454fa26384142c"
         ),
         "CZAS_KURIERA_UPDATED": (
             "5c98b59d38fcdf5a811ed66edc71b13a5145d4a373f9cf30036798e2f5091f4f"
         ),
         "pickup_at_warsaw": (
-            "1948ba3ab79099cfc0a1fdbfe30e09bf68cc4fd831c620bff0a48ca36d72392f"
+            "958e291dec476ae25308a6234d3e518078d39207e790b75a320cf0a1263e2587"
         ),
         "czas_kuriera_warsaw": (
-            "3b7d557e02c7069594074ee6b9547bed9118ecd9ca3a1a9ed0cd275c720914ea"
+            "a125e9382b1978bcb2595de79b925af10473d0ecd24dd3413670ad8365e04575"
         ),
         "czas_kuriera_hhmm": (
-            "92a937460eda14bf3f90cff3dfa45a94c75556a92c45620392a5035ec4f5dd45"
+            "621594346743a8bc92a4a36b5871117f1e4bb6c2b4a5843bab769f54ac296250"
         ),
         "committed_pickup_authority": (
             "b8ee93c09667747c07e44a617ca56e66f09bda1de984618a1b470d1bcdce9b0a"
         ),
         "pickup_time_revision": (
-            "c667a3202b516b72d70067a82f4a5cab5a5a6193dcece3727c9724c4b56bfbf1"
+            "9aac8f82f4cac792c672f2bbbc8f0e228699c20602090205b271dfe1ae3660fb"
         ),
         "committed_authority_attestation": (
             "0e006a4c4c5b1c76ea944177174d5e46bc7156f9572fb2c2544f734872dcc78b"

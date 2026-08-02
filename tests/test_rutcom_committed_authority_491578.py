@@ -1389,6 +1389,8 @@ def test_cold_start_absent_czasowka_routes_initial_tuple_through_authority(
     from dispatch_v2.committed_pickup_authority import (
         ASSIGNMENT_CK_FORWARD_SNAPSHOT_FIELD,
         ASSIGNMENT_CK_PASSIVE_SNAPSHOT_FIELD,
+        NEW_ORDER_TIME_INTENT_FIELD,
+        build_new_order_time_intent,
     )
     NEW_ORDER_TIME_AUTHORITY_SNAPSHOT_FIELD = (
         "czasowka_new_order_time_authority_enabled"
@@ -1452,7 +1454,13 @@ def test_cold_start_absent_czasowka_routes_initial_tuple_through_authority(
         old_plan_release_authorized=None,
     ):
         state_body = dict(payload or {})
+        initial_intent = None
         if event_type == "NEW_ORDER":
+            initial_intent = build_new_order_time_intent(
+                order_id,
+                state_body,
+                observed_at="2026-08-01T18:00:00+02:00",
+            )
             state_body["pickup_at_warsaw"] = None
             state_body["czas_kuriera_warsaw"] = None
             state_body["czas_kuriera_hhmm"] = None
@@ -1475,6 +1483,7 @@ def test_cold_start_absent_czasowka_routes_initial_tuple_through_authority(
         }
         if event_type == "NEW_ORDER":
             state_event[NEW_ORDER_TIME_AUTHORITY_SNAPSHOT_FIELD] = True
+            state_event[NEW_ORDER_TIME_INTENT_FIELD] = initial_intent
         if event_type == "COURIER_ASSIGNED":
             state_event[ASSIGNMENT_CK_FORWARD_SNAPSHOT_FIELD] = True
             state_event[ASSIGNMENT_CK_PASSIVE_SNAPSHOT_FIELD] = True
@@ -1605,6 +1614,280 @@ def test_real_durable_new_order_sanitizes_and_commits_initial_tuple(
     assert stored["czas_kuriera_warsaw"].endswith("T14:00:00+02:00")
     assert stored["czas_kuriera_hhmm"] == "14:00"
     assert stored["committed_pickup_authority"] == "rutcom_pickup_field"
+
+
+def test_new_order_forward_persists_original_time_intent_before_initializer(
+    tmp_path, monkeypatch
+):
+    """Crash after NEW_ORDER must not erase the restaurant-agreed tuple."""
+    from dispatch_v2 import panel_watcher as pw
+    from dispatch_v2 import state_machine as sm
+    from dispatch_v2.committed_pickup_authority import (
+        RUTCOM_FORWARD_AUTHORITY_FLAG,
+    )
+
+    _isolate_durable_bus(tmp_path, monkeypatch)
+    state_path = tmp_path / "orders_state.json"
+    state_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(sm, "_state_path", lambda: str(state_path))
+
+    def decision(name):
+        return name == RUTCOM_FORWARD_AUTHORITY_FLAG
+
+    monkeypatch.setattr(pw.C, "decision_flag", decision)
+    monkeypatch.setattr(sm, "decision_flag", decision)
+    monkeypatch.setattr(sm, "flag", _authority_runtime_flag)
+    monkeypatch.setattr(pw.lifecycle_downstream, "apply", lambda _event: None)
+    oid = "initial-intent-durable"
+    payload = {
+        "order_type": "czasowka",
+        "prep_minutes": 60,
+        "pickup_at_warsaw": "2026-08-02T19:16:00+02:00",
+        "czas_kuriera_warsaw": "2026-08-02T19:21:00+02:00",
+        "czas_kuriera_hhmm": "19:21",
+        "status_id": 2,
+        "restaurant": "fixture",
+        "pickup_address": "fixture",
+        "delivery_address": "fixture",
+    }
+
+    initialized = pw._emit_and_apply_state(
+        "NEW_ORDER",
+        order_id=oid,
+        payload=payload,
+        event_id=f"{oid}_NEW_ORDER_first",
+    )
+
+    assert initialized.state_ready is True
+    stored = sm.get_order_strict(oid)
+    intent = stored["pending_committed_time_intent"]
+    assert intent["pickup_at_warsaw"] == payload["pickup_at_warsaw"]
+    assert intent["czas_kuriera_warsaw"] == payload["czas_kuriera_warsaw"]
+    assert intent["czas_kuriera_hhmm"] == payload["czas_kuriera_hhmm"]
+
+
+def test_new_order_time_intent_hash_rejects_tuple_tampering():
+    """Changing 19:21 after receipt capture cannot forge initial authority."""
+    from dispatch_v2.committed_pickup_authority import (
+        ResolutionOutcome,
+        build_new_order_time_intent,
+        resolve_czasowka_initial_time_intent,
+    )
+
+    oid = "initial-intent-tamper"
+    intent = build_new_order_time_intent(
+        oid,
+        {
+            "pickup_at_warsaw": "2099-08-02T19:16:00+02:00",
+            "czas_kuriera_warsaw": "2099-08-02T19:21:00+02:00",
+            "czas_kuriera_hhmm": "19:21",
+            "status_id": 2,
+            "prep_minutes": 60,
+        },
+        observed_at="2099-08-02T18:50:00+02:00",
+    )
+    tampered = {
+        **intent,
+        "czas_kuriera_warsaw": "2099-08-02T19:26:00+02:00",
+        "czas_kuriera_hhmm": "19:26",
+    }
+    shell = {
+        "order_id": oid,
+        "status": "planned",
+        "order_type": "czasowka",
+        "prep_minutes": 60,
+        "courier_id": None,
+        "pickup_at_warsaw": None,
+        "czas_kuriera_warsaw": None,
+        "czas_kuriera_hhmm": None,
+        "pickup_time_revision": 0,
+        "v319g_ck_change_count": 0,
+    }
+
+    resolution = resolve_czasowka_initial_time_intent(shell, tampered)
+
+    assert resolution.outcome is ResolutionOutcome.SUPPRESS
+    assert resolution.reason == "invalid_new_order_time_intent"
+    assert resolution.event is None
+
+
+def test_new_order_forward_receipt_survives_on_to_off_flip(
+    tmp_path, monkeypatch
+):
+    """Crash-local data is unnecessary; the durable ON receipt survives OFF."""
+    from dispatch_v2 import panel_watcher as pw
+    from dispatch_v2 import state_machine as sm
+    from dispatch_v2.committed_pickup_authority import (
+        RUTCOM_FORWARD_AUTHORITY_FLAG,
+    )
+
+    _isolate_durable_bus(tmp_path, monkeypatch)
+    state_path = tmp_path / "orders_state.json"
+    state_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(sm, "_state_path", lambda: str(state_path))
+    enabled = {"value": True}
+
+    def decision(name):
+        return bool(
+            enabled["value"] and name == RUTCOM_FORWARD_AUTHORITY_FLAG
+        )
+
+    monkeypatch.setattr(pw.C, "decision_flag", decision)
+    monkeypatch.setattr(sm, "decision_flag", decision)
+    monkeypatch.setattr(sm, "flag", _authority_runtime_flag)
+    monkeypatch.setattr(pw.lifecycle_downstream, "apply", lambda _event: None)
+    oid = "initial-receipt-flag-flip"
+    normalized = {
+        "order_type": "czasowka",
+        "prep_minutes": 60,
+        "pickup_at_warsaw": "2099-08-02T19:16:00+02:00",
+        "czas_kuriera_warsaw": "2099-08-02T19:21:00+02:00",
+        "czas_kuriera_hhmm": "19:21",
+        "status_id": 2,
+    }
+    initialized = pw._emit_and_apply_state(
+        "NEW_ORDER",
+        order_id=oid,
+        payload={
+            **normalized,
+            "restaurant": "fixture",
+            "pickup_address": "fixture",
+            "delivery_address": "fixture",
+        },
+        event_id=f"{oid}_NEW_ORDER_first",
+    )
+    enabled["value"] = False
+    crash_recovered_state = sm.get_order_strict(oid)
+    del initialized
+
+    assert pw._resume_new_order_time_contract(
+        oid,
+        crash_recovered_state,
+    ) is True
+    stored = sm.get_order_strict(oid)
+    assert stored["pickup_at_warsaw"] == normalized["czas_kuriera_warsaw"]
+    assert stored["czas_kuriera_warsaw"] == normalized["czas_kuriera_warsaw"]
+    assert stored["czas_kuriera_hhmm"] == "19:21"
+    assert stored["pending_committed_time_intent"] is None
+
+
+def test_real_tick_recovers_pending_initial_intent_before_later_restamp(
+    tmp_path, monkeypatch
+):
+    """The ordinary restart tick consumes the durable 19:21, not fresh 19:16."""
+    from dispatch_v2 import common as C
+    from dispatch_v2 import panel_detail_prefetch
+    from dispatch_v2 import panel_watcher as pw
+    from dispatch_v2 import parse_continuity_guard
+    from dispatch_v2 import state_machine as sm
+    from dispatch_v2.committed_pickup_authority import (
+        RUTCOM_FORWARD_AUTHORITY_FLAG,
+    )
+
+    _isolate_durable_bus(tmp_path, monkeypatch)
+    state_path = tmp_path / "orders_state.json"
+    state_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(sm, "_state_path", lambda: str(state_path))
+    enabled = {"value": True}
+
+    def decision(name):
+        return bool(
+            enabled["value"] and name == RUTCOM_FORWARD_AUTHORITY_FLAG
+        )
+
+    monkeypatch.setattr(C, "decision_flag", decision)
+    monkeypatch.setattr(pw, "decision_flag", decision)
+    monkeypatch.setattr(sm, "decision_flag", decision)
+    monkeypatch.setattr(sm, "flag", _authority_runtime_flag)
+    oid = "initial-real-tick-recovery"
+    original = {
+        "order_type": "czasowka",
+        "prep_minutes": 60,
+        "pickup_at_warsaw": "2099-08-02T19:16:00+02:00",
+        "czas_kuriera_warsaw": "2099-08-02T19:21:00+02:00",
+        "czas_kuriera_hhmm": "19:21",
+        "status_id": 2,
+        "restaurant": "fixture",
+        "pickup_address": "fixture",
+        "delivery_address": "fixture",
+    }
+    initialized = pw._emit_and_apply_state(
+        "NEW_ORDER",
+        order_id=oid,
+        payload=original,
+        event_id=f"{oid}_NEW_ORDER_first",
+    )
+    assert initialized.state_ready is True
+    assert sm.get_order_strict(oid)["pickup_at_warsaw"] is None
+
+    # Simulated process restart/hot rollback. The next panel response carries
+    # the mutable status restamp, but both legacy detectors are disabled.
+    enabled["value"] = False
+    monkeypatch.setattr(C, "ENABLE_V319G_CK_DETECTION", False)
+    monkeypatch.setattr(C, "ENABLE_PICKUP_TIME_DETECTION", False)
+    monkeypatch.setattr(C, "flag", lambda _name, default=None: False)
+    monkeypatch.setattr(
+        panel_detail_prefetch,
+        "prefetch_details",
+        lambda *_args, **_kwargs: ({}, {"prefetch_enabled": False}),
+    )
+    monkeypatch.setattr(
+        parse_continuity_guard,
+        "evaluate",
+        lambda *_args, **_kwargs: {
+            "freeze_new": False,
+            "suspicious": False,
+        },
+    )
+    monkeypatch.setattr(
+        pw,
+        "_heal_missing_order_details",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        pw,
+        "fetch_order_details",
+        lambda *_args, **_kwargs: {
+            "id_kurier": 26,
+            "id_status_zamowienia": 2,
+        },
+    )
+    monkeypatch.setattr(
+        pw,
+        "normalize_order",
+        lambda _raw: {
+            "order_type": "czasowka",
+            "prep_minutes": 60,
+            "pickup_at_warsaw": "2099-08-02T19:16:00+02:00",
+            "czas_kuriera_warsaw": "2099-08-02T19:16:00+02:00",
+            "czas_kuriera_hhmm": "19:16",
+            "status_id": 2,
+        },
+    )
+
+    stats = pw._diff_and_emit(
+        {
+            "order_ids": [oid],
+            "assigned_ids": set(),
+            "unassigned_ids": [oid],
+            "rest_names": {},
+            "courier_packs": {},
+            "courier_load": {},
+            "html_times": {},
+            "closed_ids": set(),
+            "pickup_addresses": {},
+            "delivery_addresses": {},
+        },
+        csrf="test",
+        _state_outbox_sweeper_on=True,
+    )
+
+    stored = sm.get_order_strict(oid)
+    assert stats["errors"] == 0
+    assert stored["pickup_at_warsaw"] == original["czas_kuriera_warsaw"]
+    assert stored["czas_kuriera_warsaw"] == original["czas_kuriera_warsaw"]
+    assert stored["czas_kuriera_hhmm"] == "19:21"
+    assert stored["pending_committed_time_intent"] is None
 
 
 def test_real_durable_new_order_off_preserves_legacy_initial_tuple(

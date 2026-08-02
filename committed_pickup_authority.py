@@ -75,7 +75,11 @@ _COORDINATOR_RECEIPT_SOURCES = frozenset(
 _COORDINATOR_RECEIPT_MAX_AGE = timedelta(minutes=5)
 _COORDINATOR_RECEIPT_FUTURE_SKEW = timedelta(seconds=30)
 _PICKUP_OBSERVATION_SOURCES = frozenset(
-    {"panel_pickup_recheck", "coordinator_force"}
+    {
+        "panel_pickup_recheck",
+        "coordinator_force",
+        "new_order_initial_intent",
+    }
 )
 _SEMANTIC_EVENT_KEYS = frozenset(
     {"event_type", "order_id", "courier_id", "payload"}
@@ -137,6 +141,25 @@ ASSIGNMENT_CK_PASSIVE_SNAPSHOT_FIELD = (
 )
 NEW_ORDER_TIME_AUTHORITY_SNAPSHOT_FIELD = (
     "czasowka_new_order_time_authority_enabled"
+)
+NEW_ORDER_TIME_INTENT_SCHEMA = "committed_pickup.new_order_intent.v1"
+NEW_ORDER_TIME_INTENT_FIELD = "pending_committed_time_intent"
+NEW_ORDER_TIME_INTENT_ID_FIELD = "committed_new_order_time_intent_id"
+_NEW_ORDER_TIME_INTENT_BODY_FIELDS = (
+    "schema",
+    "order_id",
+    "forward_authority_enabled",
+    "pickup_at_warsaw",
+    "czas_kuriera_warsaw",
+    "czas_kuriera_hhmm",
+    "status_id",
+    "prep_minutes",
+    "decision_deadline",
+    "zmiana_czasu_odbioru",
+    "observed_at",
+)
+_NEW_ORDER_TIME_INTENT_FIELDS = frozenset(
+    (*_NEW_ORDER_TIME_INTENT_BODY_FIELDS, "intent_id")
 )
 _AUTHORITY_EVENT_EXACT_KEYS = frozenset(
     {
@@ -238,9 +261,12 @@ def state_has_committed_pickup_artifact(
     """
     if not isinstance(order, Mapping):
         return False
-    return any(
-        field in order and order.get(field) is not None
-        for field in COMMITTED_PICKUP_STATE_FIELDS
+    return bool(
+        order.get(NEW_ORDER_TIME_INTENT_FIELD) is not None
+        or any(
+            field in order and order.get(field) is not None
+            for field in COMMITTED_PICKUP_STATE_FIELDS
+        )
     )
 
 
@@ -333,44 +359,51 @@ def is_forward_authority_outbox_artifact(
     row: Mapping[str, object] | None,
     current_order: Mapping[str, object] | None,
 ) -> bool:
-    """Contextual forward-rollout classifier without weakening code rollback.
+    """Fence every pending time writer whose semantics change at forward ON.
 
     Code rollback remains deliberately conservative for every unfinished raw
-    CK row because a pre-authority reader cannot reconstruct its class.  A
-    forward flip, however, changes only ``czasowka`` semantics and runs while
-    writers are quiesced with a strict current-state snapshot.  One fully
-    bound, well-formed raw CK receipt for an explicitly elastic aggregate is
-    therefore provably unaffected; malformed, missing, authority-bearing or
-    ambiguously classified work still blocks.
+    CK row because a pre-authority reader cannot reconstruct its class. A
+    forward flip changes both CK and pickup writers of ``czasowka`` and runs
+    while writers are quiesced with a strict current-state snapshot. Only a
+    fully bound time receipt for an explicitly elastic aggregate is provably
+    unaffected; malformed, missing, authority-bearing or ambiguously
+    classified work still blocks.
     """
-    if not is_committed_pickup_outbox_artifact(row):
-        return False
     if not isinstance(row, Mapping) or not row:
         return True
     event = row.get("state_event")
     if not isinstance(event, Mapping) or not event:
         return True
     payload = event.get("payload")
-    if (
-        event.get("event_type") != "CZAS_KURIERA_UPDATED"
-        or not isinstance(payload, Mapping)
-        or not isinstance(current_order, Mapping)
-        or current_order.get("order_type") != "elastic"
-        or state_has_committed_pickup_artifact(current_order)
-        or _event_has_authority_artifact(event)
-        or _payload_has_authority_artifact(payload)
-    ):
+    event_type = event.get("event_type")
+    if event_type not in {"CZAS_KURIERA_UPDATED", "PICKUP_TIME_UPDATED"}:
+        return is_committed_pickup_outbox_artifact(row)
+    if not isinstance(payload, Mapping):
         return True
     row_order_id = _clean_id(row.get("order_id"))
     event_order_id = _clean_id(event.get("order_id"))
     if (
         not row_order_id
         or row_order_id != event_order_id
-        or _clean_id(current_order.get("order_id")) != row_order_id
         or str(row.get("event_id") or "").strip()
         != str(event.get("event_id") or "").strip()
     ):
         return True
+    # Forward rollout changes every time writer of a czasowka, not merely raw
+    # CK.  A pending legacy PICKUP_TIME_UPDATED can win revision 0 and make the
+    # already accepted authority event stale.  Only a fully resolved explicit
+    # elastic aggregate proves that either raw time event keeps its semantics.
+    if (
+        not isinstance(current_order, Mapping)
+        or _clean_id(current_order.get("order_id")) != row_order_id
+        or current_order.get("order_type") != "elastic"
+        or state_has_committed_pickup_artifact(current_order)
+        or _event_has_authority_artifact(event)
+        or _payload_has_authority_artifact(payload)
+    ):
+        return True
+    if event_type == "PICKUP_TIME_UPDATED":
+        return False
     old_iso = payload.get("old_ck_iso")
     old_hhmm = payload.get("old_ck_hhmm")
     new_iso = payload.get("new_ck_iso")
@@ -428,6 +461,10 @@ def committed_time_contract_is_complete(
     """
     if not isinstance(order, Mapping):
         return False
+    if order.get(NEW_ORDER_TIME_INTENT_FIELD) is not None:
+        # The tuple is not complete until the exact initial intent is consumed
+        # or superseded in the same atomic pickup+CK state write.
+        return False
     pickup = _parse_aware(order.get("pickup_at_warsaw"))
     ck = _parse_aware(order.get("czas_kuriera_warsaw"))
     ck_hhmm = order.get("czas_kuriera_hhmm")
@@ -459,6 +496,66 @@ def committed_time_contract_is_complete(
 
 def _clean_id(value: object) -> str:
     return str(value or "").strip()
+
+
+def _new_order_time_intent_id(body: Mapping[str, object]) -> str:
+    digest = hashlib.sha256(
+        json.dumps(
+            dict(body),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return f"{NEW_ORDER_TIME_INTENT_SCHEMA}:{digest}"
+
+
+def build_new_order_time_intent(
+    order_id: object,
+    payload: Mapping[str, object] | None,
+    *,
+    observed_at: object,
+) -> dict:
+    """Seal the raw initial Rutcom tuple before NEW_ORDER sanitizes it."""
+    payload = payload or {}
+    body = {
+        "schema": NEW_ORDER_TIME_INTENT_SCHEMA,
+        "order_id": _clean_id(order_id),
+        "forward_authority_enabled": True,
+        "pickup_at_warsaw": payload.get("pickup_at_warsaw"),
+        "czas_kuriera_warsaw": payload.get("czas_kuriera_warsaw"),
+        "czas_kuriera_hhmm": payload.get("czas_kuriera_hhmm"),
+        "status_id": payload.get("status_id"),
+        "prep_minutes": payload.get("prep_minutes"),
+        "decision_deadline": payload.get("decision_deadline"),
+        "zmiana_czasu_odbioru": payload.get("zmiana_czasu_odbioru"),
+        "observed_at": observed_at,
+    }
+    return {**body, "intent_id": _new_order_time_intent_id(body)}
+
+
+def new_order_time_intent_is_valid(
+    intent: Mapping[str, object] | None,
+    *,
+    order_id: object,
+) -> bool:
+    """Exact schema/hash/order binding for a durable initial-time receipt."""
+    if not isinstance(intent, Mapping) or set(intent) != (
+        _NEW_ORDER_TIME_INTENT_FIELDS
+    ):
+        return False
+    body = {
+        field: intent.get(field)
+        for field in _NEW_ORDER_TIME_INTENT_BODY_FIELDS
+    }
+    return bool(
+        intent.get("schema") == NEW_ORDER_TIME_INTENT_SCHEMA
+        and intent.get("forward_authority_enabled") is True
+        and _clean_id(intent.get("order_id")) == _clean_id(order_id)
+        and _clean_id(order_id)
+        and _parse_aware(intent.get("observed_at")) is not None
+        and intent.get("intent_id") == _new_order_time_intent_id(body)
+    )
 
 
 def _valid_coordinator_receipt(
@@ -978,6 +1075,10 @@ def _authority_proof(
             dict(receipt) if isinstance(receipt, Mapping) else None
         ),
     }
+    if observation.get(NEW_ORDER_TIME_INTENT_ID_FIELD) is not None:
+        proof_observation[NEW_ORDER_TIME_INTENT_ID_FIELD] = observation.get(
+            NEW_ORDER_TIME_INTENT_ID_FIELD
+        )
     for _state_field, old_key, _new_key in COMMITTED_PICKUP_COUPLED_FIELDS:
         proof_observation[old_key] = observation.get(old_key)
     return {
@@ -1089,6 +1190,10 @@ def _build_pickup_event(
             CK_CHANGE_REVISION_OBSERVATION_FIELD
         ),
     }
+    if observation.get(NEW_ORDER_TIME_INTENT_ID_FIELD) is not None:
+        payload[NEW_ORDER_TIME_INTENT_ID_FIELD] = observation.get(
+            NEW_ORDER_TIME_INTENT_ID_FIELD
+        )
     coupled_new_values = {
         "new_order_type": "czasowka",
         "new_prep_minutes": observation.get("observed_prep_minutes"),
@@ -1443,6 +1548,105 @@ def resolve_czasowka_pickup_observation(
     )
 
 
+def resolve_czasowka_initial_time_intent(
+    existing: Mapping[str, object] | None,
+    intent: Mapping[str, object] | None,
+) -> CommittedPickupResolution:
+    """Resolve one durable NEW_ORDER tuple into exactly one canonical event.
+
+    The intent itself is the receipt-bound ON policy.  This function is pure
+    and never re-reads runtime flags: an ON-to-OFF flip after NEW_ORDER cannot
+    revive the raw CK writer or replace the original tuple with a later panel
+    restamp.
+    """
+    existing = existing or {}
+    oid = _clean_id(existing.get("order_id"))
+    if not new_order_time_intent_is_valid(intent, order_id=oid):
+        return _resolution(
+            ResolutionOutcome.SUPPRESS,
+            "invalid_new_order_time_intent",
+        )
+    intent = dict(intent or {})
+    intent_id = intent.get("intent_id")
+    common = {
+        "oid": oid,
+        "courier_id": existing.get("courier_id"),
+        "courier_id_at_observation": existing.get("courier_id"),
+        "assignment_event_id_at_observation": existing.get(
+            "assignment_event_id"
+        ),
+        "pickup_time_revision_at_observation": normalize_pickup_revision(
+            existing.get("pickup_time_revision", 0)
+        ),
+        CK_CHANGE_REVISION_OBSERVATION_FIELD: normalize_pickup_revision(
+            existing.get(CK_CHANGE_REVISION_STATE_FIELD, 0)
+        ),
+        "observed_at": intent.get("observed_at"),
+        "observed_status_id": intent.get("status_id"),
+        "observed_pickup_at_warsaw": intent.get("pickup_at_warsaw"),
+        "observed_prep_minutes": intent.get("prep_minutes"),
+        "observed_decision_deadline": intent.get("decision_deadline"),
+        "new_zmiana_czasu_odbioru": intent.get(
+            "zmiana_czasu_odbioru"
+        ),
+        NEW_ORDER_TIME_INTENT_ID_FIELD: intent_id,
+    }
+    ck_observation = {
+        **common,
+        "source": "first_acceptance",
+        "old_ck_iso": existing.get("czas_kuriera_warsaw"),
+        "old_ck_hhmm": existing.get("czas_kuriera_hhmm"),
+        "new_ck_iso": intent.get("czas_kuriera_warsaw"),
+        "new_ck_hhmm": intent.get("czas_kuriera_hhmm"),
+    }
+    ck_resolution = resolve_czasowka_committed_observation(
+        existing,
+        ck_observation,
+        is_czasowka=True,
+        passive_guard_enabled=True,
+        manual_passthrough_enabled=False,
+        rutcom_forward_authority_enabled=True,
+    )
+    if ck_resolution.outcome is ResolutionOutcome.APPLY:
+        return ck_resolution
+
+    pickup_observation = {
+        **common,
+        "source": "new_order_initial_intent",
+        "old_ck_iso": existing.get("czas_kuriera_warsaw"),
+        "old_ck_hhmm": existing.get("czas_kuriera_hhmm"),
+        "new_ck_iso": intent.get("czas_kuriera_warsaw"),
+        "new_ck_hhmm": intent.get("czas_kuriera_hhmm"),
+        "new_pickup_at_warsaw": intent.get("pickup_at_warsaw"),
+    }
+    return resolve_czasowka_pickup_observation(
+        existing,
+        pickup_observation,
+        is_czasowka=True,
+    )
+
+
+def validate_new_order_time_intent_event(
+    current: Mapping[str, object] | None,
+    event: Mapping[str, object] | None,
+) -> bool:
+    """Verify that an authority event is the exact pending NEW_ORDER intent."""
+    if not isinstance(current, Mapping) or not isinstance(event, Mapping):
+        return False
+    intent = current.get(NEW_ORDER_TIME_INTENT_FIELD)
+    payload = event.get("payload")
+    if not isinstance(intent, Mapping) or not isinstance(payload, Mapping):
+        return False
+    if payload.get(NEW_ORDER_TIME_INTENT_ID_FIELD) != intent.get("intent_id"):
+        return False
+    resolution = resolve_czasowka_initial_time_intent(current, intent)
+    return bool(
+        resolution.outcome is ResolutionOutcome.APPLY
+        and isinstance(resolution.event, Mapping)
+        and dict(resolution.event) == dict(event)
+    )
+
+
 def _event_envelope_matches(
     event: Mapping[str, object],
     expected_event: Mapping[str, object],
@@ -1636,6 +1840,10 @@ def committed_pickup_effect_applied(
         == proof_schema
         and current.get("committed_pickup_event_key")
         == payload.get("committed_pickup_event_key")
+        and (
+            payload.get(NEW_ORDER_TIME_INTENT_ID_FIELD) is None
+            or current.get(NEW_ORDER_TIME_INTENT_FIELD) is None
+        )
         and current_revision == observed_revision + 1
         and current_ck_revision == observed_ck_revision + 1
     )
@@ -1654,6 +1862,9 @@ __all__ = [
     "COMMITTED_PICKUP_EVENT_ID_MARKER",
     "COMMITTED_PICKUP_STATE_FIELDS",
     "CommittedPickupResolution",
+    "NEW_ORDER_TIME_INTENT_FIELD",
+    "NEW_ORDER_TIME_INTENT_ID_FIELD",
+    "NEW_ORDER_TIME_INTENT_SCHEMA",
     "NEW_ORDER_TIME_AUTHORITY_SNAPSHOT_FIELD",
     "PASSIVE_CK_SOURCES",
     "RECEIPT_REQUIRED_PICKUP_SOURCES",
@@ -1662,6 +1873,7 @@ __all__ = [
     "TIME_EVENT_CAS_SCHEMA",
     "TIME_EVENT_CAS_SCHEMA_FIELD",
     "build_time_event_cas_snapshot",
+    "build_new_order_time_intent",
     "committed_pickup_effect_applied",
     "committed_pickup_event_id",
     "committed_time_contract_is_complete",
@@ -1669,8 +1881,10 @@ __all__ = [
     "is_committed_pickup_outbox_artifact",
     "is_forward_authority_outbox_artifact",
     "normalize_pickup_revision",
+    "new_order_time_intent_is_valid",
     "pickup_payload_requires_coordinator_receipt",
     "resolve_czasowka_committed_observation",
+    "resolve_czasowka_initial_time_intent",
     "resolve_czasowka_assignment_ck",
     "resolve_czasowka_pickup_observation",
     "state_has_committed_pickup_artifact",
@@ -1678,4 +1892,5 @@ __all__ = [
     "time_event_cas_is_versioned",
     "time_event_cas_status",
     "validate_committed_pickup_event",
+    "validate_new_order_time_intent_event",
 ]

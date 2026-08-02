@@ -50,11 +50,14 @@ from dispatch_v2.core.config_reload_subscriber import BroadcastSubscriber
 from dispatch_v2.event_bus import emit, emit_audit
 from dispatch_v2.committed_pickup_authority import (
     NEW_ORDER_TIME_AUTHORITY_SNAPSHOT_FIELD,
+    NEW_ORDER_TIME_INTENT_FIELD,
     RUTCOM_FORWARD_AUTHORITY_FLAG,
     ResolutionOutcome,
+    build_new_order_time_intent,
     build_time_event_cas_snapshot,
     committed_time_contract_is_complete,
     normalize_pickup_revision,
+    resolve_czasowka_initial_time_intent,
     state_has_committed_pickup_artifact,
 )
 from dispatch_v2.parser_health import get_monitor as get_parser_health_monitor
@@ -206,6 +209,13 @@ def _emit_and_apply_state(
             NEW_ORDER_TIME_AUTHORITY_SNAPSHOT_FIELD
         ] = initial_authority_enabled
         if initial_authority_enabled and C.is_czasowka_order(state_body):
+            state_event_metadata[NEW_ORDER_TIME_INTENT_FIELD] = (
+                build_new_order_time_intent(
+                    order_id,
+                    state_body,
+                    observed_at=datetime.now(timezone.utc).isoformat(),
+                )
+            )
             sanitized_payload = dict(payload or {})
             for field in (
                 "pickup_at_warsaw",
@@ -2297,34 +2307,30 @@ def _initialize_new_order_time_contract(
     current = state_get_order_strict(oid)
     if not isinstance(current, dict):
         return False
-    observed_at = datetime.now(timezone.utc).isoformat()
-    fresh = {
-        "pickup_at_warsaw": normalized.get("pickup_at_warsaw"),
-        "czas_kuriera_warsaw": normalized.get("czas_kuriera_warsaw"),
-        "czas_kuriera_hhmm": normalized.get("czas_kuriera_hhmm"),
-        "status_id": normalized.get("status_id"),
-        "prep_minutes": normalized.get("prep_minutes"),
-        "decision_deadline": normalized.get("decision_deadline"),
-        "zmiana_czasu_odbioru": normalized.get("zmiana_czasu_odbioru"),
-        "observed_at": observed_at,
-    }
-    ck_event = _diff_czas_kuriera(current, fresh, oid=oid)
-    if ck_event is not None:
-        ck_outcome = _apply_time_update_event(oid, ck_event)
-        if not getattr(ck_outcome, "state_ready", False):
-            return False
-        current = state_get_order_strict(oid)
-        if not isinstance(current, dict):
-            return False
-    pickup_event = _diff_pickup_time(current, fresh, oid=oid)
-    if pickup_event is not None:
-        pickup_outcome = _apply_time_update_event(oid, pickup_event)
-        if not getattr(pickup_outcome, "state_ready", False):
-            return False
-        current = state_get_order_strict(oid)
-        if not isinstance(current, dict):
-            return False
-    return committed_time_contract_is_complete(current)
+    return _resume_new_order_time_contract(oid, current)
+
+
+def _resume_new_order_time_contract(order_id: str, current: dict) -> bool:
+    """Consume the durable initial receipt through the one authority bridge."""
+    intent = current.get(NEW_ORDER_TIME_INTENT_FIELD)
+    if intent is None:
+        return committed_time_contract_is_complete(current)
+    resolution = resolve_czasowka_initial_time_intent(current, intent)
+    if (
+        resolution.outcome is not ResolutionOutcome.APPLY
+        or not isinstance(resolution.event, dict)
+    ):
+        _log.warning(
+            "NEW_ORDER initial time intent suppressed oid=%s reason=%s",
+            order_id,
+            resolution.reason,
+        )
+        return False
+    outcome = _apply_time_update_event(str(order_id), resolution.event)
+    if not getattr(outcome, "state_ready", False):
+        return False
+    refreshed = state_get_order_strict(str(order_id))
+    return committed_time_contract_is_complete(refreshed)
 
 
 def _claim_forced_time_event(
@@ -4000,6 +4006,12 @@ def _diff_and_emit(
         )
     except Exception:
         _forward_time_authority_on = False
+    _pending_initial_time_ids = {
+        str(_oid)
+        for _oid, _order in current_state.items()
+        if isinstance(_order, dict)
+        and _order.get(NEW_ORDER_TIME_INTENT_FIELD) is not None
+    }
     # FORCE-RECHECK na żądanie koordynatora (przycisk „Odśwież czas" w konsoli):
     # czytaj trwale kolejke coordinator_time_recheck (panel dopisal oid). Receipt
     # znika dopiero po udanym fetch/apply; crash lub blad HTTP zostawia retry.
@@ -4082,6 +4094,7 @@ def _diff_and_emit(
         or ENABLE_PICKUP_TIME_DETECTION
         or _forward_time_authority_on
         or _force_ids
+        or _pending_initial_time_ids
     ):
         for zid, state_order in list(current_state.items()):
             if zid in _claimed_force_ids:
@@ -4089,10 +4102,12 @@ def _diff_and_emit(
             _force = zid in _force_ids
             _status = state_order.get("status")
             _is_czasowka = C.is_czasowka_order(state_order)
+            _pending_initial_time = zid in _pending_initial_time_ids
             in_scope = (
                 _status in ("assigned", "picked_up")
                 or (_status == "planned" and _is_czasowka)
                 or _force  # klik koordynatora wymusza re-check dowolnego statusu
+                or _pending_initial_time
             )
             if not in_scope:
                 continue
@@ -4119,6 +4134,32 @@ def _diff_and_emit(
             except Exception as e:
                 _log.debug(f"order-time normalize fail zid={zid}: {e}")
                 continue
+
+            if _pending_initial_time:
+                try:
+                    initial_ready = _resume_new_order_time_contract(
+                        zid,
+                        state_order,
+                    )
+                except Exception as exc:  # noqa: BLE001 — intent stays durable
+                    initial_ready = False
+                    _log.warning(
+                        "NEW_ORDER initial time recovery fail oid=%s: %s",
+                        zid,
+                        exc,
+                    )
+                if not initial_ready:
+                    stats["errors"] += 1
+                    # Never reinterpret a corrupt/incomplete durable receipt
+                    # as a later mutable panel snapshot.
+                    continue
+                state_order = state_get_order_strict(zid) or state_order
+                _status = state_order.get("status")
+                _is_czasowka = C.is_czasowka_order(state_order)
+                if not _forward_time_authority_on:
+                    # Finish the receipt-bound ON transaction after hot-OFF,
+                    # but do not create a new authority decision in this tick.
+                    continue
 
             _force_ack_ready = bool(_force)
             _force_event_claimed = False

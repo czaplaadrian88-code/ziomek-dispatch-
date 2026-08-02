@@ -1,4 +1,4 @@
-# RUTCOM committed pickup authority — raport kandydata v19, 2026-08-02
+# RUTCOM committed pickup authority — raport kandydata v20, 2026-08-02
 
 ## Wynik
 
@@ -12,6 +12,45 @@ Rutcom. Granica transportu przed zapisem outboxa zamienia legalny CK na jeden
 kanoniczny `PICKUP_TIME_UPDATED`. Jeden handler state atomowo zapisuje pickup,
 CK, HH:MM, monotoniczną rewizję oraz provenance. Plan, scoring po potwierdzonym
 apply i aplikacja dziedziczą tę samą prawdę.
+
+## Co domknięto w v20
+
+Dwa niezależne review exact-byte v19 poprawnie zatrzymały live. Authority
+verdict ma SHA
+`7ffd3b6493cd62c5e848e96e8e57e2bd190bb8b764db84b304bce6fe63563b15`,
+a completeness verdict
+`11cf4fe79f3ebe83a02167c3eb74133d19ae171297d097b44e47aea12b524a20`;
+oba wydały `CONFIRMED_DEFECT`. MAIN odtworzył cztery klasy jako 4/4 RED:
+
+- `NEW_ORDER` zamrażał ON, lecz initializer ponownie czytał live flagę, więc
+  ON→OFF mógł przywrócić surowy CK zamiast dokończyć rozpoczętą decyzję;
+- pierwotny initial tuple znikał między durable shellem a inicjalizatorem, więc
+  po crashu świeży statusowy restamp 19:16 mógł zostać uznany za nowy kanon;
+- forward preflight nie blokował pending legacy `PICKUP_TIME_UPDATED` czasówki;
+- sanitizowany czasowy `NEW_ORDER` ze snapshotem ON był fałszywie uznawany za
+  gotowy do flipu, mimo że nie miał jeszcze materializowanego kontraktu.
+
+V20 usuwa wspólną przyczynę: brak trwałej tożsamości initial decyzji. Przed
+sanityzacją watcher buduje immutable `committed_pickup.new_order_intent.v1`,
+wiąże go SHA-256 z OID, pełnym pierwotnym tuple, statusem i czasem obserwacji i
+utrwala w tej samej transakcji co shell `NEW_ORDER`. Jeden czysty resolver nie
+czyta flag runtime i z tego receiptu zwraca najwyżej jeden kanoniczny
+`PICKUP_TIME_UPDATED`. Exact receipt autoryzuje dokończenie wyłącznie tej samej
+rozpoczętej transakcji po ON→OFF; nie otwiera nowych obserwacji. State zapisuje
+pickup+CK+HH:MM+provenance i usuwa pending intent atomowo. Restart tick najpierw
+odzyskuje receipt, a dopiero potem ocenia świeży panel, więc restamp 19:16 nie
+zastępuje umówionego 19:21. Forward fence obejmuje wszystkie pending CK/pickup
+writery i każdy czasowy `NEW_ORDER`; code rollback pozostaje fail-closed.
+
+Po fixie cztery oracles są zielone. Tamper 19:21 bez przeliczenia hash daje
+`invalid_new_order_time_intent`, a realny restart tick przy obu flagach legacy
+OFF odzyskuje pierwotne 19:21 mimo świeżego 19:16. Sześć celowych mutacji
+czerwieniło dokładnie właściwy test; po exact restore zestaw ma 7/7 PASS, a
+szeroki klaster dotkniętych warstw 592/592 PASS. Pełna regresja i dwa świeże
+review final-byte v20 pozostają ostatnią bramką kodową przed operacją live.
+Pierwsza pełna hermetyczna regresja v20 ma 6617 passed, 74 skipped, 8 xfailed,
+149 warnings i 0 failed w 594,91 s; profil skip/xfail/warnings jest identyczny
+z v19, a delta wynosi +7 testów.
 
 ## Co domknięto w v19
 
@@ -516,6 +555,16 @@ Pełny kontrakt i mapa writerów/konsumentów są w
 
 ## Dowody bramki
 
+- Review v19: authority verdict SHA
+  `7ffd3b6493cd62c5e848e96e8e57e2bd190bb8b764db84b304bce6fe63563b15`
+  i completeness verdict SHA
+  `11cf4fe79f3ebe83a02167c3eb74133d19ae171297d097b44e47aea12b524a20`;
+  oba `CONFIRMED_DEFECT`, cztery findings odtworzone RED, zero live.
+- Pre-review v20: 4/4 findings green; sześć mutation kills, exact restore 7/7,
+  szeroki klaster 592/592; py_compile/import/diff-check i checkery lifecycle,
+  hygiene, effect, docs oraz entropy bez nowej luki. Pełna hermetyczna regresja
+  ma 6617 passed, 74 skipped, 8 xfailed, 149 warnings, 0 failed w 594,91 s;
+  profil identyczny z v19, delta +7 testów.
 - Review v18: authority verdict SHA
   `19de319abc4764be7327d4bcc3828707aba66907e31ad8143ac7d39bdfcc42ae`
   i completeness verdict SHA
@@ -591,10 +640,13 @@ ACK na docelowy stan `ON` i wymagane kontrolowane restarty, lecz kod nie został
 wdrożony, procesy nie były
 restartowane, a runtime nie został zmieniony.
 
-Operacja live wymaga backupu, wdrożenia jawnego commita, `py_compile`/import
-check, kontrolowanych restartów dokładnych procesów, health/PID/NRestarts/
-fingerprint i dopiero potem atomowego flipu `true` oraz replay/smoke 491578.
-`dispatch-telegram` nie jest częścią zakresu.
+Operacja live wymaga quiesce wyłącznie panel-watcher i shadow, zielonego
+`forward-status`, backupu, wdrożenia jawnego commita oraz `py_compile`/import
+check przy zatrzymanych writerach. Flaga musi zostać ustawiona atomowo na
+`true` przed uruchomieniem nowych procesów; dopiero potem start, health/PID/
+NRestarts/fingerprint i replay/smoke 491578. Eliminuje to okno nowy-kod/OFF,
+które mogłoby stworzyć kolejny legacy `NEW_ORDER`. `dispatch-telegram` nie jest
+częścią zakresu.
 
 Rollback zachowania jest hot: nowa flaga `false`. Revert kodu pre-v4 wymaga
 OFF każdej flagi z kanonicznej listy authority, quiesce, terminalnego authority
@@ -603,17 +655,18 @@ trwałego backupu i mechanicznej bramki
 `tools/rutcom_committed_authority_rollback.py`; prosty revert jest zabroniony.
 Forward deploy nie wymaga migracji danych, ale po zatrzymaniu starych writerów
 musi przejść read-only `forward-status` schema v3: flaga OFF, pusta kolejka,
-zero unfinished pre-v4 raw eventów, zero pre-v16 assignmentów z CK bez
-snapshotów polityki oraz zero aktywnych niepełnych kontraktów czasówki. Dopiero
-potem wolno podmienić kod.
+zero pending writerów CK/pickup czasówki, zero czasowych `NEW_ORDER`, zero
+unfinished pre-v4 raw eventów, zero pre-v16 assignmentów z CK bez snapshotów
+polityki oraz zero aktywnych niepełnych kontraktów czasówki. Dopiero potem wolno
+podmienić kod.
 Po ON wymagane jest co
 najmniej 48 godzin obserwacji applied/suppressed, outbox retry, receipt claim/
 ACK, post-pickup/stale-generation/revision i spójności pickup↔CK.
 
 ## Identyfikacja kandydata
 
-- Wersja: v19, przed dwoma świeżymi review exact-byte
-- Branch: `fix/rutcom-committed-provenance-v19-20260802`
+- Wersja: v20, po pełnej regresji, przed dwoma świeżymi review exact-byte
+- Branch: `fix/rutcom-committed-provenance-v20-20260802`
 - Worktree: `/root/worktrees/dispatch_v2/active/20260802-rutcom-v17-integration-pkgroot/dispatch_v2`
-- Base: `49aed3215ff3ef3c730a0260807804de8b6543da`
+- Base produkcyjny przed v18–v20: `df162f62e`
 - Produkcja: bez zmian; zero deployu, restartu, migracji i flipu.
