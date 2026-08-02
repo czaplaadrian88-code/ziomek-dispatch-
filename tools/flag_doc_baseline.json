@@ -34,10 +34,12 @@
   "ENABLE_GPS_AGE_DISCOUNT",
   "ENABLE_GPS_BBOX_GUARD",
   "ENABLE_GPS_DELIVERY_VALIDATION",
+  "ENABLE_GPS_MERGE_LOCK",
   "ENABLE_INACTIVE_COURIER_GUARD",
   "ENABLE_KEBAB_KROL_DINNER_EXCLUSION",
   "ENABLE_LOAD_PLAN_PURE_READ",
   "ENABLE_NEW_COURIER_RAMP",
+  "ENABLE_NOTIFY_CHANNEL_SPLIT",
   "ENABLE_NOTIFY_PRIORITY_ROUTING",
   "ENABLE_OBJ_DELIVERY_FOOD_AGE",
   "ENABLE_OBJ_DELIVERY_FOOD_AGE_SHADOW",
@@ -73,5 +75,7 @@
  "_2026-06-30_note": "+1 swiadomie baseline: ENABLE_COORDINATOR_FORCE_TIME_RECHECK = kill-switch operacyjny przycisku konsoli Odswiez czas z rutcomu (NIE logika decyzyjna dispatchu -> nie nalezy do ZIOMEK_LOGIC_REFERENCE.md; klasa jak guard/alert).",
  "_2026-07-02_note_S1": "ENABLE_SLA_ANCHOR_UNIFIED (S1) NIE w baseline: flaga jeszcze NIE jest w flags.json (flip za ACK), a doc juz dopisany do ZIOMEK_LOGIC_REFERENCE (sekcja FALA-2) — przy flipie test_flag_doc_coverage zielony bez baseline.",
  "_2026-07-02_note_o2capz": "-2 baseline (kurczenie ratcheta): ENABLE_ETA_QUANTILE_R6_BAGCAP + ENABLE_PACZKA_R6_THERMAL_EXEMPT udokumentowane w ZIOMEK_LOGIC_REFERENCE przy co-design o2-capz.",
- "_2026-07-28_note_r2": "-1 baseline (kurczenie ratcheta): ENABLE_PENDING_RESWEEP udokumentowany w ZIOMEK_LOGIC_REFERENCE.md. Ujawnione przez R2 — jego opis ENABLE_PROPOSAL_REFRESH referencjonuje te flage, a checker uznaje obecnosc nazwy w ref za udokumentowanie (dopasowanie podciagu), wiec wpis w baseline stal sie nieaktualny. Zamiast samego usuniecia z baseline flaga dostala PELNY opis (jest LIVE w flags.json, a byla bez zadnej dokumentacji) — dlug faktycznie splacony, nie tylko przepisany."
+ "_2026-07-28_note_r2": "-1 baseline (kurczenie ratcheta): ENABLE_PENDING_RESWEEP udokumentowany w ZIOMEK_LOGIC_REFERENCE.md. Ujawnione przez R2 — jego opis ENABLE_PROPOSAL_REFRESH referencjonuje te flage, a checker uznaje obecnosc nazwy w ref za udokumentowanie (dopasowanie podciagu), wiec wpis w baseline stal sie nieaktualny. Zamiast samego usuniecia z baseline flaga dostala PELNY opis (jest LIVE w flags.json, a byla bez zadnej dokumentacji) — dlug faktycznie splacony, nie tylko przepisany.",
+ "_2026-08-02_note_notify": "+1 swiadomie baseline: ENABLE_NOTIFY_CHANNEL_SPLIT (notify round-3 b0546fb88) — niedecyzyjny kill-switch ROUTINGU powiadomien (notify_router: technical -> kanal NAPRAW), routing/observability, NIE logika decyzyjna dispatchu, wiec klasa jak alert/guard (nie nalezy do ZIOMEK_LOGIC_REFERENCE.md). Sesja notify flipnela go ON we flags.json + dodala do _FINGERPRINT_EXTRA_FLAGS, ale nie dorejestrowala -> drift zlapany przez ratchet C-FLAG-DRIFT. Rownolegle dodany do TEST_ISOLATED_INFRA_FLAGS + stala-fallback OFF w common.py (parytet z ENABLE_NOTIFY_PRIORITY_ROUTING, ktory juz byl w baseline od 2026-06-25). CHANNEL_SPLIT_SHADOW NIE dodany (brak klucza w flags.json -> nie jest flaga decyzyjna checkera, wpis bylby stale).",
+ "_2026-08-02_note_gps_merge_lock": "+1 swiadomie baseline: ENABLE_GPS_MERGE_LOCK (A-1, sesja GPS, origin opus-a1-gps) — niedecyzyjny kill-switch CONCURRENCY kanonicznego writera GPS PWA (gps_pwa_store.py: lock+merge-by-ts vs legacy last-writer-wins). Steruje INTEGRALNOSCIA ZAPISU pozycji, NIE trescia decyzji dispatchu (kto/kiedy/score/ETA); czytelnicy GPS dostaja niezmieniony schemat rekordu. Ta sama klasa co notify-routing / ENABLE_LEX_WINDOW_LEDGER_V2 -> allowlist TEST_ISOLATED_INFRA_FLAGS + stala-fallback OFF w common.py. Flipniety ON w live flags.json (A-1 deploy) bez dorejestrowania -> drift zlapany przez ratchet; konsolidacja rejestracji w jednym commicie z notify (decyzja CTO, opus-a1-gps idle) zeby uniknac konfliktu merge cross-worktree."
 }
