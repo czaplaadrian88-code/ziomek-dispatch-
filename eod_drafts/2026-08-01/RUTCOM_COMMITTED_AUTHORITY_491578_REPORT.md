@@ -1,4 +1,4 @@
-# RUTCOM committed pickup authority — raport kandydata v20, 2026-08-02
+# RUTCOM committed pickup authority — raport kandydata v21, 2026-08-02
 
 ## Wynik
 
@@ -12,6 +12,59 @@ Rutcom. Granica transportu przed zapisem outboxa zamienia legalny CK na jeden
 kanoniczny `PICKUP_TIME_UPDATED`. Jeden handler state atomowo zapisuje pickup,
 CK, HH:MM, monotoniczną rewizję oraz provenance. Plan, scoring po potwierdzonym
 apply i aplikacja dziedziczą tę samą prawdę.
+
+## Co domknięto w v21
+
+Dwa niezależne review exact-byte v20 ponownie prawidłowo zatrzymały promocję.
+MAIN odtworzył wszystkie unikalne ustalenia jako osiem czerwonych oracles:
+recovery pending initial intentu zależało od obecności zlecenia na aktualnej
+tablicy; self-hash można było spójnie przeliczyć bez powiązania z pierwotnym
+outboxem `NEW_ORDER`; bliźniaczy legacy writer mógł zużyć pending intent;
+broadcast `NEW_ORDER` dostawał sanitizowaną zamiast źródłowej koperty; rollback
+nie widział receipt-bound `NEW_ORDER`; oba classifiery rolloutu przepuszczały
+jawny elastyk z kanonicznym `prep_minutes>=60`; a forward gate przyjmował
+deklarację quiesce bez mechanicznego sprawdzenia obu writerów.
+
+V21 zamyka te klasy w istniejących ownerach kontraktu. Broadcast i audit
+zachowują surową kopertę wejściową, a wyłącznie projekcja state jest
+sanityzowana. Recovery trwałego intentu wykonuje się przed sprawdzeniem bieżącej
+tablicy i nie potrzebuje ponownego fetchu restauracji. Apply wiąże intent przez
+`last_lifecycle_event_id_new_order` z dokładnym, niezależnym i już zastosowanym
+rekordem outbox `NEW_ORDER`; brak lub podmiana receipt failuje closed. Dopóki
+initial intent jest pending, state przyjmuje wyłącznie odpowiadający mu event
+authority, a receipt jest czyszczony tylko przez ten exact writer. Oba
+classifiery używają kanonicznego `is_czasowka`, więc etykieta elastyka nie może
+przykryć `prep_minutes>=60`. Rollback rezerwuje klasę receipt-bound
+`NEW_ORDER`, a `forward-status` schema v4 wymaga `--quiesced` i odczytuje z
+systemd dokładnie `dispatch-panel-watcher.service` oraz
+`dispatch-shadow.service`; oba muszą być loaded i inactive.
+
+Negatywny zestaw był 8/8 RED przed zmianą i 8/8 PASS po niej. Osiem niezależnych
+mutacji odwracających kolejno receipt binding, recovery przed tablicą, surowy
+broadcast, sibling-writer guard, oba classifiery `prep_minutes>=60`, rollback
+receipt-bound `NEW_ORDER` i mechaniczne quiesce ponownie czerwieniło właściwe
+oracles. Po exact restore pięć głównych modułów wróciło do zapisanych SHA-256.
+Szeroki klaster siedmiu dotkniętych plików testowych ma 367/367 PASS. Pełna
+hermetyczna regresja na zintegrowanym base `b8bf3f8d3` ma 6706 passed,
+74 skipped, 8 xfailed, 153 warnings i 0 failed w 479,28 s. Pierwszy przebieg
+bez `ZIOMEK_SCRIPTS_ROOT`/`PYTHONPATH` został jawnie odrzucony jako błędna
+konfiguracja (6703 pass, 3 fail przez skan produkcyjnego drzewa); te same trzy
+nodeidy na poprawnym środowisku mają 3/3 PASS i pełny poprawny przebieg jest
+zielony. Produkcja nadal nie została zmieniona, flaga pozostaje OFF, a dwa
+świeże review final-byte v21 są ostatnią bramką kodową przed operacją live.
+
+### Mapa kompletności v21
+
+| Miejsce | Rola | Writer / consumer | Dotknięte | Dowód |
+|---|---|---|---|---|
+| `panel_watcher._emit_and_apply_state` | ingest/audit/state projection | writer raw broadcast i sanitized state | TAK | oracle surowej koperty oraz mutation raw→sanitized |
+| `panel_watcher._diff_and_emit` | restart/recovery | consumer pending initial intentu | TAK | recovery przed board/fetch, przypadek zlecenia nieobecnego na tablicy |
+| durable outbox `NEW_ORDER` + `committed_pickup_apply` | niezależny receipt i granica apply | writer/consumer identity | TAK | exact event-id, typ, snapshot, intent i `state_status=applied` |
+| `state_machine.NEW_ORDER` / `PICKUP_TIME_UPDATED` | shell i jedyny committed writer | writer/consumer pending intentu | TAK | sibling writer odrzucony, exact authority atomowo konsumuje receipt |
+| `committed_pickup_authority` + rollback tool | klasyfikacja i bramki forward/revert | policy/consumer outboxa | TAK | kanoniczne `is_czasowka`, receipt-bound `NEW_ORDER`, schema v4 |
+| panel-watcher i shadow systemd | producenci obserwacji | writerzy runtime | TAK | `--quiesced` wymaga loaded+inactive obu exact unitów |
+| plan/scoring/feasibility/serializer/apka | konsumenci kanonicznego state | consumers | N-D | kontrakt wejściowy bez zmiany; brak nowego writera i render override |
+| flaga/rejestr/checkery/ratchet | rollout i antyregresja | owner/verify | TAK | lifecycle 557/557, hygiene 271/271, zero nowego driftu |
 
 ## Co domknięto w v20
 
@@ -555,6 +608,12 @@ Pełny kontrakt i mapa writerów/konsumentów są w
 
 ## Dowody bramki
 
+- Review v20: dwa niezależne werdykty `CONFIRMED_DEFECT`; osiem unikalnych
+  klas odtworzonych 8/8 RED, zero live. V21 ma 8/8 PASS, osiem mutation kills,
+  exact restore pięciu modułów, szeroki klaster 367/367 oraz pełną hermetyczną
+  regresję 6706 passed, 74 skipped, 8 xfailed, 153 warnings, 0 failed w
+  479,28 s na base `b8bf3f8d3`. Pierwszy przebieg bez worktree env był
+  świadomie nieważny (3 path-mixing fail); poprawny pełny przebieg jest zielony.
 - Review v19: authority verdict SHA
   `7ffd3b6493cd62c5e848e96e8e57e2bd190bb8b764db84b304bce6fe63563b15`
   i completeness verdict SHA
@@ -627,8 +686,8 @@ Pełny kontrakt i mapa writerów/konsumentów są w
   kandydat. Wcześniejsze oracles v2–v10 pozostają zielone.
 - `py_compile` i import zmienionych modułów są zielone; `git diff --check`
   zielony.
-- Lifecycle 550/550; hygiene 267/0 orphan; effect 155/147 bez nowej luki; docs
-  193/130 bez nowego driftu; merge-seed jest idempotentny.
+- Lifecycle 557/557; hygiene 271/271 i zero orphan; effect/docs bez nowej luki
+  przy poprawnym worktree env; merge-seed jest idempotentny.
 - Fingerprint poprawnie raportuje nową flagę jako `REGISTRY-ONLY` przed
   deployem/restartem. Entropy: dead-flag/drift 1, sentinel 0, bez pogorszenia.
 
@@ -641,7 +700,8 @@ wdrożony, procesy nie były
 restartowane, a runtime nie został zmieniony.
 
 Operacja live wymaga quiesce wyłącznie panel-watcher i shadow, zielonego
-`forward-status`, backupu, wdrożenia jawnego commita oraz `py_compile`/import
+`forward-status --quiesced`, backupu, wdrożenia jawnego commita oraz
+`py_compile`/import
 check przy zatrzymanych writerach. Flaga musi zostać ustawiona atomowo na
 `true` przed uruchomieniem nowych procesów; dopiero potem start, health/PID/
 NRestarts/fingerprint i replay/smoke 491578. Eliminuje to okno nowy-kod/OFF,
@@ -654,7 +714,9 @@ outboxa, zweryfikowanego fence-last receiptu,
 trwałego backupu i mechanicznej bramki
 `tools/rutcom_committed_authority_rollback.py`; prosty revert jest zabroniony.
 Forward deploy nie wymaga migracji danych, ale po zatrzymaniu starych writerów
-musi przejść read-only `forward-status` schema v3: flaga OFF, pusta kolejka,
+musi przejść read-only `forward-status --quiesced` schema v4: mechanicznie
+potwierdzone loaded+inactive `dispatch-panel-watcher.service` i
+`dispatch-shadow.service`, flaga OFF, pusta kolejka,
 zero pending writerów CK/pickup czasówki, zero czasowych `NEW_ORDER`, zero
 unfinished pre-v4 raw eventów, zero pre-v16 assignmentów z CK bez snapshotów
 polityki oraz zero aktywnych niepełnych kontraktów czasówki. Dopiero potem wolno
@@ -665,8 +727,8 @@ ACK, post-pickup/stale-generation/revision i spójności pickup↔CK.
 
 ## Identyfikacja kandydata
 
-- Wersja: v20, po pełnej regresji, przed dwoma świeżymi review exact-byte
+- Wersja: v21, po pełnej regresji, przed dwoma świeżymi review exact-byte
 - Branch: `fix/rutcom-committed-provenance-v20-20260802`
 - Worktree: `/root/worktrees/dispatch_v2/active/20260802-rutcom-v17-integration-pkgroot/dispatch_v2`
-- Zintegrowany base produkcyjny: `82be9833d`
+- Zintegrowany base produkcyjny: `b8bf3f8d3`
 - Produkcja: bez zmian; zero deployu, restartu, migracji i flipu.

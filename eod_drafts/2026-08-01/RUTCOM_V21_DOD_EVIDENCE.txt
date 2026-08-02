@@ -1,0 +1,9 @@
+# Mechaniczny input DoD CTO — kandydat v21, bez danych produkcyjnych/PII.
+regresja: HERMETIC_STRICT=1 na base b8bf3f8d3 — 6706 passed, 74 skipped, 8 xfailed, 153 warnings, 0 failed w 479.28 s; pierwszy path-mixing run odrzucony, poprawne worktree env użyte w wyniku finalnym.
+e2e: produkcyjny schemat incydentu 491578 przechodzi watcher -> durable NEW_ORDER receipt -> kanoniczny PICKUP_TIME_UPDATED -> atomowy state; 8/8 oracles PASS, szeroki klaster dotkniętych warstw 367/367 PASS.
+pozytywny-wplyw: na tym samym golden case OFF zachowuje legacy stary committed 19:16, a ON przyjmuje restauracyjne 19:21 dokładnie raz; przypadek ochronny 483023 i stale/backward/tamper pozostają zablokowane.
+rollback: hot rollback = ENABLE_CZASOWKA_RUTCOM_FORWARD_AUTHORITY=false; code revert tylko po OFF wszystkich authority flags, terminalnym outboxie, trwałym backupie i schema-v4 forward/status fence; forward wymaga --quiesced oraz loaded+inactive panel-watcher i shadow; dispatch-telegram poza zakresem.
+N-D: plan_manager.py, plan_recheck.py — konsumują istniejący kanoniczny state, nie są writerami raw Rutcom ani właścicielami polityki czasu.
+N-D: route_simulator_v2.py, route_order.py, route_podjazdy.py — algorytm trasy i progi bez zmian; wejściowy pickup/CK pozostaje tym samym kontraktem.
+N-D: feasibility_v2.py, core/candidates.py, core/selection.py, objm_lexr6.py — HARD, scoring i tie-break bez zmiany; nie czytają raw Rutcom.
+N-D: courier API serializer, Android RouteLogic — tylko konsumują sprzężone pola kanonicznego state; brak render override i drugiego writera.
