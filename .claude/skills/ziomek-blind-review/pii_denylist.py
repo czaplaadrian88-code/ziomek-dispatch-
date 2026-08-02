@@ -24,9 +24,10 @@ GRANICE POKRYCIA (świadome; nie udajemy kompletności):
     neutralnie (`dane.json`), jeśli treść nie odpali heurystyki;
   * zbiór rozszerzeń, które bundler może kopiować, ma jednego właściciela:
     BUNDLE_COPYABLE_SUFFIXES w tym module. Każdy kopiowalny plik, którego pełnej
-    treści nie da się przeskanować (za duży, NUL, nie-UTF-8 albo błąd odczytu),
-    daje trafienie `unscannable` i ODMOWĘ; można je zdjąć wyłącznie dokładnym
-    `--allow-sensitive` dla tego jednego istniejącego pliku;
+    treści nie da się przeskanować (za duży, NUL, nie-UTF-8, błąd odczytu albo
+    osiągnięty limit bezpieczeństwa parsera), daje trafienie `unscannable` i
+    ODMOWĘ; można je zdjąć wyłącznie dokładnym `--allow-sensitive` dla tego
+    jednego istniejącego pliku;
   * niekopiowalne binaria/archiwa mogą zostać sprawdzone tylko po ścieżce i nigdy
     nie trafiają do bundla; ich treści nie potwierdzamy;
   * heurystyka „imię+nazwisko" działa TYLKO na wartościach plików strukturalnych
@@ -73,6 +74,9 @@ PRUNED_DIRS = (".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cac
 
 # JEDYNY właściciel zbioru artefaktów, które driver może skopiować do bundla.
 # Driver wywołuje `is_bundle_copyable()`; nie utrzymuje własnej listy rozszerzeń.
+# SECURITY BOUNDARY: dopisanie typu strukturalnego (np. `.csv`/`.jsonl`) wymaga
+# najpierw oracle, że KAŻDY limit/early-stop jego parsera zwraca content_done=False;
+# inaczej nowy typ stałby się kopiowalny po tylko częściowym skanie treści.
 BUNDLE_COPYABLE_SUFFIXES = (
     ".md", ".json", ".yaml", ".yml", ".py", ".schema.json", ".txt",
 )
@@ -298,7 +302,8 @@ def _read_text(path: Path) -> str | None:
         return None
 
 
-def _walk_json(node, keys: list[str], values: list[str]) -> None:
+def _walk_json(node, keys: list[str], values: list[str]) -> bool:
+    """Zbierz stringi z drzewa; False oznacza ucięcie przez limit wartości."""
     stack = [node]
     while stack and len(values) < MAX_VALUES_PER_FILE:
         cur = stack.pop()
@@ -311,34 +316,39 @@ def _walk_json(node, keys: list[str], values: list[str]) -> None:
             stack.extend(cur)
         elif isinstance(cur, str):
             values.append(cur)
+    return not stack
 
 
-def _extract_keys_values(rel_low: str, text: str) -> tuple[list[str], list[str]]:
-    """Klucze i wartości-stringi z pliku strukturalnego. Best-effort, nigdy nie rzuca."""
+def _extract_keys_values(rel_low: str, text: str) -> tuple[list[str], list[str], bool]:
+    """Zwróć klucze, wartości i informację, czy parser przeskanował całą treść."""
     keys: list[str] = []
     values: list[str] = []
+    content_done = True
     suffix = os.path.splitext(rel_low)[1]
     if suffix == ".json":
         try:
-            _walk_json(json.loads(text), keys, values)
-            return keys, values
+            content_done = _walk_json(json.loads(text), keys, values)
+            return keys, values, content_done
         except (ValueError, RecursionError):
             pass
     elif suffix in (".jsonl", ".ndjson"):
         parsed_any = False
-        for i, line in enumerate(text.splitlines()):
-            if i >= MAX_JSONL_LINES:
-                break
+        lines = text.splitlines()
+        if len(lines) > MAX_JSONL_LINES:
+            content_done = False
+        for line in lines[:MAX_JSONL_LINES]:
             line = line.strip()
             if not line:
                 continue
             try:
-                _walk_json(json.loads(line), keys, values)
+                if not _walk_json(json.loads(line), keys, values):
+                    content_done = False
+                    break
                 parsed_any = True
             except ValueError:
                 continue
         if parsed_any:
-            return keys, values
+            return keys, values, content_done
     elif suffix in (".csv", ".tsv"):
         sep = "\t" if suffix == ".tsv" else ","
         lines = text.splitlines()
@@ -346,7 +356,7 @@ def _extract_keys_values(rel_low: str, text: str) -> tuple[list[str], list[str]]
             keys.extend(c.strip().strip('"') for c in lines[0].split(sep))
             for line in lines[1:]:
                 values.extend(c.strip().strip('"') for c in line.split(sep))
-        return keys, values
+        return keys, values, content_done
     elif suffix in (".yaml", ".yml"):
         for line in text.splitlines():
             m = re.match(r"^\s*-?\s*([A-Za-z_][\w.-]*)\s*:\s*(.*)$", line)
@@ -355,16 +365,21 @@ def _extract_keys_values(rel_low: str, text: str) -> tuple[list[str], list[str]]
                 val = m.group(2).strip().strip("\"'")
                 if val:
                     values.append(val)
-        return keys, values
+        return keys, values, content_done
 
     # fallback: surowe pary "klucz": "wartość" (uszkodzony/nietypowy plik)
-    keys.extend(re.findall(r'"([^"\n]{1,60})"\s*:', text)[:MAX_VALUES_PER_FILE])
-    values.extend(re.findall(r':\s*"([^"\n]{1,80})"', text)[:MAX_VALUES_PER_FILE])
-    return keys, values
+    fallback_keys = re.findall(r'"([^"\n]{1,60})"\s*:', text)
+    fallback_values = re.findall(r':\s*"([^"\n]{1,80})"', text)
+    if (len(fallback_keys) > MAX_VALUES_PER_FILE
+            or len(fallback_values) > MAX_VALUES_PER_FILE):
+        content_done = False
+    keys.extend(fallback_keys[:MAX_VALUES_PER_FILE])
+    values.extend(fallback_values[:MAX_VALUES_PER_FILE])
+    return keys, values, content_done
 
 
-def classify_content(rel: str, text: str) -> list[Hit]:
-    """Heurystyki treści. Zwraca trafienia BEZ cytowania dopasowanej treści."""
+def classify_content(rel: str, text: str) -> tuple[list[Hit], bool]:
+    """Heurystyki treści i pełność skanu, bez cytowania dopasowanej treści."""
     hits: list[Hit] = []
     for rule, rx in SECRET_CONTENT_RULES:
         matched = False
@@ -381,9 +396,9 @@ def classify_content(rel: str, text: str) -> list[Hit]:
 
     rel_low = rel.lower()
     if os.path.splitext(rel_low)[1] not in STRUCTURED_SUFFIXES:
-        return hits
+        return hits, True
 
-    keys, values = _extract_keys_values(rel_low, text)
+    keys, values, content_done = _extract_keys_values(rel_low, text)
     pii_keys = sorted({k for k in keys if PII_KEY_RE.match(k.strip())})
     if pii_keys:
         hits.append(Hit(rel, CLASS_IDENTITY_PII, "content", "pii-key-name",
@@ -408,11 +423,11 @@ def classify_content(rel: str, text: str) -> list[Hit]:
     if len(phones) >= PHONE_MIN_HITS:
         hits.append(Hit(rel, CLASS_IDENTITY_PII, "content", "phone-shaped-values",
                         f"{len(phones)} różnych wartości w kształcie numeru telefonu"))
-    return hits
+    return hits, content_done
 
 
 def screen_file(path: Path, rel: str) -> tuple[list[Hit], bool]:
-    """(trafienia, czy_zeskanowano_treść) dla jednego pliku."""
+    """(trafienia, czy_zeskanowano pełną treść) dla jednego pliku."""
     hits = list(classify_path(rel))
     suffix = os.path.splitext(rel.lower())[1]
     if suffix not in SCANNABLE_SUFFIXES:
@@ -420,8 +435,9 @@ def screen_file(path: Path, rel: str) -> tuple[list[Hit], bool]:
     text = _read_text(path)
     if text is None:
         return hits, False
-    hits.extend(classify_content(rel, text))
-    return hits, True
+    content_hits, content_done = classify_content(rel, text)
+    hits.extend(content_hits)
+    return hits, content_done
 
 
 def _resolves_inside(p: Path, root_resolved: Path) -> bool:
@@ -474,7 +490,7 @@ def _matching_allow_entry(rel: str, allow_set: set[str]) -> str | None:
 
 def screen_tree(root: Path, allow: tuple[str, ...] = ()) -> Screening:
     """FAZA 1: klasyfikuje CAŁE drzewo kandydata. Nie kopiuje i nie zapisuje nic."""
-    allow_set = {a.strip().lstrip("./") for a in allow if a.strip()}
+    allow_set = {a.strip().removeprefix("./") for a in allow if a.strip()}
     res = Screening()
     matched_allow: set[str] = set()
     for path, rel in iter_candidate_files(root):

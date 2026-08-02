@@ -153,6 +153,11 @@ def cmd_screen(args: argparse.Namespace) -> int:
         print("", file=sys.stderr)
         print(pii_denylist.refusal_text(res, src), file=sys.stderr)
         return RC_SENSITIVE
+    if res.content_skipped:
+        print(f"UWAGA: brak trafień blokujących, ale treści {len(res.content_skipped)} "
+              "niekopiowalnych plików nie przeskanowano w całości; zakres nie jest "
+              "potwierdzony treściowo.")
+        return RC_OK
     print(f"OK: zakres czysty — {res.scanned_files} plików, "
           f"{res.content_scanned} przeskanowanych treściowo.")
     return RC_OK

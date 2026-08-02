@@ -82,7 +82,7 @@ drugiej warstwy filtrów w manifeście.
 | `path` — globy/katalogi/tokeny nazw | `*.env`, `*.pem`, `*.key`, `secrets/`, `credential*`, `*full_names*`, `courier_names`, `pesel`, `telefon`; katalogi danych (`identity/`, `daily_accounting/`, `grafik/`) **tylko dla plików danych** — kod o PII zostaje recenzowalny | pliku nazwanego neutralnie (`dane.json`) |
 | `scope` — ucieczka zakresu | dowiązanie (pliku lub katalogu) wskazujące POZA katalog kandydata — klasyczne przemycenie pliku, którego skan kandydata by nie objął. **Nieallowlistowalne**: zmaterializuj plik w katalogu kandydata albo zawęź zakres | — |
 | `content` — heurystyki treści | materiał w kształcie sekretu w skanowalnym tekście; w plikach strukturalnych (`json/jsonl/csv/tsv/yaml`) także pola osobowe i klienta oraz ≥3 różne wartości w kształcie nazwiska/numeru telefonu | osobowych heurystyk w kopiowalnym kodzie `.py` i prozie `.md`/`.txt`; nazwisk użytych jako klucze struktury; gołego `adres`/`address` |
-| `unscannable` — pełność skanu | każdy **kopiowalny** plik, którego pełnej treści nie przeskanowano: `>2 MiB`, NUL, nie-UTF-8 albo błąd odczytu → odmowa | niekopiowalne binaria/archiwa nie trafiają do bundla; ich treść pozostaje niepotwierdzona |
+| `unscannable` — pełność skanu | każdy **kopiowalny** plik, którego pełnej treści nie przeskanowano: `>2 MiB`, NUL, nie-UTF-8, błąd odczytu albo limit parsera wartości/wierszy → odmowa | niekopiowalne binaria/archiwa nie trafiają do bundla; ich treść pozostaje niepotwierdzona |
 
 Zachowanie: każde trafienie (także `unscannable`) = **ODMOWA budowy bundla
 (exit 3)**, nie cichy skip pliku —
@@ -97,6 +97,17 @@ python3 .claude/skills/ziomek-blind-review/driver.py screen <katalog>   # sam sk
 ```
 Właściwą reakcją na odmowę jest **ZAWĘŻENIE zakresu** (`blind .` na korzeniu repo
 to prawie zawsze błąd), a nie hurtowe allowlistowanie.
+
+### Jawny dług po review 2026-08-02
+
+- **N1 — ratchet pojedynczych rodzin reguł:** obecny oracle czerwieni pakietowe
+  osłabienia, ale nie ma osobnego mutanta/wabika dla każdej z rodzin
+  `SECRET_DIRS`, `PII_NAME_TOKENS_ANY`, `PII_NAME_TOKENS_DATA`, `PHONE_VALUE_RE`
+  i pełnego strażnika NUL. Do domknięcia osobnym zakresem; nie blokuje W6.
+- **N3 — nazwa pola manifestu:** `excluded_carrying_verdict` obejmuje zarówno
+  pliki wycięte jako werdykt, jak i niekopiowalne po typie. Zachowanie jest
+  poprawne, ale nazwa myląca; zmiana wymaga wersjonowania/kompatybilności
+  konsumentów manifestu i pozostaje jawnym długiem.
 
 ## Oracle — korpus `fixtures/` (nie autorski, potwierdzony)
 
@@ -138,11 +149,11 @@ python3 .claude/skills/ziomek-blind-review/pii_oracle.py   # sam negatywny oracl
 ```
 Sprawdza część mechaniczną oracle: blindowanie wycina werdykty, pin jest
 fail-closed, `check` odrzuca mętne werdykty, korpus spójny, a bramka PII odmawia
-na syntetycznych wabikach (`pii_oracle.py`: 15 przypadków odmowy + 3 jawne
-kontrole granic + **mutation ratchet 10/10**). Ratchet osobno czerwieni duplikat
+na syntetycznych wabikach (`pii_oracle.py`: 17 przypadków odmowy + 3 jawne
+kontrole granic + sonda limitu JSONL + **mutation ratchet 11/11**). Ratchet osobno czerwieni duplikat
 ownera rozszerzeń w driverze, usunięcie reguł path/content/scope, fail-closed,
-odmowy `unscannable`, dokładności allowlisty per plik, klasy `client_data` i
-parserów `csv/tsv/yaml`. **Wpięty w nocną
+odmowy `unscannable` (w tym cichą trunkację), dokładności allowlisty per plik,
+klasy `client_data` i parserów `csv/tsv/yaml`. **Wpięty w nocną
 regresję** (`tests/test_skills_selftest.py`) — regresja zapali ALERT strażnika,
 nie zostanie „zademonstrowana raz i zapomniana". Część modelowa oracle (czy
 recenzent łapie wady) → `fixtures/EVAL_RESULT.md`, nie ten skrypt.

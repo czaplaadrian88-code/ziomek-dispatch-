@@ -39,6 +39,9 @@ CLEAN_CASES = {
     "boundary-code-py": "kod.py",
     "boundary-name-keys": "dane.json",
 }
+# Te dwa boundary-case'y zamrażają wyłącznie jawnie opisany stan obecny, nie
+# docelowy kontrakt bezpieczeństwa. Przy zamykaniu którejś luki należy zmienić
+# oczekiwany wynik case'u, a nie traktować jego czerwieni jako regresji.
 
 FAKE_TOKEN = "1234567890:" + ("A" * 35)          # kształt tokenu bota, nie token
 FAKE_AWS = "AKIA" + ("Q" * 16)                   # kształt klucza AWS, nie klucz
@@ -125,6 +128,19 @@ def build_decoys(root: Path) -> dict[str, Path]:
     with_nul = b"\x00" + json.dumps({"full_name": "Cela Syntetyczna"}).encode("utf-8")
     _write_bytes(d / "dane.json", with_nul)
 
+    # T1/W6: poprawny JSON poniżej limitu bajtów, ale ponad limitem wartości.
+    # Stos DFS konsumuje wypełniacze od końca; wabiki na początku pozostawały
+    # wcześniej poza skanem, a plik był cicho kopiowany do bundla.
+    d = case("unscannable-truncated-values-t1")
+    _write(d / "dane.json", json.dumps(DECOY_NAMES + (["x"] * 200_001)))
+
+    # W6 ścieżka awaryjna: uszkodzony JSON ma >MAX_VALUES_PER_FILE surowych par;
+    # wabiki za limitem nie mogą zmienić częściowego skanu w fałszywe CLEAN.
+    d = case("unscannable-truncated-fallback")
+    filler = '"x":"x",' * 200_001
+    tail = ",".join(f'"n{i}":{json.dumps(name)}' for i, name in enumerate(DECOY_NAMES))
+    _write(d / "dane.json", filler + tail)
+
     # 7. UCIECZKA ZAKRESU — dowiązanie do pliku PII spoza katalogu kandydata
     #    (nazwa dowiązania neutralna: sam path-matching by go nie złapał)
     outside = root / "poza-kandydatem"
@@ -163,6 +179,17 @@ def run_driver(skill_dir: Path, candidate: Path, out: Path,
     return subprocess.run(cmd, capture_output=True, text=True, timeout=180,
                           env={"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1",
                                "HOME": str(out.parent)})
+
+
+def run_screen(skill_dir: Path, candidate: Path) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [PY, str(skill_dir / "driver.py"), "screen", str(candidate)],
+        capture_output=True,
+        text=True,
+        timeout=180,
+        env={"PATH": "/usr/bin:/bin", "PYTHONDONTWRITEBYTECODE": "1",
+             "HOME": str(candidate.parent)},
+    )
 
 
 def policy_owner_oracle(skill_dir: Path) -> list[str]:
@@ -233,7 +260,13 @@ def oracle(skill_dir: Path, workdir: Path, verbose: bool = True) -> list[str]:
                      f"{r.stderr.strip()[:400]}")
 
     # W1: każdy wariant nieprzeskanowanego pliku da się odblokować TYLKO per plik.
-    for name in ("unscannable-large", "unscannable-non-utf8", "unscannable-nul"):
+    for name in (
+        "unscannable-large",
+        "unscannable-non-utf8",
+        "unscannable-nul",
+        "unscannable-truncated-values-t1",
+        "unscannable-truncated-fallback",
+    ):
         out = outs / f"allowlisted-{name}"
         r = run_driver(skill_dir, cases[name], out, allow=("dane.json",))
         if r.returncode != 0 or not (out / "dane.json").is_file():
@@ -254,6 +287,18 @@ def oracle(skill_dir: Path, workdir: Path, verbose: bool = True) -> list[str]:
     if leaked:
         fails.append(f"allowlist-pattern: przy odmowie powstały pliki bundla: {leaked}")
 
+    # N6: tylko dokładny prefiks "./" jest normalizowany. "../" nie może zostać
+    # zjedzone jak przez lstrip-zbioru-znaków i odblokować istniejącego pliku.
+    out = outs / "allow-parent-prefix"
+    r = run_driver(
+        skill_dir,
+        cases["path-pii-fullnames"],
+        out,
+        allow=("../daily_accounting/kurier_full_names.json",),
+    )
+    if r.returncode != RC_SENSITIVE:
+        fails.append(f"allowlist-parent-prefix: ../ odblokowało plik (rc={r.returncode})")
+
     # literówka w allowliście NIE może cicho przejść
     out = outs / "allow-typo"
     r = run_driver(skill_dir, cases["clean-control"], out, allow=("nie/ma/takiego.json",))
@@ -264,6 +309,19 @@ def oracle(skill_dir: Path, workdir: Path, verbose: bool = True) -> list[str]:
     r = run_driver(skill_dir, cases["content-pii-neutral-name"], outs / "leaktest")
     if any(n in r.stdout + r.stderr for n in DECOY_NAMES):
         fails.append("komunikat odmowy cytuje dopasowaną treść (wyciek do raportu)")
+
+    # W6/N4: JSONL ponad limitem jest dziś niekopiowalny, więc nie blokuje bundla,
+    # ale musi raportować content_not_scanned i cmd_screen nie może ogłaszać OK.
+    jsonl_case = workdir / "jsonl-line-limit"
+    _write(jsonl_case / "SKILL.md", "# kandydat\n")
+    _write(jsonl_case / "dane.jsonl", '{"kind":"synthetic"}\n' * 20_001)
+    r = run_screen(skill_dir, jsonl_case)
+    if r.returncode != 0:
+        fails.append(f"jsonl-line-limit: screen zwrócił rc={r.returncode}")
+    if '"content_not_scanned": 1' not in r.stdout:
+        fails.append("jsonl-line-limit: MAX_JSONL_LINES nie ustawił content_done=False")
+    if "OK:" in r.stdout or "UWAGA:" not in r.stdout:
+        fails.append("cmd_screen: częściowy skan został opisany jako OK albo bez ostrzeżenia")
 
     if verbose:
         for f in fails:
@@ -317,6 +375,10 @@ MUTANTS: dict[str, tuple[tuple[str, str], ...]] = {
     ),
     "cichy-skip-zamiast-odmowy": (
         ("        return RC_SENSITIVE", "        pass"),
+    ),
+    "cicha-trunkacja-struktury": (
+        ("    return hits, content_done\n\n\ndef screen_file",
+         "    return hits, True  # mutant: przywraca ciche ucięcie\n\n\ndef screen_file"),
     ),
 }
 
