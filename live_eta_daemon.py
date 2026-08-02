@@ -262,6 +262,8 @@ def build_routes(
                 "courier_id": courier_id,
                 "start": start,
                 "stops": stops,
+                "plan_version": (plan or {}).get("plan_version"),
+                "sequence_hash": route_order.route_sequence_hash(sequence),
                 **(
                     {
                         "start_source": start_source,

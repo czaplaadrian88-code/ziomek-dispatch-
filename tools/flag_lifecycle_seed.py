@@ -161,6 +161,8 @@ TWIN_CONCEPTS = {
     "trust_canon_order": ["TRUST_CANON_ORDER", "ENABLE_BUILD_VIEW_TRUST_CANON_ORDER"],
     "live_eta_fresh_override_only": ["LIVE_ETA_FRESH_OVERRIDE_ONLY",
                                      "ENABLE_LIVE_ETA_FRESH_OVERRIDE_ONLY"],
+    "route_eta_version_check": ["ROUTE_ETA_VERSION_CHECK",
+                                "ENABLE_ROUTE_ETA_VERSION_CHECK"],
 }
 
 # ── NOTATKI z weryfikacji dual-carrier 3× geocode (Z-P1-07 karta pkt 5). Consumer
