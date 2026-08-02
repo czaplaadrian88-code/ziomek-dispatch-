@@ -110,29 +110,114 @@ def _atomic_write(path: Path, data: Any) -> None:
         raise
 
 
-def _read_raw(*, _raise_on_corrupt: bool = False) -> Dict[str, Any]:
-    """Load entire plans dict. Must be called under shared or exclusive lock."""
+# ─── A-2 (2026-08-02): recovery przy korupcji courier_plans.json ─────────────
+# PROBLEM: korupcja pliku planów CICHO stawała się ``{}`` (pusty plan) → silnik
+# gubił CAŁY plan floty i re-planował od zera, bez śladu (utrata stanu/decyzji).
+# FIX U ŹRÓDŁA — jeden kanoniczny owner kontraktu ładowania (`_read_raw`), za
+# flagą ENABLE_PLAN_CORRUPT_RAISE (ETAP4, shadow-first, DEFAULT OFF):
+#   1) każdy udany zapis utrwala kopię ``.prev`` (ostatni DOBRY plan);
+#   2) odczyt uszkodzonego pliku ODZYSKUJE z ``.prev`` zamiast zwracać ``{}``;
+#   3) gdy ``.prev`` też brak/uszkodzony → RAISE (nie ciche ``{}``) — silnik nie
+#      resetuje po cichu całego stanu floty.
+# Ścieżka ``.prev`` jest POCHODNA od PLANS_FILE → monkeypatch PLANS_FILE
+# (testy / HERMETIC-GUARD) przekierowuje też backup, bez osobnej izolacji.
+# CAS „nie nadpisać nowszego" = ISTNIEJĄCY per-courier ``expected_version``
+# (zachowany przez recovery: token wersji pochodzi z .prev, stary zapis → konflikt)
+# + serializacja exclusive-lock (writers nie przeplatają się; .prev pisany pod tym
+# samym lockiem co główny plik → monotoniczny). NIE dokładamy drugiego mechanizmu.
+
+
+def _corrupt_guard_on() -> bool:
+    """EFEKTYWNY stan flagi ENABLE_PLAN_CORRUPT_RAISE (flags.json → stała → False).
+    Lazy import common (jak _perf_lazy_on) — plan_manager zostaje pure lib (bez
+    importu dispatch_pipeline/panel_watcher). Fail-safe False = zachowanie legacy."""
+    try:
+        from dispatch_v2 import common as _C
+        return bool(_C.decision_flag("ENABLE_PLAN_CORRUPT_RAISE"))
+    except Exception:
+        return False
+
+
+def _prev_path() -> Path:
+    """Backup ostatniego dobrego planu — ścieżka POCHODNA od PLANS_FILE."""
+    return PLANS_FILE.with_name(PLANS_FILE.name + ".prev")
+
+
+def _read_prev() -> Optional[Dict[str, Any]]:
+    """Odczytaj ``.prev``. None gdy brak / nie-JSON / nie-obiekt (bez recovery)."""
+    prev = _prev_path()
+    try:
+        if not prev.exists():
+            return None
+        with open(prev, "r", encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (json.JSONDecodeError, OSError) as e:
+        _log.error(f"courier_plans.prev unusable ({type(e).__name__}: {e})")
+        return None
+    if not isinstance(data, dict):
+        _log.error("courier_plans.prev is not an object; cannot recover")
+        return None
+    return data
+
+
+def _snapshot_prev(data: Dict[str, Any]) -> None:
+    """Utrwal świeżo zapisany DOBRY stan jako ``.prev`` (źródło recovery).
+    Best-effort: błąd backupu NIE może wywrócić udanego zapisu głównego pliku."""
+    try:
+        _atomic_write(_prev_path(), data)
+    except Exception as e:  # defense-in-depth: .prev to backup, nie critical path
+        _log.warning(f"courier_plans.prev snapshot fail ({type(e).__name__}: {e})")
+
+
+def _read_raw(*, _raise_on_corrupt: Optional[bool] = None) -> Dict[str, Any]:
+    """Load entire plans dict. Must be called under shared or exclusive lock.
+
+    A-2 (2026-08-02, flaga ENABLE_PLAN_CORRUPT_RAISE, shadow-first DEFAULT OFF):
+    korupcja pliku NIE może już cicho stać się ``{}``. Kolejność przy korupcji:
+      1) flaga ON → recovery z ``.prev`` (ostatni dobry plan), jeśli zdrowy;
+      2) w przeciwnym razie honoruj efektywne ``_raise_on_corrupt`` → RAISE
+         (ten sam typ wyjątku co dotąd) zamiast cichego ``{}``.
+
+    ``_raise_on_corrupt``: True/False = jawny kontrakt callera (strict-read /
+    opt-out zachowane bajt-w-bajt). None (domyślne) = wartość z flagi: ON→raise,
+    OFF→legacy ``{}``. **Flaga OFF ⇒ zachowanie identyczne jak przed A-2.**
+    """
+    guard_on = _corrupt_guard_on()
+    raise_eff = guard_on if _raise_on_corrupt is None else _raise_on_corrupt
     if not PLANS_FILE.exists():
         return {}
+    corrupt_exc: Optional[Exception] = None
     try:
         with open(PLANS_FILE, "r", encoding="utf-8") as fh:
             data = json.load(fh)
-        if not isinstance(data, dict):
-            _log.warning("courier_plans.json is not an object; treating as empty")
-            if _raise_on_corrupt:
-                raise ValueError("courier_plans.json is not an object")
-            return {}
-        return data
+        if isinstance(data, dict):
+            return data
+        _log.warning("courier_plans.json is not an object; treating as corrupt")
+        corrupt_exc = ValueError("courier_plans.json is not an object")
     except json.JSONDecodeError as e:
         _log.error(f"courier_plans.json corrupt: {e}")
-        if _raise_on_corrupt:
-            raise
-        return {}
+        corrupt_exc = e
+    # --- korupcja: najpierw recovery z .prev (flaga ON), potem raise vs {} ---
+    if guard_on:
+        recovered = _read_prev()
+        if recovered is not None:
+            _log.error(
+                "PLAN_CORRUPT_RECOVERED courier_plans.json uszkodzony — odzyskano "
+                f"z .prev (ostatni dobry plan); przyczyna={type(corrupt_exc).__name__}"
+            )
+            return recovered
+    if raise_eff:
+        raise corrupt_exc
+    return {}
 
 
 def _write_raw(data: Dict[str, Any]) -> None:
     """Write entire plans dict. Must be called under exclusive lock."""
     _atomic_write(PLANS_FILE, data)
+    # A-2 (2026-08-02): utrwal ostatni DOBRY plan do recovery (flaga ON). Pod tym
+    # samym exclusive lockiem co zapis głównego pliku → .prev monotoniczny.
+    if _corrupt_guard_on():
+        _snapshot_prev(data)
     # perf-lazy write-through (03.07): unieważnij read-cache W TYM procesie
     # natychmiast po zapisie. Klucz mtime NIE wystarcza sam: dwa zapisy w tym
     # samym ticku zegara jądra dają IDENTYCZNY st_mtime_ns (a size bywa równy)
@@ -198,7 +283,7 @@ def _read_raw_shared() -> Dict[str, Any]:
 
 # ---- public API ----
 
-def load_plans(*, _raise_on_corrupt: bool = False) -> Dict[str, Any]:
+def load_plans(*, _raise_on_corrupt: Optional[bool] = None) -> Dict[str, Any]:
     """Load all plans (read-only copy). Shared lock (perf-lazy: mtime-cache)."""
     if _raise_on_corrupt:
         with _locked(exclusive=False):
@@ -214,7 +299,7 @@ def load_plan(
     active_bag_oids: Optional[set] = None,
     invalidate_on_mismatch: bool = True,
     *,
-    _raise_on_corrupt: bool = False,
+    _raise_on_corrupt: Optional[bool] = None,
 ) -> Optional[Dict[str, Any]]:
     """Load a single plan. If active_bag_oids provided and any plan stop's
     order_id is outside that set → mismatch with reality (return None).
@@ -303,7 +388,7 @@ def save_plan(
     plan_body: Dict[str, Any],
     expected_version: Optional[int] = None,
     *,
-    _raise_on_corrupt: bool = False,
+    _raise_on_corrupt: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """Persist a plan. plan_body must contain: start_pos, start_ts, stops,
     optimization_method. plan_version and timestamps are managed here.
@@ -359,7 +444,7 @@ def invalidate_plan(
     reason: str,
     expected_version: Optional[int] = None,
     *,
-    _raise_on_corrupt: bool = False,
+    _raise_on_corrupt: Optional[bool] = None,
 ) -> None:
     """Mark plan invalidated. Plan stays in file for debug + GC-able.
 
@@ -388,7 +473,7 @@ def touch_plan(
     courier_id: str,
     reason: str = "SIGNAL",
     *,
-    _raise_on_corrupt: bool = False,
+    _raise_on_corrupt: Optional[bool] = None,
 ) -> bool:
     """FIX-E (2026-06-13, B1): LEKKI sygnał zmiany dla apki — bump plan_version +
     last_modified_at BEZ invalidacji. Plan ZOSTAJE w obecnym stanie (ważny zostaje
@@ -424,7 +509,7 @@ def advance_plan(
     delivered_at: str,
     delivery_coords: Optional[Tuple[float, float]] = None,
     *,
-    _raise_on_corrupt: bool = False,
+    _raise_on_corrupt: Optional[bool] = None,
 ) -> None:
     """Remove the dropoff stop for delivered_order_id; update start_pos to the
     delivery location + start_ts to delivered_at. If no stops remain, invalidate
@@ -470,7 +555,7 @@ def remove_stops(
     courier_id: str,
     order_id: str,
     *,
-    _raise_on_corrupt: bool = False,
+    _raise_on_corrupt: Optional[bool] = None,
     expected_version: Optional[int] = None,
 ) -> None:
     """Remove ALL stops (pickup AND dropoff) for order_id.
@@ -526,7 +611,7 @@ def mark_stale(
 
 def mark_picked_up(courier_id: str, order_id: str,
                    picked_up_at: Optional[str] = None, *,
-                   _raise_on_corrupt: bool = False) -> None:
+                   _raise_on_corrupt: Optional[bool] = None) -> None:
     """V3.19c sub A: update stop.status_at_plan_time to 'picked_up' for this
     order. Prune pickup stop (definitionally done). No-op if plan absent/
     invalidated or order_id not in plan.stops.
