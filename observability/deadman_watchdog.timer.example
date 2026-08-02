@@ -1,0 +1,13 @@
+# DEAD-MAN watchdog timer (Z0-3) — PRZYKŁAD. NIE ZAINSTALOWANY. Instalacja: patrz .service.example.
+# Co ~20 min. Persistent=true → po restarcie hosta odpali zaległy przebieg (brak cichej luki).
+
+[Unit]
+Description=Timer dla Ziomek DEAD-MAN watchdog (co ~20 min)
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=20min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

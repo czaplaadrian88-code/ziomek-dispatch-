@@ -1,0 +1,37 @@
+# DEAD-MAN watchdog (Z0-3) — PRZYKŁAD unitu. NIE JEST ZAINSTALOWANY.
+# Aktywacja = OSOBNY ACK ownera (kanał niezależny + flip DRY-RUN=0). Shadow-first.
+#
+# Instalacja (dopiero po ACK):
+#   1) cp observability/deadman_watchdog.service.example /etc/systemd/system/dispatch-deadman-watchdog.service
+#   2) cp observability/deadman_watchdog.timer.example   /etc/systemd/system/dispatch-deadman-watchdog.timer
+#   3) Utwórz EnvironmentFile z creds NIEZALEŻNEGO kanału (patrz niżej) — 0600.
+#   4) systemctl daemon-reload && systemctl enable --now dispatch-deadman-watchdog.timer
+#   5) Weryfikacja DRY-RUN (bez wysyłki): DEADMAN_DRY_RUN=1 python -m dispatch_v2.observability.deadman_watchdog --dry-run
+#   6) Flip na żywo (osobny ACK): w EnvironmentFile DEADMAN_ENABLED=1, DEADMAN_DRY_RUN=0
+#
+# Rollback: systemctl disable --now dispatch-deadman-watchdog.timer  (natychmiast; brak stanu runtime do cofania)
+#
+# ⚠ Kanał NIEZALEŻNY — celowo NIE dispatch-telegram (wyciszony 26.06). Domyślnie @DajeszBot
+#   (assistant-telegram): token ASSISTANT_TELEGRAM_TOKEN + chat ASSISTANT_TELEGRAM_ADMIN_ID
+#   z /root/.openclaw/workspace/.secrets/assistant_telegram.env. Można nadpisać dedykowanym
+#   DEADMAN_ALERT_TOKEN / DEADMAN_ALERT_CHAT_ID. (Mail/SMTP niedostępny na hoście — brak MTA.)
+
+[Unit]
+Description=Ziomek DEAD-MAN — niezalezny czuwak nad sprawnoscia alertowania (Z0-3, kanal @DajeszBot)
+Documentation=file:///root/.openclaw/workspace/scripts/dispatch_v2/observability/deadman_watchdog.py
+# CELOWO brak After=dispatch-telegram / OnFailure= — dead-man musi byc niezalezny od stosu, ktory pilnuje.
+
+[Service]
+Type=oneshot
+User=root
+WorkingDirectory=/root/.openclaw/workspace/scripts
+# Creds + gating (0600). Domyslnie shadow-first; realna wysylka dopiero po edycji tego pliku (ACK):
+EnvironmentFile=-/root/.openclaw/workspace/.secrets/assistant_telegram.env
+EnvironmentFile=-/root/.openclaw/workspace/.secrets/deadman_watchdog.env
+# Shadow-first default (nadpisz w deadman_watchdog.env po ACK):
+Environment=DEADMAN_DRY_RUN=1
+Environment=DEADMAN_ENABLED=0
+ExecStart=/root/.openclaw/venvs/dispatch/bin/python -m dispatch_v2.observability.deadman_watchdog
+StandardOutput=journal
+StandardError=journal
+TimeoutStartSec=60
