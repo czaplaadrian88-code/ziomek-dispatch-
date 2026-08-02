@@ -33,11 +33,12 @@ bramie, która sama o sobie meldowała „264/264, zero przeżyło": **oddaj art
 ## Proces (3 kroki, driver robi 1 i 3)
 
 ```
-python3 .claude/skills/ziomek-blind-review/driver.py blind <katalog_kandydata> [--pin pin.json] [--out DIR]
+python3 .claude/skills/ziomek-blind-review/driver.py blind <katalog_kandydata> [--pin pin.json] [--out DIR] [--allow-sensitive ŚCIEŻKA]
 ```
-Weryfikuje SHA-256 wejścia (fail-closed przy mismatch), buduje **ślepy bundle**
-— kopiuje artefakty kandydata, a **wycina** raport autora, handoffy, git-log i
-wszystko z nazwą niosącą werdykt (`report`, `audit`, `handoff`, `_plan`, …).
+Skanuje CAŁY zakres bramką PII/sekretów (fail-closed — patrz niżej), weryfikuje
+SHA-256 wejścia (fail-closed przy mismatch), buduje **ślepy bundle** — kopiuje
+artefakty kandydata, a **wycina** raport autora, handoffy, git-log i wszystko
+z nazwą niosącą werdykt (`report`, `audit`, `handoff`, `_plan`, …).
 Wypisuje ścieżkę bundla + gotowy prompt recenzenta.
 
 **Krok 2 — człowiek/orkiestrator:** oddaj bundle i prompt **ŚWIEŻEMU subagentowi**
@@ -62,6 +63,36 @@ python3 driver.py blind fixtures/case-critical-policy-inversion --out /tmp/b   #
 python3 driver.py check /tmp/verdict.json                                       # OK / HOLD
 ```
 
+## 🔒 Bramka PII/sekretów — FAIL-CLOSED (od 2026-08-02)
+
+Powód: **near-miss 2026-08-01** — `blind .` na korzeniu repo objął chroniony plik
+klasy PII (pełne nazwiska kurierów) i skopiował go do bundla recenzenta. Recenzent
+go nie otworzył, bundle skasowano, ale bramka nie zadziałała, bo denylista znała
+tylko nazwy niosące **werdykt**, nie **dane osobowe**.
+
+Kanoniczna polityka: **`pii_denylist.py`** — jedyne miejsce, gdzie definiuje się
+wrażliwość. Driver woła `screen_tree()` **raz, przed jakimkolwiek zapisem**; nie ma
+i nie wolno dokładać drugiej warstwy filtrów w driverze ani w manifeście.
+
+| warstwa | co łapie | czego NIE łapie |
+|---|---|---|
+| `path` — globy/katalogi/tokeny nazw | `*.env`, `*.pem`, `*.key`, `secrets/`, `credential*`, `*full_names*`, `courier_names`, `pesel`, `telefon`; katalogi danych (`identity/`, `daily_accounting/`, `grafik/`) **tylko dla plików danych** — kod o PII zostaje recenzowalny | pliku nazwanego neutralnie (`dane.json`) |
+| `scope` — ucieczka zakresu | dowiązanie (pliku lub katalogu) wskazujące POZA katalog kandydata — klasyczne przemycenie pliku, którego skan kandydata by nie objął. **Nieallowlistowalne**: zmaterializuj plik w katalogu kandydata albo zawęź zakres | — |
+| `content` — heurystyki treści | materiał w kształcie sekretu (klucz PEM, AWS/GitHub/Slack/Telegram/Anthropic, `haslo = "…"` o kształcie losowym), pola osobowe w danych (`pesel`, `nazwisko`, `telefon`, `iban`, `email`), ≥3 różne wartości w kształcie „imię+nazwisko" lub numeru telefonu | nazwisk w **prozie** (md/txt — próg fałszywych alarmów nie do utrzymania), plików binarnych i >2 MiB, gołego `adres`/`address` (świadomie: geokoder ma je wszędzie) |
+
+Zachowanie: trafienie = **ODMOWA budowy bundla (exit 3)**, nie cichy skip pliku —
+i przy odmowie na dysku nie powstaje ani jeden bajt bundla. Komunikat odmowy
+**nigdy nie cytuje dopasowanej treści** (klasa + reguła + licznik), więc wolno go
+wkleić do raportu. Zdjęcie klasyfikacji: `--allow-sensitive <ścieżka_względna>`,
+osobno dla KAŻDEGO pliku (literówka w ścieżce = też odmowa, żeby allowlista nie
+udawała przejrzanego pliku).
+
+```
+python3 .claude/skills/ziomek-blind-review/driver.py screen <katalog>   # sam skan, nic nie tworzy
+```
+Właściwą reakcją na odmowę jest **ZAWĘŻENIE zakresu** (`blind .` na korzeniu repo
+to prawie zawsze błąd), a nie hurtowe allowlistowanie.
+
 ## Oracle — korpus `fixtures/` (nie autorski, potwierdzony)
 
 Eval nie jest autorski jak w bramie, którą zastępuje. Trzy fixtures to **realne,
@@ -80,9 +111,10 @@ patrz `fixtures/EVAL_RESULT.md`.
 
 ## Gotchas
 
-1. **Blindowanie jest denylistą po NAZWIE, nie po treści.** Plik z werdyktem
-   nazwany neutralnie (`x.md`) przejdzie do recenzenta. Trzymaj raporty autora
-   pod nazwami z `report/audit/handoff/plan` albo poza katalogiem kandydata.
+1. **Blindowanie WERDYKTÓW jest denylistą po NAZWIE, nie po treści.** Plik z
+   werdyktem nazwany neutralnie (`x.md`) przejdzie do recenzenta. Trzymaj raporty
+   autora pod nazwami z `report/audit/handoff/plan` albo poza katalogiem kandydata.
+   (Bramka PII to osobna, mocniejsza warstwa: nazwa **oraz** treść — patrz wyżej.)
 2. **Bundle NIE zawiera manifestu** — leci obok (`<out>.manifest.json`), żeby
    nawet nazwa wyciętego pliku nie sugerowała recenzentowi, czego szukać.
 3. **Recenzent MUSI być świeżym subagentem.** Jeśli „recenzent" to ta sama sesja,
@@ -96,11 +128,14 @@ patrz `fixtures/EVAL_RESULT.md`.
 ## Selftest (egzekwowany co noc)
 
 ```bash
-.claude/skills/ziomek-blind-review/selftest.sh   # 8/8 PASS
+.claude/skills/ziomek-blind-review/selftest.sh   # 11/11 PASS
+python3 .claude/skills/ziomek-blind-review/pii_oracle.py   # sam negatywny oracle + mutanty
 ```
 Sprawdza część mechaniczną oracle: blindowanie wycina werdykty, pin jest
-fail-closed, `check` odrzuca mętne werdykty, korpus spójny. **Wpięty w nocną
-regresję** (`tests/test_skills_selftest.py`) — regresja zapali ALERT strażnika,
+fail-closed, `check` odrzuca mętne werdykty, korpus spójny, a bramka PII odmawia
+na syntetycznych wabikach (`pii_oracle.py`: 6 klas wabików + kontrola
+fałszywie-pozytywna + **mutation ratchet** — 5 mutantów, każde osłabienie polityki
+musi zapalić oracle na czerwono). **Wpięty w nocną regresję** (`tests/test_skills_selftest.py`) — regresja zapali ALERT strażnika,
 nie zostanie „zademonstrowana raz i zapomniana". Część modelowa oracle (czy
 recenzent łapie wady) → `fixtures/EVAL_RESULT.md`, nie ten skrypt.
 

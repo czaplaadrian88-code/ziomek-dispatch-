@@ -60,7 +60,7 @@ Katalog + zasady: `.claude/skills/README.md`. Driver wołaj ścieżką, z korzen
 | gotowy diff przed commitem (bramka DoD, exit 1 = STOP) | `python3 .claude/skills/ziomek-cto/driver.py dod <diff\|ref> --evidence <plik>` |
 | koniec sesji / wpis handoff do memory | `python3 .claude/skills/ziomek-cto/driver.py handoff` |
 | diagnoza usług / werdykt strażnika / przecieki / flagi / suita | `.claude/skills/run-dispatch-v2/driver.sh health` (subkomendy: `guard`/`litter`/`flags`/`collect`/`test`) |
-| kandydat (skill/patch/brama) przed promocją/merge | `python3 .claude/skills/ziomek-blind-review/driver.py blind <katalog>` → świeży recenzent → `check <verdict.json>` |
+| kandydat (skill/patch/brama) przed promocją/merge | `python3 .claude/skills/ziomek-blind-review/driver.py blind <katalog>` → świeży recenzent → `check <verdict.json>` (⚠ wskazuj katalog KANDYDATA, nie `.`; PII/sekret w zakresie = odmowa budowy bundla, exit 3) |
 
 ## 📜 REGUŁA DWÓCH MIEJSC (Adrian 17.07)
 Każda dyrektywa sesyjna (routing skilli, zasady pracy, bramki, bootstrap) MUSI być zapisana równolegle

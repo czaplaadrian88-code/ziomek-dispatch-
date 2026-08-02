@@ -56,5 +56,17 @@ echo '{"disposition":"MAYBE"}' > "$T/bad2.json"
 echo '{"disposition":"CLEAN","findings":[]}' > "$T/clean.json"
 "$PY" "$HERE/driver.py" check "$T/clean.json" >/dev/null 2>&1; want "check CLEAN → 0" 0 $?
 
+# 9. BRAMKA PII — szybki smoke: wabik po nazwie blokuje budowę i NIE zostawia bundla
+mkdir -p "$T/pii/daily_accounting"
+printf '# kandydat\n' > "$T/pii/SKILL.md"
+printf '{"101": "AAA"}\n' > "$T/pii/daily_accounting/kurier_full_names.json"
+"$PY" "$HERE/driver.py" blind "$T/pii" --out "$T/b3" >/dev/null 2>&1; want "PII w zakresie → ODMOWA (rc 3)" 3 $?
+[ ! -e "$T/b3" ] && ok "odmowa nie zostawia bundla" || bad "odmowa zostawila bundle [$(ls "$T/b3" 2>/dev/null | tr '\n' ' ')]"
+
+# 10. negatywny oracle PII + mutation ratchet (wabiki syntetyczne, wszystkie klasy)
+"$PY" "$HERE/pii_oracle.py" > "$T/pii_oracle.log" 2>&1
+if [ $? = 0 ]; then ok "pii_oracle: wabiki odrzucone, mutanty czerwone"
+else bad "pii_oracle FAILED — patrz log:"; cat "$T/pii_oracle.log"; fi
+
 echo ""
 [ "$fail" = "0" ] && { echo "SELFTEST OK"; exit 0; } || { echo "SELFTEST FAILED"; exit 1; }

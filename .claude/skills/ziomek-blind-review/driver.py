@@ -26,6 +26,17 @@ import sys
 import tempfile
 from pathlib import Path
 
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+# Polityka PII/sekretów ma JEDNEGO właściciela — `pii_denylist`. Driver jej nie
+# powiela ani nie osłabia: woła screen_tree() raz, przed jakimkolwiek zapisem.
+import pii_denylist  # noqa: E402
+
+RC_OK = 0
+RC_HOLD = 1          # integralność wejścia (pin) — fail-closed
+RC_USAGE = 2         # zły argument
+RC_SENSITIVE = 3     # zakres zawiera PII/sekret — bundle NIE powstał
+
 # Pliki, które NIGDY nie trafiają do ślepego recenzenta — niosą cudzy werdykt.
 BLIND_DENY_SUBSTRINGS = (
     "report", "remediation", "handoff", "handover", "verdict", "review",
@@ -54,9 +65,17 @@ def cmd_blind(args: argparse.Namespace) -> int:
     src = Path(args.candidate).resolve()
     if not src.is_dir():
         print(f"BLAD: katalog kandydata nie istnieje: {src}", file=sys.stderr)
-        return 2
+        return RC_USAGE
 
-    # (1) integralność wejścia — fail-closed, jeśli podano pin
+    # (1) BRAMKA PII/SEKRETÓW — faza skanu CAŁEGO drzewa PRZED jakimkolwiek zapisem.
+    #     Trafienie = odmowa budowy bundla, nie cichy skip pliku (near-miss 01.08).
+    allow = tuple(args.allow_sensitive or ())
+    screening = pii_denylist.screen_tree(src, allow=allow)
+    if screening.blocked:
+        print(pii_denylist.refusal_text(screening, src), file=sys.stderr)
+        return RC_SENSITIVE
+
+    # (2) integralność wejścia — fail-closed, jeśli podano pin
     pins: dict[str, str] = {}
     if args.pin:
         pin_path = Path(args.pin).resolve()
@@ -65,21 +84,18 @@ def cmd_blind(args: argparse.Namespace) -> int:
             f = src / rel
             if not f.is_file():
                 print(f"HOLD: przypięty plik nie istnieje: {rel}", file=sys.stderr)
-                return 1
+                return RC_HOLD
             actual = sha256_file(f)
             if actual != expected:
                 print(f"HOLD: SHA-256 mismatch {rel}\n  pin={expected}\n  akt={actual}",
                       file=sys.stderr)
-                return 1
+                return RC_HOLD
 
-    # (2) budowa ślepego bundla — kopiuj artefakty, wytnij werdykty
+    # (3) budowa ślepego bundla — kopiuj artefakty, wytnij werdykty
     out = Path(args.out) if args.out else Path(tempfile.mkdtemp(prefix="blind-bundle-"))
     out.mkdir(parents=True, exist_ok=True)
     included, excluded = [], []
-    for f in sorted(src.rglob("*")):
-        if f.is_dir():
-            continue
-        rel = f.relative_to(src).as_posix()
+    for f, rel in pii_denylist.iter_candidate_files(src):
         if is_blinded_out(rel) or not f.name.endswith(ALLOW_SUFFIXES):
             excluded.append(rel)
             continue
@@ -93,6 +109,7 @@ def cmd_blind(args: argparse.Namespace) -> int:
         "included": included,
         "excluded_carrying_verdict": excluded,
         "pin_verified": bool(pins),
+        "pii_screening": screening.summary(),
     }
     # Manifest NIE trafia do bundla — recenzent czyta wyłącznie artefakty kandydata.
     # (Nawet nazwa wyciętego pliku jest metadanymi, których recenzent widzieć nie musi.)
@@ -119,6 +136,27 @@ def _reviewer_prompt(bundle: Path) -> str:
         f"[{{\"file\": \"...\", \"line\": N, \"claim\": \"...\", \"reproduction\": \"...\"}}]}}.\n"
         f"CLEAN wolno zwrócić TYLKO, gdy nie ma żadnego defektu — nie halucynuj wady."
     )
+
+
+def cmd_screen(args: argparse.Namespace) -> int:
+    """Sucha bramka PII — ten sam kod co w `blind`, bez budowy bundla.
+
+    Istnieje po to, żeby zawężanie zakresu dało się iterować bez tworzenia
+    czegokolwiek na dysku. NIE jest drugą polityką — woła ten sam screen_tree().
+    """
+    src = Path(args.candidate).resolve()
+    if not src.is_dir():
+        print(f"BLAD: katalog kandydata nie istnieje: {src}", file=sys.stderr)
+        return RC_USAGE
+    res = pii_denylist.screen_tree(src, allow=tuple(args.allow_sensitive or ()))
+    print(json.dumps(res.summary(), ensure_ascii=False, indent=2))
+    if res.blocked:
+        print("", file=sys.stderr)
+        print(pii_denylist.refusal_text(res, src), file=sys.stderr)
+        return RC_SENSITIVE
+    print(f"OK: zakres czysty — {res.scanned_files} plików, "
+          f"{res.content_scanned} przeskanowanych treściowo.")
+    return RC_OK
 
 
 def cmd_check(args: argparse.Namespace) -> int:
@@ -173,7 +211,15 @@ def main() -> int:
     b.add_argument("candidate", help="katalog kandydata")
     b.add_argument("--pin", help="JSON {ścieżka_wzgl: sha256} — fail-closed przy mismatch")
     b.add_argument("--out", help="katalog docelowy bundla (domyślnie tmp)")
+    b.add_argument("--allow-sensitive", action="append", metavar="ŚCIEŻKA_WZGL",
+                   help="zdejmij klasyfikację PII/sekret z JEDNEGO pliku (powtarzalne). "
+                        "Używaj wyłącznie dla atrap/fixture'ów, które sam przejrzałeś.")
     b.set_defaults(func=cmd_blind)
+
+    s = sub.add_parser("screen", help="sam skan PII/sekretów kandydata (bez budowy bundla)")
+    s.add_argument("candidate", help="katalog kandydata")
+    s.add_argument("--allow-sensitive", action="append", metavar="ŚCIEŻKA_WZGL")
+    s.set_defaults(func=cmd_screen)
 
     c = sub.add_parser("check", help="zwaliduj werdykt recenzenta")
     c.add_argument("verdict", help="plik JSON z werdyktem")
