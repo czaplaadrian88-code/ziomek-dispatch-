@@ -30,12 +30,17 @@ from http.server import BaseHTTPRequestHandler
 from typing import Optional, Tuple
 
 from dispatch_v2 import gps_pwa_store
+from dispatch_v2 import gps_rate_limit
 from dispatch_v2.common import coords_in_bialystok_bbox, decision_flag, setup_logger
+from dispatch_v2.identity import pin_auth
 
 
 PORT = 8766  # 8765 zajęty przez legacy /root/gps_server.py (Traccar receiver)
 HOST = "0.0.0.0"
 KURIER_PINY_PATH = "/root/.openclaw/workspace/dispatch_state/kurier_piny.json"
+# A-6: addytywny magazyn KDF (per-user-salt). Legacy kurier_piny.json NIGDY
+# nie nadpisywany — patrz identity/pin_auth (dual-read, flaga ENABLE_PIN_KDF).
+KURIER_PINY_KDF_PATH = "/root/.openclaw/workspace/dispatch_state/kurier_piny_kdf.json"
 KURIER_IDS_PATH = "/root/.openclaw/workspace/dispatch_state/kurier_ids.json"
 GPS_PWA_PATH = "/root/.openclaw/workspace/dispatch_state/gps_positions_pwa.json"
 
@@ -58,9 +63,14 @@ def _load_json(path: str) -> dict:
 # ---- auth ----
 
 def _resolve_pin(pin: str) -> Tuple[Optional[str], Optional[str]]:
-    """PIN → (courier_id, name). (None, None) dla nieznanego PIN-u."""
-    piny = _load_json(KURIER_PINY_PATH)
-    name = piny.get(pin)
+    """PIN → (courier_id, name). (None, None) dla nieznanego PIN-u.
+
+    A-6 (2026-08-02): krok PIN→name deleguje do `pin_auth.resolve_pin` (dual-read
+    KDF + sól per-user, lazy re-hash). Flaga `ENABLE_PIN_KDF` OFF = bajt-parytet z
+    legacy `piny.get(pin)` (zero dostępu do magazynu KDF). Krok name→cid bez zmian.
+    """
+    name = pin_auth.resolve_pin(
+        pin, piny_path=KURIER_PINY_PATH, kdf_path=KURIER_PINY_KDF_PATH)
     if not name:
         return None, None
     ids = _load_json(KURIER_IDS_PATH)
@@ -68,6 +78,27 @@ def _resolve_pin(pin: str) -> Tuple[Optional[str], Optional[str]]:
     if cid is None:
         return None, name
     return str(cid), name
+
+
+def _client_ip(handler) -> str:
+    """Best-effort IP klienta dla per-IP rate-limit. Za nginx `client_address` to
+    loopback proxy → użyj leftmost X-Forwarded-For (per-klient). Bez proxy → peer.
+    XFF jest spoofowalny, więc per-IP to bezpiecznik best-effort; per-KURIER
+    (post-auth, keyed on cid) jest kontrolą autorytatywną i niewrażliwą na spoofing."""
+    try:
+        peer = handler.client_address[0]
+    except Exception:
+        return "unknown"
+    try:
+        if peer in ("127.0.0.1", "::1", "::ffff:127.0.0.1"):
+            xff = handler.headers.get("X-Forwarded-For")
+            if xff:
+                first = xff.split(",")[0].strip()
+                if first:
+                    return first
+    except Exception:
+        pass
+    return peer or "unknown"
 
 
 # ---- write gps record ----
@@ -296,6 +327,14 @@ class GpsHandler(BaseHTTPRequestHandler):
             self._json(400, {"ok": False, "error": f"bad body: {type(e).__name__}"})
             return
 
+        # A-6: per-IP rate-limit PRZED auth (dławi flood z jednego źródła niezależnie
+        # od ważności PIN-u). OFF (default) → None = zero dławienia (bajt-parytet).
+        client_ip = _client_ip(self)
+        if gps_rate_limit.check(None, client_ip) is not None:
+            _log.warning(f"RATE_LIMIT ip={client_ip} scope=ip")
+            self._json(429, {"ok": False, "error": "rate limited (ip)"})
+            return
+
         pin = str(body.get("pin") or "").strip()
         lat = body.get("lat")
         lon = body.get("lon")
@@ -324,6 +363,13 @@ class GpsHandler(BaseHTTPRequestHandler):
         if cid is None:
             _log.warning(f"pin auth fail (pin=****{pin[-1:]}, name={name})")
             self._json(401, {"ok": False, "error": "bad pin"})
+            return
+
+        # A-6: per-KURIER rate-limit PO auth (dławi flood pozycji zalogowanego
+        # kuriera). OFF (default) → None = zero dławienia (bajt-parytet).
+        if gps_rate_limit.check(cid, None) is not None:
+            _log.warning(f"RATE_LIMIT cid={cid} scope=courier")
+            self._json(429, {"ok": False, "error": "rate limited (courier)"})
             return
 
         try:

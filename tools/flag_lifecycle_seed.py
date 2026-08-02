@@ -97,6 +97,23 @@ ENGINE_EXPLICIT_DYNAMIC = {
         "consumers": ["dispatch_v2/gps_pwa_store.py"],
         "proof": {"kind": "literal_flag_calls"},
     },
+    # A-6 SECURITY P0 (2026-08-02): niedecyzyjne kill-switche security, czytane
+    # literalnym flag() poza flags.json (shadow-first, kod-default OFF; do flags.json
+    # trafią dopiero przy flipie ON za ACK). Wzorzec 1:1 z ENABLE_GPS_MERGE_LOCK wyżej.
+    "ENABLE_PIN_KDF": {
+        "default": False,
+        # Literalny czytelnik = pin_auth.pin_kdf_enabled(); gps_server woła
+        # pin_auth.resolve_pin, nie flag() wprost.
+        "consumers": ["dispatch_v2/identity/pin_auth.py"],
+        "proof": {"kind": "literal_flag_calls"},
+    },
+    "ENABLE_GPS_RATE_LIMIT": {
+        "default": False,
+        # Literalny czytelnik = gps_rate_limit.rate_limit_enabled(); gps_server woła
+        # gps_rate_limit.check, nie flag() wprost.
+        "consumers": ["dispatch_v2/gps_rate_limit.py"],
+        "proof": {"kind": "literal_flag_calls"},
+    },
     "ENABLE_COMMITTED_INVALIDATES_VIEW": {
         "default": True,
         "consumers": [
