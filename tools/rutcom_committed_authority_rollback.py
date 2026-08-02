@@ -33,7 +33,6 @@ from dispatch_v2.committed_pickup_authority import (  # noqa: E402
     ASSIGNMENT_CK_PASSIVE_SNAPSHOT_FIELD,
     COMMITTED_PICKUP_AUTHORITY_FLAGS,
     MANUAL_CK_AUTHORITY_FLAG,
-    NEW_ORDER_TIME_AUTHORITY_SNAPSHOT_FIELD,
     RUTCOM_FORWARD_AUTHORITY_FLAG,
     committed_time_contract_is_complete,
     is_forward_authority_outbox_artifact,
@@ -168,7 +167,11 @@ def _unbound_new_order_time_row_blocks_forward(row: object) -> bool:
     )
     if not looks_like_time_order:
         return False
-    return event.get(NEW_ORDER_TIME_AUTHORITY_SNAPSHOT_FIELD) is not True
+    # Even a receipt-bound/sanitized NEW_ORDER is not safe while unfinished:
+    # the outbox commits before state apply, so it may still create a pending
+    # aggregate shell after a supposedly green flip. Drain every time-order
+    # NEW_ORDER under quiescence; the current state scan then owns the handoff.
+    return True
 
 
 def collect_status() -> dict:

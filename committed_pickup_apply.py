@@ -23,6 +23,7 @@ from dispatch_v2.committed_pickup_authority import (
     time_event_cas_artifact_present,
     time_event_cas_is_versioned,
     validate_committed_pickup_event,
+    validate_new_order_time_intent_event,
 )
 
 AUTHORITY_ATTESTATION_SCHEMA = "committed_pickup_outbox_attestation.v1"
@@ -281,7 +282,13 @@ def apply_event(event: Mapping[str, object]):
             receipt_verified = coordinator_time_recheck.verify_claimed_event(
                 event
             )
-        claim_authorized = bool(receipt_verified)
+        initial_intent_verified = validate_new_order_time_intent_event(
+            current,
+            event,
+        )
+        claim_authorized = bool(
+            receipt_verified or initial_intent_verified
+        )
         if not (passive_enabled or claim_authorized):
             raise ValueError(
                 "committed pickup authority requires passive guard"
@@ -302,7 +309,7 @@ def apply_event(event: Mapping[str, object]):
         )
         if (
             validation.outcome is not ResolutionOutcome.APPLY
-            and not receipt_verified
+            and not claim_authorized
         ):
             raise ValueError(
                 f"committed pickup proof rejected: {validation.reason}"

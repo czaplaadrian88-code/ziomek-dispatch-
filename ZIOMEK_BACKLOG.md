@@ -1,6 +1,6 @@
 # ZIOMEK AI DISPATCHER - BACKLOG ROZWOJU
 
-> **KANDYDAT v19 2026-08-02 — RUTCOM COMMITTED PICKUP AUTHORITY / OID 491578:**
+> **KANDYDAT v20 2026-08-02 — RUTCOM COMMITTED PICKUP AUTHORITY / OID 491578:**
 > root cause potwierdzony: guard pasywny 52 razy stłumił zmianę umówionego
 > czasu Rutcom 19:16→19:21, przez co aplikacja poprawnie pokazywała stary stan
 > 19:16. Jeden resolver autorytetu zastępuje rozproszoną politykę; akceptuje
@@ -128,7 +128,20 @@
 > prune terminalizują się jako `superseded`. Siedem mutacji zostało zabitych,
 > exact zestaw ma 30/30, focused 432/432, pełna regresja
 > `6610P/0F/74S/8X/149W` w 466,95 s przy identycznym profilu v18.
-> Dwa świeże `CLEAN` v19 są wymagane przed commitem i live. Read-only preflight
+> Dwa świeże review v19 ponownie zatrzymały live: policy snapshot mógł zostać
+> nadpisany hot-OFF przed initial writerem, pierwotny tuple ginął trwale między
+> `NEW_ORDER` i inicjalizatorem, preflight pomijał pending legacy pickup oraz
+> fałszywie przepuszczał sanitizowany czasowy `NEW_ORDER`. V20 zapisuje
+> niezmienny hash-bound initial intent w tej samej transakcji co shell,
+> materializuje go dokładnie jednym `PICKUP_TIME_UPDATED` również po ON→OFF i
+> atomowo usuwa receipt z zapisem pickup+CK+HH:MM+provenance. Zwykły restart
+> tick konsumuje trwały intent przed świeżym panelem, więc restamp 19:16 nie
+> zastępuje umówionego 19:21. Preflight blokuje każdego pending writera czasu i
+> każdy czasowy `NEW_ORDER`; tylko w pełni związany jawny elastyk jest wyjątkiem.
+> Cztery findings były 4/4 RED przed fixem; v20 ma 6 mutation kills, exact 7/7,
+> szeroki klaster 592/592 i zielone checkery. Pełna hermetyczna regresja v20:
+> `6617P/0F/74S/8X/149W` w 594,91 s, z profilem identycznym z v19 i deltą +7
+> testów. Dwa świeże `CLEAN` final-byte v20 są wymagane przed live. Read-only preflight
 > 16:31Z ma pustą kolejkę/outbox, ale dwie aktywne legacy czasówki z rozbieżnym
 > pickup/CK, więc `safe_for_forward_deploy=false`; bez migracji, deployu,
 > restartu i flipu. Produkcja pozostaje bez zmian do naturalnej terminalizacji

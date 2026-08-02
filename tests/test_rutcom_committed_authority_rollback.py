@@ -372,6 +372,109 @@ def test_forward_deploy_blocks_unbound_czasowka_new_order(monkeypatch):
     assert status["safe_for_forward_deploy"] is False
 
 
+def test_forward_deploy_blocks_pending_sanitized_czasowka_new_order(
+    monkeypatch,
+):
+    """A receipt-bound NEW_ORDER can still create a pending aggregate shell."""
+    new_order = {
+        "event_type": "NEW_ORDER",
+        "event_id": "pending-sanitized-new-order",
+        "order_id": "time-order-pending-shell",
+        "czasowka_new_order_time_authority_enabled": True,
+        "payload": {
+            "order_type": "czasowka",
+            "prep_minutes": 60,
+            "pickup_at_warsaw": None,
+            "czas_kuriera_warsaw": None,
+            "czas_kuriera_hhmm": None,
+        },
+    }
+    monkeypatch.setattr(rollback.C, "decision_flag", lambda _name: False)
+    monkeypatch.setattr(
+        rollback.event_bus,
+        "list_unfinished_state_applies",
+        lambda: [
+            _outbox_row(
+                new_order,
+                event_id="pending-sanitized-new-order",
+                event_key="pending-sanitized-new-order-key",
+                order_id="time-order-pending-shell",
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        rollback.queue,
+        "legacy_rollback_status",
+        lambda: _queue_status(),
+    )
+    monkeypatch.setattr(
+        rollback.state_machine,
+        "get_all_strict",
+        lambda: {},
+    )
+
+    status = rollback.collect_status()
+
+    assert status["unfinished_unbound_new_order_time_outbox"] == 1
+    assert status["safe_for_forward_deploy"] is False
+
+
+def test_forward_deploy_blocks_pending_legacy_pickup_for_czasowka(
+    monkeypatch,
+):
+    """Every pending time writer for a czasowka must drain before the flip."""
+    order_id = "time-order-pending-pickup"
+    pickup = {
+        "event_type": "PICKUP_TIME_UPDATED",
+        "event_id": "legacy-pickup-time-order",
+        "order_id": order_id,
+        "payload": {
+            "source": "panel_re_check",
+            "old_pickup_at_warsaw": "2026-08-02T19:16:00+02:00",
+            "new_pickup_at_warsaw": "2026-08-02T19:18:00+02:00",
+            "pickup_time_revision_at_observation": 0,
+        },
+    }
+    monkeypatch.setattr(rollback.C, "decision_flag", lambda _name: False)
+    monkeypatch.setattr(
+        rollback.event_bus,
+        "list_unfinished_state_applies",
+        lambda: [
+            _outbox_row(
+                pickup,
+                event_id="legacy-pickup-time-order",
+                event_key="legacy-pickup-time-order-key",
+                order_id=order_id,
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        rollback.queue,
+        "legacy_rollback_status",
+        lambda: _queue_status(),
+    )
+    monkeypatch.setattr(
+        rollback.state_machine,
+        "get_all_strict",
+        lambda: {
+            order_id: {
+                "order_id": order_id,
+                "status": "planned",
+                "order_type": "czasowka",
+                "prep_minutes": 60,
+                "pickup_at_warsaw": "2026-08-02T19:16:00+02:00",
+                "czas_kuriera_warsaw": "2026-08-02T19:16:00+02:00",
+                "czas_kuriera_hhmm": "19:16",
+            }
+        },
+    )
+
+    status = rollback.collect_status()
+
+    assert status["unfinished_forward_authority_outbox"] == 1
+    assert status["safe_for_forward_deploy"] is False
+
+
 def test_forward_deploy_blocks_unassigned_legacy_czasowka_missing_contract(
     monkeypatch,
 ):

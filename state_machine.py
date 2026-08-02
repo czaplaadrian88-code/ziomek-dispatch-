@@ -44,12 +44,15 @@ from dispatch_v2.committed_pickup_authority import (
     COMMITTED_PICKUP_COUPLED_FIELDS,
     MANUAL_CK_AUTHORITY_FLAG,
     NEW_ORDER_TIME_AUTHORITY_SNAPSHOT_FIELD,
+    NEW_ORDER_TIME_INTENT_FIELD,
     PASSIVE_CK_SOURCES,
     RETIRED_CZASOWKA_CK_ONLY_SOURCES,
     RUTCOM_FORWARD_AUTHORITY_FLAG,
     CommittedPickupResolution,
     ResolutionOutcome,
     committed_pickup_effect_applied,
+    committed_time_contract_is_complete,
+    new_order_time_intent_is_valid,
     normalize_pickup_revision,
     pickup_event_has_authority_artifact,
     pickup_payload_requires_coordinator_receipt,
@@ -1289,7 +1292,21 @@ def event_effect_status(
     payload = event.get("payload") or {}
     status = current.get("status")
     if etype == "NEW_ORDER":
-        # Późniejsze lifecycle states także dowodzą, że NEW_ORDER był zastosowany.
+        if _new_order_time_authority_enabled(event):
+            expected_intent = event.get(NEW_ORDER_TIME_INTENT_FIELD)
+            if committed_time_contract_is_complete(current):
+                return "applied"
+            if (
+                new_order_time_intent_is_valid(
+                    expected_intent,
+                    order_id=oid,
+                )
+                and current.get(NEW_ORDER_TIME_INTENT_FIELD)
+                == expected_intent
+            ):
+                return "applied"
+            return "pending"
+        # Późniejsze lifecycle states także dowodzą, że legacy NEW_ORDER był zastosowany.
         return "applied"
     if etype == "ORDER_DETAILS_ENRICHED":
         # Merge-only event nie tworzy rekordu i nie dotyka terminalnego lifecycle.
@@ -1622,6 +1639,29 @@ def _r_declared_tripwire(order_id: str, merged: dict, event: Optional[str]) -> N
         _log.debug(f"R_DECLARED tripwire jsonl append skip oid={order_id}: {_e}")
 
 
+def _merge_new_order_time_intent_backfill(
+    order_id: str,
+    existing: dict,
+    incoming: dict,
+) -> tuple[dict, bool]:
+    """Backfill only the pending receipt, never replay NEW_ORDER lifecycle."""
+    intent = incoming.get(NEW_ORDER_TIME_INTENT_FIELD)
+    if not new_order_time_intent_is_valid(intent, order_id=order_id):
+        return dict(existing), False
+    current_intent = existing.get(NEW_ORDER_TIME_INTENT_FIELD)
+    if current_intent == intent or committed_time_contract_is_complete(existing):
+        return dict(existing), False
+    if current_intent is not None:
+        _log.error(
+            "NEW_ORDER initial intent conflict refused "
+            f"oid={order_id}"
+        )
+        return dict(existing), False
+    merged = dict(existing)
+    merged[NEW_ORDER_TIME_INTENT_FIELD] = dict(intent)
+    return merged, True
+
+
 @_lifecycle_state_mutation
 def upsert_order(
     order_id: str,
@@ -1655,7 +1695,22 @@ def upsert_order(
                         f"oid={order_id} first={existing_marker} "
                         f"incoming={incoming_marker}"
                     )
-                return dict(existing)
+                merged_existing, intent_changed = (
+                    _merge_new_order_time_intent_backfill(
+                        order_id,
+                        existing,
+                        data,
+                    )
+                )
+                if intent_changed:
+                    state[order_id] = merged_existing
+                    _guarded_write(
+                        path,
+                        state,
+                        old_count,
+                        op="new_order_intent_backfill",
+                    )
+                return merged_existing
             if existing:
                 # Rekord sprzed ery markerów jest już żywym agregatem. NEW_ORDER
                 # może tu wyłącznie uzupełnić brakujący dowód first-write; nie
@@ -1667,7 +1722,13 @@ def upsert_order(
                         f"oid={order_id}"
                     )
                     return dict(existing)
-                marked_existing = dict(existing)
+                marked_existing, _intent_changed = (
+                    _merge_new_order_time_intent_backfill(
+                        order_id,
+                        existing,
+                        data,
+                    )
+                )
                 marked_existing[
                     "last_lifecycle_event_id_new_order"
                 ] = str(incoming_marker)
@@ -1790,12 +1851,27 @@ def update_from_event(event: dict) -> Optional[dict]:
         ck_hhmm = (
             None if initial_time_owned else payload.get("czas_kuriera_hhmm")
         )
+        initial_intent_fields = {}
+        if initial_time_owned:
+            raw_intent = event.get(NEW_ORDER_TIME_INTENT_FIELD)
+            if new_order_time_intent_is_valid(raw_intent, order_id=oid):
+                initial_intent_fields[NEW_ORDER_TIME_INTENT_FIELD] = dict(
+                    raw_intent
+                )
+            else:
+                # The shell stays mechanically incomplete and blocks rollout
+                # or code rollback.  Missing/corrupt receipt can never revive
+                # the legacy raw CK writer as an accidental recovery path.
+                initial_intent_fields[NEW_ORDER_TIME_INTENT_FIELD] = {
+                    "schema": "invalid_new_order_time_intent",
+                }
         if not _verify_czas_kuriera_consistency(ck_iso, ck_hhmm, oid):
             # Skip persist czas_kuriera fields; log ERROR w helper; raise signal.
             # Inne pola persistowane bez zmian (order dalej trafia do state).
             ck_iso = None
             ck_hhmm = None
             _result = upsert_order(oid, _marked({
+                **initial_intent_fields,
                 "status": "planned",
                 "commitment_level": "planned",
                 "restaurant": payload.get("restaurant"),
@@ -1822,6 +1898,7 @@ def update_from_event(event: dict) -> Optional[dict]:
                 f"persisted bez czas_kuriera fields"
             )
         return upsert_order(oid, _marked({
+            **initial_intent_fields,
             "status": "planned",
             "commitment_level": "planned",
             "restaurant": payload.get("restaurant"),
@@ -2288,6 +2365,10 @@ def update_from_event(event: dict) -> Optional[dict]:
                 _np_dt = datetime.fromisoformat(new_pickup)
                 update_fields["czas_kuriera_warsaw"] = new_pickup
                 update_fields["czas_kuriera_hhmm"] = _np_dt.strftime("%H:%M")
+                # Consumption of the initial receipt is part of this exact
+                # atomic pickup+CK write.  No crash can leave a complete tuple
+                # with a replayable stale NEW_ORDER intent.
+                update_fields[NEW_ORDER_TIME_INTENT_FIELD] = None
             except (ValueError, TypeError):
                 pass  # new_pickup już zwalidowany wyżej; defensywnie
         # Wszystkie pola sprzężone są własnością jednego kontraktu policy/CAS.
