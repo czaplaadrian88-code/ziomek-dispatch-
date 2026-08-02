@@ -16,17 +16,21 @@
 > Osobno nadal otwarte: błędne czasy Jakub/Grill/Kolejowa, Q5 outcome-manifest,
 > `S-AUTO-01` oraz PII denylista blind-review bundlera.
 
-> **KANDYDAT OFFLINE 2026-08-02 — TIME-C FAZA 1:** `route_order` jest jedynym
-> ownerem SHA-256 renderowanej sekwencji; live ETA niesie `plan_version` +
-> `sequence_hash`, a panel i courier-api mają wspólny fail-closed guard za
-> bliźniaczymi flagami default OFF. Istniejący `decision_eta_log` dostał historię
-> per order×stop×cykl i rotation-aware CLI, bez drugiego logu. Oracle stare
-> ETA/nowy plan RED→GREEN, mutation czerwony; dispatcher `6426P/0F/24S/8X`,
-> panel `2095P/8F baseline/1S` (delta nowych failów 0), courier-api
-> `172P/0F/1S` (naprawione 10 zastanych błędów dotkniętego kontraktu).
-> Branch `wt/timec-faza1-sol-20260802`; zero merge/deploy/restart/flip/runtime/
-> ledger. Retencja live, ≥2 dni shadow, review i flip pozostają HOLD do osobnych
-> bramek. Raport: `/root/artifacts/timec-bartek-20260802/REPORT_TIMEC_FAZA1.md`.
+> **KANDYDAT OFFLINE 2026-08-02 — TIME-C FAZA 1, ITERACJA 2:** blind review
+> `3×HIGH + 3×MEDIUM` domknięte u źródła. Producent izoluje zły stop/kuriera i
+> publikuje zdrową część cyklu; trzy repo dowodzą, że ta sama `plan_version` z
+> inną sekwencją ma inny hash. Wszystkie powierzchnie używają jednego
+> `build_eta_binding_sequence`; OFF nie buduje dodatkowej trasy ani SHA.
+> Historia cykli jest wyłącznie za `ENABLE_LIVE_ETA_HISTORY_LOG=OFF` i ma własny
+> rotowany `live_eta_history.jsonl`, bez zapisów do `decision_eta_log`.
+> Konsumenci są przebazowani na wdrożone bazy courier `4a18c67` (z `adcb706`)
+> i panel `46cd68a8` (z `464e489f`). Pełne suity: dispatch
+> `6457P/2F-baseline/74S/8X`, courier `223P/0F/1S`, panel
+> `2099P/8F-baseline/1S`; delta nowych failów = 0. F7/L1 i F10/L4 zamknięte,
+> F8 usunięte konstrukcyjnie; F9 pozostaje jawnym długiem do wydzielenia z
+> własnym oracle. Branch `wt/timec-faza1-sol-20260802`; zero deploy/restart/
+> flip/runtime/ledger i zero zmian worktree `rutcom-*`/`delivery-credit-*`.
+> Raport: `/root/artifacts/timec-bartek-20260802/REPORT_TIMEC_F1_ITER2.md`.
 
 > **KANDYDAT 2026-07-24 — C7 POST-SHIFT REPLAY GO:** owner związał kryterium
 > monotonicznie („każde 5 min w dół to poprawa, najlepsze 0"). Branch

@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Callable, Iterable, Mapping, Sequence
 from zoneinfo import ZoneInfo
 
+from dispatch_v2 import common as C
 from dispatch_v2 import route_order
 
 SCHEMA_VERSION = 1
@@ -459,18 +460,26 @@ def write_cycle(
             courier_id = str(route.get("courier_id"))
             if not courier_id or courier_id == "None":
                 continue
-            snapshot = calculate_live_eta(
-                courier_id=courier_id,
-                start=route.get("start"),
-                start_source=route.get("start_source"),
-                stops=route.get("stops") or [],
-                now=current,
-                duration_provider=duration_provider,
-                cycle_id=cycle_id,
-                source_contract=bool(route.get("source_contract")),
-                plan_version=route.get("plan_version"),
-                sequence_hash=route.get("sequence_hash"),
-            )
+            try:
+                snapshot = calculate_live_eta(
+                    courier_id=courier_id,
+                    start=route.get("start"),
+                    start_source=route.get("start_source"),
+                    stops=route.get("stops") or [],
+                    now=current,
+                    duration_provider=duration_provider,
+                    cycle_id=cycle_id,
+                    source_contract=bool(route.get("source_contract")),
+                    plan_version=route.get("plan_version"),
+                    sequence_hash=route.get("sequence_hash"),
+                )
+            except Exception as exc:  # one malformed courier cannot poison a cycle
+                _log.warning(
+                    "LIVE_ETA route fail-soft courier_id=%s error=%s",
+                    courier_id,
+                    type(exc).__name__,
+                )
+                continue
             entries[courier_id] = {"snapshot": snapshot}
         store = {
             "schema_version": SCHEMA_VERSION,
@@ -485,11 +494,12 @@ def write_cycle(
             for courier_id, entry in entries.items()
         }
         try:
-            from dispatch_v2 import decision_eta_log
+            if C.decision_flag("ENABLE_LIVE_ETA_HISTORY_LOG"):
+                from dispatch_v2 import live_eta_history
 
-            decision_eta_log.record_live_eta_cycle(snapshots)
+                live_eta_history.record_live_eta_cycle(snapshots)
         except Exception as exc:  # telemetry cannot invalidate a published cycle
-            _log.warning("decision ETA live-cycle hook fail-safe: %s", type(exc).__name__)
+            _log.warning("live ETA history hook fail-safe: %s", type(exc).__name__)
         return snapshots
 
 
@@ -536,18 +546,30 @@ def bind_snapshot_to_route(
     kontraktu, z inną sekwencją albo z inną wersją planu nie może dostarczyć ETA.
     Konsumenci dostają status do DTO/telemetrii, ale nie implementują porównania.
     """
-    try:
-        current_hash = route_order.route_sequence_hash(rendered_stops)
-        route_error = None
-    except (TypeError, ValueError) as exc:
-        current_hash = None
-        route_error = type(exc).__name__
     snapshot_hash = (
         snapshot.get("sequence_hash") if isinstance(snapshot, Mapping) else None
     )
     snapshot_plan_version = (
         snapshot.get("plan_version") if isinstance(snapshot, Mapping) else None
     )
+    if not enforce:
+        return (
+            snapshot if isinstance(snapshot, Mapping) else None,
+            {
+                "status": "unchecked",
+                "current_plan_version": current_plan_version,
+                "current_sequence_hash": None,
+                "snapshot_plan_version": snapshot_plan_version,
+                "snapshot_sequence_hash": snapshot_hash,
+            },
+        )
+
+    try:
+        current_hash = route_order.route_sequence_hash(rendered_stops)
+        route_error = None
+    except (TypeError, ValueError) as exc:
+        current_hash = None
+        route_error = type(exc).__name__
     contract: dict[str, object] = {
         "status": "unchecked",
         "current_plan_version": current_plan_version,
@@ -557,8 +579,6 @@ def bind_snapshot_to_route(
     }
     if route_error is not None:
         contract["route_error"] = route_error
-    if not enforce:
-        return (snapshot if isinstance(snapshot, Mapping) else None), contract
     if not isinstance(snapshot, Mapping):
         contract["status"] = "missing_snapshot"
         return None, contract

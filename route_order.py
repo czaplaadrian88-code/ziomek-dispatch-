@@ -353,6 +353,21 @@ def build_route_stops(bag, plan_doc=None, *, plan_aware=False,
     return stops
 
 
+def build_eta_binding_sequence(bag, plan_doc=None) -> list[dict]:
+    """Jedyna sekwencja wejściowa kontraktu wersjonowanego ETA.
+
+    Producent oraz każda powierzchnia konsumencka muszą hashować dokładnie ten
+    sam kanon. Parametry są celowo zamknięte tutaj: lokalne flagi renderowania
+    panelu/apki nie mogą tworzyć innej tożsamości tej samej trasy.
+    """
+    return build_route_stops(
+        bag,
+        plan_doc,
+        plan_aware=True,
+        trust_canon=True,
+    )
+
+
 def repair_dropoffs_after_pickups(seq, *, kind_key="kind", id_key="order_id"):
     """Dostawy wyprzedzone przez sortowanie odbiorów → przenieś tuż ZA ich odbiór.
 

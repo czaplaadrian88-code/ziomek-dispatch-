@@ -19,8 +19,10 @@ Właścicielem jest `dispatch_v2.route_order`:
 - kolejne kroki per-zlecenie opisujące ten sam fizyczny stop są zwijane;
 - JSON UTF-8 ma sortowane klucze i separatory `,`/`:`, wynik to SHA-256 hex.
 
-`route_sequence_hash()` istnieje wyłącznie w `route_order.py`. Producent i
-konsumenci wołają tę samą funkcję. Wspólna brama
+`route_sequence_hash()` i `build_eta_binding_sequence()` istnieją wyłącznie w
+`route_order.py`. Druga funkcja zamyka `plan_aware=True` i `trust_canon=True`,
+więc producent oraz wszystkie powierzchnie karmią hash identyczną sekwencją,
+nie lokalną trasą prezentacyjną. Wspólna brama
 `live_eta.bind_snapshot_to_route()` sprawdza hash i `plan_version`; readery nie
 mają własnego porównania ani fallbackowej definicji hasha.
 
@@ -49,27 +51,27 @@ flipa, restartu ani deployu.
 
 | Miejsce | Rola | Writer/consumer | Dotknięte | Powód / test |
 |---|---|---|---|---|
-| `route_order.py` | kanon fizycznej sekwencji | owner | TAK | jedna definicja i golden hash; parytet physical↔expanded |
-| `live_eta_daemon.build_routes` | budowa trasy wejściowej | writer DTO A | TAK | niesie aktualny `plan_version` i hash dokładnej sekwencji |
-| `live_eta.calculate_live_eta/write_cycle` | snapshot/store atomowy | writer DTO B | TAK | publikuje oba pola; odrzuca podany hash sprzeczny ze stopami |
+| `route_order.py` | kanon fizycznej sekwencji | owner | TAK | jedna definicja hasha i jedna funkcja sekwencji do bindingu; golden + parytet physical↔expanded |
+| `live_eta_daemon.build_routes` | budowa trasy wejściowej | writer DTO A | TAK | izolacja per kurier/stop; hash wyłącznie faktycznie publikowanych stopów |
+| `live_eta.calculate_live_eta/write_cycle` | snapshot/store atomowy | writer DTO B | TAK | niespójny kurier jest logowany i pomijany bez utraty zdrowych wpisów |
 | `live_eta.read_latest/read_all/eta_for` | surowe readery | consumer | N-D | zgodność wsteczna; brama jest osobnym chokepointem przed `eta_for` |
 | `live_eta.bind_snapshot_to_route` | kontrola generacji | owner policy | TAK | OFF pass-through, ON fail-closed; negatywny oracle + mutation |
 | `plan_manager.save_plan` | kanoniczny commit planu | writer planu | TAK | log planu oznacza writer role; plan_version już monotoniczny |
 | `plan_manager.invalidate/touch/advance/remove/insert/gc` | pozostali mutatorzy planu | writer planu | N-D | już bumpują/modyfikują generację; następny cykl próbuje nowy kontrakt, stary jest odrzucany |
 | `panel_watcher`, `plan_recheck`, `dispatch_pipeline` | callery mutatorów | writer pośredni | N-D | delegują do `plan_manager`; brak konkurencyjnego hasha |
 | `b_route_shadow`, `bundle_calib_shadow`, replay | plan temp | writer-observer | N-D | przekierowany `PLANS_FILE`; role plan logu rozróżnia `observer` |
-| `decision_eta_log.py` | append-only historia | writer metryki | TAK | rekord per order×fizyczny stop×cykl: timestamp/value/version/hash/writer |
-| `decision_eta_coverage.py`, kalibracje GPS | istniejący log | consumer metryki | N-D | nowy rekord zachowuje pełny `decision_eta.v1`; źródło nie wchodzi do mianownika decyzji |
-| `decision_eta_timeline.py` | historia operatora | consumer | TAK | czyta live + `.N[.gz]`, domyślnie ukrywa observerów, filtr order/kind/since |
-| `jsonl_rotation.py` + logrotate config | retencja | boundary | TAK (ratchet) | istniejący log ma daily/maxsize 100M/30 rotacji/compress; rename, bez copytruncate |
-| `panel fleet_state.read_fleet` | route-card i worek | consumer | TAK | jedna brama przed overlayem; DTO niesie current/snapshot version/hash/status |
-| `panel fleet_state.read_orders` | order-list | consumer | TAK | kontrakt liczony raz per cid na request; cache lokalny tylko w obrębie odczytu |
+| `decision_eta_log.py` | historia decyzji | istniejący writer | TAK | usunięto konkurencyjny writer cykli live ETA; plik zachowuje swój dotychczasowy kontrakt |
+| `live_eta_history.py` | historia cykli ETA | kanoniczny writer metryki | TAK | własne schema/path/flaga; rekord per order×fizyczny stop×cykl, zero PII |
+| `decision_eta_timeline.py` | historia operatora | consumer | TAK | czyta wyłącznie własny log live ETA + `.N[.gz]`, filtr order/kind/since |
+| `jsonl_rotation.py` + logrotate config | retencja | boundary | TAK (ratchet) | dedykowany log ma daily/maxsize 100M/30 rotacji/compress; rename, bez copytruncate |
+| `panel fleet_state.read_fleet` | route-card i worek | consumer | TAK | presentation route bez zmian; binding przez wspólny builder tylko ON |
+| `panel fleet_state.read_orders` | order-list | consumer | TAK | OFF nie ładuje planów ani nie buduje trasy/SHA; ON raz per cid |
 | `panel canon_eta.canon_eta_map` | tracking, deliveries, history ingest | consumer | TAK | odrzuca mismatch przed projekcją; istniejący plan fallback |
 | `panel api/coordinator.py` | endpointy/poll | serializer | N-D | serializuje `read_fleet/read_orders`; brak osobnego ETA writera/cache |
-| frontend route-card/order-list | render | consumer UI | N-D | Faza 2; Faza 1 korzysta z istniejącego `planned`/pustego fallbacku i statusu backendu |
-| `courier_orders.build_view_from_snapshots` | trasa kuriera | consumer/DTO | TAK | guard po finalnym `stop_sequence`; DTO niesie oba kontrakty i status |
-| `courier_orders.build_eta_map` | `/api/eta/orders` | consumer | TAK | guard przed projekcją per-order; plan fallback pozostaje |
-| `courier_orders.read_bound_eta` | route-geometry ETA | consumer | TAK | usuwa bezpośredni, niechroniony odczyt z `main.py`; legacy OFF, ON fail-closed |
+| frontend route-card/order-list | render | consumer UI | TAK | `live_eta_snapshot_at` stempluje tylko zaakceptowane ETA; surowy czas ma nazwę `raw_snapshot_at` |
+| `courier_orders.build_view_from_snapshots` | trasa kuriera | consumer/DTO | TAK | OFF nie wywołuje buildera/bindingu; ON używa wspólnej sekwencji |
+| `courier_orders.build_eta_map` | `/api/eta/orders` | consumer | TAK | OFF dawny reader bez worka/trasy/SHA; ON wspólny builder |
+| `courier_orders.read_bound_eta` | route-geometry ETA | consumer | TAK | OFF bez dodatkowego I/O/build/SHA; ON wspólny builder i fail-closed |
 | `courier_api main.py /api/courier/orders` | REST serializer | serializer | TAK | przekazuje `sequence_hash`, snapshot version/hash i status |
 | `courier_api main.py /api/courier/route-geometry` | lekki ETA endpoint | serializer | TAK | korzysta ze wspólnego bound readera, nie z surowego snapshotu |
 | `courier_api main.py /api/courier/plan-version` | polling | consumer generacji | N-D | już niesie plan_version; nie serwuje ETA |
@@ -79,19 +81,37 @@ flipa, restartu ani deployu.
 
 ## Historia i retencja
 
-Nie powstał drugi log. `record_live_eta_cycle()` rozszerza istniejący
-`decision_eta_log.jsonl`. Zapis następuje dopiero po atomowej publikacji nowego
-cyklu (nie przy cache-hit tego samego cyklu), używa współdzielonego durable
-appendera i nie zawiera nazw, adresów ani współrzędnych.
+Historia cykli ma jednego właściciela: `live_eta_history.py`, schema
+`live_eta_history.v1` i własny `live_eta_history.jsonl`. Hook działa wyłącznie
+przy `ENABLE_LIVE_ETA_HISTORY_LOG=ON`, dopiero po atomowej publikacji nowego
+cyklu i nigdy przy cache-hit. Przy OFF nie importuje writera, nie tworzy pliku i
+nie zmienia ani jednego bajtu snapshotu. `decision_eta_log.jsonl` nie dostaje
+już rekordów cyklu live ETA.
 
-Źródłowa polityka retencji była już przygotowana: daily, `maxsize 100M`, 30
+Źródłowa polityka retencji jest przygotowana: daily, `maxsize 100M`, 30
 rotacji, compress+delaycompress i bezstratny rename pod namespace lockiem.
 Read-only audyt hosta wykazał jednak brak zainstalowanego timera/konfiguracji.
 Instalacja pozostaje jawnym długiem wydaniowym, bo Faza 1 ma zakaz live.
 
+## Rozstrzygnięcie LOW z blind review
+
+- F7/L1 zamknięte: `live_eta_snapshot_at` opisuje wyłącznie zaakceptowany
+  snapshot, a diagnostyczny czas surowego wejścia ma osobne pole
+  `raw_snapshot_at`.
+- F8 zamknięte konstrukcyjnie przy M3: `read_bound_eta` nie zależy już od flag
+  tras prezentacyjnych; enforcement buduje sekwencję przez jednego ownera.
+- F10/L4 zamknięte: ratchety przeszukują całe repo courier-api i cały backend
+  oraz frontend panelu, blokując lokalnego ownera hasha/buildera/domeny.
+- F9 pozostaje jawnym długiem offline: obronne zmiany no-op reorder,
+  warunkowego metadata overlay i wzbogacenia `mine.order_id` należy wydzielić
+  do osobnego commita/kandydata z własnym oracle. Nie cofnięto ich w tej
+  iteracji, bo próba separacji ponownie czerwieniła 10 testów dotkniętego
+  kontraktu. Zgodnie z zakresem iteracji nie utworzono wpisu w ledgerze.
+
 ## Rollback kandydata
 
-Przed deployem: oba enforcementy pozostają OFF. Po przyszłym flipie rollback to
+Przed deployem: oba enforcementy i `ENABLE_LIVE_ETA_HISTORY_LOG` pozostają OFF.
+Po przyszłym flipie rollback to
 ustawienie obu flag na OFF i kontrolowany restart panelu/courier-api za ACK.
 Pola snapshotu i DTO są addytywne, więc starsi readerzy je ignorują. Kod można
 cofnąć osobnymi commitami/tagami każdego repo; nie ma migracji danych.
