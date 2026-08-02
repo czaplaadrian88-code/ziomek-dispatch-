@@ -97,6 +97,15 @@ ENGINE_EXPLICIT_DYNAMIC = {
         "consumers": ["dispatch_v2/gps_pwa_store.py"],
         "proof": {"kind": "literal_flag_calls"},
     },
+    # A-4 (2026-08-02): flaga idempotencji/propagacji-błędu writera pending_proposals
+    # (nie w tupli decyzyjnej, nie w flags.json — shadow-first, kod-default OFF).
+    # Nośnik = DEFAULT_FLAGS (kod); do flags.json trafi dopiero przy flipie ON za ACK.
+    "ENABLE_UPSERT_PROPOSALS_IDEMPOTENT": {
+        "default": False,
+        # JEDYNY literalny czytelnik = pending_proposals_store.upsert_proposals().
+        "consumers": ["dispatch_v2/pending_proposals_store.py"],
+        "proof": {"kind": "literal_flag_calls"},
+    },
     "ENABLE_COMMITTED_INVALIDATES_VIEW": {
         "default": True,
         "consumers": [

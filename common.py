@@ -94,6 +94,20 @@ ENABLE_NOTIFY_CHANNEL_SPLIT_SHADOW = False
 # Stala-fallback = literal OFF = default czytelnika; kanon po flipie = flags.json.
 ENABLE_GPS_MERGE_LOCK = False
 
+# UPSERT idempotent A-4 (2026-08-02, sesja a4-upsert-idempotent): niedecyzyjny
+# kill-switch IDEMPOTENCJI + PROPAGACJI BLEDU kanonicznego writera pending_proposals
+# (`pending_proposals_store.upsert_proposals`, jedyny literalny czytelnik
+# `C.flag("ENABLE_UPSERT_PROPOSALS_IDEMPOTENT", False)`). OFF (default) = LEGACY
+# bajt-parytet (kazdy upsert re-stemplowal sent_at/expires_at; blad zapisu polkniety
+# -> 0); ON = powtorny upsert TEJ SAMEJ propozycji (best.courier_id niezmieniony) =
+# NO-OP (sent_at/wiek claimu nietkniety), a blad zapisu PROPAGUJE do callera.
+# Zmienia tylko KTORE wpisy pending przezyja re-upsert + widocznosc bledu, NIE TRESC
+# decyzji dispatchu (kto/kiedy/score/ETA — te liczy silnik PRZED zapisem). Dlatego
+# poza ETAP4_DECISION_FLAGS — TEN SAM wzorzec write-path kill-switch co
+# ENABLE_GPS_MERGE_LOCK / ENABLE_LEX_WINDOW_LEDGER_V2 / ENABLE_LOADGOV_SNAPSHOT_PUBLISH
+# wyzej. Stala-fallback = literal OFF = default czytelnika; kanon po flipie = flags.json.
+ENABLE_UPSERT_PROPOSALS_IDEMPOTENT = False
+
 # Noc 2026-07-28 — drabina eskalacji S1→S2→S3. Wszystkie cztery przełączniki
 # startują OFF i są w ETAP4_DECISION_FLAGS, bo nawet shadow producer stanie się
 # wejściem decyzji po odczycie certyfikatu przez plan-recheck/selection.
@@ -1016,6 +1030,14 @@ TEST_ISOLATED_INFRA_FLAGS = (
     # decyzje -> determinizm zachowany bez zywej wartosci. Ten sam wzorzec allowlist
     # co ENABLE_LEX_WINDOW_LEDGER_V2 / ENABLE_NOTIFY_CHANNEL_SPLIT (non-behavioral).
     "ENABLE_GPS_MERGE_LOCK",
+    # UPSERT idempotent A-4 (2026-08-02, sesja a4-upsert-idempotent): niedecyzyjny
+    # kill-switch idempotencji writera pending_proposals (`upsert_proposals`).
+    # Shadow-first, DZIS BEZ klucza w flags.json (kod-default OFF) -> wpis daje
+    # pokrycie strip Z WYPRZEDZENIEM na przyszly flip ON za ACK (analogicznie do
+    # ENABLE_NOTIFY_CHANNEL_SPLIT_SHADOW). W fixturach hermetycznych brak retry/
+    # wspolbieznego upsertu -> flaga bez wplywu na determinizm. Ten sam wzorzec
+    # allowlist co ENABLE_GPS_MERGE_LOCK wyzej (non-behavioral).
+    "ENABLE_UPSERT_PROPOSALS_IDEMPOTENT",
 )
 
 # Flagi zunifikowane już wcześniej wzorcem runtime (E2 audytu 10.06) — wchodzą

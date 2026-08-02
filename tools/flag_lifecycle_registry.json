@@ -2,7 +2,7 @@
  "_meta": {
   "counts": {
    "apka": 29,
-   "engine": 439,
+   "engine": 440,
    "engine_1b_units": 13,
    "etap4": 154,
    "flags_json_keys": 268,
@@ -11,7 +11,7 @@
    "numeric": 36,
    "panel": 88,
    "test_isolated": 8,
-   "total": 556,
+   "total": 557,
    "twins_concepts": 8
   },
   "generator": "tools/flag_lifecycle_seed.py",
@@ -13947,6 +13947,44 @@
    "review_date": "2026-10-10",
    "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
    "source_of_truth": "common.py-const",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
+  "ENABLE_UPSERT_PROPOSALS_IDEMPOTENT": {
+   "carriers": [
+    "common.py:TEST_ISOLATED_INFRA_FLAGS",
+    "common.py-const",
+    "explicit-dynamic-source-scan"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/pending_proposals_store.py"
+   ],
+   "curated_at": "2026-08-02",
+   "current_snapshot": {
+    "default": false
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_UPSERT_PROPOSALS_IDEMPOTENT",
+   "notes": "A-4 (2026-08-02) idempotencja + propagacja bledu kanonicznego writera pending_proposals (upsert_proposals). OFF=LEGACY bajt-parytet (re-stempel sent_at/expires_at przy kazdym upsercie; blad zapisu polkniety→0). ON=powtorny upsert TEJ SAMEJ propozycji (best.courier_id niezmieniony, wpis zywy po sweep)=NO-OP (sent_at/wiek claimu nietkniety); zmiana kuriera/brak/wygasniecie=swiezy build_entry; blad zapisu PROPAGUJE do callera (shadow fail-soft). Niedecyzyjny write-path kill-switch (zmienia KTORE wpisy przezyja re-upsert + widocznosc bledu, NIE tresc decyzji) — poza ETAP4, wzorzec ENABLE_GPS_MERGE_LOCK. Prerekwizyt flipu Etapu 1 (auto-assign czyta claim z pending).",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-shadow.service"
+   },
+   "removal_condition": "flip ON (za ACK) + 2 dni shadow: brak duplikatow/re-stemplowania sent_at (active_proposal_claims wiek claimu stabilny) ORAZ blad zapisu widoczny w logu; jesli nie wpieta do 2026-12 → retire (ACK Adrian)",
+   "review_date": "2026-08-12",
+   "rollback": "flaga OFF = brak w flags.json (default False w kodzie) — zero live; ON tylko za ACK + restart dispatch-shadow.service",
+   "source_of_truth": "explicit-dynamic-source-scan",
    "twin_of": [],
    "worlds": [
     "engine"
