@@ -10,6 +10,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -136,6 +137,134 @@ def _apply_resurrection(new_status="picked_up", courier_id="100", reason="test-c
             },
         }
     )
+
+
+def test_rollback_preflight_lists_every_unfinished_row_without_limit(
+    isolated_stores,
+):
+    event_ids = []
+    for index in range(105):
+        event_id = f"rollback-preflight-{index:03d}"
+        order_id = f"rollback-order-{index:03d}"
+        payload = {
+            "new_pickup_at_warsaw": "2026-08-01T19:21:00+02:00",
+            "source": "panel_re_check",
+        }
+        state_event = {
+            "event_type": "PICKUP_TIME_UPDATED",
+            "event_id": event_id,
+            "order_id": order_id,
+            "courier_id": "492",
+            "payload": payload,
+        }
+        assert EB.emit(
+            "PICKUP_TIME_UPDATED",
+            order_id=order_id,
+            courier_id="492",
+            payload=payload,
+            event_id=event_id,
+            state_event=state_event,
+            event_key=event_id,
+        ) == event_id
+        event_ids.append(event_id)
+
+    unfinished = EB.list_unfinished_state_applies()
+
+    assert [row["event_id"] for row in unfinished] == event_ids
+
+
+def test_rollback_preflight_fails_closed_for_unknown_status_and_corrupt_event(
+    isolated_stores,
+):
+    events_db, _state_path = isolated_stores
+    event_ids = [
+        "rollback-corrupt-state-status",
+        "rollback-corrupt-downstream-status",
+        "rollback-corrupt-state-event",
+        "rollback-known-terminal",
+    ]
+    for event_id in event_ids:
+        payload = {
+            "new_pickup_at_warsaw": "2026-08-01T19:21:00+02:00",
+            "source": "rutcom_forward_commitment",
+        }
+        state_event = {
+            "event_type": "PICKUP_TIME_UPDATED",
+            "event_id": event_id,
+            "order_id": event_id,
+            "courier_id": "492",
+            "payload": payload,
+        }
+        assert EB.emit(
+            "PICKUP_TIME_UPDATED",
+            order_id=event_id,
+            courier_id="492",
+            payload=payload,
+            event_id=event_id,
+            state_event=state_event,
+            event_key=event_id,
+        ) == event_id
+
+    with sqlite3.connect(events_db) as conn:
+        conn.execute(
+            "UPDATE state_apply_outbox SET state_status='corrupt' "
+            "WHERE event_id=?",
+            (event_ids[0],),
+        )
+        conn.execute(
+            "UPDATE state_apply_outbox SET state_status='applied', "
+            "downstream_status='corrupt' WHERE event_id=?",
+            (event_ids[1],),
+        )
+        conn.execute(
+            "UPDATE state_apply_outbox SET state_event='not-json' "
+            "WHERE event_id=?",
+            (event_ids[2],),
+        )
+        conn.execute(
+            "UPDATE state_apply_outbox SET state_status='applied', "
+            "downstream_status='applied' WHERE event_id=?",
+            (event_ids[3],),
+        )
+
+    unfinished = EB.list_unfinished_state_applies()
+
+    assert [row["event_id"] for row in unfinished] == event_ids[:3]
+    assert unfinished[2]["state_event"] is None
+
+
+@pytest.mark.parametrize(
+    ("state_status", "downstream_status", "expected"),
+    [
+        ("superseded", "pending", False),
+        ("superseded", "skipped", True),
+        ("applied", "pending", False),
+        ("applied", "applied", True),
+        ("applied", "skipped", True),
+    ],
+)
+def test_terminal_receipt_oracle_matches_exact_outbox_pair(
+    monkeypatch, state_status, downstream_status, expected
+):
+    monkeypatch.setattr(
+        EB,
+        "get_state_apply_outbox",
+        lambda _event_id: {
+            "event_id": "terminal-pair",
+            "state_status": state_status,
+            "downstream_status": downstream_status,
+        },
+    )
+
+    assert EB.state_apply_outbox_row_is_terminal(
+        {
+            "state_status": state_status,
+            "downstream_status": downstream_status,
+        }
+    ) is expected
+    assert DEA.is_terminal_outcome(
+        SimpleNamespace(event_id="terminal-pair")
+    ) is expected
 
 
 def test_outbox_schema_migration_is_additive_and_thread_serialized(

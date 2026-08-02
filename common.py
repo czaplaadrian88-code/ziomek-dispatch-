@@ -10,6 +10,10 @@ from pathlib import Path
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
+from dispatch_v2.committed_pickup_authority import (
+    COMMITTED_CK_DELTA_THRESHOLD_MIN,
+)
+
 # R4: jedna dźwignia ścieżek dla produkcji i izolowanego harnessu testowego.
 SCRIPTS_DIR = Path(os.environ.get("ZIOMEK_SCRIPTS_ROOT", "/root/.openclaw/workspace/scripts"))
 STATE_DIR = Path(os.environ.get("ZIOMEK_STATE_DIR", "/root/.openclaw/workspace/dispatch_state"))
@@ -643,6 +647,12 @@ ETAP4_DECISION_FLAGS = (
     # PICKUP_TIME_UPDATED, ktory atomowo lustrzy czas do aplikacji kuriera.
     # Default OFF = dotychczasowy CK_PASSIVE_SUPPRESSED bajt-w-bajt.
     "ENABLE_CZASOWKA_CK_MANUAL_EDIT_PASSTHROUGH",
+    # RUTCOM-COMMITTED-AUTHORITY (2026-08-01, incydent #491578): aktywna
+    # czasowka w statusie Rutcom 2 moze przyjac przyszly ruch CK do przodu,
+    # nie wczesniejszy niz pickup_at. Wspolny resolver tlumaczy go na jeden
+    # PICKUP_TIME_UPDATED; statusowy ruch wstecz (#483023) nadal jest blokowany.
+    # Default OFF = dotychczasowe CK_PASSIVE_SUPPRESSED bajt-w-bajt.
+    "ENABLE_CZASOWKA_RUTCOM_FORWARD_AUTHORITY",
     # CZASOWKA-RECLAIM (owner 2026-07-21): dwa rozdzielne etapy. SHADOW
     # wyłącznie mierzy durable PICKUP_TIME_UPDATED po zapisie state; LIVE ma
     # uśpiony state-handler, ale nie ma uzbrojonego producenta ani call-site'u.
@@ -683,6 +693,9 @@ STATE_OUTBOX_SWEEPER_MIN_AGE_S = 30.0
 # CK-MANUAL-EDIT: bezpieczny fallback OFF; kanon po ewentualnym flipie =
 # flags.json/decision_flag. Rollback hot: klucz false albo brak klucza.
 ENABLE_CZASOWKA_CK_MANUAL_EDIT_PASSTHROUGH = False
+# RUTCOM-COMMITTED-AUTHORITY: bezpieczny fallback OFF; po jawnej aktywacji
+# kanon = flags.json/decision_flag, rollback hot = false albo brak klucza.
+ENABLE_CZASOWKA_RUTCOM_FORWARD_AUTHORITY = False
 # CZASOWKA-RECLAIM: oba fallbacki OFF. Shadow nie zmienia state/planu/gastro;
 # LIVE pozostaje nieuzbrojony (brak producenta/call-site'u); jego state-handler
 # nie jest kompletnym downstreamem i wymaga osobnej karty oraz ACK ownera.
@@ -2712,7 +2725,7 @@ ENABLE_V319H_BUG2_WAVE_CONTINUATION = _os.environ.get(
 # ============================================================
 ENABLE_V319G_CK_DETECTION = _os.environ.get(
     "ENABLE_V319G_CK_DETECTION", "1") == "1"
-V319G_CK_DELTA_THRESHOLD_MIN = 3.0
+V319G_CK_DELTA_THRESHOLD_MIN = COMMITTED_CK_DELTA_THRESHOLD_MIN
 
 # ============================================================
 # PICKUP_TIME_UPDATED — detekcja zmiany pickup_at_warsaw (czas odbioru).

@@ -60,6 +60,8 @@ NEW_PICKUP = "2026-05-19T12:17:00+02:00"
 
 def _state(pickup_iso, prep=60, cid="393"):
     return {
+        "order_id": "474577",
+        "status": "planned",
         "courier_id": cid,
         "pickup_at_warsaw": pickup_iso,
         "prep_minutes": prep,
@@ -97,7 +99,7 @@ def t2_below_threshold():
 
 
 def t3_above_threshold_474577():
-    """Realny scenariusz 474577: pickup 10:10 → 12:17 (Δ+127min)."""
+    """OFF zachowuje legacy routing, ale wiąże event z rewizją CAS."""
     out = _diff()(_state(OLD_PICKUP), _fresh(NEW_PICKUP), oid="474577")
     p = (out or {}).get("payload", {}) if isinstance(out, dict) else {}
     ok = (
@@ -108,10 +110,48 @@ def t3_above_threshold_474577():
         and p.get("new_pickup_at_warsaw") == NEW_PICKUP
         and abs(p.get("delta_min", 0) - 127.0) < 0.01
         and p.get("source") == "panel_re_check"
+        and "committed_authority" not in p
+        and p.get("pickup_time_revision_at_observation") == 0
         and out.get("event_id_suffix") is None
     )
-    check("3. scenariusz 474577 (Δ=+127min) → emit event z pełnym payload",
+    check("3. OFF: 474577 (Δ=+127min) → legacy event z rewizją CAS",
           ok, detail=f"got={out}")
+
+
+def t3_authority_on_474577():
+    """ON przenosi ten sam pickup do proof-bound authority contract."""
+    from dispatch_v2 import state_machine
+
+    original_decision = state_machine.decision_flag
+    original_flag = state_machine.flag
+    state_machine.decision_flag = lambda name: (
+        name == "ENABLE_CZASOWKA_RUTCOM_FORWARD_AUTHORITY"
+    )
+    state_machine.flag = lambda name, default=None: (
+        True
+        if name == "ENABLE_CZASOWKA_CK_PASSIVE_GUARD"
+        else default
+    )
+    try:
+        out = _diff()(
+            {**_state(OLD_PICKUP), "pickup_time_revision": 0},
+            _fresh(NEW_PICKUP),
+            oid="474577",
+        )
+    finally:
+        state_machine.decision_flag = original_decision
+        state_machine.flag = original_flag
+    p = (out or {}).get("payload", {}) if isinstance(out, dict) else {}
+    ok = (
+        isinstance(out, dict)
+        and p.get("source") == "rutcom_pickup_field"
+        and p.get("observed_source") == "panel_pickup_recheck"
+        and p.get("pickup_time_revision_at_observation") == 0
+        and out.get("event_id_hint", "").startswith(
+            "474577_PICKUP_TIME_UPDATED_COMMITTED_"
+        )
+    )
+    check("3b. ON: 474577 → proof-bound authority event", ok, detail=f"got={out}")
 
 
 def t4_negative_delta():
@@ -183,6 +223,7 @@ def t9_payload_carries_bundle():
 
 
 for _t in (t1_no_change, t2_below_threshold, t3_above_threshold_474577,
+           t3_authority_on_474577,
            t4_negative_delta, t5_null_null, t6_value_to_null,
            t7_null_to_value, t8_parse_fail, t9_payload_carries_bundle):
     run(_t.__name__, _t)
@@ -222,14 +263,15 @@ class _TmpState:
 
 
 def _evt(oid="474577", old=OLD_PICKUP, new=NEW_PICKUP, prep=180,
-         deadline="2026-05-19T12:00:00+02:00", zmiana=True, delta=127.0):
+         deadline="2026-05-19T12:00:00+02:00", zmiana=True, delta=127.0,
+         cid="26"):
     return {
         "event_type": "PICKUP_TIME_UPDATED",
         "order_id": oid,
-        "courier_id": "393",
+        "courier_id": cid,
         "payload": {
             "oid": oid,
-            "courier_id": "393",
+            "courier_id": cid,
             "old_pickup_at_warsaw": old,
             "new_pickup_at_warsaw": new,
             "old_prep_minutes": 60,
@@ -238,6 +280,8 @@ def _evt(oid="474577", old=OLD_PICKUP, new=NEW_PICKUP, prep=180,
             "new_zmiana_czasu_odbioru": zmiana,
             "delta_min": delta,
             "source": "panel_re_check",
+            "assignment_event_id_at_observation": None,
+            "courier_id_at_observation": cid,
         },
     }
 
@@ -307,7 +351,8 @@ def t13_handler_partial_bundle():
     from dispatch_v2 import state_machine
     with _TmpState():
         state_machine.upsert_order("474577", {
-            "status": "assigned", "pickup_at_warsaw": OLD_PICKUP,
+            "status": "assigned", "courier_id": "26",
+            "order_type": "czasowka", "pickup_at_warsaw": OLD_PICKUP,
             "prep_minutes": 60, "decision_deadline": "keep-me",
         }, event="NEW_ORDER")
         state_machine.update_from_event(

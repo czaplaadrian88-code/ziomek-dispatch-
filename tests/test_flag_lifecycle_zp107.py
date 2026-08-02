@@ -10,6 +10,7 @@ cross-repo skip-safe.
 """
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
 import os
@@ -34,6 +35,59 @@ def _load_by_path(name, filename):
 
 CHK = _load_by_path("_flc_check_test", "flag_lifecycle_check.py")
 SD = _load_by_path("_flc_seed_test", "flag_lifecycle_seed.py")
+
+
+def test_symbolic_consumer_scan_resolves_import_alias_and_named_argument():
+    alias_tree = ast.parse(
+        "from dispatch_v2.committed_pickup_authority import "
+        "RUTCOM_FORWARD_AUTHORITY_FLAG as F\n"
+        "from dispatch_v2.common import decision_flag as read_flag\n"
+        "value = read_flag(name=F)\n"
+    )
+    keyword_tree = ast.parse(
+        "value = C.decision_flag("
+        "name=RUTCOM_FORWARD_AUTHORITY_FLAG)\n"
+    )
+
+    assert SD._has_symbolic_consumer_call(
+        alias_tree,
+        "decision_flag",
+        "RUTCOM_FORWARD_AUTHORITY_FLAG",
+    )
+    assert SD._has_symbolic_consumer_call(
+        keyword_tree,
+        "decision_flag",
+        "RUTCOM_FORWARD_AUTHORITY_FLAG",
+    )
+
+
+def test_symbolic_consumer_scan_resolves_module_and_local_aliases():
+    tree = ast.parse(
+        "import dispatch_v2.common as C\n"
+        "import dispatch_v2.committed_pickup_authority as A\n"
+        "read_flag = C.decision_flag\n"
+        "flag_name = A.RUTCOM_FORWARD_AUTHORITY_FLAG\n"
+        "value = read_flag(name=flag_name)\n"
+    )
+
+    assert SD._has_symbolic_consumer_call(
+        tree,
+        "decision_flag",
+        "RUTCOM_FORWARD_AUTHORITY_FLAG",
+    )
+
+
+def test_symbolic_consumer_scan_reserves_exact_literal_reader():
+    tree = ast.parse(
+        'value = C.decision_flag("ENABLE_CZASOWKA_RUTCOM_FORWARD_AUTHORITY")\n'
+    )
+
+    assert SD._has_symbolic_consumer_call(
+        tree,
+        "decision_flag",
+        "RUTCOM_FORWARD_AUTHORITY_FLAG",
+        flag_name="ENABLE_CZASOWKA_RUTCOM_FORWARD_AUTHORITY",
+    )
 
 
 def _registry():
@@ -192,6 +246,117 @@ def test_committed_engine_consumer_paths_have_canonical_root():
         and not consumer.startswith(("dispatch_v2/", "panel:", "courier_api"))
     ]
     assert bad == []
+
+
+@pytest.mark.parametrize(
+    "flag_name",
+    [
+        "ENABLE_CZASOWKA_CK_MANUAL_EDIT_PASSTHROUGH",
+        "ENABLE_CZASOWKA_RUTCOM_FORWARD_AUTHORITY",
+    ],
+)
+def test_committed_authority_flags_have_exact_source_bound_runtime_consumers(
+    flag_name,
+):
+    expected = [
+        "dispatch_v2/committed_pickup_apply.py",
+        "dispatch_v2/dispatch_pipeline.py",
+        "dispatch_v2/state_machine.py",
+        "dispatch_v2/tools/rutcom_committed_authority_rollback.py",
+    ]
+    if flag_name == "ENABLE_CZASOWKA_RUTCOM_FORWARD_AUTHORITY":
+        expected[2:2] = [
+            "dispatch_v2/durable_event_apply.py",
+            "dispatch_v2/panel_watcher.py",
+        ]
+    spec = SD.ENGINE_SYMBOLIC_CONSUMERS[flag_name]
+    entry = _registry()["flags"][flag_name]
+
+    assert spec["consumers"] == expected
+    assert entry["consumers"] == expected
+
+
+def test_rutcom_symbolic_consumer_sources_match_current_ast():
+    SD._validate_symbolic_consumer_sources()
+
+
+def test_symbolic_consumer_validation_rejects_missing_alias_read(tmp_path):
+    root = tmp_path / "dispatch_v2"
+    root.mkdir()
+    (root / "authority.py").write_text(
+        'FLAG_ALIAS = "FLAG_SYMBOLIC"\n', encoding="utf-8"
+    )
+    (root / "reader.py").write_text(
+        "def read():\n    return False\n", encoding="utf-8"
+    )
+    specs = {
+        "FLAG_SYMBOLIC": {
+            "symbol": "FLAG_ALIAS",
+            "definition": "dispatch_v2/authority.py",
+            "accessor": "decision_flag",
+            "consumers": ["dispatch_v2/reader.py"],
+        }
+    }
+
+    with pytest.raises(
+        ValueError, match="SYMBOLIC_CONSUMER_SOURCE_DRIFT.*reader.py"
+    ):
+        SD._validate_symbolic_consumer_sources(str(root), specs)
+
+
+def test_symbolic_consumer_validation_rejects_unlisted_alias_reader(tmp_path):
+    root = tmp_path / "dispatch_v2"
+    root.mkdir()
+    (root / "authority.py").write_text(
+        'FLAG_ALIAS = "FLAG_SYMBOLIC"\n', encoding="utf-8"
+    )
+    read = "def read():\n    return decision_flag(FLAG_ALIAS)\n"
+    (root / "reader.py").write_text(read, encoding="utf-8")
+    (root / "hidden_reader.py").write_text(read, encoding="utf-8")
+    specs = {
+        "FLAG_SYMBOLIC": {
+            "symbol": "FLAG_ALIAS",
+            "definition": "dispatch_v2/authority.py",
+            "accessor": "decision_flag",
+            "consumers": ["dispatch_v2/reader.py"],
+        }
+    }
+
+    with pytest.raises(
+        ValueError,
+        match="consumer set mismatch.*hidden_reader.py",
+    ):
+        SD._validate_symbolic_consumer_sources(str(root), specs)
+
+
+def test_symbolic_consumer_validation_rejects_unlisted_literal_reader(tmp_path):
+    root = tmp_path / "dispatch_v2"
+    root.mkdir()
+    (root / "authority.py").write_text(
+        'FLAG_ALIAS = "FLAG_SYMBOLIC"\n', encoding="utf-8"
+    )
+    (root / "reader.py").write_text(
+        "def read():\n    return decision_flag(FLAG_ALIAS)\n",
+        encoding="utf-8",
+    )
+    (root / "hidden_reader.py").write_text(
+        'def read():\n    return C.decision_flag("FLAG_SYMBOLIC")\n',
+        encoding="utf-8",
+    )
+    specs = {
+        "FLAG_SYMBOLIC": {
+            "symbol": "FLAG_ALIAS",
+            "definition": "dispatch_v2/authority.py",
+            "accessor": "decision_flag",
+            "consumers": ["dispatch_v2/reader.py"],
+        }
+    }
+
+    with pytest.raises(
+        ValueError,
+        match="consumer set mismatch.*hidden_reader.py",
+    ):
+        SD._validate_symbolic_consumer_sources(str(root), specs)
 
 
 def test_catches_flags_json_orphan(tmp_path):
@@ -423,6 +588,13 @@ def test_explicit_absent_transition_becomes_dead_tombstone():
     assert entry["current_snapshot"] == {}
     assert entry["consumers"] == []
     assert fresh["_meta"]["merge_absent_transitioned_dead"] == [name]
+
+    # Obowiazkowy kolejny --merge nie moze mnozyc tej samej noty.
+    fresh_again = {"_meta": {"counts": {}}, "flags": {}}
+    assert SD.merge_curation(fresh_again, fresh["flags"]) == 1
+    note = fresh_again["flags"][name]["notes"]
+    assert note == entry["notes"]
+    assert note.count("RECONCILED 2026-07-30") == 1
 
 
 def test_committed_explicit_dynamic_sources_have_ast_proof():

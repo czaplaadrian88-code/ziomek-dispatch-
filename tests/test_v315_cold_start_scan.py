@@ -6,9 +6,9 @@ direct (state nie ma prior ASSIGNED) → reconcile worker MISSING_FROM_STATE
 phantom 4h+ później.
 
 Fix: _post_restart_cold_start_scan(parsed, csrf) — one-shot post-restart
-iteruje courier_packs i emit COURIER_ASSIGNED dla każdego oid bez entry
-w orders_state lub z empty cid. Bypass V3.15 budget. _cold_start_done
-flag → second call no-op via tick() gate.
+iteruje courier_packs. Dla brakującego rekordu emituje pełny NEW_ORDER przed
+COURIER_ASSIGNED; dla istniejącego rekordu z empty cid wystarcza assignment.
+Bypass V3.15 budget. _cold_start_done flag → second call no-op via tick() gate.
 """
 import importlib
 import json
@@ -300,9 +300,14 @@ def main():
         raw_fetches={"467140": _raw_response("467140", 508, status_id=3)},
         emit_captures=emits,
     )
-    expected_eid = "467140_COURIER_ASSIGNED_508_canonical"
-    expect(f"event_id={expected_eid}",
-           emits and emits[0].get("event_id") == expected_eid)
+    expected_eids = [
+        "467140_NEW_ORDER_first",
+        "467140_COURIER_ASSIGNED_508_canonical",
+    ]
+    expect(
+        f"event_ids={expected_eids}",
+        [event.get("event_id") for event in emits] == expected_eids,
+    )
 
     # --- TEST 14: fetch fail → counter increments + skip oid ---
     print("\n=== test 14: fetch_details fail → cold_start_errors++ ===")

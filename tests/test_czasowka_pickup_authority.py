@@ -13,6 +13,7 @@ przestempluje `czas_kuriera` przy zmianie statusu → pasywny re-odczyt panelu
 import json
 import logging
 import os
+import sqlite3
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -68,22 +69,66 @@ def run(label, fn):
 
 class _TmpState:
     def __enter__(self):
-        from dispatch_v2 import state_machine
+        from dispatch_v2 import event_bus, state_machine
         self.sm = state_machine
+        self.event_bus = event_bus
         self.tmpdir = tempfile.mkdtemp(prefix="czas_auth_")
         self.path = os.path.join(self.tmpdir, "orders.json")
+        self.events_path = os.path.join(self.tmpdir, "events.db")
         with open(self.path, "w") as f:
             json.dump({}, f)
+        with sqlite3.connect(self.events_path) as conn:
+            conn.executescript(
+                """
+                CREATE TABLE events (
+                    event_id TEXT PRIMARY KEY,
+                    event_type TEXT NOT NULL,
+                    order_id TEXT,
+                    courier_id TEXT,
+                    payload TEXT,
+                    created_at TEXT NOT NULL,
+                    processed_at TEXT,
+                    status TEXT DEFAULT 'pending'
+                );
+                CREATE INDEX idx_events_status ON events(status);
+                CREATE TABLE processed_events (
+                    event_id TEXT PRIMARY KEY,
+                    processed_at TEXT NOT NULL
+                );
+                """
+            )
         self._orig = state_machine._state_path
+        self._orig_event_db = event_bus._db_path
+        self._orig_audit_initialized = event_bus._audit_log_initialized
+        self._orig_outbox_initialized = event_bus._state_apply_outbox_initialized
+        self._orig_outbox_db_path = event_bus._state_apply_outbox_db_path
         state_machine._state_path = lambda: self.path
+        event_bus._db_path = lambda: self.events_path
+        event_bus._audit_log_initialized = False
+        event_bus._state_apply_outbox_initialized = False
+        event_bus._state_apply_outbox_db_path = None
         return self
 
     def __exit__(self, *a):
         try:
             self.sm._state_path = self._orig
+            self.event_bus._db_path = self._orig_event_db
+            self.event_bus._audit_log_initialized = self._orig_audit_initialized
+            self.event_bus._state_apply_outbox_initialized = (
+                self._orig_outbox_initialized
+            )
+            self.event_bus._state_apply_outbox_db_path = (
+                self._orig_outbox_db_path
+            )
         except Exception:
             pass
-        for p in (self.path, self.path + ".lock"):
+        for p in (
+            self.path,
+            self.path + ".lock",
+            self.events_path,
+            self.events_path + "-wal",
+            self.events_path + "-shm",
+        ):
             try:
                 os.unlink(p)
             except FileNotFoundError:
@@ -145,9 +190,14 @@ def _ck_evt(oid, new_iso, new_hhmm, source):
 
 def _manual_ck_evt(oid, new_iso, new_hhmm, source="panel_re_check",
                    marker=True, observed_pickup=_PICKUP, status_id=3,
-                   observed_prep=None):
+                   observed_prep=None, old_iso=_CK, old_hhmm="16:22"):
     evt = _ck_evt(oid, new_iso, new_hhmm, source)
     evt["payload"].update({
+        "old_ck_iso": old_iso,
+        "old_ck_hhmm": old_hhmm,
+        "courier_id_at_observation": "484",
+        "assignment_event_id_at_observation": None,
+        "pickup_time_revision_at_observation": 0,
         "new_zmiana_czasu_odbioru": marker,
         "observed_pickup_at_warsaw": observed_pickup,
         "observed_status_id": status_id,
@@ -242,10 +292,14 @@ def t7_sm_elastyk_panel_re_check_applies():
 print("=== PICKUP_TIME_UPDATED mirrors pickup → czas_kuriera (czasówka) ===")
 
 
-def _pickup_evt(oid, new_pickup):
+def _pickup_evt(oid, new_pickup, cid="484"):
     return {"event_type": "PICKUP_TIME_UPDATED", "order_id": oid,
+            "courier_id": cid,
             "payload": {"new_pickup_at_warsaw": new_pickup,
-                        "old_pickup_at_warsaw": _PICKUP, "source": "panel_re_check"}}
+                        "old_pickup_at_warsaw": _PICKUP,
+                        "assignment_event_id_at_observation": None,
+                        "courier_id_at_observation": cid,
+                        "source": "panel_re_check"}}
 
 
 def t8_pickup_forward_mirrors_ck():
@@ -274,7 +328,7 @@ def t10_pickup_elastyk_no_mirror():
     from dispatch_v2 import state_machine as sm
     with _TmpState():
         _seed_elastyk(sm)
-        sm.update_from_event(_pickup_evt("490100", _LATER))
+        sm.update_from_event(_pickup_evt("490100", _LATER, cid="400"))
         got = sm.get_order("490100") or {}
         check("10. ELASTYK pickup change → czas_kuriera NOT mirrored (stays 16:22)",
               got.get("czas_kuriera_hhmm") == "16:22", f"ck={got.get('czas_kuriera_hhmm')}")
@@ -410,6 +464,7 @@ def t17_manual_state_on_updates_pickup_and_courier_app_time():
         evt = _manual_ck_evt(
             "489052", _I489052_MANUAL, "11:41",
             observed_pickup=_I489052_PICKUP,
+            old_iso=_I489052_CK, old_hhmm="12:01",
         )
         with patch.object(sm, "decision_flag", return_value=True), \
              patch.object(sm, "flag", side_effect=_test_flag):
@@ -435,6 +490,7 @@ def t18_gastro_restamp_blocked_off_and_on():
             evt = _manual_ck_evt(
                 "489052", _I489052_MANUAL, "11:41", marker=False,
                 observed_pickup=_I489052_PICKUP,
+                old_iso=_I489052_CK, old_hhmm="12:01",
             )
             with patch.object(sm, "decision_flag", return_value=enabled), \
                  patch.object(sm, "flag", side_effect=_test_flag):
@@ -464,20 +520,19 @@ def t19_preproposal_twin_updates_state_and_refreshes_app_view():
              patch.object(dp.C, "flag", side_effect=_test_flag), \
              patch.object(sm, "decision_flag", return_value=True), \
              patch.object(sm, "flag", side_effect=_test_flag), \
-             patch("dispatch_v2.event_bus.emit_audit") as audit, \
              patch("dispatch_v2.plan_manager.touch_plan", return_value=True) as touch:
             dp._v327_emit_pre_recheck_event(
                 "489052", "484", _I489052_CK, _I489052_MANUAL,
                 "11:41", datetime.now(timezone.utc), fresh_time=fresh_time,
             )
         got = sm.get_order("489052") or {}
-        audit_type = audit.call_args.args[0] if audit.call_args else None
         check("19. pre_proposal twin: PICKUP event + state mirror + plan_version refresh",
               got.get("pickup_at_warsaw") == _I489052_MANUAL
               and got.get("czas_kuriera_hhmm") == "11:41"
-              and audit_type == "PICKUP_TIME_UPDATED"
+              and (got.get("history") or [{}])[-1].get("event")
+              == "PICKUP_TIME_UPDATED"
               and touch.call_count == 1,
-              f"got={got} audit={audit_type} touch={touch.call_count}")
+              f"got={got} touch={touch.call_count}")
 
 
 def t20_elastyk_unchanged_with_new_flag_on():
@@ -525,19 +580,14 @@ def t22_manual_signal_mutation_tripwires():
           f"pickup_evt={pickup_evt} status_evt={status_evt}")
 
 
-def t23_app_refresh_respects_existing_kill_switch():
+def t23_preproposal_has_no_parallel_view_writer():
+    from dispatch_v2 import committed_pickup_apply as cpa
     from dispatch_v2 import dispatch_pipeline as dp
-    with patch.object(dp.C, "ENABLE_SAVED_PLANS", True), \
-         patch("dispatch_v2.plan_manager.touch_plan", return_value=True) as touch:
-        with patch.object(dp.C, "flag", return_value=False):
-            dp._v327_touch_committed_view("489052", "484")
-        blocked_calls = touch.call_count
-        with patch.object(dp.C, "flag", return_value=True):
-            dp._v327_touch_committed_view("489052", "484")
-        enabled_calls = touch.call_count
-    check("23. refresh apki respektuje ENABLE_COMMITTED_INVALIDATES_VIEW OFF/ON",
-          blocked_calls == 0 and enabled_calls == 1,
-          f"blocked={blocked_calls} enabled={enabled_calls}")
+    check(
+        "23. preproposal nie utrzymuje rownoleglego writera planu/apki",
+        not hasattr(dp, "_v327_touch_committed_view")
+        and cpa.lifecycle_downstream.apply is not None,
+    )
 
 
 def t24_preproposal_fetch_off_is_exact_legacy_tuple():
@@ -571,7 +621,7 @@ for lbl, fn in [
     ("t20", t20_elastyk_unchanged_with_new_flag_on),
     ("t21", t21_new_flag_registered_default_off),
     ("t22", t22_manual_signal_mutation_tripwires),
-    ("t23", t23_app_refresh_respects_existing_kill_switch),
+    ("t23", t23_preproposal_has_no_parallel_view_writer),
     ("t24", t24_preproposal_fetch_off_is_exact_legacy_tuple),
 ]:
     run(lbl, fn)
