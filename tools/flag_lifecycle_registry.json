@@ -2,16 +2,16 @@
  "_meta": {
   "counts": {
    "apka": 29,
-   "engine": 439,
+   "engine": 440,
    "engine_1b_units": 13,
-   "etap4": 154,
-   "flags_json_keys": 268,
+   "etap4": 155,
+   "flags_json_keys": 271,
    "fp_extra": 37,
    "known_drift": 0,
    "numeric": 36,
    "panel": 88,
    "test_isolated": 8,
-   "total": 556,
+   "total": 557,
    "twins_concepts": 8
   },
   "generator": "tools/flag_lifecycle_seed.py",
@@ -6765,7 +6765,7 @@
    "lifecycle": "dead",
    "lifecycle_seeded": false,
    "name": "ENABLE_FALLBACK_HONEST_OSRM_ETA",
-   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
+   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
    "owner": {
     "business": "Adrian",
     "service": "courier-api.service"
@@ -7212,7 +7212,7 @@
    "lifecycle": "dead",
    "lifecycle_seeded": false,
    "name": "ENABLE_FROZEN_PICKUP_ETA",
-   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
+   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
    "owner": {
     "business": "Adrian",
     "service": "courier-api.service"
@@ -8008,6 +8008,7 @@
   },
   "ENABLE_GPS_MERGE_LOCK": {
    "carriers": [
+    "flags.json",
     "explicit-dynamic-source-scan"
    ],
    "consumers": [
@@ -8016,7 +8017,7 @@
    ],
    "curated_at": "2026-08-02",
    "current_snapshot": {
-    "default": false
+    "flags.json": true
    },
    "default": false,
    "intentional_per_process": {
@@ -8036,7 +8037,7 @@
    "removal_condition": "flip ON PO OBU stronach (dispatch-gps + courier-api) + kill-test Sol (0 utraty cross-proces) + 2 dni shadow: gps_pwa_cid_vanished_total==0 (kanarek niezaktualizowanego blizniaka/jednostronnej flagi) ORAZ stale_skipped w normie",
    "review_date": "2026-08-12",
    "rollback": "flaga OFF = brak w flags.json (default False w kodzie) — zero live; ON tylko za ACK + restart dispatch-gps ORAZ courier-api (obie strony MUSZĄ mieć ON)",
-   "source_of_truth": "explicit-dynamic-source-scan",
+   "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [
     "engine"
@@ -8961,7 +8962,7 @@
    "lifecycle": "dead",
    "lifecycle_seeded": false,
    "name": "ENABLE_LIVE_ETA_FRESH_OVERRIDE_ONLY",
-   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
+   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
    "owner": {
     "business": "Adrian",
     "service": "courier-api.service"
@@ -13342,7 +13343,7 @@
    "lifecycle": "dead",
    "lifecycle_seeded": false,
    "name": "ENABLE_SAME_DEST_DROPOFF_ONE_ETA",
-   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
+   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
    "owner": {
     "business": "Adrian",
     "service": "courier-api.service"
@@ -16987,7 +16988,7 @@
    "lifecycle": "dead",
    "lifecycle_seeded": false,
    "name": "LIVE_ETA_FRESH_OVERRIDE_ONLY",
-   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
+   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
    "owner": {
     "business": "Adrian",
     "service": "nadajesz-panel.service"
@@ -17021,7 +17022,7 @@
    "lifecycle": "dead",
    "lifecycle_seeded": false,
    "name": "LIVE_ETA_MAX_AGE_MIN",
-   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
+   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
    "owner": {
     "business": "Adrian",
     "service": "courier-api.service"
@@ -17376,7 +17377,7 @@
    "lifecycle": "dead",
    "lifecycle_seeded": false,
    "name": "MONOTONIC_ROUTE_TIMES",
-   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
+   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
    "owner": {
     "business": "Adrian",
     "service": "nadajesz-panel.service"
@@ -18682,7 +18683,7 @@
    "lifecycle": "dead",
    "lifecycle_seeded": false,
    "name": "PIN_AGREED_PICKUP_TIME",
-   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
+   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
    "owner": {
     "business": "Adrian",
     "service": "nadajesz-panel.service"
@@ -19593,7 +19594,7 @@
    "lifecycle": "dead",
    "lifecycle_seeded": false,
    "name": "SEED_PICKUP_TIME_FROM_AGREED",
-   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
+   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
    "owner": {
     "business": "Adrian",
     "service": "nadajesz-panel.service"
