@@ -2,16 +2,16 @@
  "_meta": {
   "counts": {
    "apka": 27,
-   "engine": 434,
+   "engine": 435,
    "engine_1b_units": 12,
-   "etap4": 154,
+   "etap4": 155,
    "flags_json_keys": 267,
    "fp_extra": 35,
    "known_drift": 0,
    "numeric": 36,
    "panel": 88,
    "test_isolated": 8,
-   "total": 549,
+   "total": 550,
    "twins_concepts": 8
   },
   "generator": "tools/flag_lifecycle_seed.py",
@@ -4748,7 +4748,6 @@
     "explicit-dynamic-source-scan"
    ],
    "consumers": [
-    "dispatch_v2/dispatch_pipeline.py",
     "dispatch_v2/durable_event_apply.py",
     "dispatch_v2/panel_watcher.py"
    ],
@@ -5043,9 +5042,10 @@
     "common.py:ETAP4_DECISION_FLAGS"
    ],
    "consumers": [
-    "dispatch_v2/common.py",
+    "dispatch_v2/committed_pickup_apply.py",
     "dispatch_v2/dispatch_pipeline.py",
-    "dispatch_v2/state_machine.py"
+    "dispatch_v2/state_machine.py",
+    "dispatch_v2/tools/rutcom_committed_authority_rollback.py"
    ],
    "curated_at": "2026-07-20",
    "current_snapshot": {
@@ -5080,7 +5080,8 @@
     "flags.json"
    ],
    "consumers": [
-    "dispatch_v2/panel_watcher.py",
+    "dispatch_v2/committed_pickup_apply.py",
+    "dispatch_v2/durable_event_apply.py",
     "dispatch_v2/state_machine.py"
    ],
    "curated_at": "2026-07-10",
@@ -5187,6 +5188,46 @@
    "twin_of": [
     "ENABLE_CZASOWKA_RECLAIM_LIVE"
    ],
+   "worlds": [
+    "engine"
+   ]
+  },
+  "ENABLE_CZASOWKA_RUTCOM_FORWARD_AUTHORITY": {
+   "carriers": [
+    "common.py:ETAP4_DECISION_FLAGS"
+   ],
+   "consumers": [
+    "dispatch_v2/committed_pickup_apply.py",
+    "dispatch_v2/dispatch_pipeline.py",
+    "dispatch_v2/durable_event_apply.py",
+    "dispatch_v2/panel_watcher.py",
+    "dispatch_v2/state_machine.py",
+    "dispatch_v2/tools/rutcom_committed_authority_rollback.py"
+   ],
+   "curated_at": "2026-08-01",
+   "current_snapshot": {
+    "default": false
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_CZASOWKA_RUTCOM_FORWARD_AUTHORITY",
+   "notes": "Incydent #491578: aktywna czasowka + Rutcom status 2 + przyszly ruch CK do przodu, nie przed pickup_at, przechodzi przez jeden resolver do PICKUP_TIME_UPDATED. #483023 (ruch wstecz/przed gotowoscia) i post-pickup pozostaja blokowane. Owner 2026-08-01 jawnie polecil docelowy flip ON po zielonych bramkach i wdrozeniu.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-shadow.service + dispatch-panel-watcher.service"
+   },
+   "removal_condition": "po minimum 2 dniach poprawnej obserwacji i utrwaleniu kontraktu jako bezwarunkowego kanonu albo retire za decyzja ownera",
+   "review_date": "2026-08-08",
+   "rollback": "flags.json OFF hot-reload (bez restartu)",
+   "source_of_truth": "common.py-const",
+   "twin_of": [],
    "worlds": [
     "engine"
    ]
@@ -13106,7 +13147,6 @@
    "consumers": [
     "dispatch_v2/common.py",
     "dispatch_v2/common.py:ENABLE_SAVED_PLANS",
-    "dispatch_v2/dispatch_pipeline.py",
     "dispatch_v2/durable_event_apply.py",
     "dispatch_v2/lifecycle_downstream.py",
     "dispatch_v2/panel_watcher.py"

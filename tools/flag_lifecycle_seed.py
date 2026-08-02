@@ -90,7 +90,6 @@ ENGINE_EXPLICIT_DYNAMIC = {
     "ENABLE_COMMITTED_INVALIDATES_VIEW": {
         "default": True,
         "consumers": [
-            "dispatch_v2/dispatch_pipeline.py",
             "dispatch_v2/durable_event_apply.py",
             "dispatch_v2/panel_watcher.py",
         ],
@@ -113,6 +112,38 @@ ENGINE_EXPLICIT_DYNAMIC = {
             "key_const": "PINGPONG_MARGIN_MULTIPLIER_KEY",
             "default_const": "DEFAULT_PINGPONG_MARGIN_MULTIPLIER",
         },
+    },
+}
+
+# Aliasowe readery nie zawierają literalnej nazwy flagi, więc zwykły token
+# scan myli definicję stałej z consumerem i pomija realne decision_flag(...).
+# Każdy wpis jest związany AST-em zarówno z definicją aliasu, jak i z dokładną
+# listą runtime readerów. To nie jest ręczny fallback: drift źródła przerywa
+# re-seed zamiast utrwalać historyczny snapshot.
+ENGINE_SYMBOLIC_CONSUMERS = {
+    "ENABLE_CZASOWKA_CK_MANUAL_EDIT_PASSTHROUGH": {
+        "symbol": "MANUAL_CK_AUTHORITY_FLAG",
+        "definition": "dispatch_v2/committed_pickup_authority.py",
+        "accessor": "decision_flag",
+        "consumers": [
+            "dispatch_v2/committed_pickup_apply.py",
+            "dispatch_v2/dispatch_pipeline.py",
+            "dispatch_v2/state_machine.py",
+            "dispatch_v2/tools/rutcom_committed_authority_rollback.py",
+        ],
+    },
+    "ENABLE_CZASOWKA_RUTCOM_FORWARD_AUTHORITY": {
+        "symbol": "RUTCOM_FORWARD_AUTHORITY_FLAG",
+        "definition": "dispatch_v2/committed_pickup_authority.py",
+        "accessor": "decision_flag",
+        "consumers": [
+            "dispatch_v2/committed_pickup_apply.py",
+            "dispatch_v2/dispatch_pipeline.py",
+            "dispatch_v2/durable_event_apply.py",
+            "dispatch_v2/panel_watcher.py",
+            "dispatch_v2/state_machine.py",
+            "dispatch_v2/tools/rutcom_committed_authority_rollback.py",
+        ],
     },
 }
 
@@ -588,7 +619,17 @@ def merge_curation(fresh, old_flags):
                 "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot "
                 "zastąpiony audytowalnym tombstone."
             )
-            entry["notes"] = f"{note} | {transition_note}" if note else transition_note
+            note_parts = [
+                part.strip()
+                for part in str(note or "").split(" | ")
+                if part.strip()
+            ]
+            if transition_note not in note_parts:
+                note_parts.append(transition_note)
+            # ``--merge`` jest rytualem wielokrotnym. Tombstone musi byc
+            # idempotentny, inaczej kazdy poprawny re-seed dopisuje ten sam
+            # historyczny dowod i generuje niezwiazany drift rejestru.
+            entry["notes"] = " | ".join(dict.fromkeys(note_parts))
             fresh["flags"][name] = entry
             absent_transitioned_dead.append(name)
             preserved += 1
@@ -717,10 +758,202 @@ def _validate_explicit_dynamic_sources(
         raise ValueError("EXPLICIT_DYNAMIC_SOURCE_DRIFT: " + "; ".join(errors))
 
 
+def _validate_symbolic_consumer_sources(
+    root: str | None = None,
+    specs: dict | None = None,
+) -> None:
+    """Prove alias value and every declared runtime decision reader by AST."""
+    root = root or DISPATCH_V2
+    specs = specs or ENGINE_SYMBOLIC_CONSUMERS
+    errors = []
+    for name, spec in sorted(specs.items()):
+        symbol = spec["symbol"]
+        accessor = spec["accessor"]
+        consumers = spec["consumers"]
+        if consumers != sorted(set(consumers)) or not consumers:
+            errors.append(f"{name}: consumers must be non-empty sorted unique")
+
+        definition = spec["definition"]
+        definition_path = _explicit_source_path(root, definition)
+        try:
+            definition_tree = ast.parse(
+                open(definition_path, encoding="utf-8").read(),
+                filename=definition_path,
+            )
+        except (OSError, SyntaxError) as ex:
+            errors.append(
+                f"{name}@{definition}: unreadable {type(ex).__name__}"
+            )
+            definition_tree = None
+        if (
+            definition_tree is not None
+            and _ast_constants(definition_tree).get(symbol) != name
+        ):
+            errors.append(f"{name}@{definition}: {symbol} mismatch")
+
+        discovered = set()
+        source_glob = os.path.join(root, "**", "*.py")
+        for path in sorted(glob.glob(source_glob, recursive=True)):
+            rel = os.path.relpath(path, root).replace(os.sep, "/")
+            if set(rel.split("/")).intersection(
+                {"tests", ".claude", "eod_drafts"}
+            ):
+                continue
+            consumer = f"dispatch_v2/{rel}"
+            try:
+                tree = ast.parse(
+                    open(path, encoding="utf-8").read(), filename=path
+                )
+            except (OSError, SyntaxError) as ex:
+                errors.append(
+                    f"{name}@{consumer}: unreadable {type(ex).__name__}"
+                )
+                continue
+            if _has_symbolic_consumer_call(
+                tree,
+                accessor,
+                symbol,
+                flag_name=name,
+            ):
+                discovered.add(consumer)
+
+        for consumer in consumers:
+            path = _explicit_source_path(root, consumer)
+            try:
+                tree = ast.parse(
+                    open(path, encoding="utf-8").read(), filename=path
+                )
+            except (OSError, SyntaxError) as ex:
+                errors.append(
+                    f"{name}@{consumer}: unreadable {type(ex).__name__}"
+                )
+                continue
+            if not _has_symbolic_consumer_call(
+                tree,
+                accessor,
+                symbol,
+                flag_name=name,
+            ):
+                errors.append(
+                    f"{name}@{consumer}: missing {accessor}({symbol})"
+                )
+        expected = set(consumers)
+        if discovered != expected:
+            errors.append(
+                f"{name}: consumer set mismatch "
+                f"missing={sorted(expected - discovered)!r} "
+                f"unexpected={sorted(discovered - expected)!r}"
+            )
+    if errors:
+        raise ValueError(
+            "SYMBOLIC_CONSUMER_SOURCE_DRIFT: " + "; ".join(errors)
+        )
+
+
+def _has_symbolic_consumer_call(
+    tree: ast.AST,
+    accessor: str,
+    symbol: str,
+    *,
+    flag_name: str | None = None,
+) -> bool:
+    symbol_names = {symbol}
+    accessor_names = {accessor}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ImportFrom):
+            continue
+        for imported in node.names:
+            local = imported.asname or imported.name
+            if imported.name == symbol:
+                symbol_names.add(local)
+            if imported.name == accessor:
+                accessor_names.add(local)
+
+    # Conservative fixed point for local aliases (F = FLAG; read = accessor).
+    assignments = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Assign, ast.AnnAssign))
+    ]
+
+    def _name_or_attr(node: ast.AST) -> str | None:
+        if isinstance(node, ast.Name):
+            return node.id
+        if isinstance(node, ast.Attribute):
+            return node.attr
+        return None
+
+    for _ in range(len(assignments) + 1):
+        changed = False
+        for node in assignments:
+            value = node.value
+            targets = (
+                node.targets
+                if isinstance(node, ast.Assign)
+                else [node.target]
+            )
+            value_name = _name_or_attr(value)
+            value_is_literal_flag = bool(
+                flag_name
+                and isinstance(value, ast.Constant)
+                and value.value == flag_name
+            )
+            if value_name is None and not value_is_literal_flag:
+                continue
+            for target in targets:
+                if not isinstance(target, ast.Name):
+                    continue
+                if (
+                    (value_name in symbol_names or value_is_literal_flag)
+                    and target.id not in symbol_names
+                ):
+                    symbol_names.add(target.id)
+                    changed = True
+                if (
+                    value_name in accessor_names
+                    and target.id not in accessor_names
+                ):
+                    accessor_names.add(target.id)
+                    changed = True
+        if not changed:
+            break
+
+    def _is_symbol(node: ast.AST) -> bool:
+        if (
+            flag_name
+            and isinstance(node, ast.Constant)
+            and node.value == flag_name
+        ):
+            return True
+        name = _name_or_attr(node)
+        return bool(name and name in symbol_names)
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        is_accessor = bool(
+            isinstance(node.func, ast.Name)
+            and node.func.id in accessor_names
+            or isinstance(node.func, ast.Attribute)
+            and node.func.attr == accessor
+        )
+        if not is_accessor:
+            continue
+        if node.args and _is_symbol(node.args[0]):
+            return True
+        if any(
+            keyword.arg == "name" and _is_symbol(keyword.value)
+            for keyword in node.keywords
+        ):
+            return True
+    return False
+
+
 def build_registry(flags_json=DEF_FLAGS_JSON, systemd_dir=DEF_SYSTEMD_DIR,
                    panel_dir=DEF_PANEL_DIR, courier_dir=DEF_COURIER_DIR,
                    panelsync_dir=DEF_PANELSYNC_DIR):
     _validate_explicit_dynamic_sources()
+    _validate_symbolic_consumer_sources()
     common_py = os.path.join(DISPATCH_V2, "common.py")
     src = open(common_py, encoding="utf-8").read()
     etap4 = _tuple_names(src, "ETAP4_DECISION_FLAGS")
@@ -770,6 +1003,7 @@ def build_registry(flags_json=DEF_FLAGS_JSON, systemd_dir=DEF_SYSTEMD_DIR,
     # ── ENGINE: unia nazw z tupli ∪ flags.json ∪ env-frozen-module ∪ 1b-systemd ──
     engine_names = (decision_all | numeric_set | set(test_iso) | set(fjson)
                     | set(ENGINE_EXPLICIT_DYNAMIC)
+                    | set(ENGINE_SYMBOLIC_CONSUMERS)
                     | set(envfrozen_engine)
                     | {n for env in engine_units_env.values() for n in env})
     for name in sorted(engine_names):
@@ -778,6 +1012,7 @@ def build_registry(flags_json=DEF_FLAGS_JSON, systemd_dir=DEF_SYSTEMD_DIR,
         is_decision = name in decision_all
         is_numeric = name in numeric_set
         explicit_dynamic = ENGINE_EXPLICIT_DYNAMIC.get(name)
+        symbolic_consumers = ENGINE_SYMBOLIC_CONSUMERS.get(name)
         d = envfrozen_engine.get(name) or defs.get(name) or explicit_dynamic
         default = (d or {}).get("default")
         carriers, snap = [], {}
@@ -854,6 +1089,8 @@ def build_registry(flags_json=DEF_FLAGS_JSON, systemd_dir=DEF_SYSTEMD_DIR,
         if name in envfrozen_engine:
             cons = sorted(set(cons) |
                           {f"{envfrozen_engine[name]['file']}:{envfrozen_engine[name]['const']}"})
+        if symbolic_consumers:
+            cons = list(symbolic_consumers["consumers"])
         e.update({
             "source_of_truth": sot,
             "carriers": _dedup(e["carriers"] + carriers),

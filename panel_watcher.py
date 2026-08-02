@@ -48,6 +48,13 @@ from dispatch_v2.osrm_client import haversine as _haversine_km
 from dispatch_v2.core.broadcast_handlers import dispatch_config_reload
 from dispatch_v2.core.config_reload_subscriber import BroadcastSubscriber
 from dispatch_v2.event_bus import emit, emit_audit
+from dispatch_v2.committed_pickup_authority import (
+    RUTCOM_FORWARD_AUTHORITY_FLAG,
+    ResolutionOutcome,
+    build_time_event_cas_snapshot,
+    normalize_pickup_revision,
+    state_has_committed_pickup_artifact,
+)
 from dispatch_v2.parser_health import get_monitor as get_parser_health_monitor
 from dispatch_v2.parser_health_layer3 import install_layer3, record_tick_full
 from dispatch_v2.parser_health_endpoint import start_health_endpoint
@@ -71,7 +78,6 @@ from dispatch_v2.panel_client import (
 from dispatch_v2.state_machine import (
     ORDER_DETAILS_ENRICHMENT_FIELDS,
     ORDER_DETAILS_ENRICHMENT_REQUIRED_FIELDS,
-    build_czasowka_manual_ck_pickup_event,
     event_effect_status,
     get_all as state_get_all,
     get_order as state_get_order,
@@ -79,6 +85,8 @@ from dispatch_v2.state_machine import (
     update_from_event,
     upsert_order,
     touch_check_cursor,
+    resolve_czasowka_ck_observation,
+    resolve_czasowka_pickup_observation,
 )
 from dispatch_v2.geocoding import geocode
 
@@ -144,8 +152,9 @@ _DETAILS_HEAL_RETRY_STATE: dict[str, tuple[int, float]] = {}
 # MISSING_FROM_STATE phantoms gdy panel-watcher restart in-peak drops
 # COURIER_ASSIGNED dla orderów mid-way ASSIGN→PICKUP (post-restart diff
 # emit COURIER_PICKED_UP direct bez prior ASSIGNED). Scan iteruje
-# parsed["courier_packs"] i emit COURIER_ASSIGNED dla każdego oid bez
-# entry w orders_state lub z empty cid. Bypasses V3.15 budget (one-shot).
+# parsed["courier_packs"] i dla nieobecnego oid odtwarza pełny NEW_ORDER przed
+# COURIER_ASSIGNED; rekord z empty cid dostaje tylko assignment. Bypasses V3.15
+# budget (one-shot).
 _cold_start_done = False
 # Lookup address_id -> coords. MP-#12 (2026-05-08): mtime-based hot-reload co 15s
 # eliminuje konieczność restart'u panel_watcher gdy restaurant_coords.json zmieniony
@@ -1863,18 +1872,25 @@ def _update_plan_on_picked_up(
             raise
 
 
+def _time_event_cas_enabled(old_state: dict) -> bool:
+    """New writes are versioned while rollout or persisted provenance is live."""
+    return bool(
+        C.decision_flag(RUTCOM_FORWARD_AUTHORITY_FLAG)
+        or state_has_committed_pickup_artifact(old_state)
+    )
+
+
 def _diff_czas_kuriera(old_state: dict, fresh_response: dict,
-                      oid: str, deliberate: bool = False) -> Optional[dict]:
+                      oid: str, deliberate: bool = False,
+                      authority_receipt: Optional[dict] = None) -> Optional[dict]:
     """V3.19g1: detect czas_kuriera change for already-assigned order.
 
-    deliberate=True (force-recheck na żądanie koordynatora, kolejka
-    coordinator_time_recheck): pasywne strażniki (czasówka-passive, elastyk
-    forward-only) są POMIJANE i source="coordinator_force" — klik człowieka to
-    świadoma zmiana, ściągamy nowy czas w OBIE strony (state_machine też przepuści,
-    bo coordinator_force ∉ _CK_PASSIVE_SOURCES). Próg szumu ±3min zostaje.
+    deliberate=True omija forward-only elastyka. Dla czasowki wymagany jest
+    dodatkowo trwaly ``authority_receipt`` z kolejki v3; sam bool nie jest
+    dowodem decyzji i nie moze bocznym kanalem nadpisac committed czasu.
 
     Returns None (no-op) when:
-      - no change, below threshold, first acceptance (null→val), val→null revert
+      - no change, below threshold, val→null revert
     Returns event dict ({event_type, order_id, courier_id, payload}) when
     |Δt| >= V319G_CK_DELTA_THRESHOLD_MIN (default 3 min).
 
@@ -1893,101 +1909,98 @@ def _diff_czas_kuriera(old_state: dict, fresh_response: dict,
     # null→null
     if not old_ck_iso and not new_ck_iso:
         return None
-    # V3.27.1 BUG-1: null→value (first acceptance) — emit synth event z source=first_acceptance.
-    # Pre-V3.27.1 zwracało None tutaj — efekt: 100% (47/47) assigned/picked_up orderów
-    # miało czas_kuriera_warsaw=None w orders_state.json. delta_min=None (brak baseline).
-    if not old_ck_iso and new_ck_iso:
-        payload = {
-            "oid": oid,
-            "courier_id": old_state.get("courier_id"),
-            "old_ck_iso": None,
-            "old_ck_hhmm": None,
-            "new_ck_iso": new_ck_iso,
-            "new_ck_hhmm": new_ck_hhmm,
-            "delta_min": None,
-            "source": "first_acceptance",
-        }
-        return {
-            "event_type": "CZAS_KURIERA_UPDATED",
-            "order_id": oid,
-            "courier_id": old_state.get("courier_id"),
-            "payload": payload,
-            "event_id_suffix": "_FIRST_ACK",
-        }
     # value→null (panel revert — warn, skip)
     if old_ck_iso and not new_ck_iso:
         _log.warning(f"v319g1 oid={oid} ck_change_to_null old={old_ck_hhmm}")
         return None
 
-    # value→value — compute signed delta
-    try:
-        old_dt = datetime.fromisoformat(old_ck_iso)
-        new_dt = datetime.fromisoformat(new_ck_iso)
-    except (ValueError, TypeError) as e:
-        _log.warning(f"v319g1 oid={oid} ck iso parse fail: {e}")
+    # Null→value i value→value mają jeden policy path. Pierwsza akceptacja nie
+    # ma liczbowego baseline, ale deliberate receipt nadal musi dojść do
+    # kanonicznego resolvera czasówki zamiast raw-CK bocznym kanałem.
+    first_acceptance = not old_ck_iso and bool(new_ck_iso)
+    delta_min = None
+    if not first_acceptance:
+        try:
+            old_dt = datetime.fromisoformat(old_ck_iso)
+            new_dt = datetime.fromisoformat(new_ck_iso)
+        except (ValueError, TypeError) as e:
+            _log.warning(f"v319g1 oid={oid} ck iso parse fail: {e}")
+            return None
+        delta_min = (new_dt - old_dt).total_seconds() / 60.0
+    # Exact parytet z base i jedna polityka noise-floor dla obu klas. Nowy
+    # authority rozstrzyga znaczenie zmiany dopiero po przejsciu starego progu.
+    if (
+        delta_min is not None
+        and abs(delta_min) < V319G_CK_DELTA_THRESHOLD_MIN
+    ):
         return None
 
-    delta_min = (new_dt - old_dt).total_seconds() / 60.0
-    if abs(delta_min) < V319G_CK_DELTA_THRESHOLD_MIN:
-        return None  # noise floor
-
-    # Source-block L1 (Adrian 2026-06-24, root #483023): dla CZASÓWKI umówiony
-    # czas = pickup_at_warsaw. Gastro przestempluje `czas_kuriera` przy zmianie
-    # statusu → ten pasywny re-odczyt to śmieć (16:22→15:04 5 s po assignie).
-    # NIE emituj (żeby nie odpalić FIX-E „apka odświeży widok" + audit na bzdurze).
-    # Autorytatywny bliźniak: state_machine CZAS_KURIERA_UPDATED (_CK_PASSIVE_SOURCES).
-    # Zmiana umówionego czasu czasówki idzie kanałem pickup_at (PICKUP_TIME_UPDATED).
+    # Czasowka: jeden resolver rozroznia statusowy re-stamp od committed czasu
+    # Rutcom i zawsze zwraca kanoniczny PICKUP_TIME_UPDATED. Panel watcher nie
+    # utrzymuje drugiej kopii polityki.
     _is_czas = C.is_czasowka_order(old_state)
     try:
         from dispatch_v2.common import flag as _flag
     except Exception:
         _flag = None
     if _is_czas:
-        # Czasówka: committed = pickup_at, a czas_kuriera to przeklepywany przez gastro
-        # ŚMIEĆ (re-stamp na zmianie statusu) — guard suppress ZAWSZE, także przy deliberate
-        # (force koordynatora ściąga czasówkę kanałem pickup_at → PICKUP_TIME_UPDATED, który
-        # mirroruje na czas_kuriera). Bypass tu pociągnąłby śmieciowy czas_kuriera.
-        _guard = _flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True) if _flag else True
-        if _guard:
-            # Incydent #489052: gastro wystawia marker recznej zmiany czasu.
-            # Wspolny, fail-closed classifier ze state_machine dopuszcza tylko
-            # krawedz False->True przy stabilnym pickup/statusie i zwraca
-            # kanoniczny PICKUP_TIME_UPDATED (nie bezposredni writer CK).
-            _manual_payload = {
-                "oid": oid,
-                "courier_id": old_state.get("courier_id"),
-                "old_ck_iso": old_ck_iso,
-                "old_ck_hhmm": old_ck_hhmm,
-                "new_ck_iso": new_ck_iso,
-                "new_ck_hhmm": new_ck_hhmm,
-                "delta_min": round(delta_min, 2),
-                "source": "coordinator_force" if deliberate else "panel_re_check",
-                "new_zmiana_czasu_odbioru": fresh_response.get(
-                    "zmiana_czasu_odbioru"
-                ),
-                "observed_pickup_at_warsaw": fresh_response.get(
-                    "pickup_at_warsaw"
-                ),
-                "observed_status_id": fresh_response.get("status_id"),
-                "observed_prep_minutes": fresh_response.get("prep_minutes"),
-                "observed_decision_deadline": fresh_response.get(
-                    "decision_deadline"
-                ),
-                "assignment_event_id_at_observation": old_state.get(
-                    "assignment_event_id"
-                ),
-                "courier_id_at_observation": old_state.get("courier_id"),
-            }
-            _manual_evt = build_czasowka_manual_ck_pickup_event(
-                old_state, _manual_payload
+        _authority_payload = {
+            "oid": oid,
+            "courier_id": old_state.get("courier_id"),
+            "old_ck_iso": old_ck_iso,
+            "old_ck_hhmm": old_ck_hhmm,
+            "new_ck_iso": new_ck_iso,
+            "new_ck_hhmm": new_ck_hhmm,
+            "delta_min": (
+                None if delta_min is None else round(delta_min, 2)
+            ),
+            "source": (
+                "coordinator_force"
+                if deliberate
+                else "first_acceptance"
+                if first_acceptance
+                else "panel_re_check"
+            ),
+            "new_zmiana_czasu_odbioru": fresh_response.get(
+                "zmiana_czasu_odbioru"
+            ),
+            "observed_pickup_at_warsaw": fresh_response.get(
+                "pickup_at_warsaw"
+            ),
+            "observed_status_id": fresh_response.get("status_id"),
+            "observed_prep_minutes": fresh_response.get("prep_minutes"),
+            "observed_decision_deadline": fresh_response.get(
+                "decision_deadline"
+            ),
+            "observed_at": (
+                fresh_response.get("observed_at")
+                or datetime.now(timezone.utc).isoformat()
+            ),
+            "assignment_event_id_at_observation": old_state.get(
+                "assignment_event_id"
+            ),
+            "courier_id_at_observation": old_state.get("courier_id"),
+            "pickup_time_revision_at_observation": normalize_pickup_revision(
+                old_state.get("pickup_time_revision", 0)
+            ),
+            "authority_receipt": authority_receipt,
+        }
+        _authority = resolve_czasowka_ck_observation(
+            old_state, _authority_payload
+        )
+        if _authority.outcome is ResolutionOutcome.APPLY:
+            return _authority.event
+        if _authority.outcome is ResolutionOutcome.SUPPRESS:
+            _delta_label = (
+                "no-baseline"
+                if delta_min is None
+                else f"{delta_min:+.1f}min"
             )
-            if _manual_evt is not None:
-                return _manual_evt
             _log.info(
-                f"CK_PASSIVE_SUPPRESSED oid={oid} czasówka ck "
-                f"{old_ck_hhmm}→{new_ck_hhmm} Δ={delta_min:+.1f}min "
-                f"src={'coordinator_force' if deliberate else 'panel_re_check'} "
-                f"— committed=pickup_at, gastro re-stamp ignorowany (no emit)"
+                f"CK_COMMITTED_SUPPRESSED oid={oid} czasówka ck "
+                f"{old_ck_hhmm}→{new_ck_hhmm} Δ={_delta_label} "
+                f"src={_authority_payload['source']} "
+                f"reason={_authority.reason} (no emit)"
             )
             return None
     else:
@@ -1996,7 +2009,12 @@ def _diff_czas_kuriera(old_state: dict, fresh_response: dict,
         # wobble ETA). Forward (koordynatorski +15 / spóźnienie) przechodzi.
         # deliberate (klik koordynatora) omija — to świadoma zmiana, nie szum.
         _eguard = _flag("ENABLE_ELASTYK_CK_NO_BACKWARD", True) if _flag else True
-        if _eguard and delta_min < 0 and not deliberate:
+        if (
+            _eguard
+            and delta_min is not None
+            and delta_min < 0
+            and not deliberate
+        ):
             _log.info(
                 f"CK_ELASTYK_BACKWARD_BLOCKED oid={oid} ck {old_ck_hhmm}→{new_ck_hhmm} "
                 f"Δ={delta_min:+.1f}min src=panel_re_check — elastyk forward-only, "
@@ -2011,19 +2029,35 @@ def _diff_czas_kuriera(old_state: dict, fresh_response: dict,
         "old_ck_hhmm": old_ck_hhmm,
         "new_ck_iso": new_ck_iso,
         "new_ck_hhmm": new_ck_hhmm,
-        "delta_min": round(delta_min, 2),
-        "source": "coordinator_force" if deliberate else "panel_re_check",
+        "delta_min": None if delta_min is None else round(delta_min, 2),
+        "source": (
+            "coordinator_force"
+            if deliberate
+            else "first_acceptance"
+            if first_acceptance
+            else "panel_re_check"
+        ),
     }
-    return {
+    if _time_event_cas_enabled(old_state):
+        payload.update(
+            build_time_event_cas_snapshot(
+                old_state, "CZAS_KURIERA_UPDATED"
+            )
+        )
+    result = {
         "event_type": "CZAS_KURIERA_UPDATED",
         "order_id": oid,
         "courier_id": old_state.get("courier_id"),
         "payload": payload,
     }
+    if first_acceptance:
+        result["event_id_suffix"] = "_FIRST_ACK"
+    return result
 
 
 def _diff_pickup_time(old_state: dict, fresh_response: dict,
-                      oid: str, deliberate: bool = False) -> Optional[dict]:
+                      oid: str, deliberate: bool = False,
+                      authority_receipt: Optional[dict] = None) -> Optional[dict]:
     """Detect pickup_at_warsaw change (restaurant-declared pickup time).
 
     deliberate=True (force-recheck koordynatora): source="coordinator_force"
@@ -2080,6 +2114,51 @@ def _diff_pickup_time(old_state: dict, fresh_response: dict,
         if abs(delta_min) < PICKUP_TIME_DELTA_THRESHOLD_MIN:
             return None  # noise floor
 
+    if new_iso and C.is_czasowka_order(old_state):
+        authority_payload = {
+            "oid": oid,
+            "courier_id": old_state.get("courier_id"),
+            "courier_id_at_observation": old_state.get("courier_id"),
+            "assignment_event_id_at_observation": old_state.get(
+                "assignment_event_id"
+            ),
+            "pickup_time_revision_at_observation": normalize_pickup_revision(
+                old_state.get("pickup_time_revision", 0)
+            ),
+            "source": (
+                "coordinator_force" if deliberate else "panel_pickup_recheck"
+            ),
+            "observed_at": (
+                fresh_response.get("observed_at")
+                or datetime.now(timezone.utc).isoformat()
+            ),
+            "observed_status_id": fresh_response.get("status_id"),
+            "observed_pickup_at_warsaw": new_iso,
+            "new_pickup_at_warsaw": new_iso,
+            "new_ck_iso": fresh_response.get("czas_kuriera_warsaw"),
+            "new_ck_hhmm": fresh_response.get("czas_kuriera_hhmm"),
+            "new_zmiana_czasu_odbioru": fresh_response.get(
+                "zmiana_czasu_odbioru"
+            ),
+            "observed_prep_minutes": fresh_response.get("prep_minutes"),
+            "observed_decision_deadline": fresh_response.get(
+                "decision_deadline"
+            ),
+            "authority_receipt": authority_receipt,
+        }
+        authority = resolve_czasowka_pickup_observation(
+            old_state,
+            authority_payload,
+        )
+        if authority.outcome is ResolutionOutcome.APPLY:
+            return authority.event
+        if authority.outcome is ResolutionOutcome.SUPPRESS:
+            _log.info(
+                f"PICKUP_COMMITTED_SUPPRESSED oid={oid} "
+                f"{old_iso}→{new_iso} reason={authority.reason}"
+            )
+            return None
+
     payload = {
         "oid": oid,
         "courier_id": old_state.get("courier_id"),
@@ -2097,7 +2176,16 @@ def _diff_pickup_time(old_state: dict, fresh_response: dict,
             "assignment_event_id"
         ),
         "courier_id_at_observation": old_state.get("courier_id"),
+        "pickup_time_revision_at_observation": normalize_pickup_revision(
+            old_state.get("pickup_time_revision", 0)
+        ),
     }
+    if _time_event_cas_enabled(old_state):
+        payload.update(
+            build_time_event_cas_snapshot(
+                old_state, "PICKUP_TIME_UPDATED"
+            )
+        )
     evt = {
         "event_type": "PICKUP_TIME_UPDATED",
         "order_id": oid,
@@ -2118,53 +2206,84 @@ def _time_update_event_key(order_id: str, event: dict) -> str:
     dany event. Retry tego samego przejscia pozostaje idempotentny, kolejny cel
     lub powrot do wczesniejszego celu jest osobna trwala intencja.
     """
-    event_type = str(event.get("event_type") or "")
+    from dispatch_v2.committed_pickup_apply import time_update_event_key
+
+    return time_update_event_key(order_id, event)
+
+
+def _apply_time_update_event(order_id: str, event: dict):
+    """Jeden wybor durable transportu dla obu detektorow czasu."""
     payload = event.get("payload") or {}
-    transition_fields = {
-        "CZAS_KURIERA_UPDATED": (
-            "old_ck_iso",
-            "old_ck_hhmm",
-            "new_ck_iso",
-            "new_ck_hhmm",
-            "source",
-        ),
-        "PICKUP_TIME_UPDATED": (
-            "old_pickup_at_warsaw",
-            "new_pickup_at_warsaw",
-            "old_prep_minutes",
-            "new_prep_minutes",
-            "new_decision_deadline",
-            "new_zmiana_czasu_odbioru",
-            "source",
-            "assignment_event_id_at_observation",
-            "courier_id_at_observation",
-        ),
-    }
-    if event_type not in transition_fields:
-        raise ValueError(f"unsupported time update event_type: {event_type!r}")
+    if payload.get("committed_authority"):
+        from dispatch_v2.committed_pickup_apply import apply_event
 
-    transition = {
-        field: payload.get(field) for field in transition_fields[event_type]
-    }
-    transition_json = json.dumps(
-        transition,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
+        return apply_event(event)
+    return _emit_and_apply_state(
+        str(event.get("event_type") or ""),
+        order_id=str(order_id),
+        courier_id=(
+            str(event.get("courier_id"))
+            if event.get("courier_id") is not None
+            else None
+        ),
+        payload=payload,
+        event_id=_time_update_event_key(str(order_id), event),
+        audit=True,
     )
-    transition_digest = hashlib.sha256(
-        transition_json.encode("utf-8")
-    ).hexdigest()
 
-    suffix = event.get("event_id_suffix")
-    if suffix:
-        legacy_discriminator = str(suffix)
-    else:
-        legacy_discriminator = f"_{int(float(payload.get('delta_min', 0)) * 10)}"
-    return (
-        f"{order_id}_{event_type}{legacy_discriminator}"
-        f"_to_{transition_digest}"
+
+def _claim_forced_time_event(
+    order_id: str,
+    event: dict,
+    receipt: Optional[dict],
+    receipt_store,
+) -> Optional[dict]:
+    """Zwiąż każdy force-time event z kolejką przed pierwszym side effectem.
+
+    Authority czasówki może być już claimowane przez resolver; wywołanie jest
+    wtedy idempotentne. Legacy/elastyk dostaje neutralny exact claim oraz jedną
+    kontynuację po ACK, dzięki czemu drugi równoległy field z tego samego
+    response nie ginie. Claim nie nadaje authority biznesowego.
+    """
+    if not isinstance(receipt, dict):
+        return None
+    claimed = receipt_store.claim_receipt(
+        receipt,
+        order_id=str(order_id),
+        event=event,
+        continue_after_ack=True,
     )
+    if claimed is None:
+        return None
+    if receipt_store.get_claimed_event(
+        claimed,
+        order_id=str(order_id),
+    ) != event:
+        return None
+    return claimed
+
+
+def _replay_claimed_time_event(order_id: str, receipt: dict, receipt_store):
+    """Domknij exact claim przed jakimkolwiek nowym fetch/diff.
+
+    Claim jest pierwszym trwalym journalem intencji. Po crashu swiezy Rutcom
+    snapshot moze juz nie pokazac delty, wiec ponowne budowanie eventu z diffu
+    nie jest recovery. Odtwarzamy wyłącznie event zapisany w claimie i ACK-ujemy
+    dokładnie ten rekord dopiero po terminalnym outbox state (applied albo
+    bezpiecznie superseded). Pending/error nigdy nie kasuje receiptu.
+    """
+    claimed_event = receipt_store.get_claimed_event(
+        receipt,
+        order_id=str(order_id),
+    )
+    if claimed_event is None:
+        raise ValueError("invalid claimed coordinator time event")
+    outcome = _apply_time_update_event(str(order_id), claimed_event)
+    terminal = durable_event_apply.is_terminal_outcome(outcome)
+    if not terminal:
+        return outcome, False
+    acked = receipt_store.ack_receipts({str(order_id): receipt})
+    return outcome, acked == 1
 
 
 def _compute_kid_diagnostic(state_order: dict, fresh_order: dict) -> dict:
@@ -2902,8 +3021,8 @@ def _diff_and_emit(
             return _prefetch_map[zid]
         return fetch_order_details(zid, csrf)
 
-    # HEAL-PATH: cold-start mógł stworzyć minimalny assigned przed NEW_ORDER.
-    # Ten sam _details() oraz ten sam builder co NEW; najwyżej jeden fetch/tick.
+    # HEAL-PATH: historyczny cold-start sprzed pełnej inicjalizacji mógł stworzyć
+    # minimalny assigned. Ten sam builder co NEW; najwyżej jeden fetch/tick.
     _heal_missing_order_details(
         parsed,
         current_state,
@@ -3772,24 +3891,86 @@ def _diff_and_emit(
         ENABLE_V319G_CK_DETECTION = False
         ENABLE_PICKUP_TIME_DETECTION = False
     # FORCE-RECHECK na żądanie koordynatora (przycisk „Odśwież czas" w konsoli):
-    # drenuj kolejkę coordinator_time_recheck (panel dopisał oid). Te oid wymuszamy
+    # czytaj trwale kolejke coordinator_time_recheck (panel dopisal oid). Receipt
+    # znika dopiero po udanym fetch/apply; crash lub blad HTTP zostawia retry.
     # BEZWARUNKOWO — także planned-elastyki (poza zwykłym scope) i w OBIE strony
     # (deliberate=True omija forward-only/czasówka-passive). Flaga = kill-switch.
+    _force_receipts: dict = {}
     _force_ids: set = set()
+    _ctr = None
     try:
         if C.flag("ENABLE_COORDINATOR_FORCE_TIME_RECHECK", True):
             from dispatch_v2 import coordinator_time_recheck as _ctr
-            _force_ids = _ctr.drain()
+            _force_receipts = _ctr.pending_with_receipts()
+            for _legacy_oid, _legacy_receipt in list(
+                _force_receipts.items()
+            ):
+                if _legacy_receipt is not None:
+                    continue
+                upgraded = _ctr.upgrade_legacy_receipt(_legacy_oid)
+                if upgraded is not None:
+                    _force_receipts[_legacy_oid] = upgraded
+            _force_ids = set(_force_receipts)
             if _force_ids:
                 _log.info(
-                    f"COORDINATOR_FORCE_TIME_RECHECK drained {len(_force_ids)} oid(s): "
+                    f"COORDINATOR_FORCE_TIME_RECHECK pending {len(_force_ids)} oid(s): "
                     f"{sorted(_force_ids)}"
                 )
     except Exception as _e:  # noqa: BLE001 — fail-soft, automat leci dalej
         _log.warning(f"force-recheck drain fail: {_e}")
 
+    # Exact claim jest transakcją kolejki, a nie własnością bieżącego snapshotu
+    # orders_state. Po crashu claim->outbox zlecenie może zostać legalnie
+    # sprzątnięte przez retencję; recovery musi więc przejść po CAŁEJ trwałej
+    # kolejce przed iteracją po current_state. Claimed head nie wraca w tym
+    # samym ticku do board/fetch/diff — po ACK ewentualny successor zaczyna się
+    # od świeżego snapshotu w następnym ticku.
+    _claimed_force_ids: set = set()
+    if _ctr is not None:
+        for _claimed_zid, _claimed_receipt in list(
+            _force_receipts.items()
+        ):
+            if not (
+                isinstance(_claimed_receipt, dict)
+                and _claimed_receipt.get("claim") is not None
+            ):
+                continue
+            _claimed_force_ids.add(_claimed_zid)
+            try:
+                claimed_outcome, claimed_acked = (
+                    _replay_claimed_time_event(
+                        _claimed_zid,
+                        _claimed_receipt,
+                        _ctr,
+                    )
+                )
+            except Exception as _e:  # noqa: BLE001 — claim zostaje
+                _log.warning(
+                    "force-recheck claimed replay fail "
+                    f"oid={_claimed_zid}: {_e}"
+                )
+                stats["errors"] += 1
+                continue
+            if not claimed_acked:
+                _log.warning(
+                    "force-recheck claimed replay pending "
+                    f"oid={_claimed_zid} state_ready="
+                    f"{getattr(claimed_outcome, 'state_ready', False)} "
+                    f"superseded="
+                    f"{getattr(claimed_outcome, 'superseded', False)}"
+                )
+                stats["errors"] += 1
+                continue
+            _log.info(
+                "COORDINATOR_FORCE_TIME_RECHECK exact-claim ack "
+                f"oid={_claimed_zid} superseded="
+                f"{getattr(claimed_outcome, 'superseded', False)}"
+            )
+
     if ENABLE_V319G_CK_DETECTION or ENABLE_PICKUP_TIME_DETECTION or _force_ids:
         for zid, state_order in list(current_state.items()):
+            if zid in _claimed_force_ids:
+                continue
             _force = zid in _force_ids
             _status = state_order.get("status")
             _is_czasowka = C.is_czasowka_order(state_order)
@@ -3824,6 +4005,10 @@ def _diff_and_emit(
                 _log.debug(f"order-time normalize fail zid={zid}: {e}")
                 continue
 
+            _force_ack_ready = bool(_force)
+            _force_event_claimed = False
+            _observed_at = datetime.now(timezone.utc).isoformat()
+
             # ---- Detekcja A: czas_kuriera (V3.19g1) ----
             if ENABLE_V319G_CK_DETECTION or _force:
                 fresh_snippet = {
@@ -3838,42 +4023,61 @@ def _diff_and_emit(
                     "status_id": norm_ck.get("status_id"),
                     "prep_minutes": norm_ck.get("prep_minutes"),
                     "decision_deadline": norm_ck.get("decision_deadline"),
+                    "observed_at": _observed_at,
                 }
                 evt = _diff_czas_kuriera(state_order, fresh_snippet, oid=zid,
-                                         deliberate=_force)
+                                         deliberate=_force,
+                                         authority_receipt=(
+                                             _force_receipts.get(zid)
+                                             if _force else None
+                                         ))
                 if evt is not None:
+                    if _force and _ctr is not None:
+                        claimed_receipt = _claim_forced_time_event(
+                            zid,
+                            evt,
+                            _force_receipts.get(zid),
+                            _ctr,
+                        )
+                        if claimed_receipt is None:
+                            _force_ack_ready = False
+                            stats["errors"] += 1
+                            _log.warning(
+                                "force-recheck exact claim fail "
+                                f"oid={zid} event={evt.get('event_type')}"
+                            )
+                            continue
+                        _force_receipts[zid] = claimed_receipt
+                        _force_event_claimed = True
+                    try:
+                        time_outcome = _apply_time_update_event(zid, evt)
+                    except Exception as _e:  # noqa: BLE001 — receipt zostaje
+                        _log.warning(
+                            f"order-time apply fail oid={zid} "
+                            f"event={evt.get('event_type')}: {_e}"
+                        )
+                        stats["errors"] += 1
+                        _force_ack_ready = False
+                        time_outcome = None
+                    if time_outcome is None:
+                        continue
+                    if not durable_event_apply.is_terminal_outcome(
+                        time_outcome
+                    ):
+                        stats["errors"] += 1
+                        _force_ack_ready = False
                     if evt.get("event_type") == "PICKUP_TIME_UPDATED":
                         p = evt["payload"]
-                        p_event_id = _time_update_event_key(zid, evt)
-                        pickup_outcome = _emit_and_apply_state(
-                            "PICKUP_TIME_UPDATED",
-                            order_id=zid,
-                            courier_id=str(state_order.get("courier_id") or ""),
-                            payload=p,
-                            event_id=p_event_id,
-                            audit=True,
-                        )
-                        if not pickup_outcome.state_ready:
-                            stats["errors"] += 1
-                        if pickup_outcome.downstream_executed:
+                        if time_outcome.downstream_executed:
                             _log.info(
-                                f"CK_MANUAL_EDIT_PASSTHROUGH oid={zid} pickup "
+                                f"CK_COMMITTED_AUTHORITY_APPLIED oid={zid} pickup "
                                 f"{p.get('old_pickup_at_warsaw')}→"
-                                f"{p.get('new_pickup_at_warsaw')} status={_status}"
+                                f"{p.get('new_pickup_at_warsaw')} status={_status} "
+                                f"authority={p.get('committed_authority')}"
                             )
-                        continue
-                    event_id_str = _time_update_event_key(zid, evt)
-                    ck_outcome = _emit_and_apply_state(
-                        "CZAS_KURIERA_UPDATED",
-                        order_id=zid,
-                        courier_id=str(state_order.get("courier_id") or ""),
-                        payload=evt["payload"],
-                        event_id=event_id_str,
-                        audit=True,
-                    )
-                    if not ck_outcome.state_ready:
-                        stats["errors"] += 1
-                    if ck_outcome.downstream_executed:
+                        if time_outcome.state_ready:
+                            state_order = state_get_order(zid) or state_order
+                    elif time_outcome.downstream_executed:
                         delta_val = evt["payload"].get("delta_min")
                         delta_str = (
                             f"Δ={delta_val:+.1f}min"
@@ -3887,27 +4091,60 @@ def _diff_and_emit(
                         )
 
             # ---- Detekcja B: pickup_at_warsaw (PICKUP_TIME_UPDATED) ----
-            if ENABLE_PICKUP_TIME_DETECTION or _force:
+            if (
+                (ENABLE_PICKUP_TIME_DETECTION or _force)
+                and not (_force and _force_event_claimed)
+            ):
                 pickup_snippet = {
                     "pickup_at_warsaw": norm_ck.get("pickup_at_warsaw"),
                     "prep_minutes": norm_ck.get("prep_minutes"),
                     "decision_deadline": norm_ck.get("decision_deadline"),
                     "zmiana_czasu_odbioru": norm_ck.get("zmiana_czasu_odbioru"),
+                    "czas_kuriera_warsaw": norm_ck.get("czas_kuriera_warsaw"),
+                    "czas_kuriera_hhmm": norm_ck.get("czas_kuriera_hhmm"),
+                    "status_id": norm_ck.get("status_id"),
+                    "observed_at": _observed_at,
                 }
                 evt_p = _diff_pickup_time(state_order, pickup_snippet, oid=zid,
-                                          deliberate=_force)
+                                          deliberate=_force,
+                                          authority_receipt=(
+                                              _force_receipts.get(zid)
+                                              if _force else None
+                                          ))
                 if evt_p is not None:
-                    p_event_id = _time_update_event_key(zid, evt_p)
-                    pickup_outcome = _emit_and_apply_state(
-                        "PICKUP_TIME_UPDATED",
-                        order_id=zid,
-                        courier_id=str(state_order.get("courier_id") or ""),
-                        payload=evt_p["payload"],
-                        event_id=p_event_id,
-                        audit=True,
-                    )
-                    if not pickup_outcome.state_ready:
+                    if _force and _ctr is not None:
+                        claimed_receipt = _claim_forced_time_event(
+                            zid,
+                            evt_p,
+                            _force_receipts.get(zid),
+                            _ctr,
+                        )
+                        if claimed_receipt is None:
+                            _force_ack_ready = False
+                            stats["errors"] += 1
+                            _log.warning(
+                                "force-recheck exact claim fail "
+                                f"oid={zid} event={evt_p.get('event_type')}"
+                            )
+                            continue
+                        _force_receipts[zid] = claimed_receipt
+                        _force_event_claimed = True
+                    try:
+                        pickup_outcome = _apply_time_update_event(zid, evt_p)
+                    except Exception as _e:  # noqa: BLE001 — receipt zostaje
+                        _log.warning(
+                            f"pickup-time apply fail oid={zid}: {_e}"
+                        )
                         stats["errors"] += 1
+                        _force_ack_ready = False
+                        pickup_outcome = None
+                    if pickup_outcome is None:
+                        continue
+                    if not durable_event_apply.is_terminal_outcome(
+                        pickup_outcome
+                    ):
+                        stats["errors"] += 1
+                        _force_ack_ready = False
                     if pickup_outcome.downstream_executed:
                         p_delta = evt_p["payload"].get("delta_min")
                         p_delta_str = (
@@ -3920,6 +4157,17 @@ def _diff_and_emit(
                             f"{evt_p['payload'].get('new_pickup_at_warsaw')} "
                             f"{p_delta_str} status={_status}"
                         )
+            if _force and _force_ack_ready and _ctr is not None:
+                try:
+                    acked = _ctr.ack_receipts(
+                        {zid: _force_receipts.get(zid)}
+                    )
+                    if acked:
+                        _log.info(
+                            f"COORDINATOR_FORCE_TIME_RECHECK ack oid={zid}"
+                        )
+                except Exception as _e:  # noqa: BLE001 — receipt zostaje do retry
+                    _log.warning(f"force-recheck ack fail oid={zid}: {_e}")
     # ================== END ORDER-TIME RE-CHECK ==================
 
     return stats
@@ -3929,10 +4177,11 @@ def _post_restart_cold_start_scan(parsed: dict, csrf: str) -> dict:
     """tech-debt #24: one-shot scan post-restart żeby naprawić missing
     COURIER_ASSIGNED dla orderów mid-way ASSIGN→PICKUP w restart window.
 
-    Iteruje parsed["courier_packs"][nick] → oids. Dla każdego oid bez
-    entry w orders_state (state_cid=="") emit COURIER_ASSIGNED z
-    source="cold_start_scan". Bypass V3.15 budget (one-shot, expected
-    5-30 mismatches po panel-watcher restart in-peak).
+    Iteruje parsed["courier_packs"][nick] → oids. Dla nieobecnego rekordu
+    najpierw emituje kanoniczny NEW_ORDER z pełnego buildera detali, a dopiero
+    potem COURIER_ASSIGNED. Istniejący pełny rekord z pustym courier_id wymaga
+    wyłącznie assignmentu. Bypass V3.15 budget (one-shot, expected 5-30
+    mismatches po panel-watcher restart in-peak).
 
     Idempotent: emit_audit z deterministic event_id, drugi call no-op.
     Defense-in-depth: kurier_ids load fail → skip (warn), per-oid
@@ -4003,6 +4252,43 @@ def _post_restart_cold_start_scan(parsed: dict, csrf: str) -> dict:
                     f"but raw id_kurier={_panel_cid} for oid={_oid_str} — trust raw"
                 )
                 _target_cid = _panel_cid
+            if _oid_str not in current_state:
+                try:
+                    _built = _build_order_details_payload(
+                        _oid_str,
+                        _raw,
+                        (parsed.get("rest_names") or {}).get(_oid_str),
+                    )
+                except Exception as _build_exc:
+                    _log.warning(
+                        "cold_start_scan build(%s): %s",
+                        _oid_str,
+                        _build_exc,
+                    )
+                    stats["cold_start_errors"] += 1
+                    continue
+                if _built is None:
+                    _log.warning(
+                        "cold_start_scan build(%s): normalized order absent",
+                        _oid_str,
+                    )
+                    stats["cold_start_errors"] += 1
+                    continue
+                _norm, _new_order_payload = _built
+                _initialized = _emit_and_apply_state(
+                    "NEW_ORDER",
+                    order_id=_oid_str,
+                    payload=_new_order_payload,
+                    event_id=f"{_oid_str}_NEW_ORDER_first",
+                )
+                if not _initialized.state_ready:
+                    _log.warning(
+                        "cold_start_scan NEW_ORDER pending oid=%s stage=%s",
+                        _oid_str,
+                        _initialized.failure_stage,
+                    )
+                    stats["cold_start_errors"] += 1
+                    continue
             _ev = _emit_and_apply_state(
                 "COURIER_ASSIGNED",
                 order_id=_oid_str,

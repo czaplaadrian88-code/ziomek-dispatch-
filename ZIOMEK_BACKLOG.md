@@ -1,5 +1,129 @@
 # ZIOMEK AI DISPATCHER - BACKLOG ROZWOJU
 
+> **KANDYDAT v18 2026-08-02 — RUTCOM COMMITTED PICKUP AUTHORITY / OID 491578:**
+> root cause potwierdzony: guard pasywny 52 razy stłumił zmianę umówionego
+> czasu Rutcom 19:16→19:21, przez co aplikacja poprawnie pokazywała stary stan
+> 19:16. Jeden resolver autorytetu zastępuje rozproszoną politykę; akceptuje
+> wyłącznie bezpieczny forward aktywnej czasówki lub korektę z markerem/
+> queue-bound receiptem v4. Jedna granica kanonizuje raw CK przed durable
+> outboxem, a `PICKUP_TIME_UPDATED` jest jedyną drogą zapisu
+> pickup+CK+HH:MM+revision+provenance. Immutable claimed head, coalesced
+> successor i exact attestation wiążą retry z realnym rekordem kolejki/outboxa.
+> V10 blokuje cofnięcie przez równoległy stary
+> `pickup_at`, wyciek do scoringu, forge/reuse receiptu, złego courier lane,
+> legacy ABA przed pierwszym authority apply i alias event key; kolejny forward
+> 19:21→19:26 przechodzi. Historyczny durable raw CK jest terminalny, exact
+> outbox wznawia własną transakcję przed rewalidacją, a `coordinator_force`
+> nigdy nie degraduje się do legacy bez receiptu. Oba flags OFF zachowują
+> pre-proposal exact legacy path; zwykły pickup ma ten sam wynik legacy i tylko
+> addytywny revision fence. Ochrona 483023 i post-pickup pozostaje zamknięta.
+> V7 zachowuje exact legacy event key przy OFF, rezerwuje także normalized
+> `observed_source`, nie pozwala kompatybilnemu drainowi skasować claimu i ma
+> mechaniczny rollback gate: pełny unfinished-outbox audit, fence, exact backup
+> i bezpieczną projekcję v4→legacy. Dwa blind review v6 znalazły pięć unikalnych
+> luk; wszystkie niezależnie odtworzono i zamknięto w v7. Kolejne dwa blind
+> review v7 wykryły stuck claim po przegranym CAS/prune, przedwczesny ACK po
+> samym state, fence bez wiarygodnego rollback receipt, niepełny classifier i
+> obejścia AST. V8 utrwala stale claim jako terminalne superseded, wymaga exact
+> outbox state+downstream do ACK, zapisuje fence jako ostatni commit związany z
+> SHA backupu/projekcji i rozwiązuje alias/concat/static-fstring w ratchecie.
+> Dwa blind review v8 wydały `CONFIRMED_DEFECT`: recovery było
+> błędnie zagnieżdżone w pętli bieżącego state, proof nie wiązał starego CK,
+> niekanoniczny CK-only writer mógł wygrać, rollback audit pomijał nieznane
+> statusy/częściowo uszkodzony authority row, a `dict(keyword=...)` omijał oba
+> ratchety. V9 odtwarza każdy claim bez zależności od obecności OID w state,
+> wiąże proof z aktualnym CK i snapshotem state bliźniaka, wygasza równoległy
+> CK-only writer przy ON, failuje closed dla każdego nieznanego układu outboxa
+> i domyka keyword AST. Dwa świeże blind review v9 ponownie wydały
+> `CONFIRMED_DEFECT`: code-revert nie sprawdzał manual authority flag; stripped
+> authority artefakty mogły spaść do legacy; assignment i first_acceptance
+> mogły utworzyć CK z pustego baseline; attestation nie wiązała finalnych
+> markerów downstream, a ratchet rezerwował zbyt wąską klasę artefaktów.
+> V10 ustanowiła jedną kanoniczną listę wszystkich authority flags, jeden
+> fail-closed oracle całej klasy artefaktów, wygasiła oba CK-only writery także
+> przy pustym CK i zapieczętowała pełną trwałą kopertę dopiero po zamrożeniu
+> markerów downstream. Dwa świeże blind review v10 poprawnie wydały
+> `CONFIRMED_DEFECT`: część osieroconych/null authority keys i trwały event ID
+> mogły spaść do legacy; rollback patrzył tylko wewnątrz `state_event`, release
+> fence ignorował manual writer; bezkontekstowy `coordinator_force` blokował
+> legalny pickup elastyka; rejestr flag wskazywał definicje zamiast runtime
+> readerów. V11 rezerwuje schemat po obecności klucza i durable identity,
+> klasyfikuje cały związany row outboxa, stosuje source receipt dopiero po
+> rozpoznaniu czasówki, sprawdza wszystkie authority flags przy release oraz
+> mechanicznie wymusza dokładny zbiór trzech aliasowych consumerów przez AST.
+> Pierwsza pełna suita v11 wykryła zbyt szerokie uznawanie ogólnych markerów
+> downstream za authority; zawężenie u źródła ma osobny negatywny oracle i
+> mutation probe. Finalny szeroki klaster ma 336/336, pełna regresja
+> `6482P/0F/74S/8X` przy identycznych skip/xfail/warnings jak base, a jedenaście
+> mutacji nowych zabezpieczeń zostało zabitych i przywróconych bajtowo. Dwa
+> blind review v11 poprawnie zatrzymały live: generic receipt mógł przywrócić
+> stale pickup 19:16 po CK-derived 19:21, legacy force event nie miał claimu
+> przed apply, manual flaga miała niepełną mapę readerów, a CK-only źródła nie
+> były jawnie wygaszone. V12 blokuje stale baseline także z receiptem, claimuje
+> każdy force event przed side effectem, promuje neutralną continuation dla
+> drugiego legacy pola, podnosi stary timestamp bez nadawania authority,
+> odrzuca poison claim, przypina obie flagi do trzech realnych readerów i jawnie
+> wygasza `coordinator_edit`/`first_acceptance`/`ziomek_late_extension` dla
+> czasówki. Osiem nowych mutation probes zostało zabitych i przywróconych do
+> identycznych SHA. Finalna regresja v12 jest zielona:
+> `6493P/0F/74S/8X/149W`, szeroki klaster `329/329`, profil identyczny z base.
+> Dwa review v12 poprawnie zatrzymały live i wykryły osiem dalszych klas:
+> oscylację sprzecznego snapshotu, brak CK CAS w pickup proofie, rozbieżną
+> terminalność outboxa, nieskończoną continuation jednego kliknięcia, niepełny
+> CAS legacy claimu, claim więziony po prune OID, rollback ignorujący aktywne
+> provenance/hot-OFF split oraz brak rollback readera w rejestrze flag. Każda
+> została odtworzona RED na v12 i naprawiona u ownera kontraktu w v13. Pełna
+> hermetyczna regresja v13: `6510P/0F/74S/8X/149W`. Dwa review v13 ponownie
+> zatrzymały live i wykryły dziewięć klas: brak wspólnego CAS legacy pickup/
+> claimed CK, fail-soft canonicalization, drift raw-writer handler/oracle,
+> null-attestation, częściowe provenance cleanup, nieatomowy rollback oraz
+> alias/static-join bypassy ratchetów. V14 ustanawia jeden `time_update_cas.v1`
+> owner dla statusu/courier/assignment/revision, strict read przed outboxem,
+> fail-closed partial envelope, wspólny terminal policy, pełny artifact cleanup,
+> transaction-like rollback z ochroną obcego fence i pełniejsze AST ratchety.
+> Szeroki klaster v14 miał 350 pass, lecz dwa review v14 poprawnie zatrzymały
+> live: wykazały CK ABA claimu, niepełny CAS/postcondition pól sprzężonych,
+> `delta=None`, partial CK downgrade, utratę poison receiptu, literalny bypass
+> rejestru i brak preflightu starych raw eventów przy dark deployu. V15 wiąże
+> obie monotoniczne rewizje i jedną mapę prep/deadline/markera, zachowuje poison,
+> rozpoznaje literalny reader oraz dodaje `forward-status` po quiesce — bez
+> fallbacku runtime. Negatywne oracles były 12/12 RED; wielomutacja daje
+> 12 fail, exact restore 14/14 green. Pełna hermetyczna regresja v15:
+> `6544P/0F/74S/8X/149W`. Dwa świeże review v15 poprawnie zatrzymały live:
+> oracle assignmentu nie zgadzał się z wygaszonym CK writerem, pierwszy
+> `null→wartość` omijał resolver, successor zużywał TTL za trwałym claimem,
+> a legacy czasówka mogła utracić tożsamość po obniżeniu prep. V16 ustanawia
+> jeden assignment resolver z durable snapshotem flag, jeden null/value path,
+> receipt v5 z osobnym `requested_at`/`eligible_at` i atomowo materializuje
+> `order_type=czasowka` przez wspólną mapę proof/CAS/writer/postcondition.
+> Negatywne oracles review były 4/4 RED; MAIN dodatkowo domknął exact OFF
+> first-acceptance parity. Pięć mutation probes czerwieniło 1/2/2/1/2, exact
+> restore 8/8 green, a finalny szeroki klaster ma 399/399 PASS. Regresja
+> v16: `6561P/0F/74S/8X/149W` w 433,93 s. Dwa świeże review v16 poprawnie
+> zatrzymały live: projekcja rollbacku używała `requested_at` zamiast
+> `eligible_at`; pickup `null→wartość` i cold-start assignment mogły ominąć
+> pełny kontrakt; preflight nie blokował pre-v16 assignmentu bez snapshotów ani
+> aktywnego niepełnego state czasówki. V17 naprawia te przyczyny u ownerów
+> kolejki, ingestu i bramki wydania. Sześć negatywnych oracles było RED przed
+> fixem i ma 6/6 green; pięć mutacji czerwieni 2/2/2/1/1, exact restore ma 8/8,
+> ratchet 22/22, a pełna regresja v17 to `6576P/0F/74S/8X/149W` w 450,57 s.
+> Dwa świeże review v17 poprawnie zatrzymały live: forward gate ignorował
+> policzoną klasę unfinished authority rows; re-click mógł nadpisać poison
+> claimed head/successor; preflight duplikował classifier i pomijał legacy
+> prep>=60 bez kuriera; nowa czasówka z pierwszym tuple po NEW_ORDER nie miała
+> legalnego `None→czas` u policy ownera. V18 domyka wszystkie cztery przyczyny
+> u gate/queue/wspólnego classifiera/authority. Oracles: 6F+1P przed, 7/7 po;
+> sześć mutation probes po 1F; focused 376/376; pełna regresja na aktualnym
+> masterze `49aed3215`: `6599P/0F/74S/8X/149W` w 452,70 s.
+> Dwa świeże `CLEAN` v18 są wymagane przed commitem i live;
+> produkcja pozostaje bez zmian.
+> Flaga
+> `ENABLE_CZASOWKA_RUTCOM_FORWARD_AUTHORITY` jest default OFF; owner wydał ACK
+> na docelowe ON po wdrożeniu. Kod nie jest jeszcze wdrożony, procesy nie były
+> restartowane, runtime i produkcyjne flagi są niezmienione.
+> Kontrakt: `docs/RUTCOM_COMMITTED_PICKUP_AUTHORITY.md`; dowód:
+> `eod_drafts/2026-08-01/RUTCOM_COMMITTED_AUTHORITY_491578_REPORT.md`.
+
 > **FINAL LIVE 2026-08-01 15:57 UTC — AT-GATE/LEDGER V4 WDROŻONY, FABLE #229:**
 > jawny owner ACK „wprowadź live, audyt powdrożeniowy Fable” wykonany.
 > Provider `d0c0640b5` jest na kanonicznym masterze; ledger produkcyjny
