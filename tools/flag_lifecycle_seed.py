@@ -87,6 +87,16 @@ _FLAG_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 # literalne C.flag(...) z defaultem oraz pośrednie KEY constants czytające
 # load_flags(). To nadal skan źródła z provenance, nie ręczny fallback snapshotu.
 ENGINE_EXPLICIT_DYNAMIC = {
+    # A-1 (2026-08-02): flaga concurrency czytana literalnym flag() w gps_pwa_store
+    # (nie w tupli common.py, nie w flags.json — shadow-first, kod-default OFF).
+    # Nośnik = DEFAULT_FLAGS (kod); do flags.json trafi dopiero przy flipie ON za ACK.
+    "ENABLE_GPS_MERGE_LOCK": {
+        "default": False,
+        # JEDYNY literalny czytelnik flagi = gps_pwa_store.merge_lock_enabled();
+        # gps_server/gps_positions_gc/courier_api wołają store, nie flag() wprost.
+        "consumers": ["dispatch_v2/gps_pwa_store.py"],
+        "proof": {"kind": "literal_flag_calls"},
+    },
     "ENABLE_COMMITTED_INVALIDATES_VIEW": {
         "default": True,
         "consumers": [

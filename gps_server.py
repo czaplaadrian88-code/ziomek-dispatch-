@@ -21,19 +21,15 @@ Uruchamianie:
     python3 -m dispatch_v2.gps_server
     # albo systemd: dispatch-gps.service
 """
-import fcntl
 import json
-import os
 import socketserver
 import sys
-import tempfile
-import threading
 import urllib.parse
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler
-from pathlib import Path
 from typing import Optional, Tuple
 
+from dispatch_v2 import gps_pwa_store
 from dispatch_v2.common import coords_in_bialystok_bbox, decision_flag, setup_logger
 
 
@@ -44,7 +40,6 @@ KURIER_IDS_PATH = "/root/.openclaw/workspace/dispatch_state/kurier_ids.json"
 GPS_PWA_PATH = "/root/.openclaw/workspace/dispatch_state/gps_positions_pwa.json"
 
 _log = setup_logger("gps_server", "/root/.openclaw/workspace/scripts/logs/gps_server.log")
-_write_lock = threading.Lock()
 
 
 # ---- storage ----
@@ -58,31 +53,6 @@ def _load_json(path: str) -> dict:
     except Exception as e:
         _log.warning(f"load {path}: {e}")
         return {}
-
-
-def _atomic_write_json(path: str, data: dict) -> None:
-    """Temp + LOCK_EX + fsync + rename (wzorzec z P0.5b Fix #3)."""
-    p = Path(path)
-    p.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(
-        dir=str(p.parent),
-        prefix=f".{p.name}.tmp-",
-        suffix=".json",
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-            json.dump(data, f, ensure_ascii=False, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
-        os.replace(tmp_path, p)
-    except Exception:
-        if os.path.exists(tmp_path):
-            try:
-                os.unlink(tmp_path)
-            except OSError:
-                pass
-        raise
 
 
 # ---- auth ----
@@ -116,17 +86,19 @@ def _ingest_coords_ok(lat: float, lon: float) -> bool:
 
 def _update_gps(courier_id: str, name: str, lat: float, lon: float,
                 accuracy: float) -> None:
-    with _write_lock:
-        data = _load_json(GPS_PWA_PATH)
-        data[courier_id] = {
-            "lat": round(float(lat), 7),
-            "lon": round(float(lon), 7),
-            "accuracy": round(float(accuracy), 2),
-            "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-            "source": "pwa",
-            "name": name,
-        }
-        _atomic_write_json(GPS_PWA_PATH, data)
+    # A-1 (2026-08-02): zapis przez KANONICZNY writer (gps_pwa_store) — jeden
+    # owner kontraktu wspólny z courier-api. Flaga ENABLE_GPS_MERGE_LOCK OFF =
+    # bajt-parytet z legacy (threading.Lock + load→set→atomic write); ON =
+    # dedykowany lockfile cross-proces + merge-by-ts (koniec lost-update).
+    record = {
+        "lat": round(float(lat), 7),
+        "lon": round(float(lon), 7),
+        "accuracy": round(float(accuracy), 2),
+        "timestamp": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "source": "pwa",
+        "name": name,
+    }
+    gps_pwa_store.write_pwa_position(GPS_PWA_PATH, courier_id, record)
 
 
 # ---- HTML ----
