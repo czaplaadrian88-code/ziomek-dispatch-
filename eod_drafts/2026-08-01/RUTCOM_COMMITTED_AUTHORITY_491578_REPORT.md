@@ -1,4 +1,4 @@
-# RUTCOM committed pickup authority — raport kandydata v21, 2026-08-02
+# RUTCOM committed pickup authority — raport kandydata v22, 2026-08-02
 
 ## Wynik
 
@@ -12,6 +12,62 @@ Rutcom. Granica transportu przed zapisem outboxa zamienia legalny CK na jeden
 kanoniczny `PICKUP_TIME_UPDATED`. Jeden handler state atomowo zapisuje pickup,
 CK, HH:MM, monotoniczną rewizję oraz provenance. Plan, scoring po potwierdzonym
 apply i aplikacja dziedziczą tę samą prawdę.
+
+## Co domknięto w v22
+
+Dwa niezależne review final-byte v21 ponownie prawidłowo zatrzymały promocję.
+Werdykt authority ma SHA-256
+`9f0c69be82b500848c503157843564ec0dd52ea2548d8a35b72731eae9e885bb`,
+a rollout/completeness
+`bc86f8dd7c1b644e363df1cccc9cf85376cb555ead4075122a96d34815fc7ddf`;
+oba wydały `CONFIRMED_DEFECT`. MAIN odtworzył trzy klasy jako cztery czerwone
+oracles: restart recovery initial intentu następował dopiero po writerze
+assignment/pickup; pickup writer i forward preflight klasyfikowały stary agregat
+sprzed własnej zmiany `prep_minutes`; a pre-proposal ponownie czytał żywe flagi
+po asynchronicznym HTTP i mógł zmienić semantykę requestu w locie.
+
+V22 usuwa przyczyny w istniejących ownerach. Pending initial receipt odzyskuje
+się bezwarunkowo zaraz po pierwszym odczycie state i przed każdym writerem
+lifecycle; nieudany receipt izoluje tylko własny OID, a stary późny recovery
+został usunięty. Jeden czysty `project_time_event_order` projektuje dokładnie te
+same sprzężone pola, które zapisze handler, i jest wspólnym kontraktem writerów
+state oraz forward preflightu. Pre-proposal tworzy jeden immutable
+`CommittedPickupPolicySnapshot` przed HTTP i przekazuje ten sam obiekt przez
+fetch, klasyfikację, legacy apply lub durable authority apply. OFF→ON nie nadaje
+authority rozpoczętej operacji, a ON→OFF domyka już rozpoczęty, zapieczętowany
+event bez ponownej interpretacji flag.
+
+Cztery oracles review były 4/4 RED przed fixem i 4/4 PASS po nim. Dwa dodatkowe
+oracles transakcji flag potwierdzają obie strony hot-flipu. Pięć kontrolowanych
+mutacji — wyłączenie wczesnego recovery, obu projekcji agregatu oraz obu stron
+snapshotu flag — dało właściwy FAIL; po każdym restore chroniony plik wrócił do
+identycznego SHA-256. Klaster bezpośredni ma 226/226 PASS, rozszerzony klaster
+outbox/queue/flag ma 456/456 PASS. Pełna kanoniczna regresja na base
+`b8bf3f8d3` ma 6713 passed, 74 skipped, 8 xfailed, 153 warnings i 0 failed w
+637,32 s. Compile, import i `diff --check` są zielone; lifecycle repo/live ma
+557/557, hygiene 271/271 i zero sierot, effect coverage nie ma nowej luki, a
+entropia pozostaje bez pogorszenia.
+
+Read-only live preflight po naturalnej terminalizacji ma pustą kolejkę, zero
+unfinished outboxa i zero aktywnych niepełnych kontraktów. Jedyną przyczyną
+`safe_for_forward_deploy=false` jest teraz poprawnie wykryte działanie dwóch
+writerów: `dispatch-panel-watcher.service` i `dispatch-shadow.service`.
+Produkcja oraz flaga forward nadal pozostają bez zmian/OFF. Przed kontrolowanym
+quiesce, deployem, restartem i flipem nadal wymagane są dwa świeże review CLEAN
+na dokładnych finalnych bajtach v22.
+
+### Mapa kompletności v22
+
+| Miejsce | Rola | Writer / consumer | Dotknięte | Dowód |
+|---|---|---|---|---|
+| `panel_watcher._diff_and_emit` | recovery/lifecycle | jedyny consumer pending initial intentu | TAK | recovery przed heal/assignment/pickup/terminal; stary późny consumer usunięty |
+| `committed_pickup_authority.project_time_event_order` | wspólna projekcja | policy owner pól sprzężonych | TAK | state writer i forward preflight używają jednego helpera; dwie mutation kills |
+| `state_machine.PICKUP_TIME_UPDATED` | kanoniczny state writer | writer pickup+CK+prep/type | TAK | klasyfikacja post-event; elastyk 20→czasówka 60 nie tworzy split truth |
+| rollback `forward-status` | bramka wydania | consumer unfinished time eventów | TAK | post-event klasyfikacja blokuje pickup promujący czasówkę |
+| `dispatch_pipeline` | producent pre-proposal | owner request-scoped policy | TAK | jeden snapshot przed HTTP, ten sam obiekt w fetch/emit/apply, zero live reread |
+| `committed_pickup_apply` / `state_machine` | durable i legacy apply | konsumenci snapshotu | TAK | ON→OFF finish, OFF→ON no-authority, source/type fail-closed |
+| outbox/queue/flagi/checkery | bliźniaki i release | consumers/ratchets | TAK | 456/456 broad, lifecycle 557/557, hygiene 271/271, pełna suita 6713/6713 |
+| plan/scoring/feasibility/serializer/apka | konsumenci state | consumers | N-D | kontrakt wejściowy bez zmiany; nadal brak render override i drugiego writera |
 
 ## Co domknięto w v21
 
@@ -50,8 +106,8 @@ hermetyczna regresja na zintegrowanym base `b8bf3f8d3` ma 6706 passed,
 bez `ZIOMEK_SCRIPTS_ROOT`/`PYTHONPATH` został jawnie odrzucony jako błędna
 konfiguracja (6703 pass, 3 fail przez skan produkcyjnego drzewa); te same trzy
 nodeidy na poprawnym środowisku mają 3/3 PASS i pełny poprawny przebieg jest
-zielony. Produkcja nadal nie została zmieniona, flaga pozostaje OFF, a dwa
-świeże review final-byte v21 są ostatnią bramką kodową przed operacją live.
+zielony. Produkcja nie została zmieniona, flaga pozostała OFF, a dwa review
+final-byte v21 następnie wykryły trzy klasy domknięte wyżej w v22.
 
 ### Mapa kompletności v21
 

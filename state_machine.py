@@ -49,6 +49,7 @@ from dispatch_v2.committed_pickup_authority import (
     PASSIVE_CK_SOURCES,
     RETIRED_CZASOWKA_CK_ONLY_SOURCES,
     RUTCOM_FORWARD_AUTHORITY_FLAG,
+    CommittedPickupPolicySnapshot,
     CommittedPickupResolution,
     ResolutionOutcome,
     committed_pickup_effect_applied,
@@ -57,6 +58,7 @@ from dispatch_v2.committed_pickup_authority import (
     normalize_pickup_revision,
     pickup_event_has_authority_artifact,
     pickup_payload_requires_coordinator_receipt,
+    project_time_event_order,
     resolve_czasowka_assignment_ck,
     resolve_czasowka_committed_observation,
     resolve_czasowka_pickup_observation as _resolve_pickup_observation,
@@ -213,15 +215,30 @@ def _czasowka_reclaim_live_authorized(event: dict) -> bool:
 def resolve_czasowka_ck_observation(
     existing: Optional[dict],
     ck_payload: Optional[dict],
+    *,
+    policy_snapshot: Optional[CommittedPickupPolicySnapshot] = None,
 ) -> CommittedPickupResolution:
     """Powiąż flagi i jednorazowy receipt ze wspólnym czystym resolverem."""
     existing = existing or {}
     payload = dict(ck_payload or {})
-    manual_enabled = decision_flag(MANUAL_CK_AUTHORITY_FLAG)
-    forward_enabled = decision_flag(
-        RUTCOM_FORWARD_AUTHORITY_FLAG
-    )
-    passive_enabled = flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True)
+    if policy_snapshot is not None:
+        if type(policy_snapshot) is not CommittedPickupPolicySnapshot:
+            raise TypeError(
+                "policy_snapshot must be CommittedPickupPolicySnapshot"
+            )
+        if payload.get("source") != "pre_proposal_recheck":
+            raise ValueError(
+                "policy_snapshot is reserved for pre_proposal_recheck"
+            )
+        manual_enabled = policy_snapshot.manual_passthrough_enabled
+        forward_enabled = policy_snapshot.rutcom_forward_authority_enabled
+        passive_enabled = policy_snapshot.passive_guard_enabled
+    else:
+        manual_enabled = decision_flag(MANUAL_CK_AUTHORITY_FLAG)
+        forward_enabled = decision_flag(
+            RUTCOM_FORWARD_AUTHORITY_FLAG
+        )
+        passive_enabled = flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True)
     is_czasowka = _is_czasowka_order(existing)
     if is_czasowka and payload.get("source") == "coordinator_force":
         from dispatch_v2 import coordinator_time_recheck as receipt_store
@@ -302,13 +319,24 @@ def resolve_czasowka_ck_observation(
 def _czasowka_raw_ck_writer_is_retired(
     existing: Optional[dict],
     resolution: CommittedPickupResolution,
+    *,
+    policy_snapshot: Optional[CommittedPickupPolicySnapshot] = None,
 ) -> bool:
     """Jedna polityka handlera i postcondition dla wygaszonych raw CK writerów."""
+    if policy_snapshot is not None and type(
+        policy_snapshot
+    ) is not CommittedPickupPolicySnapshot:
+        raise TypeError("policy_snapshot must be CommittedPickupPolicySnapshot")
+    forward_enabled = (
+        policy_snapshot.rutcom_forward_authority_enabled
+        if policy_snapshot is not None
+        else decision_flag(RUTCOM_FORWARD_AUTHORITY_FLAG)
+    )
     return bool(
         resolution.outcome is ResolutionOutcome.NOT_APPLICABLE
         and _is_czasowka_order(existing)
         and (
-            decision_flag(RUTCOM_FORWARD_AUTHORITY_FLAG)
+            forward_enabled
             or state_has_committed_pickup_artifact(existing)
         )
     )
@@ -1808,9 +1836,32 @@ def set_status(order_id: str, status: str, extra: Optional[dict] = None, event: 
 
 
 @_lifecycle_state_mutation
-def update_from_event(event: dict) -> Optional[dict]:
+def update_from_event(
+    event: dict,
+    *,
+    authority_policy: Optional[CommittedPickupPolicySnapshot] = None,
+) -> Optional[dict]:
     """Konsumuje event z event busa i aktualizuje state machine.
     Zwraca zaktualizowany rekord lub None."""
+    if authority_policy is not None:
+        if type(authority_policy) is not CommittedPickupPolicySnapshot:
+            raise TypeError(
+                "authority_policy must be CommittedPickupPolicySnapshot"
+            )
+        policy_payload = event.get("payload")
+        if (
+            event.get("event_type") != "CZAS_KURIERA_UPDATED"
+            or not isinstance(policy_payload, dict)
+            or policy_payload.get("source") != "pre_proposal_recheck"
+        ):
+            raise ValueError(
+                "authority_policy is reserved for raw pre_proposal_recheck"
+            )
+        if authority_policy.authority_enabled:
+            raise ValueError(
+                "authority-enabled pre_proposal_recheck requires durable apply"
+            )
+
     # Z-P1-01 Phase A: formal FSM shadow.  It is intentionally fail-open and
     # log-only; legacy behavior below (including current fallbacks/exceptions)
     # remains the sole writer until a separately approved enforcement phase.
@@ -2180,7 +2231,11 @@ def update_from_event(event: dict) -> Optional[dict]:
         # zaakceptowany CK zostaje przetlumaczony na PICKUP_TIME_UPDATED, nigdy
         # nie zapisuje tylko pola czytanego przez aplikacje.
         _src = payload.get("source")
-        _authority = resolve_czasowka_ck_observation(existing, payload)
+        _authority = resolve_czasowka_ck_observation(
+            existing,
+            payload,
+            policy_snapshot=authority_policy,
+        )
         if _authority.outcome is ResolutionOutcome.APPLY:
             if durable_event_id:
                 # Legalny committed CK jest kanonizowany przed outboxem przez
@@ -2198,7 +2253,11 @@ def update_from_event(event: dict) -> Optional[dict]:
                 f"authority={_authority.reason} → PICKUP_TIME_UPDATED"
             )
             return update_from_event(dict(_authority.event))
-        if _czasowka_raw_ck_writer_is_retired(existing, _authority):
+        if _czasowka_raw_ck_writer_is_retired(
+            existing,
+            _authority,
+            policy_snapshot=authority_policy,
+        ):
             # Po aktywacji authority czasówki nie może już zmienić drugi,
             # CK-only writer — także gdy stary CK jest pusty. Brak baseline nie
             # nadaje authority; każda nowa prawda idzie atomowym pickup+CK.
@@ -2367,8 +2426,9 @@ def update_from_event(event: dict) -> Optional[dict]:
         # więc musi nadążać za LEGALNĄ zmianą odbioru (koordynator/restauracja,
         # dowolny kierunek). To jest kanał,
         # którym committed czasówki ma się zmieniać (zamiast pasywnego czas_kuriera).
+        prospective_order = project_time_event_order(existing, payload)
         if (
-            _is_czasowka_order(existing)
+            _is_czasowka_order(prospective_order)
             and (
                 committed_authority is not None
                 or flag("ENABLE_PICKUP_TIME_MIRRORS_CK", True)

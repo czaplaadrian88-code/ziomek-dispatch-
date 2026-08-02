@@ -3047,6 +3047,45 @@ def _diff_and_emit(
             )
 
     current_state = state_get_all()
+    _known_state_ids = set(current_state)
+
+    # A pending initial receipt is older than every observation in this tick.
+    # Recover it before prefetch/heal/assignment/pickup/terminal writers.  The
+    # post-recovery reload is the only snapshot consumed by the rest of the
+    # tick; a corrupt receipt quarantines just that OID instead of letting a
+    # sibling lifecycle writer make the original decision unrecoverable.
+    _pending_initial_blocked_ids = set()
+    _pending_initial_seen = False
+    for _pending_oid, _pending_order in list(current_state.items()):
+        if not isinstance(_pending_order, dict) or _pending_order.get(
+            NEW_ORDER_TIME_INTENT_FIELD
+        ) is None:
+            continue
+        _pending_initial_seen = True
+        try:
+            _pending_ready = _resume_new_order_time_contract(
+                str(_pending_oid),
+                _pending_order,
+            )
+        except Exception as _pending_exc:  # noqa: BLE001 — receipt stays
+            _pending_ready = False
+            _log.warning(
+                "NEW_ORDER initial time recovery fail oid=%s: %s",
+                _pending_oid,
+                _pending_exc,
+            )
+        if _pending_ready:
+            stats["initial_time_contract_recovered"] = (
+                stats.get("initial_time_contract_recovered", 0) + 1
+            )
+            continue
+        _pending_initial_blocked_ids.add(str(_pending_oid))
+        stats["errors"] += 1
+    if _pending_initial_seen:
+        current_state = state_get_all()
+        for _blocked_oid in _pending_initial_blocked_ids:
+            current_state.pop(_blocked_oid, None)
+
     html_order_ids = set(parsed["order_ids"])
     assigned_in_panel = parsed["assigned_ids"]
     rest_names = parsed["rest_names"]
@@ -3129,7 +3168,7 @@ def _diff_and_emit(
     # reszta _diff_and_emit (sekcja 2 — zmiany/terminalne) działa normalnie.
     _new_scan_ids = [] if _freeze_new else parsed["order_ids"]
     for zid in _new_scan_ids:
-        if zid in current_state:
+        if zid in _known_state_ids:
             continue
         if zid in _ignored_ids:
             stats["ignored"] += 1
@@ -3999,12 +4038,6 @@ def _diff_and_emit(
         )
     except Exception:
         _forward_time_authority_on = False
-    _pending_initial_time_ids = {
-        str(_oid)
-        for _oid, _order in current_state.items()
-        if isinstance(_order, dict)
-        and _order.get(NEW_ORDER_TIME_INTENT_FIELD) is not None
-    }
     # FORCE-RECHECK na żądanie koordynatora (przycisk „Odśwież czas" w konsoli):
     # czytaj trwale kolejke coordinator_time_recheck (panel dopisal oid). Receipt
     # znika dopiero po udanym fetch/apply; crash lub blad HTTP zostawia retry.
@@ -4087,7 +4120,6 @@ def _diff_and_emit(
         or ENABLE_PICKUP_TIME_DETECTION
         or _forward_time_authority_on
         or _force_ids
-        or _pending_initial_time_ids
     ):
         for zid, state_order in list(current_state.items()):
             if zid in _claimed_force_ids:
@@ -4095,43 +4127,13 @@ def _diff_and_emit(
             _force = zid in _force_ids
             _status = state_order.get("status")
             _is_czasowka = C.is_czasowka_order(state_order)
-            _pending_initial_time = zid in _pending_initial_time_ids
             in_scope = (
                 _status in ("assigned", "picked_up")
                 or (_status == "planned" and _is_czasowka)
                 or _force  # klik koordynatora wymusza re-check dowolnego statusu
-                or _pending_initial_time
             )
             if not in_scope:
                 continue
-            if _pending_initial_time:
-                # This recovery consumes only orders_state + the hash-bound
-                # NEW_ORDER outbox receipt. Board presence and detail HTTP are
-                # later mutable observations and cannot gate durable liveness.
-                try:
-                    initial_ready = _resume_new_order_time_contract(
-                        zid,
-                        state_order,
-                    )
-                except Exception as exc:  # noqa: BLE001 — intent stays durable
-                    initial_ready = False
-                    _log.warning(
-                        "NEW_ORDER initial time recovery fail oid=%s: %s",
-                        zid,
-                        exc,
-                    )
-                if not initial_ready:
-                    stats["errors"] += 1
-                    # Never reinterpret a corrupt/incomplete durable receipt
-                    # as a later mutable panel snapshot.
-                    continue
-                state_order = state_get_order_strict(zid) or state_order
-                _status = state_order.get("status")
-                _is_czasowka = C.is_czasowka_order(state_order)
-                if not _forward_time_authority_on:
-                    # Finish the receipt-bound ON transaction after hot-OFF,
-                    # but do not create a new authority decision in this tick.
-                    continue
             if zid not in html_order_ids:
                 if _force:
                     _log.info(f"force-recheck oid={zid} nie ma na boardzie — pomijam")

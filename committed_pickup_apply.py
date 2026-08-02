@@ -21,12 +21,14 @@ from dispatch_v2.committed_pickup_authority import (
     NEW_ORDER_TIME_INTENT_FIELD,
     NEW_ORDER_TIME_INTENT_ID_FIELD,
     RUTCOM_FORWARD_AUTHORITY_FLAG,
+    CommittedPickupPolicySnapshot,
     ResolutionOutcome,
     TIME_EVENT_CAS_SCHEMA_FIELD,
     time_event_cas_artifact_present,
     time_event_cas_is_versioned,
     validate_committed_pickup_event,
     validate_new_order_time_intent_event,
+    resolve_czasowka_committed_observation,
 )
 
 AUTHORITY_ATTESTATION_SCHEMA = "committed_pickup_outbox_attestation.v1"
@@ -233,7 +235,11 @@ def time_update_event_key(order_id: str, event: Mapping[str, object]) -> str:
     return f"{order_id}_{event_type}{discriminator}_to_{digest}"
 
 
-def apply_event(event: Mapping[str, object]):
+def apply_event(
+    event: Mapping[str, object],
+    *,
+    authority_policy: CommittedPickupPolicySnapshot | None = None,
+):
     """Utrwal, zastosuj i domknij downstream jednego eventu czasu."""
     from dispatch_v2 import state_machine
 
@@ -247,6 +253,24 @@ def apply_event(event: Mapping[str, object]):
     payload = event.get("payload")
     if not isinstance(payload, Mapping):
         raise ValueError("time event requires payload")
+    if authority_policy is not None:
+        if type(authority_policy) is not CommittedPickupPolicySnapshot:
+            raise TypeError(
+                "authority_policy must be CommittedPickupPolicySnapshot"
+            )
+        observed_source = (
+            payload.get("source")
+            if event_type == "CZAS_KURIERA_UPDATED"
+            else payload.get("observed_source")
+        )
+        if observed_source != "pre_proposal_recheck":
+            raise ValueError(
+                "authority_policy is reserved for pre_proposal_recheck"
+            )
+        if not authority_policy.authority_enabled:
+            raise ValueError(
+                "authority-disabled pre_proposal_recheck must use legacy apply"
+            )
 
     # Granica transportu jest ostatnim miejscem, w którym surowy CK może
     # istnieć. Jeżeli wspólny resolver rozpozna legalną zmianę committed
@@ -257,11 +281,31 @@ def apply_event(event: Mapping[str, object]):
         # prawdziwym brakiem OID i utrwalić legalnej czasówki jako raw CK.
         # Ten sam strict reader wiąże później wersję state w durable outboxie.
         current = state_machine.get_order_strict(order_id)
-        if isinstance(current, dict):
-            resolved = state_machine.resolve_czasowka_ck_observation(
-                current,
-                dict(payload),
+        if authority_policy is not None and not isinstance(current, dict):
+            raise ValueError(
+                "pre_proposal authority requires existing strict state"
             )
+        if isinstance(current, dict):
+            if authority_policy is None:
+                resolved = state_machine.resolve_czasowka_ck_observation(
+                    current,
+                    dict(payload),
+                )
+            else:
+                resolved = resolve_czasowka_committed_observation(
+                    current,
+                    dict(payload),
+                    is_czasowka=C.is_czasowka_order(current),
+                    passive_guard_enabled=(
+                        authority_policy.passive_guard_enabled
+                    ),
+                    manual_passthrough_enabled=(
+                        authority_policy.manual_passthrough_enabled
+                    ),
+                    rutcom_forward_authority_enabled=(
+                        authority_policy.rutcom_forward_authority_enabled
+                    ),
+                )
             if (
                 resolved.outcome is ResolutionOutcome.APPLY
                 and isinstance(resolved.event, Mapping)
@@ -274,6 +318,14 @@ def apply_event(event: Mapping[str, object]):
                     raise ValueError(
                         "canonical committed pickup requires payload"
                     )
+            elif (
+                authority_policy is not None
+                and resolved.reason != "not_czasowka"
+            ):
+                raise ValueError(
+                    "pre_proposal authority observation rejected: "
+                    f"{resolved.reason}"
+                )
 
     event_key = time_update_event_key(order_id, event)
     state_event_sealer = None
@@ -303,12 +355,22 @@ def apply_event(event: Mapping[str, object]):
                 downstream_fn=lifecycle_downstream.apply,
             )
 
-        passive_enabled = C.flag(
-            "ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True
+        passive_enabled = (
+            authority_policy.passive_guard_enabled
+            if authority_policy is not None
+            else C.flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True)
         )
         current = state_machine.get_order_strict(order_id)
-        manual_enabled = C.decision_flag(MANUAL_CK_AUTHORITY_FLAG)
-        forward_enabled = C.decision_flag(RUTCOM_FORWARD_AUTHORITY_FLAG)
+        manual_enabled = (
+            authority_policy.manual_passthrough_enabled
+            if authority_policy is not None
+            else C.decision_flag(MANUAL_CK_AUTHORITY_FLAG)
+        )
+        forward_enabled = (
+            authority_policy.rutcom_forward_authority_enabled
+            if authority_policy is not None
+            else C.decision_flag(RUTCOM_FORWARD_AUTHORITY_FLAG)
+        )
         receipt_verified = False
         proof = payload.get("committed_authority_proof")
         observation = (

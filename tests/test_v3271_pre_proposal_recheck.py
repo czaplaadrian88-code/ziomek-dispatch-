@@ -305,6 +305,55 @@ def test_recheck_fetch_failure_defensive():
     assert result["3001"] == "cached_value", f"fetch fail MUST fallback to cached, got {result}"
 
 
+def test_recheck_freezes_authority_policy_before_async_fetch(monkeypatch):
+    """OFF-started HTTP work cannot become authority after a mid-flight flip."""
+    _reset_state()
+    monkeypatch.setattr(
+        dispatch_pipeline.C, "ENABLE_V327_PRE_PROPOSAL_RECHECK", True
+    )
+    live = {"forward": False}
+
+    def decision(name):
+        if name == "ENABLE_CZASOWKA_RUTCOM_FORWARD_AUTHORITY":
+            return live["forward"]
+        return False
+
+    monkeypatch.setattr(dispatch_pipeline.C, "decision_flag", decision)
+    seen = []
+
+    def fetch(_oid, timeout=None, *, authority_policy):
+        seen.append(("fetch", authority_policy))
+        live["forward"] = True
+        return ("2026-04-26T17:05:00+02:00", "17:05")
+
+    def emit(*_args, authority_policy, **_kwargs):
+        seen.append(("emit", authority_policy))
+        return False
+
+    monkeypatch.setattr(
+        dispatch_pipeline, "_v327_safe_fetch_czas_kuriera", fetch
+    )
+    monkeypatch.setattr(
+        dispatch_pipeline, "_v327_emit_pre_recheck_event", emit
+    )
+    bag = [
+        _make_order_sim(
+            "policy-snapshot",
+            assigned_min_ago=20,
+            ck_warsaw="2026-04-26T17:00:00+02:00",
+        )
+    ]
+
+    dispatch_pipeline.get_fresh_czas_kuriera_for_bag(
+        bag, datetime.now(timezone.utc)
+    )
+
+    assert [kind for kind, _policy in seen] == ["fetch", "emit"]
+    assert seen[0][1] is seen[1][1]
+    assert seen[0][1].rutcom_forward_authority_enabled is False
+    assert live["forward"] is True
+
+
 def test_recheck_cache_eviction():
     """Entries starsze niż EVICT_AGE_SEC=3600 evicted, fresh preserved."""
     _reset_state()

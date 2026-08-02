@@ -1,6 +1,6 @@
 # ZIOMEK AI DISPATCHER - BACKLOG ROZWOJU
 
-> **KANDYDAT v20 2026-08-02 — RUTCOM COMMITTED PICKUP AUTHORITY / OID 491578:**
+> **KANDYDAT v22 2026-08-02 — RUTCOM COMMITTED PICKUP AUTHORITY / OID 491578:**
 > root cause potwierdzony: guard pasywny 52 razy stłumił zmianę umówionego
 > czasu Rutcom 19:16→19:21, przez co aplikacja poprawnie pokazywała stary stan
 > 19:16. Jeden resolver autorytetu zastępuje rozproszoną politykę; akceptuje
@@ -138,14 +138,27 @@
 > tick konsumuje trwały intent przed świeżym panelem, więc restamp 19:16 nie
 > zastępuje umówionego 19:21. Preflight blokuje każdego pending writera czasu i
 > każdy czasowy `NEW_ORDER`; tylko w pełni związany jawny elastyk jest wyjątkiem.
-> Cztery findings były 4/4 RED przed fixem; v20 ma 6 mutation kills, exact 7/7,
-> szeroki klaster 592/592 i zielone checkery. Pełna hermetyczna regresja v20:
-> `6617P/0F/74S/8X/149W` w 594,91 s, z profilem identycznym z v19 i deltą +7
-> testów. Dwa świeże `CLEAN` final-byte v20 są wymagane przed live. Read-only preflight
-> 16:31Z ma pustą kolejkę/outbox, ale dwie aktywne legacy czasówki z rozbieżnym
-> pickup/CK, więc `safe_for_forward_deploy=false`; bez migracji, deployu,
-> restartu i flipu. Produkcja pozostaje bez zmian do naturalnej terminalizacji
-> tych rekordów, quiesce i ponownego zielonego preflightu.
+> Cztery findings były 4/4 RED przed fixem; v20 miała 6 mutation kills, exact 7/7,
+> szeroki klaster 592/592 i pełną regresję `6617P/0F/74S/8X/149W`.
+> Review v20 ujawniły osiem dalszych klas, zamkniętych w v21 przez exact binding
+> applied `NEW_ORDER`, recovery niezależne od board/fetch, wyłączność pending
+> intentu, źródłowy broadcast, wspólny classifier i mechaniczne quiesce. V21:
+> 8/8 oracles, 8 mutation kills, 367/367 focused i
+> `6706P/0F/74S/8X/153W`. Dwa review v21 zatrzymały jeszcze późny recovery za
+> assignment/pickup writerami, klasyfikację starego agregatu sprzed zmiany
+> `prep_minutes` w state/preflight oraz ponowne czytanie żywych flag po HTTP.
+> V22 odzyskuje receipt przed każdym writerem lifecycle, usuwa późnego bliźniaka,
+> współdzieli jeden post-event projector i zamraża jeden request-scoped policy
+> snapshot przez fetch→resolver→legacy/durable apply. Review findings były 4/4
+> RED przed i 4/4 PASS po; oba kierunki hot-flipu mają osobne oracles, pięć
+> mutation kills wraca do exact SHA, focused 226/226, broad 456/456, pełna suita
+> `6713P/0F/74S/8X/153W` w 637,32 s. Lifecycle repo/live 557/557, hygiene
+> 271/271, zero sierot i nowej luki effect coverage.
+> Read-only live preflight ma pustą kolejkę, zero unfinished outboxa i zero
+> aktywnych niepełnych kontraktów; naturalna terminalizacja usunęła wcześniejszy
+> blocker danych. `safe_for_forward_deploy=false` wyłącznie dlatego, że oba
+> exact writery są nadal aktywne. Produkcja pozostaje bez zmian do dwóch świeżych
+> `CLEAN`, kontrolowanego quiesce i ponownego zielonego preflightu.
 > Flaga
 > `ENABLE_CZASOWKA_RUTCOM_FORWARD_AUTHORITY` jest default OFF; owner wydał ACK
 > na docelowe ON po wdrożeniu. Kod nie jest jeszcze wdrożony, procesy nie były

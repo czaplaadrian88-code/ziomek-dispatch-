@@ -716,6 +716,63 @@ def test_forward_deploy_ignores_well_formed_elastic_raw_ck(monkeypatch):
     assert status["safe_for_forward_deploy"] is True
 
 
+def test_forward_deploy_blocks_pickup_that_promotes_elastic_to_prep60(
+    monkeypatch,
+):
+    """Preflight classifies the durable post-event state, not stale state."""
+    event_id = "elastic-pickup-promotes-prep60"
+    pickup = {
+        "event_type": "PICKUP_TIME_UPDATED",
+        "event_id": event_id,
+        "order_id": "elastic-promoted",
+        "courier_id": "492",
+        "payload": {
+            "old_pickup_at_warsaw": "2026-08-02T14:00:00+02:00",
+            "new_pickup_at_warsaw": "2026-08-02T14:15:00+02:00",
+            "old_prep_minutes": 20,
+            "new_prep_minutes": 60,
+            "source": "panel_re_check",
+        },
+    }
+    row = _outbox_row(
+        pickup,
+        event_id=event_id,
+        event_key=f"{event_id}-key",
+        order_id="elastic-promoted",
+    )
+    elastic = {
+        "order_id": "elastic-promoted",
+        "status": "assigned",
+        "order_type": "elastic",
+        "prep_minutes": 20,
+        "courier_id": "492",
+        "pickup_at_warsaw": "2026-08-02T14:00:00+02:00",
+        "czas_kuriera_warsaw": "2026-08-02T14:00:00+02:00",
+        "czas_kuriera_hhmm": "14:00",
+    }
+    monkeypatch.setattr(rollback.C, "decision_flag", lambda _name: False)
+    monkeypatch.setattr(
+        rollback.event_bus,
+        "list_unfinished_state_applies",
+        lambda: [row],
+    )
+    monkeypatch.setattr(
+        rollback.queue,
+        "legacy_rollback_status",
+        lambda: _queue_status(),
+    )
+    monkeypatch.setattr(
+        rollback.state_machine,
+        "get_all_strict",
+        lambda: {elastic["order_id"]: elastic},
+    )
+
+    status = rollback.collect_status(writer_quiescence_verified=True)
+
+    assert status["unfinished_forward_authority_outbox"] == 1
+    assert status["safe_for_forward_deploy"] is False
+
+
 def test_forward_deploy_blocks_explicit_elastic_with_canonical_prep60(
     monkeypatch,
 ):

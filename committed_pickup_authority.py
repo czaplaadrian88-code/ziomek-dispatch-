@@ -133,6 +133,55 @@ COMMITTED_PICKUP_COUPLED_FIELDS = (
         "new_zmiana_czasu_odbioru",
     ),
 )
+
+
+@dataclass(frozen=True)
+class CommittedPickupPolicySnapshot:
+    """Immutable in-process authority policy captured before mutable I/O."""
+
+    manual_passthrough_enabled: bool
+    rutcom_forward_authority_enabled: bool
+    passive_guard_enabled: bool
+
+    def __post_init__(self) -> None:
+        for field_name in (
+            "manual_passthrough_enabled",
+            "rutcom_forward_authority_enabled",
+            "passive_guard_enabled",
+        ):
+            if type(getattr(self, field_name)) is not bool:
+                raise TypeError(f"{field_name} must be exact bool")
+
+    @property
+    def authority_enabled(self) -> bool:
+        return bool(
+            self.manual_passthrough_enabled
+            or self.rutcom_forward_authority_enabled
+        )
+
+
+def project_time_event_order(
+    current: Mapping[str, object] | None,
+    event_or_payload: Mapping[str, object] | None,
+) -> dict:
+    """Project coupled fields exactly as the canonical pickup writer will.
+
+    Classification at preflight and at apply must use the same post-event
+    aggregate. Otherwise an unfinished legacy pickup can change prep 20→60
+    after being classified as elastic and create split pickup/CK truth.
+    """
+    projected = dict(current or {})
+    candidate = event_or_payload or {}
+    payload = candidate.get("payload")
+    if isinstance(payload, Mapping):
+        candidate = payload
+    for state_field, _old_key, new_key in COMMITTED_PICKUP_COUPLED_FIELDS:
+        new_value = candidate.get(new_key)
+        if new_value is not None:
+            projected[state_field] = new_value
+    return projected
+
+
 ASSIGNMENT_CK_FORWARD_SNAPSHOT_FIELD = (
     "czasowka_assignment_ck_forward_authority_enabled"
 )
@@ -1864,6 +1913,7 @@ __all__ = [
     "COMMITTED_PICKUP_COUPLED_FIELDS",
     "COMMITTED_PICKUP_EVENT_ID_MARKER",
     "COMMITTED_PICKUP_STATE_FIELDS",
+    "CommittedPickupPolicySnapshot",
     "CommittedPickupResolution",
     "NEW_ORDER_TIME_INTENT_FIELD",
     "NEW_ORDER_TIME_INTENT_ID_FIELD",
@@ -1886,6 +1936,7 @@ __all__ = [
     "normalize_pickup_revision",
     "new_order_time_intent_is_valid",
     "pickup_payload_requires_coordinator_receipt",
+    "project_time_event_order",
     "resolve_czasowka_committed_observation",
     "resolve_czasowka_initial_time_intent",
     "resolve_czasowka_assignment_ck",

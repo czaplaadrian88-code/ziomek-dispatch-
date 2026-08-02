@@ -352,12 +352,50 @@ def test_both_producers_and_defense_route_to_one_resolver():
         "resolve_czasowka_ck_observation",
     ]
     assert "resolve_czasowka_ck_observation(" in watcher
-    assert "resolve_czasowka_ck_observation as _resolve_committed" in pipeline
+    assert "resolve_czasowka_committed_observation(" in pipeline
     assert "state_machine.resolve_czasowka_ck_observation(" in _source(
+        "committed_pickup_apply.py"
+    )
+    assert "resolve_czasowka_committed_observation(" in _source(
         "committed_pickup_apply.py"
     )
     assert "build_czasowka_manual_ck_pickup_event(" not in watcher
     assert "build_czasowka_manual_ck_pickup_event as" not in pipeline
+
+
+def test_preproposal_policy_is_frozen_once_across_async_and_apply_boundaries():
+    pipeline = _source("dispatch_pipeline.py")
+    tree = ast.parse(pipeline)
+    functions = {
+        node.name: ast.get_source_segment(pipeline, node) or ""
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    snapshot = functions["_v327_committed_time_policy_snapshot"]
+    fetch = functions["_v327_safe_fetch_czas_kuriera"]
+    emit = functions["_v327_emit_pre_recheck_event"]
+    bag = functions["get_fresh_czas_kuriera_for_bag"]
+
+    assert "C.decision_flag(MANUAL_CK_AUTHORITY_FLAG)" in snapshot
+    assert "C.decision_flag(RUTCOM_FORWARD_AUTHORITY_FLAG)" in snapshot
+    assert fetch.index("_v327_committed_time_policy_snapshot()") < (
+        fetch.index("_v327_safe_fetch_order_time(")
+    )
+    assert "C.decision_flag(" not in fetch
+    assert "C.decision_flag(" not in emit
+    assert "C.flag(" not in emit
+    assert bag.index(
+        "authority_policy = _v327_committed_time_policy_snapshot()"
+    ) < bag.index("executor.submit(")
+    assert bag.count("authority_policy=authority_policy") == 2
+    assert "authority_policy=authority_policy" in emit
+
+    boundary = _source("committed_pickup_apply.py")
+    state = _source("state_machine.py")
+    assert "authority_policy: CommittedPickupPolicySnapshot | None" in boundary
+    assert "authority_policy.passive_guard_enabled" in boundary
+    assert "policy_snapshot=authority_policy" in state
+    assert "authority-enabled pre_proposal_recheck requires durable apply" in state
 
 
 def test_coordinator_authority_is_receipt_bound_end_to_end():
@@ -477,15 +515,20 @@ def test_new_order_intent_is_outbox_bound_and_recovers_before_panel_io():
     assert "state_payload = sanitized_state_payload" in emitter
     assert "payload = sanitized_payload" not in emitter
 
-    recovery = watcher.split(
-        "# This recovery consumes only orders_state", 1
-    )[1].split("_force_ack_ready = bool(_force)", 1)[0]
-    assert recovery.index("_resume_new_order_time_contract(") < (
-        recovery.index("if zid not in html_order_ids:")
-    )
-    assert recovery.index("if zid not in html_order_ids:") < (
-        recovery.index("raw_ck = _details(zid)")
-    )
+    recovery_start = watcher.index("# A pending initial receipt")
+    recovery_end = watcher.index("html_order_ids =", recovery_start)
+    recovery = watcher[recovery_start:recovery_end]
+    assert "_resume_new_order_time_contract(" in recovery
+    assert "current_state = state_get_all()" in recovery
+    assert "current_state.pop(_blocked_oid, None)" in recovery
+    for later_writer in (
+        "_heal_missing_order_details(",
+        "# 2. ZMIANY:",
+        "# ================== PICKED_UP RECONCILE",
+        "# ============ ORDER-TIME RE-CHECK",
+    ):
+        assert recovery_start < watcher.index(later_writer, recovery_end)
+    assert "# This recovery consumes only orders_state" not in watcher
 
     assert "def verify_new_order_time_intent_receipt(" in apply
     assert 'current.get("last_lifecycle_event_id_new_order")' in apply
@@ -850,7 +893,7 @@ def test_event_producers_are_closed_over_known_funnels():
     pipeline = _source("dispatch_pipeline.py")
     boundary = _source("committed_pickup_apply.py")
     assert "return apply_event(event)" in watcher
-    assert "outcome = _durable_apply(event)" in pipeline
+    assert "outcome = _durable_apply(" in pipeline
     assert "durable_event_apply.emit_and_apply(" in boundary
 
 
@@ -952,7 +995,7 @@ def test_semantic_literal_closure_blocks_constant_alias_bypass():
             "3b6a795052f2dfe7ca89e53bc1f643f19e7ed48f357a80986e454fa26384142c"
         ),
         "CZAS_KURIERA_UPDATED": (
-            "5c98b59d38fcdf5a811ed66edc71b13a5145d4a373f9cf30036798e2f5091f4f"
+            "18cf5797d2a998bba3e8323dc585d07f6640e2288ada7a1f472fc3f9b647202a"
         ),
         "pickup_at_warsaw": (
             "2672d9f69eb106272ee116c4482ea2215f27e1957c4451886ec24bbea0bc8e48"

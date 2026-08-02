@@ -18,9 +18,12 @@ from dispatch_v2.route_simulator_v2 import OrderSim, RoutePlanV2, DWELL_PICKUP_M
 from dispatch_v2.feasibility_v2 import check_feasibility_v2  # noqa: F401 — kontrakt atrybutu: monkeypatch tools/replay_feasibility + aliasy _dp w core.{candidates,selection} (K11/K12)
 from dispatch_v2 import common as C
 from dispatch_v2.committed_pickup_authority import (
+    CommittedPickupPolicySnapshot,
     MANUAL_CK_AUTHORITY_FLAG,
     RUTCOM_FORWARD_AUTHORITY_FLAG,
     build_time_event_cas_snapshot,
+    normalize_pickup_revision,
+    resolve_czasowka_committed_observation,
 )
 from dispatch_v2 import calib_maps  # SP-B2 (2026-06-11): mapy ETA-quantile + prep-bias (shadow)
 from dispatch_v2 import panel_client  # V3.27.1 sesja 2: pre-proposal recheck (Blocker 2 Opcja A)
@@ -336,6 +339,21 @@ class _V327FreshCzasKuriera(tuple):
         return obj
 
 
+def _v327_committed_time_policy_snapshot() -> CommittedPickupPolicySnapshot:
+    """Capture one immutable authority policy before any mutable HTTP work."""
+    return CommittedPickupPolicySnapshot(
+        manual_passthrough_enabled=bool(
+            C.decision_flag(MANUAL_CK_AUTHORITY_FLAG)
+        ),
+        rutcom_forward_authority_enabled=bool(
+            C.decision_flag(RUTCOM_FORWARD_AUTHORITY_FLAG)
+        ),
+        passive_guard_enabled=bool(
+            C.flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True)
+        ),
+    )
+
+
 def _v327_safe_fetch_order_time(oid: str, timeout: float = None) -> Optional[dict]:
     """Fetch jednego, spojnego snapshotu pol czasu z gastro.
 
@@ -384,13 +402,20 @@ def _v327_safe_fetch_order_time(oid: str, timeout: float = None) -> Optional[dic
 
 
 def _v327_safe_fetch_czas_kuriera(
-    oid: str, timeout: float = None
+    oid: str,
+    timeout: float = None,
+    *,
+    authority_policy: Optional[CommittedPickupPolicySnapshot] = None,
 ) -> Tuple[Optional[str], Optional[str]]:
     """API V3.27.1: OFF zwraca dokladnie legacy 2-tuple.
 
     Dopiero nowa flaga ON dokleja nieiterowany snapshot do kompatybilnego
     tuple-subclass. Dzięki temu ciemny deploy nie zmienia nawet typu wyniku.
     """
+    if authority_policy is None:
+        authority_policy = _v327_committed_time_policy_snapshot()
+    if type(authority_policy) is not CommittedPickupPolicySnapshot:
+        raise TypeError("authority_policy must be CommittedPickupPolicySnapshot")
     snapshot = _v327_safe_fetch_order_time(oid, timeout=timeout)
     if snapshot is None:
         return (None, None)
@@ -398,10 +423,7 @@ def _v327_safe_fetch_czas_kuriera(
         snapshot.get("czas_kuriera_warsaw"),
         snapshot.get("czas_kuriera_hhmm"),
     )
-    if not (
-        C.decision_flag(MANUAL_CK_AUTHORITY_FLAG)
-        or C.decision_flag(RUTCOM_FORWARD_AUTHORITY_FLAG)
-    ):
+    if not authority_policy.authority_enabled:
         return legacy
     return _V327FreshCzasKuriera(
         legacy[0],
@@ -426,7 +448,11 @@ def _v327_emit_pre_recheck_event(oid: str, courier_id: Optional[str],
                                    old_ck_iso: Optional[str], new_ck_iso: str,
                                    new_ck_hhmm: Optional[str],
                                    now: datetime,
-                                   fresh_time: Optional[dict] = None) -> bool:
+                                   fresh_time: Optional[dict] = None,
+                                   *,
+                                   authority_policy: Optional[
+                                       CommittedPickupPolicySnapshot
+                                   ] = None) -> bool:
     """V3.27.1 sesja 3 fix Bug 1 — emit synth CZAS_KURIERA_UPDATED z OBIEMA polami.
 
     Pre-fix (sesja 2): payload `new_ck_hhmm=None` → state_machine sanity FAIL
@@ -438,15 +464,14 @@ def _v327_emit_pre_recheck_event(oid: str, courier_id: Optional[str],
     Side-effect: wspolny durable outbox utrwala event, stosuje state i domyka
     lifecycle downstream. Klucz eventu jest deterministyczny z tresci zmiany.
     """
-    from dispatch_v2.committed_pickup_authority import (
-        ResolutionOutcome,
-        normalize_pickup_revision,
-    )
+    from dispatch_v2.committed_pickup_authority import ResolutionOutcome
     from dispatch_v2.committed_pickup_apply import apply_event as _durable_apply
-    from dispatch_v2.state_machine import (
-        get_order as _sm_get_order,
-        resolve_czasowka_ck_observation as _resolve_committed,
-    )
+    from dispatch_v2.state_machine import get_order as _sm_get_order
+
+    if authority_policy is None:
+        authority_policy = _v327_committed_time_policy_snapshot()
+    if type(authority_policy) is not CommittedPickupPolicySnapshot:
+        raise TypeError("authority_policy must be CommittedPickupPolicySnapshot")
 
     delta_min = _v327_compute_delta_min(old_ck_iso, new_ck_iso)
     payload = {
@@ -461,10 +486,7 @@ def _v327_emit_pre_recheck_event(oid: str, courier_id: Optional[str],
     }
     # OFF = payload/event identyczny jak przed zmiana. Dopiero ON dopina
     # snapshot korelacyjny z tego samego response gastro.
-    authority_snapshot_enabled = (
-        C.decision_flag(MANUAL_CK_AUTHORITY_FLAG)
-        or C.decision_flag(RUTCOM_FORWARD_AUTHORITY_FLAG)
-    )
+    authority_snapshot_enabled = authority_policy.authority_enabled
     authority_state = {}
     if authority_snapshot_enabled:
         # Exact OFF nie wykonuje nawet nowego odczytu state: historyczna
@@ -540,7 +562,10 @@ def _v327_emit_pre_recheck_event(oid: str, courier_id: Optional[str],
                 payload=payload,
                 event_id=event_id,
             )
-            _legacy_apply(event)
+            _legacy_apply(
+                event,
+                authority_policy=authority_policy,
+            )
         except Exception as exc:
             log.warning(
                 f"V3.27.1 _v327_emit_pre_recheck_event oid={oid} "
@@ -559,20 +584,39 @@ def _v327_emit_pre_recheck_event(oid: str, courier_id: Optional[str],
         # Ten sam resolver co panel_watcher i defense-in-depth state_machine.
         # Pozytywny sygnal nie zapisuje CK bokiem: przechodzi kanonicznym
         # PICKUP_TIME_UPDATED, ktory mirroruje czas do aplikacji.
-        authority_resolution = None
-        if authority_snapshot_enabled:
-            authority_resolution = _resolve_committed(
-                authority_state, payload
-            )
+        authority_resolution = resolve_czasowka_committed_observation(
+            authority_state,
+            payload,
+            is_czasowka=C.is_czasowka_order(authority_state),
+            passive_guard_enabled=authority_policy.passive_guard_enabled,
+            manual_passthrough_enabled=(
+                authority_policy.manual_passthrough_enabled
+            ),
+            rutcom_forward_authority_enabled=(
+                authority_policy.rutcom_forward_authority_enabled
+            ),
+        )
         authority_event = (
             authority_resolution.event
             if authority_resolution is not None
             and authority_resolution.outcome is ResolutionOutcome.APPLY
             else None
         )
+        if (
+            authority_event is None
+            and authority_resolution.reason != "not_czasowka"
+        ):
+            log.info(
+                "V3.27.1 pre_proposal_recheck "
+                f"oid={oid} suppressed reason={authority_resolution.reason}"
+            )
+            return False
         if authority_event is not None:
             event = authority_event
-        outcome = _durable_apply(event)
+        outcome = _durable_apply(
+            event,
+            authority_policy=authority_policy,
+        )
         stored = _sm_get_order(oid) or {}
         target_applied = (
             outcome.state_ready
@@ -623,6 +667,11 @@ def get_fresh_czas_kuriera_for_bag(bag_orders: List[OrderSim],
         # Flag-gated short-circuit — return cached state values
         return {o.order_id: getattr(o, "czas_kuriera_warsaw", None) for o in bag_orders}
 
+    # This one object is the policy lease for the whole async operation. A hot
+    # flag flip may affect the next request, never reinterpret this one between
+    # fetch, classification and durable apply.
+    authority_policy = _v327_committed_time_policy_snapshot()
+
     # Counter increment + eviction trigger
     _v327_pre_recheck_call_counter += 1
     cache_size = len(_v327_pre_recheck_last_seen)
@@ -670,7 +719,11 @@ def get_fresh_czas_kuriera_for_bag(bag_orders: List[OrderSim],
         with ThreadPoolExecutor(max_workers=len(fetch_oids),
                                   thread_name_prefix="v327_recheck") as executor:
             future_to_oid = {
-                executor.submit(_v327_safe_fetch_czas_kuriera, oid): oid
+                executor.submit(
+                    _v327_safe_fetch_czas_kuriera,
+                    oid,
+                    authority_policy=authority_policy,
+                ): oid
                 for oid in fetch_oids
             }
             for future in as_completed(future_to_oid):
@@ -710,6 +763,7 @@ def get_fresh_czas_kuriera_for_bag(bag_orders: List[OrderSim],
                         fresh_hhmm,
                         now,
                         fresh_time=fresh_time,
+                        authority_policy=authority_policy,
                     )
                     if target_applied:
                         results[oid] = fresh_iso

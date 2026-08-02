@@ -5222,6 +5222,7 @@
    ],
    "consumers": [
     "dispatch_v2/committed_pickup_apply.py",
+    "dispatch_v2/dispatch_pipeline.py",
     "dispatch_v2/durable_event_apply.py",
     "dispatch_v2/state_machine.py"
    ],

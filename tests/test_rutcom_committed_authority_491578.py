@@ -16,6 +16,7 @@ from unittest.mock import patch
 import pytest
 
 from dispatch_v2.committed_pickup_authority import (
+    CommittedPickupPolicySnapshot,
     ResolutionOutcome,
     pickup_event_has_authority_artifact,
     resolve_czasowka_committed_observation,
@@ -1217,6 +1218,94 @@ def test_preproposal_twin_persists_same_canonical_event(
     )
 
 
+def test_preproposal_off_started_event_cannot_gain_authority_after_hot_on(
+    tmp_path, monkeypatch
+):
+    from dispatch_v2 import dispatch_pipeline as dp
+    from dispatch_v2 import event_bus
+    from dispatch_v2 import state_machine as sm
+
+    _seed_state_491578(sm, tmp_path, monkeypatch)
+    # Runtime has already flipped ON, but this request owns the earlier OFF
+    # policy. The state writer must not reinterpret it as a new authority write.
+    monkeypatch.setattr(dp.C, "decision_flag", _authority_decision_flag)
+    monkeypatch.setattr(sm, "decision_flag", _authority_decision_flag)
+    monkeypatch.setattr(sm, "flag", _authority_runtime_flag)
+    policy = CommittedPickupPolicySnapshot(
+        manual_passthrough_enabled=False,
+        rutcom_forward_authority_enabled=False,
+        passive_guard_enabled=True,
+    )
+
+    with patch.object(event_bus, "emit_audit", return_value="legacy"):
+        accepted = dp._v327_emit_pre_recheck_event(
+            "491578",
+            "492",
+            "2026-08-01T19:16:00+02:00",
+            "2026-08-01T19:21:00+02:00",
+            "19:21",
+            datetime.fromisoformat("2026-08-01T18:50:57+02:00"),
+            fresh_time={
+                "pickup_at_warsaw": "2026-08-01T19:15:58+02:00",
+                "status_id": 2,
+                "prep_minutes": 60,
+                "zmiana_czasu_odbioru": False,
+            },
+            authority_policy=policy,
+        )
+
+    stored = sm.get_order_strict("491578")
+    assert accepted is True  # exact legacy emitter contract
+    assert stored["pickup_at_warsaw"].endswith("T19:15:58+02:00")
+    assert stored["czas_kuriera_hhmm"] == "19:16"
+    assert stored.get("committed_pickup_authority") is None
+
+
+def test_preproposal_on_started_event_finishes_after_hot_off(
+    tmp_path, monkeypatch
+):
+    from dispatch_v2 import dispatch_pipeline as dp
+    from dispatch_v2 import state_machine as sm
+
+    _seed_state_491578(sm, tmp_path, monkeypatch)
+    _isolate_durable_bus(tmp_path, monkeypatch)
+    monkeypatch.setattr(dp.C, "decision_flag", lambda _name: False)
+    monkeypatch.setattr(sm, "decision_flag", lambda _name: False)
+    monkeypatch.setattr(sm, "flag", _authority_runtime_flag)
+    policy = CommittedPickupPolicySnapshot(
+        manual_passthrough_enabled=False,
+        rutcom_forward_authority_enabled=True,
+        passive_guard_enabled=True,
+    )
+    fresh_time = {
+        "pickup_at_warsaw": "2026-08-01T19:15:58+02:00",
+        "status_id": 2,
+        "prep_minutes": 60,
+        "decision_deadline": "2026-08-01T18:16:58+02:00",
+        "zmiana_czasu_odbioru": False,
+    }
+
+    with patch("dispatch_v2.plan_manager.touch_plan", return_value=True):
+        accepted = dp._v327_emit_pre_recheck_event(
+            "491578",
+            "492",
+            "2026-08-01T19:16:00+02:00",
+            "2026-08-01T19:21:00+02:00",
+            "19:21",
+            datetime.fromisoformat("2026-08-01T18:50:57+02:00"),
+            fresh_time=fresh_time,
+            authority_policy=policy,
+        )
+
+    stored = sm.get_order_strict("491578")
+    assert accepted is True
+    assert stored["pickup_at_warsaw"].endswith("T19:21:00+02:00")
+    assert stored["czas_kuriera_hhmm"] == "19:21"
+    assert stored["committed_pickup_authority"] == (
+        "rutcom_forward_commitment"
+    )
+
+
 def test_flag_is_decision_scoped_default_off_and_registered():
     from dispatch_v2 import common as C
 
@@ -2014,6 +2103,98 @@ def test_real_tick_recovers_pending_initial_intent_before_later_restamp(
     assert stored["pending_committed_time_intent"] is None
 
 
+def test_restart_tick_recovers_initial_intent_before_assignment_writer(
+    tmp_path, monkeypatch
+):
+    """Lifecycle writers cannot advance the shell before receipt recovery."""
+    from dispatch_v2 import panel_detail_prefetch
+    from dispatch_v2 import parse_continuity_guard
+    from dispatch_v2.committed_pickup_authority import (
+        NEW_ORDER_TIME_INTENT_FIELD,
+    )
+
+    oid = "initial-recovery-before-assignment"
+    pw, sm, original = _seed_pending_initial_time_contract(
+        tmp_path, monkeypatch, oid=oid
+    )
+    monkeypatch.setattr(
+        pw.C,
+        "flag",
+        lambda name, default=None: (
+            False
+            if name == "ENABLE_COORDINATOR_FORCE_TIME_RECHECK"
+            else _authority_runtime_flag(name, default)
+        ),
+    )
+    monkeypatch.setattr(
+        panel_detail_prefetch,
+        "prefetch_details",
+        lambda *_args, **_kwargs: ({}, {"prefetch_enabled": False}),
+    )
+    monkeypatch.setattr(
+        parse_continuity_guard,
+        "evaluate",
+        lambda *_args, **_kwargs: {
+            "freeze_new": False,
+            "suspicious": False,
+        },
+    )
+    monkeypatch.setattr(
+        pw,
+        "_heal_missing_order_details",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        pw,
+        "fetch_order_details",
+        lambda *_args, **_kwargs: {
+            "id_kurier": 492,
+            "id_status_zamowienia": 2,
+        },
+    )
+    monkeypatch.setattr(
+        pw,
+        "normalize_order",
+        lambda _raw: {
+            "order_type": "czasowka",
+            "prep_minutes": 60,
+            "pickup_at_warsaw": "2099-08-02T19:16:00+02:00",
+            "czas_kuriera_warsaw": "2099-08-02T19:16:00+02:00",
+            "czas_kuriera_hhmm": "19:16",
+            "status_id": 2,
+        },
+    )
+
+    stats = pw._diff_and_emit(
+        {
+            "order_ids": [oid],
+            "assigned_ids": {oid},
+            "unassigned_ids": [],
+            "rest_names": {},
+            "courier_packs": {"492": [oid]},
+            "courier_load": {},
+            "html_times": {},
+            "closed_ids": set(),
+            "pickup_addresses": {},
+            "delivery_addresses": {},
+        },
+        csrf="test",
+        _state_outbox_sweeper_on=True,
+    )
+
+    stored = sm.get_order_strict(oid)
+    assert stats["errors"] == 0
+    assert stored["status"] == "assigned"
+    assert stored["courier_id"] == "492"
+    assert stored["pickup_at_warsaw"] == original[
+        "czas_kuriera_warsaw"
+    ]
+    assert stored["czas_kuriera_warsaw"] == original[
+        "czas_kuriera_warsaw"
+    ]
+    assert stored[NEW_ORDER_TIME_INTENT_FIELD] is None
+
+
 def test_restart_tick_recovers_initial_intent_even_when_order_left_board(
     tmp_path, monkeypatch
 ):
@@ -2509,7 +2690,7 @@ def test_preproposal_authority_uses_durable_apply_funnel(
         "zmiana_czasu_odbioru": False,
     }
 
-    def _apply_and_record(event):
+    def _apply_and_record(event, **_kwargs):
         sm.update_from_event(event)
         return outcome
 
@@ -2528,6 +2709,9 @@ def test_preproposal_authority_uses_durable_apply_funnel(
 
     assert accepted is True
     durable_apply.assert_called_once()
+    assert durable_apply.call_args.kwargs[
+        "authority_policy"
+    ].rutcom_forward_authority_enabled is True
     emitted = durable_apply.call_args.args[0]
     assert emitted["courier_id"] == "492"
     assert emitted["payload"]["courier_id"] == "492"
@@ -3265,6 +3449,53 @@ def test_legacy_pickup_state_write_advances_revision_without_authority_schema(
     assert stored["pickup_at_warsaw"].endswith("T19:26:00+02:00")
     assert stored["pickup_time_revision"] == 1
     assert "committed_pickup_authority" not in stored
+
+
+def test_pickup_writer_classifies_post_event_prep_before_ck_mirror(
+    tmp_path, monkeypatch
+):
+    """A pickup event promoting prep 20→60 cannot create split truth."""
+    from dispatch_v2 import state_machine as sm
+
+    state_path = tmp_path / "orders_state.json"
+    state_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(sm, "_state_path", lambda: str(state_path))
+    oid = "elastic-promoted-to-time-order"
+    sm.upsert_order(
+        oid,
+        {
+            "order_id": oid,
+            "status": "assigned",
+            "courier_id": "492",
+            "order_type": "elastic",
+            "prep_minutes": 20,
+            "pickup_at_warsaw": "2026-08-02T14:00:00+02:00",
+            "czas_kuriera_warsaw": "2026-08-02T14:00:00+02:00",
+            "czas_kuriera_hhmm": "14:00",
+        },
+        event="COURIER_ASSIGNED",
+    )
+    monkeypatch.setattr(sm, "decision_flag", lambda _name: False)
+    monkeypatch.setattr(sm, "flag", _authority_runtime_flag)
+    event = {
+        "event_type": "PICKUP_TIME_UPDATED",
+        "order_id": oid,
+        "courier_id": "492",
+        "payload": {
+            "old_pickup_at_warsaw": "2026-08-02T14:00:00+02:00",
+            "new_pickup_at_warsaw": "2026-08-02T14:15:00+02:00",
+            "old_prep_minutes": 20,
+            "new_prep_minutes": 60,
+            "source": "panel_re_check",
+        },
+    }
+
+    assert sm.update_from_event(event) is not None
+    stored = sm.get_order_strict(oid)
+    assert stored["prep_minutes"] == 60
+    assert stored["pickup_at_warsaw"] == "2026-08-02T14:15:00+02:00"
+    assert stored["czas_kuriera_warsaw"] == "2026-08-02T14:15:00+02:00"
+    assert stored["czas_kuriera_hhmm"] == "14:15"
 
 
 def test_legacy_coordinator_source_without_authority_is_rejected_at_state(

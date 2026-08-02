@@ -40,6 +40,7 @@ from dispatch_v2.committed_pickup_authority import (  # noqa: E402
     committed_time_contract_is_complete,
     is_forward_authority_outbox_artifact,
     is_committed_pickup_outbox_artifact,
+    project_time_event_order,
     state_has_committed_pickup_artifact,
 )
 
@@ -298,12 +299,19 @@ def collect_status(
             if isinstance(row, Mapping)
             else None
         )
+        row_event = (
+            row.get("state_event") if isinstance(row, Mapping) else None
+        )
+        projected_order = project_time_event_order(
+            current_order,
+            row_event if isinstance(row_event, Mapping) else None,
+        )
         if is_forward_authority_outbox_artifact(
             row,
             current_order,
             is_czasowka=bool(
                 isinstance(current_order, Mapping)
-                and C.is_czasowka_order(dict(current_order))
+                and C.is_czasowka_order(projected_order)
             ),
         ):
             forward_authority_rows.append(row)
