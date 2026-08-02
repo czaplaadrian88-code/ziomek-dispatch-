@@ -471,6 +471,53 @@ def test_receipt_bound_new_order_blocks_code_revert_even_if_payload_is_elastic(
     assert status["safe_for_code_revert"] is False
 
 
+def test_forward_deploy_blocks_new_order_labeled_elastic_with_prep60(
+    monkeypatch,
+):
+    """NEW_ORDER fencing uses the same canonical class as live producers."""
+    event_id = "mislabelled-new-order"
+    new_order = {
+        "event_type": "NEW_ORDER",
+        "event_id": event_id,
+        "order_id": "mislabelled-new-order",
+        "payload": {
+            "order_type": "elastic",
+            "prep_minutes": 60,
+            "pickup_at_warsaw": "2026-08-02T14:00:00+02:00",
+            "czas_kuriera_warsaw": "2026-08-02T14:05:00+02:00",
+            "czas_kuriera_hhmm": "14:05",
+        },
+    }
+    monkeypatch.setattr(rollback.C, "decision_flag", lambda _name: False)
+    monkeypatch.setattr(
+        rollback.event_bus,
+        "list_unfinished_state_applies",
+        lambda: [
+            _outbox_row(
+                new_order,
+                event_id=event_id,
+                event_key=f"{event_id}-key",
+                order_id="mislabelled-new-order",
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        rollback.queue,
+        "legacy_rollback_status",
+        lambda: _queue_status(),
+    )
+    monkeypatch.setattr(
+        rollback.state_machine,
+        "get_all_strict",
+        lambda: {},
+    )
+
+    status = rollback.collect_status(writer_quiescence_verified=True)
+
+    assert status["unfinished_unbound_new_order_time_outbox"] == 1
+    assert status["safe_for_forward_deploy"] is False
+
+
 def test_forward_deploy_blocks_pending_legacy_pickup_for_czasowka(
     monkeypatch,
 ):
@@ -801,6 +848,32 @@ def test_forward_deploy_requires_dark_flag_empty_queue_and_no_old_events(
     status = rollback.collect_status(writer_quiescence_verified=True)
 
     assert status["safe_for_forward_deploy"] is True
+
+
+def test_forward_deploy_is_never_safe_without_verified_quiescence(
+    monkeypatch,
+):
+    monkeypatch.setattr(rollback.C, "decision_flag", lambda _name: False)
+    monkeypatch.setattr(
+        rollback.event_bus,
+        "list_unfinished_state_applies",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        rollback.queue,
+        "legacy_rollback_status",
+        lambda: _queue_status(),
+    )
+    monkeypatch.setattr(
+        rollback.state_machine,
+        "get_all_strict",
+        lambda: {},
+    )
+
+    status = rollback.collect_status()
+
+    assert status["writer_quiescence_verified"] is False
+    assert status["safe_for_forward_deploy"] is False
 
 
 @pytest.mark.parametrize(
