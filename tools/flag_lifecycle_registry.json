@@ -1,7 +1,7 @@
 {
  "_meta": {
   "counts": {
-   "apka": 29,
+   "apka": 30,
    "engine": 439,
    "engine_1b_units": 13,
    "etap4": 154,
@@ -9,10 +9,10 @@
    "fp_extra": 37,
    "known_drift": 0,
    "numeric": 36,
-   "panel": 88,
+   "panel": 89,
    "test_isolated": 8,
-   "total": 556,
-   "twins_concepts": 8
+   "total": 558,
+   "twins_concepts": 9
   },
   "generator": "tools/flag_lifecycle_seed.py",
   "merge_absent_dead_preserved": [
@@ -13126,6 +13126,44 @@
     "engine"
    ]
   },
+  "ENABLE_ROUTE_ETA_VERSION_CHECK": {
+   "carriers": [
+    "courier_api/config.py"
+   ],
+   "consumers": [
+    "courier_api/config.py:ROUTE_ETA_VERSION_CHECK",
+    "courier_api/courier_orders.py:RouteConfig.eta_version_check"
+   ],
+   "curated_at": "2026-08-02",
+   "current_snapshot": {
+    "courier-api.service": false
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_ROUTE_ETA_VERSION_CHECK",
+   "notes": "TIME-C Faza 1; flip wyłącznie razem z bliźniakiem panelu po ACK ownera i testach race/perf.",
+   "owner": {
+    "business": "Adrian",
+    "service": "courier-api.service"
+   },
+   "removal_condition": "promocja po shadow/replay albo retire po decyzji ownera",
+   "review_date": "2026-08-10",
+   "rollback": "env ENABLE_ROUTE_ETA_VERSION_CHECK=0 + restart courier-api.service ZA ACK",
+   "source_of_truth": "courier_api/config.py",
+   "twin_of": [
+    "ROUTE_ETA_VERSION_CHECK"
+   ],
+   "worlds": [
+    "apka"
+   ]
+  },
   "ENABLE_ROUTE_ORDER_UNIFIED": {
    "carriers": [
     "courier_api/config.py",
@@ -19494,6 +19532,45 @@
    "rollback": "DEFAULT_FLAGS w app/core/flags.py (deploy panelu)",
    "source_of_truth": "DEFAULT_FLAGS",
    "twin_of": [],
+   "worlds": [
+    "panel"
+   ]
+  },
+  "ROUTE_ETA_VERSION_CHECK": {
+   "carriers": [
+    "DEFAULT_FLAGS"
+   ],
+   "consumers": [
+    "panel:app/core/flags.py:ROUTE_ETA_VERSION_CHECK",
+    "panel:app/integrations/ziomek/canon_eta.py",
+    "panel:app/integrations/ziomek/fleet_state.py"
+   ],
+   "curated_at": "2026-08-02",
+   "current_snapshot": {
+    "nadajesz-panel.service": false
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "ROUTE_ETA_VERSION_CHECK",
+   "notes": "TIME-C Faza 1; flip wyłącznie razem z bliźniakiem courier-api po ACK ownera i testach race/perf.",
+   "owner": {
+    "business": "Adrian",
+    "service": "nadajesz-panel.service"
+   },
+   "removal_condition": "promocja po shadow/replay albo retire po decyzji ownera",
+   "review_date": "2026-08-10",
+   "rollback": "PANEL_FLAG_ROUTE_ETA_VERSION_CHECK=0 + restart nadajesz-panel.service ZA ACK",
+   "source_of_truth": "DEFAULT_FLAGS",
+   "twin_of": [
+    "ENABLE_ROUTE_ETA_VERSION_CHECK"
+   ],
    "worlds": [
     "panel"
    ]

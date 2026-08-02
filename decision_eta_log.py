@@ -347,6 +347,8 @@ def record_pipeline_decision(
 def record_plan_commit(
     courier_id: str,
     saved_plan: Mapping[str, Any],
+    *,
+    writer_role: str = "unattributed",
 ) -> bool:
     """Record every order leg after a plan CAS/write has actually committed."""
     def build() -> list[dict]:
@@ -396,7 +398,11 @@ def record_plan_commit(
                 "decision_ts": decision_ts,
                 "decision_kind": "plan_commit",
                 "source": "plan_manager",
+                "writer": "plan_manager",
+                "writer_role": str(writer_role),
                 "order_id": oid,
+                "plan_version": version,
+                "sequence_hash": None,
                 "selected_cid": cid,
                 "outcome": "PLAN_COMMITTED",
                 "candidate_pool_scope": "selected_only",
@@ -433,6 +439,90 @@ def record_plan_commit(
                     "optimization_method": saved_plan.get("optimization_method"),
                 },
             })
+        return records
+
+    return _emit(build)
+
+
+def record_live_eta_cycle(snapshots: Mapping[str, Mapping[str, Any]]) -> bool:
+    """Dopisz historię ETA per zlecenie × fizyczny stop po publikacji cyklu.
+
+    Rozszerza istniejący ``decision_eta_log.jsonl`` zamiast tworzyć konkurencyjny
+    log. Rekord nie zawiera nazw, adresów ani współrzędnych i zachowuje schema
+    ``decision_eta.v1``, więc istniejące rotatory i czytniki pozostają wspólne.
+    """
+    def build() -> list[dict]:
+        records: list[dict] = []
+        for cid, snapshot in sorted(snapshots.items(), key=lambda item: str(item[0])):
+            if not isinstance(snapshot, Mapping):
+                continue
+            cycle_id = snapshot.get("cycle_id")
+            generated_at = _iso(snapshot.get("generated_at"))
+            plan_version = snapshot.get("plan_version")
+            sequence_hash = snapshot.get("sequence_hash")
+            for stop in snapshot.get("stops") or []:
+                if not isinstance(stop, Mapping):
+                    continue
+                kind = stop.get("kind")
+                if kind not in {"pickup", "dropoff"}:
+                    continue
+                eta_at = _iso(stop.get("eta_at"))
+                stop_id = str(stop.get("stop_id") or "")
+                for raw_oid in stop.get("order_ids") or []:
+                    oid = str(raw_oid)
+                    leg = {
+                        "order_id": oid,
+                        "pickup_eta_at": eta_at if kind == "pickup" else None,
+                        "delivery_eta_at": eta_at if kind == "dropoff" else None,
+                        "missing": [] if eta_at else [f"{kind}_eta_unavailable"],
+                    }
+                    records.append({
+                        "decision_id": (
+                            f"live_eta_daemon:{cycle_id}:{cid}:{stop_id}:{oid}"
+                        ),
+                        "decision_ts": generated_at,
+                        "decision_kind": "live_eta_cycle",
+                        "source": "live_eta_daemon",
+                        "writer": "live_eta_daemon",
+                        "writer_role": "authoritative",
+                        "order_id": oid,
+                        "stop_id": stop_id,
+                        "stop_kind": kind,
+                        "eta_at": eta_at,
+                        "plan_version": plan_version,
+                        "sequence_hash": sequence_hash,
+                        "cycle_id": cycle_id,
+                        "selected_cid": str(cid),
+                        "outcome": "ETA_PUBLISHED" if eta_at else "ETA_UNAVAILABLE",
+                        "candidate_pool_scope": "selected_stop_only",
+                        "candidate_count": 1,
+                        "candidates": [{
+                            "cid": str(cid),
+                            "selected": True,
+                            "feasibility": None,
+                            "best_effort": False,
+                            "score": None,
+                            "position_source": None,
+                            "position_from_store": False,
+                            "position_age_min": None,
+                            "eta_source": "live_eta_snapshot",
+                            "pickup_travel_min": None,
+                            "pickup_travel_calibrated_min": None,
+                            "plan_strategy": None,
+                            "legs": [leg],
+                        }],
+                        "model": {
+                            "primary_selector": "live_eta.calculate_live_eta",
+                            "primary_version": None,
+                            "primary_version_status": "unversioned",
+                            "lgbm_shadow_seen": False,
+                            "lgbm_shadow_versions": [],
+                            "lgbm_twomodel_seen": False,
+                            "lgbm_twomodel_version": None,
+                        },
+                        "calibration": {},
+                        "context": {},
+                    })
         return records
 
     return _emit(build)

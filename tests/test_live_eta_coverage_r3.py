@@ -5,7 +5,7 @@ Oracle kontraktu:
 * WARM wyłącznie z ``history[].at`` nie starszego niż 180 s i tylko za flagą,
 * PLANNED oznacza stop bez wyceny daemona,
 * jeden brak współrzędnych nie kasuje poprawnych stopów całej trasy,
-* OFF zachowuje legacy snapshot bajt w bajt.
+* OFF zachowuje legacy część snapshotu bajt w bajt; kontrakt TIME-C jest addytywny.
 """
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from dispatch_v2 import live_eta, live_eta_daemon
+from dispatch_v2 import live_eta, live_eta_daemon, route_order
 
 NOW = datetime(2026, 7, 28, 1, 0, tzinfo=timezone.utc)
 
@@ -210,7 +210,7 @@ def test_future_last_event_is_not_warm(monkeypatch):
 
 
 def test_flag_off_keeps_legacy_eta_with_additive_stop_identity(monkeypatch):
-    """OFF zachowuje ETA, a ADR-010 addytywnie dopina stop_id."""
+    """OFF zachowuje ETA; ADR-010 i TIME-C dopinają wyłącznie nowe pola."""
     _deterministic_sequence(
         monkeypatch, [("pickup", ["101"]), ("dropoff", ["101"])]
     )
@@ -230,7 +230,12 @@ def test_flag_off_keeps_legacy_eta_with_additive_stop_identity(monkeypatch):
         cycle_id=1,
         source_contract=False,
     )
-    assert json.dumps(snapshot, sort_keys=True, separators=(",", ":")) == (
+    assert snapshot["plan_version"] is None
+    assert snapshot["sequence_hash"] == route_order.route_sequence_hash(route["stops"])
+    legacy_snapshot = dict(snapshot)
+    legacy_snapshot.pop("plan_version")
+    legacy_snapshot.pop("sequence_hash")
+    assert json.dumps(legacy_snapshot, sort_keys=True, separators=(",", ":")) == (
         '{"courier_id":"75","cycle_id":1,"generated_at":"2026-07-28T01:00:00Z",'
         '"orders":{"101":{"delivery_at":"2026-07-28T01:05:00Z",'
         '"pickup_at":"2026-07-28T01:01:00Z"}},"schema_version":1,'
