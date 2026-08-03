@@ -44,6 +44,9 @@ Filtr ocenia osobno nazwę pliku i każdy katalog. Dokładna kanoniczna ścieżk
 `.claude/skills/ziomek-blind-review/` jest recenzowalna, żeby skill nie wycinał
 własnego kodu; wyjątek nie obejmuje nazwy pliku ani dalszych katalogów, więc
 `AUTHOR_REPORT.md` i `author-review/x.py` nadal są bezwarunkowo wycinane.
+Źródła shell (`.sh`) są kopiowalne, ponieważ ta sama kanoniczna polityka skanuje
+ich pełną treść przed kopiowaniem; błąd UTF-8, NUL, limit lub błąd odczytu
+zatrzymuje cały bundle jako `unscannable`, zamiast cicho pominąć oracle.
 Obok zapisuje schema-v2 manifest z SHA-256 każdego pliku i agregatem całego
 bundla. Wypisuje ścieżkę bundla + gotowy prompt recenzenta.
 
@@ -85,7 +88,7 @@ tylko nazwy niosące **werdykt**, nie **dane osobowe**.
 
 Kanoniczna polityka: **`pii_denylist.py`** — jedyne miejsce, gdzie definiuje się
 wrażliwość oraz zbiór kopiowalnych rozszerzeń (`BUNDLE_COPYABLE_SUFFIXES`: `.md`,
-`.json`, `.yaml`, `.yml`, `.py`, `.schema.json`, `.txt`). Driver woła
+`.json`, `.yaml`, `.yml`, `.py`, `.sh`, `.schema.json`, `.txt`). Driver woła
 `screen_tree()` **raz, przed jakimkolwiek zapisem**, a potem używa predykatu
 `is_bundle_copyable()` z tego samego modułu; nie ma własnej listy rozszerzeń ani
 drugiej warstwy filtrów w manifeście.

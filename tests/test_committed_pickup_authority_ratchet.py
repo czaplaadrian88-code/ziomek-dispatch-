@@ -715,6 +715,7 @@ def test_forward_rollout_is_exactly_gated_and_hot_off_owns_rollback():
 
 def test_blind_review_bundle_is_digest_bound_and_fail_closed():
     driver = _source(".claude/skills/ziomek-blind-review/driver.py")
+    pii_policy = _source(".claude/skills/ziomek-blind-review/pii_denylist.py")
     selftest = _source(".claude/skills/ziomek-blind-review/selftest.sh")
 
     assert 'MANIFEST_SCHEMA = "ziomek.blind_bundle_manifest.v2"' in driver
@@ -733,10 +734,13 @@ def test_blind_review_bundle_is_digest_bound_and_fail_closed():
     assert "if any(marker in parts[-1]" in driver
     assert "for index, component in enumerate(parts[:-1]):" in driver
     assert "if _is_canonical_self_review_component(parts, index):" in driver
+    copyable_suffixes = pii_policy.split("BUNDLE_COPYABLE_SUFFIXES = (", 1)[1].split(")", 1)[0]
+    assert '".sh"' in copyable_suffixes
     assert "digest manifest: exact bundle" in selftest
     assert "digest manifest: mutation" in selftest
     assert "częściowy pin" in selftest
-    assert "self-review: kod kanonicznego skilla jest" in selftest
+    assert "self-review: kod i shell oracle skilla sa" in selftest
+    assert "shell bez pełnego skanu" in selftest
 
 
 def test_new_order_intent_is_outbox_bound_and_recovers_before_panel_io():

@@ -1,4 +1,4 @@
-# RUTCOM committed pickup authority — raport kandydata v30, 2026-08-03
+# RUTCOM committed pickup authority — raport kandydata v31, 2026-08-03
 
 ## Wynik
 
@@ -12,6 +12,44 @@ Rutcom. Granica transportu przed zapisem outboxa zamienia legalny CK na jeden
 kanoniczny `PICKUP_TIME_UPDATED`. Jeden handler state atomowo zapisuje pickup,
 CK, HH:MM, monotoniczną rewizję oraz provenance. Plan, scoring po potwierdzonym
 apply i aplikacja dziedziczą tę samą prawdę.
+
+## Co domknięto w v31
+
+Nowy bundle V30 potwierdził, że naprawa ścieżki działa, ale wykazał drugi,
+niezależny brak kompletności: `selftest.sh` w obu drzewach before/after został
+wykluczony przez kanoniczną allowlistę formatów kopiowalnych. Pełny skan PII
+objął te pliki, lecz `BUNDLE_COPYABLE_SUFFIXES` nie zawierał `.sh`. V30 bundle o
+agregacie `69e85533da477125ff66ef4b6e0eaf2c8c0beb0353cad74004e87bf9bf360ce2`
+został zatrzymany przed recenzentami; zero live.
+
+V31 dopisuje `.sh` w jedynym ownerze klasyfikacji plików, nie w driverze i nie
+przez ręczne kopiowanie. Shell już należał do `SCANNABLE_SUFFIXES`, więc podlega
+pełnemu skanowi treści. Nowy oracle wymaga, żeby kanoniczny `selftest.sh` znalazł
+się w bundlu, a osobny negatywny przypadek z nie-UTF-8 `.sh` wymaga odmowy całego
+bundla (`rc=3`) bez pozostawienia artefaktu. Usunięcie `.sh` w kontrolowanej
+mutacji ponownie daje dwa faile: brak selftestu oraz false-green dla
+nieprzeskanowanego shella. Po restore SHA-256 polityki i selftestu wynoszą
+odpowiednio `68d4a2a53677bab059fa212c4c437e08d63d1ee92035da2b95b6d3b229bbf9c2`
+i `84a4c80a86440af9626f625de062c8d947b9db1c74b47911ba3cb386940f15b8`.
+
+Krytyczny klaster nadal ma 157/157, a pełna regresja V31 ma 6782 passed /
+74 skipped / 8 xfailed / 153 warnings / 0 failed w 463,49 s. Nie zmienił się
+kod runtime, flaga ani proces produkcyjny. Następny artefakt review musi zawierać
+wszystkie 67 przypiętych plików, w tym oba `selftest.sh`, przed uruchomieniem dwóch
+świeżych recenzentów.
+
+### Mapa kompletności v31
+
+| Miejsce | Rola | Dotknięte | Dowód |
+|---|---|---|---|
+| `pii_denylist.BUNDLE_COPYABLE_SUFFIXES` | jedyny owner formatów bundla | TAK | `.sh` w jednym kanonicznym zbiorze |
+| `SCANNABLE_SUFFIXES` / `screen_file` | pełny skan treści | N-D kod | `.sh` już obsługiwany; invalid UTF-8 daje rc=3 |
+| `driver.cmd_blind` | konsument polityki | N-D kod | nadal jedno wywołanie ownera, bez lokalnej allowlisty |
+| `selftest.sh` | reviewowany oracle i test bramki | TAK | included + unscannable negative oracle |
+| committed-authority ratchet | antyregresja | TAK | `.sh` wymagany u ownera i behavioral oracle |
+| twins registry | przyszła kompletność | TAK | shell oracle zapisany w boundary 9/9 |
+| queue/authority/watcher/state/operator | zachowanie runtime | N-D kod | 157 focused + 6782 full parity |
+| pozycja/feasibility/route/scoring/UI/apka | niezależne klasy | N-D | brak zmiany danych, decyzji lub renderu |
 
 ## Co domknięto w v30
 
