@@ -13,15 +13,46 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
+import types
 from datetime import datetime, timezone
 
 HEARTBEAT_PATH = os.getenv(
     "ZIOMEK_HEARTBEAT_PATH",
     "/root/.openclaw/workspace/dispatch_state/ziomek_heartbeat.json",
 )
-# Informacyjna etykieta wersji modelu/silnika (override przez env przy bumpie).
+# release_id / etykieta wersji-generacji silnika: USTALONA RAZ z env
+# ``ZIOMEK_MODEL_VERSION`` przy starcie procesu (imporcie modułu) i IMMUTABLE.
+# Override wyłącznie przez env przy starcie/restarcie (bump wersji) — próba
+# nadpisania w runtime jest ODRZUCANA (patrz ``_ReleaseIdImmutableModule`` niżej),
+# co gwarantuje spójny, niedryfujący release_id w telemetrii pulsu / decyzji / atestacji.
 MODEL_VERSION = os.getenv("ZIOMEK_MODEL_VERSION", "V3.28")
+
+
+class _ReleaseIdImmutableModule(types.ModuleType):
+    """Zatrzask immutability release_id (``MODEL_VERSION``) na poziomie modułu.
+
+    ``MODEL_VERSION`` jest czytany raz z env przy imporcie (starcie procesu). Ten
+    zatrzask ODRZUCA każdą próbę nadpisania go w runtime (przypisanie atrybutu do
+    modułu, monkeypatch, przypadkowy zapis) INNĄ wartością — podnosi ``AttributeError``.
+    Przypisanie identycznej wartości jest idempotentnym no-op. Pozostałe atrybuty
+    modułu (np. ścieżki nadpisywane w testach) zostają zapisywalne — harness nietknięty.
+    """
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if name == "MODEL_VERSION":
+            current = self.__dict__.get("MODEL_VERSION")
+            if current is not None and value != current:
+                raise AttributeError(
+                    "MODEL_VERSION (release_id) jest immutable — ustalony z env "
+                    "ZIOMEK_MODEL_VERSION przy starcie procesu; runtime-mutacja odrzucona"
+                )
+        super().__setattr__(name, value)
+
+
+# Zatrzask klasy modułu (idempotentny przy importlib.reload — patrz oracle A-5).
+sys.modules[__name__].__class__ = _ReleaseIdImmutableModule
 
 
 def write_heartbeat(
