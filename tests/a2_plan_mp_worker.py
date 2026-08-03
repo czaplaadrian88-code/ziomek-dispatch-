@@ -8,6 +8,7 @@ na fixture'ach pytest procesu-rodzica.
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import logging
 import os
@@ -95,13 +96,19 @@ def _wait(path: Path, timeout_s: float = 15.0) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--mode", choices=("stale", "recovery"), required=True)
+    parser.add_argument(
+        "--mode",
+        choices=("stale", "recovery", "recovery_pause_after_commit"),
+        required=True,
+    )
     parser.add_argument("--state-dir", required=True)
     parser.add_argument("--scratch", required=True)
     parser.add_argument("--ready", required=True)
     parser.add_argument("--go", required=True)
     parser.add_argument("--result", required=True)
     parser.add_argument("--expected", type=int)
+    parser.add_argument("--issued-marker")
+    parser.add_argument("--tag")
     args = parser.parse_args()
 
     scratch = Path(args.scratch)
@@ -109,6 +116,7 @@ def main() -> int:
 
     # PIERWSZY import modułu stanu następuje dopiero po pełnym harnessie wyżej.
     from dispatch_v2 import plan_manager as PM
+    from dispatch_v2 import state_persistence as SP
 
     state_dir = Path(args.state_dir)
     PM.PLANS_FILE = state_dir / "courier_plans.json"
@@ -117,6 +125,40 @@ def main() -> int:
     with PM._perf_plans_lock:
         PM._perf_plans_cache["key"] = None
         PM._perf_plans_cache["data"] = None
+
+    if args.mode == "recovery_pause_after_commit":
+        if not args.issued_marker:
+            raise ValueError("--issued-marker is required for recovery pause")
+        real_open = open
+        fired = {"count": 0}
+
+        def one_emfile(path, *open_args, **open_kwargs):
+            if fired["count"] == 0 and Path(path) == PM.PLANS_FILE:
+                fired["count"] += 1
+                raise OSError(errno.EMFILE, "synthetic one-shot EMFILE")
+            return real_open(path, *open_args, **open_kwargs)
+
+        SP.open = one_emfile
+        real_persist = PM._persist_recovered_view
+
+        def persist_then_pause(plans):
+            real_persist(plans)
+            plan = plans.get("9") or {}
+            _atomic_result(Path(args.issued_marker), {
+                "token": int(plan["plan_version"]),
+                "emfile_count": fired["count"],
+                "hwm": json.loads(PM.version_hwm_path().read_text(
+                    encoding="utf-8"
+                ))["last_issued"],
+            })
+            Path(args.ready).touch()
+            # Parent intentionally sends SIGKILL while this process still owns
+            # the EX plan lock. Reaching ``go`` is only a cleanup escape hatch.
+            _wait(Path(args.go), timeout_s=60.0)
+
+        PM._persist_recovered_view = persist_then_pause
+        PM.load_plan("9")
+        raise RuntimeError("recovery pause unexpectedly returned")
 
     expected = args.expected
     if args.mode == "recovery":
@@ -130,7 +172,7 @@ def main() -> int:
     try:
         saved = PM.save_plan(
             "9",
-            _body(args.mode),
+            _body(args.tag or args.mode),
             expected_version=expected,
         )
         result = {

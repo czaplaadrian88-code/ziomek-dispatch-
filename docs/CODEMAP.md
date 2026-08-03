@@ -54,9 +54,9 @@ Pominięto szum: `.git`, `__pycache__`, `.pytest_cache`. ⚠ `.claude/skills/` t
 - `shadow_dispatcher.py` — **SILNIK**: pętla `_tick`/`run` (systemd `dispatch-shadow`); serializer `_serialize_result` → shadow log
 - `decision_eta_log.py` — wspólny, fail-safe writer snapshotów ETA dokładnie w chwili finalnej decyzji/commitu planu; addytywne, opcjonalne pickup `pred_op`=P50 + `p80` z provenance/version; flaga `ENABLE_DECISION_ETA_LOG` default OFF
 - `state_machine.py` — jedyne źródło prawdy o stanie zlecenia (upsert `orders_state`, 26 ścieżek); observer FSM Phase A log-only
-- `state_persistence.py` — jedyny leaf-owner trwałości JSON state: strict/legacy read, pochodna `.prev`, walidowany predecessor backup-on-write i temp→fsync→rename→dir-fsync
+- `state_persistence.py` — jedyny leaf-owner trwałości JSON state: strict/legacy read, pochodna `.prev`, hardened predecessor oraz nazwany byte-compatible adapter legacy; temp→fsync→rename→dir-fsync
 - `order_fsm.py` — formalny validator cyklu życia + jawne wyjątki reconcile; w Phase A nie blokuje writera
-- `plan_manager.py` — domenowy zapis/odczyt `courier_plans.json`; guarded recovery oraz globalny, JSON-safe version-HWM anti-ABA delegujący I/O do `state_persistence`
+- `plan_manager.py` — domenowy zapis/odczyt `courier_plans.json`; guarded recovery przechodzi SH→EX, fsyncuje cały zakres globalnego JSON-safe version-HWM i recovered main przed wydaniem tokenu; OFF nie konsumuje sidecarów
 - `plan_recheck.py` — periodyczny re-canon kolejności (timer 5 min); `_apply_canon_order_invariants`
 - `panel_watcher.py` — ingest z panelu gastro (event-driven poll); 4 handlery recanon
 - `panel_client.py` — dostęp do `gastro.nadajesz.pl` (login/CSRF/edit; cykl z `panel_html_parser`)

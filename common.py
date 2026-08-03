@@ -557,6 +557,11 @@ ETAP4_DECISION_FLAGS = (
     # DEFAULT OFF (shadow-first). Decyzyjna: zmienia treść (użyty plan vs pusty /
     # błąd). Konsument: plan_manager._read_raw/_write_raw. Flip za ACK ownera.
     "ENABLE_PLAN_CORRUPT_RAISE",
+    # A-2 iter3: osobny kill-switch zmiany kontraktu persistence orders_state.
+    # OFF = dokładny writer/reader sprzed A-2 (best-effort .prev, array-root
+    # przechodzi); ON = hardened object-only owner, walidowany predecessor i
+    # fail-closed backup. Default OFF; decyzja/flip wyłącznie za ACK ownera.
+    "ENABLE_ORDERS_STATE_PERSISTENCE_V2",
     "ENABLE_PANEL_PACKS_BAG_RECONSTRUCTION",
     # L2.2 (2026-07-02): zbiorczy operator-alert na data-poison z klasyfikacji
     # catch-alla _v328_eval_safe (klasyfikacja/telemetria unconditional; flaga
@@ -781,6 +786,9 @@ ENABLE_REASSIGN_OLD_PLAN_RELEASE = False
 # ON = strict/recovery przez wspólny state_persistence + monotoniczny HWM anti-ABA.
 # Kanon = flags.json (klucza brak = OFF); flip/blind wyłącznie za ACK ownera.
 ENABLE_PLAN_CORRUPT_RAISE = False
+# A-2 iter3: nowa polityka orders_state jest niezależna od plan recovery.
+# OFF pozostaje starą ścieżką bajt-w-bajt, także po wcześniejszym ON.
+ENABLE_ORDERS_STATE_PERSISTENCE_V2 = False
 # E1 OUTBOX-SWEEPER: dark launch. Wiek liczony od updated_at, wiec 30 s jest
 # jednoczesnie grace period dla foreground callbacku i cooldownem po bledzie.
 ENABLE_STATE_OUTBOX_SWEEPER = False

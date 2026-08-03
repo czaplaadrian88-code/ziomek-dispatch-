@@ -1,21 +1,19 @@
-"""Canonical persistence policy for JSON object state files.
+"""Single filesystem owner for JSON state persistence.
 
-This leaf module owns exactly one ``.prev`` contract:
-
-* ``.prev`` is the validated predecessor of the current main file;
-* a first write has no predecessor and therefore creates no ``.prev``;
-* a missing or malformed main is never copied over a healthy ``.prev``;
-* writes use temp -> file fsync -> predecessor rename+directory fsync -> main
-  rename+directory fsync.
-
-Callers retain domain policy (whether recovery is allowed and which exception is
-public), but they do not implement their own backup/read/write machinery.
+The hardened contract validates ``.prev`` and commits temp -> file fsync ->
+predecessor rename+directory fsync -> main rename+directory fsync.  A named
+legacy adapter preserves the pre-A-2 orders_state transaction byte-for-byte
+behind its default-OFF rollout flag.  Both modes live here so callers retain
+only domain/flag policy and never recreate backup/read/write machinery.
 """
 from __future__ import annotations
 
+import errno
+import fcntl
 import json
 import logging
 import os
+import shutil
 import tempfile
 import time
 from dataclasses import dataclass
@@ -37,6 +35,15 @@ class JsonObjectRead:
     """A parsed state object plus the provenance needed by recovery policy."""
 
     data: dict[str, Any]
+    source: ReadSource
+    main_error: Optional[BaseException] = None
+
+
+@dataclass(frozen=True)
+class JsonValueRead:
+    """A legacy JSON value plus provenance from the same canonical reader."""
+
+    data: Any
     source: ReadSource
     main_error: Optional[BaseException] = None
 
@@ -79,60 +86,112 @@ def _parse_object(raw: bytes, path: Path) -> dict[str, Any]:
     return value
 
 
-def _read_object(path: Path) -> dict[str, Any]:
+def _read_value(path: Path, *, shared_file_lock: bool = False) -> Any:
     with open(path, "rb") as handle:
-        return _parse_object(handle.read(), path)
+        if shared_file_lock:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
+        try:
+            return json.loads(handle.read().decode("utf-8"))
+        finally:
+            if shared_file_lock:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _read_object(path: Path, *, shared_file_lock: bool = False) -> dict[str, Any]:
+    value = _read_value(path, shared_file_lock=shared_file_lock)
+    if not isinstance(value, dict):
+        raise JsonObjectShapeError(f"{path} JSON root is not an object")
+    return value
+
+
+_TRANSIENT_READ_ERRNOS = frozenset({
+    errno.EAGAIN,
+    errno.EBUSY,
+    errno.EINTR,
+    errno.EIO,
+    errno.EMFILE,
+    errno.ENFILE,
+    errno.ENOMEM,
+    getattr(errno, "ESTALE", 116),
+})
+
+
+def _is_transient_read_error(exc: OSError) -> bool:
+    return exc.errno in _TRANSIENT_READ_ERRNOS
 
 
 def _read_main_with_retries(
     path: Path,
     retry_delays: Sequence[float],
-) -> tuple[Optional[dict[str, Any]], Optional[BaseException]]:
+    *,
+    require_object: bool = True,
+    retry_transient_os_errors: bool = False,
+    shared_file_lock: bool = False,
+) -> tuple[Optional[Any], Optional[BaseException]]:
     attempts = len(retry_delays) + 1
     for attempt in range(attempts):
         try:
-            return _read_object(path), None
+            if require_object:
+                return _read_object(
+                    path, shared_file_lock=shared_file_lock
+                ), None
+            return _read_value(
+                path, shared_file_lock=shared_file_lock
+            ), None
         except FileNotFoundError as exc:
             if attempt == attempts - 1:
                 return None, exc
             time.sleep(float(retry_delays[attempt]))
-        except (json.JSONDecodeError, UnicodeDecodeError, ValueError, OSError) as exc:
+        except OSError as exc:
+            if (
+                retry_transient_os_errors
+                and _is_transient_read_error(exc)
+                and attempt < attempts - 1
+            ):
+                time.sleep(float(retry_delays[attempt]))
+                continue
+            return None, exc
+        except (json.JSONDecodeError, UnicodeDecodeError, ValueError) as exc:
             return None, exc
     raise AssertionError("unreachable")
 
 
-def read_json_object(
+def _read_json(
     path: Path | str,
     *,
-    recover_previous: bool = False,
-    allow_bootstrap: bool = False,
-    legacy_empty: bool = False,
-    retry_delays: Sequence[float] = (),
-) -> JsonObjectRead:
-    """Read a JSON object without an implicit silent fallback.
-
-    Default is strict: malformed/missing input raises its original exception.
-    ``recover_previous`` is an explicit domain decision and never applies when
-    the caller omits it. ``allow_bootstrap`` accepts a missing main only when a
-    predecessor is also absent. ``legacy_empty`` exists solely for feature-OFF
-    compatibility and records why the empty object was returned.
-    """
+    require_object: bool,
+    recover_previous: bool,
+    allow_bootstrap: bool,
+    missing_empty: bool,
+    legacy_empty: bool,
+    retry_delays: Sequence[float],
+    retry_transient_os_errors: bool,
+    shared_file_lock: bool,
+) -> JsonValueRead:
     target = Path(path)
-    data, main_error = _read_main_with_retries(target, retry_delays)
+    data, main_error = _read_main_with_retries(
+        target,
+        retry_delays,
+        require_object=require_object,
+        retry_transient_os_errors=retry_transient_os_errors,
+        shared_file_lock=shared_file_lock,
+    )
     if data is not None:
-        return JsonObjectRead(data=data, source="main")
+        return JsonValueRead(data=data, source="main")
     if main_error is None:
         raise AssertionError("read failure without an exception")
 
     prev = previous_path(target)
     if recover_previous:
-        try:
-            recovered = _read_object(prev)
-        except (FileNotFoundError, json.JSONDecodeError, UnicodeDecodeError,
-                ValueError, OSError):
-            recovered = None
+        recovered, _previous_error = _read_main_with_retries(
+            prev,
+            retry_delays,
+            require_object=require_object,
+            retry_transient_os_errors=retry_transient_os_errors,
+            shared_file_lock=False,
+        )
         if recovered is not None:
-            return JsonObjectRead(
+            return JsonValueRead(
                 data=recovered,
                 source="previous",
                 main_error=main_error,
@@ -143,8 +202,15 @@ def read_json_object(
         and isinstance(main_error, FileNotFoundError)
         and not prev.exists()
     ):
-        return JsonObjectRead(
+        return JsonValueRead(
             data={}, source="bootstrap", main_error=main_error
+        )
+
+    # Exact plan-manager legacy: a missing main was an empty store even for
+    # strict callers and even if an ON-only predecessor remained on disk.
+    if missing_empty and isinstance(main_error, FileNotFoundError):
+        return JsonValueRead(
+            data={}, source="legacy_empty_missing", main_error=main_error
         )
 
     if legacy_empty and isinstance(main_error, (
@@ -157,9 +223,75 @@ def read_json_object(
             if isinstance(main_error, FileNotFoundError)
             else "legacy_empty_corrupt"
         )
-        return JsonObjectRead(data={}, source=source, main_error=main_error)
+        return JsonValueRead(data={}, source=source, main_error=main_error)
 
     raise main_error
+
+
+def read_json_object(
+    path: Path | str,
+    *,
+    recover_previous: bool = False,
+    allow_bootstrap: bool = False,
+    missing_empty: bool = False,
+    legacy_empty: bool = False,
+    retry_delays: Sequence[float] = (),
+    retry_transient_os_errors: bool = False,
+    shared_file_lock: bool = False,
+) -> JsonObjectRead:
+    """Read a JSON object without an implicit silent fallback.
+
+    Default is strict: malformed/missing input raises its original exception.
+    ``recover_previous`` is an explicit domain decision and never applies when
+    the caller omits it. ``allow_bootstrap`` accepts a missing main only when a
+    predecessor is also absent. ``legacy_empty`` exists solely for feature-OFF
+    compatibility and records why the empty object was returned.
+    """
+    result = _read_json(
+        path,
+        require_object=True,
+        recover_previous=recover_previous,
+        allow_bootstrap=allow_bootstrap,
+        missing_empty=missing_empty,
+        legacy_empty=legacy_empty,
+        retry_delays=retry_delays,
+        retry_transient_os_errors=retry_transient_os_errors,
+        shared_file_lock=shared_file_lock,
+    )
+    return JsonObjectRead(
+        data=result.data,
+        source=result.source,
+        main_error=result.main_error,
+    )
+
+
+def read_json_value(
+    path: Path | str,
+    *,
+    allow_bootstrap: bool = False,
+    missing_empty: bool = False,
+    legacy_empty: bool = False,
+    retry_delays: Sequence[float] = (),
+    retry_transient_os_errors: bool = False,
+    shared_file_lock: bool = False,
+) -> JsonValueRead:
+    """Read any JSON root for an explicitly selected legacy contract.
+
+    This compatibility adapter keeps historical state-machine behaviour (for
+    example, an array root remains an array) without recreating filesystem
+    policy in that caller.  Hardened consumers use :func:`read_json_object`.
+    """
+    return _read_json(
+        path,
+        require_object=False,
+        recover_previous=False,
+        allow_bootstrap=allow_bootstrap,
+        missing_empty=missing_empty,
+        legacy_empty=legacy_empty,
+        retry_delays=retry_delays,
+        retry_transient_os_errors=retry_transient_os_errors,
+        shared_file_lock=shared_file_lock,
+    )
 
 
 def _write_bytes_temp(path: Path, payload: bytes, *, prefix: str) -> str:
@@ -299,4 +431,73 @@ def atomic_write_json(
                 os.unlink(temporary)
             except FileNotFoundError:
                 pass
+        raise
+
+
+def _legacy_backup_previous(
+    path: Path,
+    *,
+    logger: Optional[logging.Logger],
+) -> None:
+    """Exact pre-A-2 orders_state predecessor backup (best effort)."""
+    if not path.exists():
+        return
+    temporary: Optional[str] = None
+    try:
+        descriptor, temporary = tempfile.mkstemp(
+            dir=str(path.parent), prefix=".prevtmp_", suffix=".json"
+        )
+        os.close(descriptor)
+        shutil.copy2(path, temporary)
+        os.replace(temporary, previous_path(path))
+        temporary = None
+    except Exception as exc:
+        if logger is not None:
+            logger.warning(
+                "legacy predecessor snapshot failed path=%s (%s: %s); "
+                "main write continues",
+                path,
+                type(exc).__name__,
+                exc,
+            )
+        if temporary is not None and os.path.exists(temporary):
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+
+
+def legacy_atomic_write_json(
+    path: Path | str,
+    data: Any,
+    *,
+    ensure_directory_durable: Optional[Callable[[Path], None]] = None,
+    logger: Optional[logging.Logger] = None,
+) -> None:
+    """Byte-compatible pre-A-2 orders_state writer for feature-OFF.
+
+    The predecessor copy is deliberately best-effort and may copy malformed
+    current bytes, matching the historical rollback contract exactly.  This
+    adapter remains in the one persistence owner; state_machine only selects
+    legacy versus hardened policy by flag.
+    """
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(
+        dir=str(target.parent), prefix=".tmp_", suffix=".json"
+    )
+    temporary: Optional[str] = temporary_name
+    durable = ensure_directory_durable or fsync_parent
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, ensure_ascii=False, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        _legacy_backup_previous(target, logger=logger)
+        os.replace(temporary, target)
+        temporary = None
+        durable(target)
+    except Exception:
+        if temporary and os.path.exists(temporary):
+            os.unlink(temporary)
         raise
