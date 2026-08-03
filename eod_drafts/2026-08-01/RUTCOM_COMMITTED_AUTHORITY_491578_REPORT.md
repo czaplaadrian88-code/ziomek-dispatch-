@@ -1,4 +1,4 @@
-# RUTCOM committed pickup authority — raport kandydata v31, 2026-08-03
+# RUTCOM committed pickup authority — raport kandydata v32, 2026-08-03
 
 ## Wynik
 
@@ -12,6 +12,46 @@ Rutcom. Granica transportu przed zapisem outboxa zamienia legalny CK na jeden
 kanoniczny `PICKUP_TIME_UPDATED`. Jeden handler state atomowo zapisuje pickup,
 CK, HH:MM, monotoniczną rewizję oraz provenance. Plan, scoring po potwierdzonym
 apply i aplikacja dziedziczą tę samą prawdę.
+
+## Co domknięto w v32
+
+Dwa świeże exact-byte review V31 poprawnie zatrzymały promocję. Authority verdict
+ma SHA-256 `41e07c8d9ef7197f481661af48173b7a5445b53a7cdedb0eba55def97027f76f`,
+a rollout verdict
+`1377b54396834e5ce4922b54bcc01d29b8a50efb7927ea3283cac89dc459a968`;
+oba przeszły checker jako `CONFIRMED_DEFECT`. MAIN niezależnie potwierdził jeden
+wspólny defekt: uruchomienie exact drivera z wnętrza bundla importowało lokalny
+`pii_denylist.py`, zapisywało nieprzypięty `__pycache__/pii_denylist…pyc`, a
+następnie ten sam verifier słusznie odrzucał zmieniony path-set. V31 pozostał
+HOLD; nie było deployu, restartu ani flipa.
+
+V32 usuwa zapis u źródła bez osłabiania exact-set. Driver ustawia
+`sys.dont_write_bytecode=True` przed lokalnym importem polityki, a wygenerowany
+prompt uruchamia verifier dodatkowo z `python3 -B`. Selftest kopiuje realny
+driver, politykę i shell oracle do kandydata, buduje ich bundle, uruchamia driver
+z wnętrza tego bundla bez `-B`, wymaga `verify rc=0` oraz braku `__pycache__`.
+Dodatkowe pliki nadal są bezwarunkowym HOLD — nic nie jest ignorowane.
+
+Kontrolowana mutacja `dont_write_bytecode=True→False` dokładnie odtwarza oba
+findingi: self-verify ma `rc=1`, a `__pycache__` pojawia się w bundlu. Po restore
+SHA-256 drivera i selftestu wynoszą odpowiednio
+`21cb6c2079bcbbbcec17982d6b78ba00295de7d5883ac643a2f48ab677fb2cad`
+i `f6638404eb304513ba9a7ce60f0b54dcc6024917256df3f3e447a3ac7a5cefc5`.
+Focused ma 157/157, a pełna regresja V32 ma 6782 passed / 74 skipped / 8 xfailed /
+153 warnings / 0 failed w 465,23 s. Produkcja i flaga nadal są nietknięte/OFF.
+
+### Mapa kompletności v32
+
+| Miejsce | Rola | Dotknięte | Dowód |
+|---|---|---|---|
+| start `driver.py` przed lokalnym importem | owner side-effectu interpretera | TAK | `dont_write_bytecode=True` |
+| `_reviewer_prompt` | kanoniczna komenda reviewerów | TAK | defense-in-depth `python3 -B` |
+| `cmd_verify` exact-set/digests | verifier | N-D kod | nadal odrzuca każdy dodatkowy plik |
+| selftest self-review | negatywny oracle | TAK | realny bundled driver PASS i zero pycache |
+| ratchet | antyregresja | TAK | wymaga obu bezpieczników i obu assertions |
+| PII policy/shell copy | security owner | N-D kod | pełny skan z V31 bez zmian |
+| twins registry | przyszła kompletność | TAK | no-pycache self-verify w boundary 9/9 |
+| runtime czasu/pozycja/HARD/SOFT/UI/apka | niezależne klasy | N-D | brak zmiany kodu lub zachowania produkcji |
 
 ## Co domknięto w v31
 

@@ -55,6 +55,9 @@ python3 .claude/skills/ziomek-blind-review/driver.py verify <bundle.manifest.jso
 ```
 To obowiązkowy pierwszy krok recenzenta. Weryfikuje dokładny zestaw ścieżek,
 każdy digest i agregat; dodatkowy/usunięty/zmieniony bajt daje `HOLD`.
+Driver ustawia `dont_write_bytecode` przed importem lokalnej polityki, a gotowy
+prompt używa dodatkowo `python3 -B`: verifier uruchomiony z wnętrza bundla nie
+może sam dopisać `__pycache__` i unieważnić obiektu, który właśnie sprawdza.
 
 **Krok 2 — człowiek/orkiestrator:** oddaj bundle i prompt **ŚWIEŻEMU subagentowi**
 (`Agent`, osobny kontekst), który NIE ma dostępu do twoich wniosków, raportu
@@ -167,7 +170,9 @@ python3 .claude/skills/ziomek-blind-review/pii_oracle.py   # sam negatywny oracl
 Sprawdza część mechaniczną oracle: blindowanie wycina werdykty, pin jest
 fail-closed, `check` odrzuca mętne werdykty, korpus spójny, a bramka PII odmawia
 na syntetycznych wabikach (`pii_oracle.py`: 17 przypadków odmowy + 3 jawne
-kontrole granic + sonda limitu JSONL + **mutation ratchet 11/11**). Ratchet osobno czerwieni duplikat
+kontrole granic + sonda limitu JSONL + **mutation ratchet 11/11**). Uruchamia też
+realny driver z wnętrza jego własnego bundla i wymaga PASS bez `__pycache__`.
+Ratchet osobno czerwieni duplikat
 ownera rozszerzeń w driverze, usunięcie reguł path/content/scope, fail-closed,
 odmowy `unscannable` (w tym cichą trunkację), dokładności allowlisty per plik,
 klasy `client_data` i parserów `csv/tsv/yaml`. **Wpięty w nocną

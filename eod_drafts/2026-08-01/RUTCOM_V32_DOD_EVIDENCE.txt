@@ -1,0 +1,84 @@
+RUTCOM COMMITTED PICKUP AUTHORITY v32 — DoD evidence
+Date: 2026-08-03 UTC
+Gate: engine.rutcom-committed-pickup-authority-491578
+Status at capture: candidate only; production code/processes unchanged; target flag effective OFF
+Base: 17c7276c8ff9f48f4a0a1de6fd5aff1e9bd6b8b0 (rejected v31)
+Branch: fix/rutcom-committed-provenance-v20-20260802
+Worktree: /root/worktrees/dispatch_v2/active/20260802-rutcom-v17-integration-pkgroot/dispatch_v2
+Model selection: gpt-5.6-sol; effort=xhigh; a verifier mutating its own exact-byte subject invalidates the independent release gate.
+regresja: 6782 passed, 0 failed, 74 skipped, 8 xfailed, 153 warnings in 465.23 s; exact full HERMETIC_STRICT parity with v29-v31.
+e2e: real bundled driver verifies its own exact set without -B and leaves no pycache; direct queue/operator/ratchet remains 157/157.
+pozytywny-wplyw: v32 prevents self-verification side effects before local imports while retaining fail-closed rejection of every extra path.
+rollback: tooling-only change; sole Rutcom behavior rollback remains hot target flag false. Production stays OFF until two new exact-byte CLEAN verdicts.
+N-D: queue, authority, watcher, state, feasibility, route, scoring, selection, serializers, panel and courier app code — no runtime/business behavior changed from v29.
+
+REJECTED v31 REVIEW INPUT
+- Rejected candidate: 17c7276c8ff9f48f4a0a1de6fd5aff1e9bd6b8b0.
+- Frozen bundle before reviewer execution: included 67, excluded 0, full pin,
+  aggregate 963e00fd09930fac05079c1abe7c015ce705c7d45678fdc433743c7d61a6a25a.
+- Two fresh gpt-5.6-sol/xhigh reviewers independently returned the same class:
+  authority verdict SHA-256
+  41e07c8d9ef7197f481661af48173b7a5445b53a7cdedb0eba55def97027f76f;
+  rollout verdict SHA-256
+  1377b54396834e5ce4922b54bcc01d29b8a50efb7927ea3283cac89dc459a968.
+- Both are CONFIRMED_DEFECT and passed the mechanical verdict checker.
+- MAIN independently reproduced actual-minus-manifest: exactly one path,
+  `after/.claude/skills/ziomek-blind-review/__pycache__/pii_denylist.cpython-312.pyc`;
+  missing count was zero. Both worktree and `-B` verifier then correctly returned
+  HOLD because the earlier in-bundle import had already mutated the subject.
+- No deploy, restart, flag flip, runtime migration or state write occurred.
+
+SOURCE FIX / SINGLE OWNER
+- `sys.dont_write_bytecode = True` is set in driver.py before importing the local
+  `pii_denylist`. An in-bundle invocation cannot create local bytecode.
+- The generated reviewer command additionally uses `python3 -B`. This is
+  defense-in-depth for the canonical invocation, not a substitute for the code
+  invariant.
+- `cmd_verify` does not ignore pycache or any other new path. Exact-set equality,
+  per-file SHA-256 and aggregate checks remain unchanged and fail-closed.
+
+COMPLETENESS MAP
+place | role | writer/consumer | touched | reason/test
+driver initialization before local policy import | interpreter side-effect owner | producer | YES | dont_write_bytecode before import
+driver reviewer prompt | canonical invocation | producer | YES | python3 -B ratchet
+driver cmd_verify | exact path/digest verifier | consumer | N-D code | still rejects all extra paths
+selftest self-review fixture | negative oracle | verifier | YES | copies real driver/policy/shell, invokes inside bundle, zero pycache
+committed authority ratchet | anti-regression | verifier | YES | requires both defenses and oracle assertions
+PII copyable/scannable policy | security owner | producer | N-D code | v31 full-scan shell contract unchanged
+twins registry | future completeness | procedure | YES | no-pycache self-verify recorded in boundary 9/9
+queue/authority/watcher/state/operator | runtime | writer/consumers | N-D code | 157 focused and 6782 full parity
+feasibility/route/scoring/selection | decisions | consumers | N-D | no HARD/SOFT, route, threshold or ranking change
+panel/API/courier serializers | display | consumers | N-D | no render or serializer change
+equal-treatment position class (8 sites) | unrelated policy | writers/consumers | N-D | no position/GPS behavior touched
+
+ORACLES / REGRESSION
+- `git diff --check`: PASS.
+- Driver/PII policy `py_compile`: PASS.
+- Twins registry JSON parse: PASS.
+- Blind-review selftest: PASS. Real bundled driver returns verify rc=0 and
+  creates no pycache; shell full-scan, path filtering, digest, pin, PII and
+  verdict checks also pass.
+- PII oracle and all eleven policy mutants: PASS.
+- Ratchet focused test: 1 passed.
+- Direct queue/operator/ratchet cluster: 157/157, exit 0.
+- Full DISPATCH_UNDER_PYTEST=1, HERMETIC_STRICT=1 suite:
+  6782 passed, 74 skipped, 8 xfailed, 153 warnings, 0 failed in 465.23 s.
+
+MUTATION PROBE / EXACT RESTORE
+- Mutant: set `sys.dont_write_bytecode = False`.
+- Result: selftest rc=1; bundled self-verify returned rc=1 and the explicit
+  no-pycache assertion failed.
+- Exact restored SHA-256:
+  driver.py 21cb6c2079bcbbbcec17982d6b78ba00295de7d5883ac643a2f48ab677fb2cad
+  selftest.sh f6638404eb304513ba9a7ce60f0b54dcc6024917256df3f3e447a3ac7a5cefc5
+- Restored full selftest: PASS.
+
+LIVE / ROLLBACK
+- Production target flag remains effective false; no production mutation was
+  performed for v32.
+- `dispatch-telegram` remains intentionally disabled and untouched.
+- Next gate: freeze v32, build a never-executed 67-file bundle with full pin,
+  run the exact generated `python3 -B` verification command, then provide that
+  immutable bundle to two new independent reviewers.
+- Runtime release and hot-OFF rollback remain the v29 production contract; v32
+  changes only independent-review transport integrity.

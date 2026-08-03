@@ -211,7 +211,7 @@
         {"nazwa": "oracle queue/ABA/poison", "plik": "tests/test_coordinator_force_recheck_2026_06_30.py", "symbol": null, "uwaga": "naive clocks, kauzalność successor/head, exact ID, manifest mismatch, restore-on-TOCTOU, corrupt retention i mutation probes"},
         {"nazwa": "oracle operator/rollout", "plik": "tests/test_rutcom_committed_authority_rollback.py", "symbol": null, "uwaga": "12-file target bytes, canonical tool root, unit target mode, post-ON status/release fail-closed i brak generic code-revert API"},
         {"nazwa": "ratchet anty-duplikat", "plik": "tests/test_committed_pickup_authority_ratchet.py", "symbol": null, "uwaga": "blokuje powrót projection/code-revert ownera, ręcznego booleanu, niepełnego manifestu i niedigestowanego review"},
-        {"nazwa": "digest-bound blind review", "plik": ".claude/skills/ziomek-blind-review/driver.py", "symbol": "def cmd_verify", "uwaga": "schema-v2 path→SHA-256 + aggregate, pełny pin, exact set, kanoniczna ścieżka skilla i w pełni przeskanowany shell oracle są self-reviewable bez przepuszczania raportów; mutation selftest w selftest.sh"}
+        {"nazwa": "digest-bound blind review", "plik": ".claude/skills/ziomek-blind-review/driver.py", "symbol": "def cmd_verify", "uwaga": "schema-v2 path→SHA-256 + aggregate, pełny pin, exact set, kanoniczna ścieżka skilla i w pełni przeskanowany shell oracle są self-reviewable bez raportów; bundled verifier nie zapisuje pycache i ma mutation selftest"}
       ]
     }
   }
