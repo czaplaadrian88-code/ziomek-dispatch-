@@ -100,8 +100,8 @@ Zlecenie wchodzi przez `panel_watcher` (poll HTML gastro), ląduje w `orders_sta
 | Plik (żywy stan) | Kto PISZE | Kto CZYTA | Rola |
 |---|---|---|---|
 | `logs/shadow_decisions.jsonl` (84 MB) | silnik `_serialize_result` | konsola, tools, ~~TG~~ | **kanoniczny log decyzji** |
-| `orders_state.json` | domenowo `state_machine`; persistence `state_persistence` | konsola, apka, silnik | prawda o zleceniach; `ENABLE_ORDERS_STATE_PERSISTENCE_V2=OFF` (default) zachowuje legacy writer/read byte-for-byte, ON wybiera walidowany fail-closed predecessor |
-| `courier_plans.json` | domenowo `plan_manager` (callery m.in. `plan_recheck`); persistence `state_persistence` | konsola, apka, silnik | kanon kolejności/planów; guard ON rezerwuje cały zakres recovery w version-HWM i utrwala recovered main pod EX przed wydaniem tokenu; OFF ignoruje sidecary |
+| `orders_state.json` | domenowo `state_machine`; persistence `state_persistence` | konsola, apka, silnik | prawda o zleceniach; `ENABLE_ORDERS_STATE_PERSISTENCE_V2=OFF` (default) zachowuje legacy writer/read byte-for-byte i non-missing `OSError` bez alertu, ON wybiera walidowany fail-closed predecessor + alert |
+| `courier_plans.json` | domenowo `plan_manager` (callery m.in. `plan_recheck`); persistence `state_persistence` | konsola, apka, silnik | kanon kolejności/planów; guard ON odzyskuje tylko złą treść/brak, nigdy wyczerpany I/O; rezerwuje zakres recovery przed mainem i pod EX uzgadnia HWM po re-ON; OFF ignoruje sidecary |
 | `pending_proposals.json` | `panel_watcher`, `postpone_sweeper` | (dawniej TG), tools | propozycje w locie |
 | `learning_log.jsonl` (100 MB) | `panel_watcher`, `daily_briefing` | retro/learning | trail TAK/NIE/INNY/KOORD |
 | `live_eta_snapshot.json` | `live_eta_daemon` → `live_eta` (jeden producer/kalkulator na cykl) | konsola, apka, panelowi konsumenci ETA | kanoniczny żywy snapshot; konsumenci tylko czytają |

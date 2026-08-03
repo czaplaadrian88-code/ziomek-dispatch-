@@ -120,6 +120,23 @@ def _is_transient_read_error(exc: OSError) -> bool:
     return exc.errno in _TRANSIENT_READ_ERRNOS
 
 
+def _is_previous_recovery_input(exc: BaseException) -> bool:
+    """Return whether a main failure proves absence or invalid content.
+
+    A predecessor is recovery input only when the main is missing or its bytes
+    were read and rejected.  An ``OSError`` other than ``FileNotFoundError``
+    says nothing about those bytes: the healthy file may merely be temporarily
+    unavailable.  Treating that infrastructure failure as corruption lets an
+    older predecessor overwrite a newer, unread main.
+    """
+    return isinstance(exc, (
+        FileNotFoundError,
+        json.JSONDecodeError,
+        UnicodeDecodeError,
+        JsonObjectShapeError,
+    ))
+
+
 def _read_main_with_retries(
     path: Path,
     retry_delays: Sequence[float],
@@ -182,8 +199,8 @@ def _read_json(
         raise AssertionError("read failure without an exception")
 
     prev = previous_path(target)
-    if recover_previous:
-        recovered, _previous_error = _read_main_with_retries(
+    if recover_previous and _is_previous_recovery_input(main_error):
+        recovered, previous_error = _read_main_with_retries(
             prev,
             retry_delays,
             require_object=require_object,
@@ -196,6 +213,13 @@ def _read_json(
                 source="previous",
                 main_error=main_error,
             )
+        # A known-missing/corrupt main still cannot be recovered safely while
+        # its predecessor is unavailable for infrastructure reasons. Surface
+        # that I/O failure instead of misreporting bootstrap/main corruption.
+        if isinstance(previous_error, OSError) and not isinstance(
+            previous_error, FileNotFoundError
+        ):
+            raise previous_error
 
     if (
         allow_bootstrap
@@ -243,9 +267,11 @@ def read_json_object(
 
     Default is strict: malformed/missing input raises its original exception.
     ``recover_previous`` is an explicit domain decision and never applies when
-    the caller omits it. ``allow_bootstrap`` accepts a missing main only when a
-    predecessor is also absent. ``legacy_empty`` exists solely for feature-OFF
-    compatibility and records why the empty object was returned.
+    the caller omits it. It accepts only missing or content-invalid main input,
+    never an unreadable main after exhausted I/O retries. ``allow_bootstrap``
+    accepts a missing main only when a predecessor is also absent.
+    ``legacy_empty`` exists solely for feature-OFF compatibility and records
+    why the empty object was returned.
     """
     result = _read_json(
         path,

@@ -901,6 +901,11 @@ def _orders_state_persistence_v2_on() -> bool:
         return False
 
 
+def _legacy_strict_read_propagates(exc: BaseException) -> bool:
+    """Whether the feature-OFF strict reader historically propagated ``exc``."""
+    return isinstance(exc, OSError) and not isinstance(exc, FileNotFoundError)
+
+
 def _write_state(path: Path, state: dict) -> None:
     """Select the whole orders_state write transaction at one choke point."""
     if _orders_state_persistence_v2_on():
@@ -1063,6 +1068,12 @@ def _read_state_strict() -> dict:
             shared_file_lock=True,
         )
     except (OSError, ValueError) as last_err:
+        # Exact feature-OFF contract: the pre-A-2 reader handled missing-main
+        # and malformed JSON itself, but propagated every other I/O failure.
+        # Alerting/wrapping those infrastructure errors is part of the hardened
+        # policy and must not arm merely because its implementation is merged.
+        if not hardened and _legacy_strict_read_propagates(last_err):
+            raise
         detail = (f"_read_state_strict: {path} nieczytelny po retry "
                   f"({type(last_err).__name__}: {last_err}) — RMW przerwany, "
                   f"NIE nadpisuję orders_state (ochrona przed clobberem)")

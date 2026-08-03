@@ -22,6 +22,12 @@ def _arm_safety(scratch: Path) -> None:
     scratch.mkdir(parents=True, exist_ok=True)
     os.environ["DISPATCH_UNDER_PYTEST"] = "1"
     os.environ["PYTEST_CURRENT_TEST"] = "a2_plan_mp_worker"
+    pycache = scratch / "pycache"
+    pycache.mkdir(parents=True, exist_ok=True)
+    os.environ["PYTHONPYCACHEPREFIX"] = str(pycache)
+    sys.pycache_prefix = str(pycache)
+    os.environ["DISPATCH_STATE_DIR"] = str(scratch / "dispatch_state-env")
+    os.environ["ZIOMEK_LOGS_DIR"] = str(scratch / "logs")
     os.environ.pop("ALLOW_TELEGRAM_IN_TEST", None)
     os.environ.pop("ALLOW_FILE_LOG_IN_TEST", None)
 
@@ -60,6 +66,48 @@ def _arm_safety(scratch: Path) -> None:
     decision_log = types.ModuleType("dispatch_v2.decision_eta_log")
     decision_log.record_plan_commit = _blocked
     sys.modules["dispatch_v2.decision_eta_log"] = decision_log
+
+
+def _pin_plan_store(PM, SP, state_dir: Path) -> None:
+    """Pin and guard every plan path before the worker's first state write."""
+    state_dir.mkdir(parents=True, exist_ok=True)
+    allowed = state_dir.resolve()
+    live = Path("/root/.openclaw/workspace/dispatch_state").resolve()
+    PM.PLANS_FILE = state_dir / "courier_plans.json"
+    PM.LOCK_FILE = state_dir / "courier_plans.lock"
+    paths = (
+        Path(PM.PLANS_FILE).resolve(),
+        Path(PM.LOCK_FILE).resolve(),
+        SP.previous_path(PM.PLANS_FILE).resolve(),
+        PM.version_hwm_path().resolve(),
+    )
+    for path in paths:
+        if not path.is_relative_to(allowed) or path.is_relative_to(live):
+            raise RuntimeError(
+                f"A2-WORKER fail-closed: plan path escaped sandbox: {path}"
+            )
+
+    def guard(name, original):
+        def checked(path, *args, **kwargs):
+            resolved = Path(path).resolve()
+            if not resolved.is_relative_to(allowed):
+                raise RuntimeError(
+                    f"A2-WORKER write-guard: {name} targeted {resolved}"
+                )
+            return original(path, *args, **kwargs)
+        return checked
+
+    SP.atomic_write_json = guard("atomic_write_json", SP.atomic_write_json)
+    SP.legacy_atomic_write_json = guard(
+        "legacy_atomic_write_json", SP.legacy_atomic_write_json
+    )
+    try:
+        SP.atomic_write_json(live / "never-write.json", {})
+    except RuntimeError as exc:
+        if "write-guard" not in str(exc):
+            raise
+    else:
+        raise RuntimeError("A2-WORKER fail-closed selftest did not block live path")
 
 
 def _body(tag: str) -> dict:
@@ -119,8 +167,7 @@ def main() -> int:
     from dispatch_v2 import state_persistence as SP
 
     state_dir = Path(args.state_dir)
-    PM.PLANS_FILE = state_dir / "courier_plans.json"
-    PM.LOCK_FILE = state_dir / "courier_plans.lock"
+    _pin_plan_store(PM, SP, state_dir)
     PM._corrupt_guard_on = lambda: True
     with PM._perf_plans_lock:
         PM._perf_plans_cache["key"] = None
