@@ -4306,6 +4306,11 @@ def _bag_dict_to_ordersim(d: dict) -> OrderSim:
     # R-PACZKI-FLEX (2026-05-20): address_id (=restaurant_id w panelu gastro),
     # order_type (czasowka vs elastic), created_at_utc (pojawienie w gastro).
     sim.address_id = d.get("address_id")
+    if C.decision_flag("ENABLE_NONCARRIED_COMMITTED_PICKUP_REORDER"):
+        sim.pickup_address = d.get("pickup_address")
+        sim.pickup_city = d.get("pickup_city")
+        sim.restaurant = d.get("restaurant")
+        sim.restaurant_address = d.get("restaurant_address")
     sim.order_type = d.get("order_type")
     sim.created_at_utc = d.get("created_at_utc") or d.get("created_at")
     # Carry canon v2: fizyczne eventy są przyszłym kontraktem. Dzisiejszy
@@ -5166,6 +5171,11 @@ def _assess_order_impl(
     )
     # R-PACZKI-FLEX (2026-05-20): patrz _bag_dict_to_ordersim site dla rationale.
     new_order.address_id = order_event.get("address_id")
+    if C.decision_flag("ENABLE_NONCARRIED_COMMITTED_PICKUP_REORDER"):
+        new_order.pickup_address = order_event.get("pickup_address")
+        new_order.pickup_city = order_event.get("pickup_city")
+        new_order.restaurant = restaurant
+        new_order.restaurant_address = order_event.get("restaurant_address")
     new_order.order_type = order_event.get("order_type")
     new_order.created_at_utc = order_event.get("created_at_utc") or order_event.get("created_at")
     new_order.physical_possession_at = order_event.get("physical_possession_at")

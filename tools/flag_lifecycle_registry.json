@@ -2,16 +2,16 @@
  "_meta": {
   "counts": {
    "apka": 30,
-   "engine": 446,
+   "engine": 447,
    "engine_1b_units": 13,
-   "etap4": 159,
+   "etap4": 160,
    "flags_json_keys": 272,
    "fp_extra": 37,
    "known_drift": 0,
    "numeric": 36,
    "panel": 89,
    "test_isolated": 13,
-   "total": 565,
+   "total": 566,
    "twins_concepts": 9
   },
   "generator": "tools/flag_lifecycle_seed.py",
@@ -9391,6 +9391,48 @@
    "review_date": "2026-10-10",
    "rollback": "flags.json OFF hot-reload (bez restartu)",
    "source_of_truth": "flags.json",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
+  "ENABLE_NONCARRIED_COMMITTED_PICKUP_REORDER": {
+   "carriers": [
+    "common.py:ETAP4_DECISION_FLAGS"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/dispatch_pipeline.py",
+    "dispatch_v2/feasibility_v2.py",
+    "dispatch_v2/plan_recheck.py",
+    "dispatch_v2/route_order.py",
+    "dispatch_v2/same_restaurant_grouper.py",
+    "dispatch_v2/shadow_dispatcher.py",
+    "dispatch_v2/tools/b_route_shadow.py"
+   ],
+   "curated_at": "2026-08-03",
+   "current_snapshot": {
+    "default": false
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_NONCARRIED_COMMITTED_PICKUP_REORDER",
+   "notes": "Case 491870 Iter2: jedna flaga obejmuje fizyczny klucz adresowy stopu TIME-B, pickup-forward n_carried=0, F5 i per-order R6. OFF zachowuje 6317f4553 bajtowo; 180 m pozostaje tylko tolerancją pozycji kuriera.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-plan-recheck.service"
+   },
+   "removal_condition": "po replayu ON/OFF i decyzji ownera: promocja albo retire",
+   "review_date": "2026-08-17",
+   "rollback": "brak klucza lub false w flags.json; hot-reload przez D3 refresh, bez zmiany runtime w tym sprincie",
+   "source_of_truth": "common.py-const",
    "twin_of": [],
    "worlds": [
     "engine"

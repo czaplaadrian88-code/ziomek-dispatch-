@@ -643,6 +643,8 @@ RELAX_COLOC_PICKUP_M = float(os.environ.get("RELAX_COLOC_PICKUP_M", "180"))
 # sama własność co relax, który już biega co tick). Replay 06-24: 18 worków, 0 pogorszeń.
 # Default OFF. Brak interakcji z relaxem (mutualnie wykluczające: relax tylko-carried).
 ENABLE_NONCARRIED_DROPOFF_REORDER = _CF.decision_flag("ENABLE_NONCARRIED_DROPOFF_REORDER")  # D.3 fala A: KANON=flags.json
+ENABLE_NONCARRIED_COMMITTED_PICKUP_REORDER = _CF.decision_flag(
+    "ENABLE_NONCARRIED_COMMITTED_PICKUP_REORDER")
 NONCARRIED_REORDER_MAX_STOPS = int(os.environ.get("NONCARRIED_REORDER_MAX_STOPS", "8"))
 NONCARRIED_REORDER_DRIVE_EPS_MIN = float(os.environ.get("NONCARRIED_REORDER_DRIVE_EPS_MIN", "0.3"))
 NONCARRIED_REORDER_DELAY_TOL_MIN = float(os.environ.get("NONCARRIED_REORDER_DELAY_TOL_MIN", "6"))
@@ -672,6 +674,7 @@ _D3_FALA_A_FLAGS = (
     "ENABLE_LEX_WINDOW_GUARDS_V2",  # WB2 2026-07-27: hot-flip guardów P-1
     "ENABLE_RELAX_COLOC_PICKUP",
     "ENABLE_NONCARRIED_DROPOFF_REORDER",
+    "ENABLE_NONCARRIED_COMMITTED_PICKUP_REORDER",
     "ENABLE_PLAN_RECHECK_COMMITTED_PROPAGATION",  # migracja B2 2026-07-18 (hot-reload w pw)
 )
 
@@ -1768,7 +1771,13 @@ def _pickup_rest_key(stop, orders_state):
     return ("name", (o.get("restaurant_name") or o.get("restaurant") or "").strip().lower())
 
 
-def _detect_departed_pickup_revisit(seq, orders_state, carried_rest_keys=None):
+def _detect_departed_pickup_revisit(
+    seq,
+    orders_state,
+    carried_rest_keys=None,
+    *,
+    physical_stops=False,
+):
     """Z-RULE detekcja: odbiór w restauracji R występujący PO ≥1 stopie pośrednim,
     gdy WCZEŚNIEJ w trasie był już odbiór w tej samej R → kurier opuścił R i ma do
     niej wrócić. Zwraca listę (first_idx, revisit_idx, [oid_first, oid_revisit]);
@@ -1778,6 +1787,61 @@ def _detect_departed_pickup_revisit(seq, orders_state, carried_rest_keys=None):
     Traktowane jak odwiedzone i opuszczone PRZED trasą (seed idx=-2) → KAŻDY ich
     odbiór w trasie = powrót (jedzenie w aucie, Adrian 2026-06-22). first_idx<0 =
     pierwsza wizyta to carried (brak węzła odbioru w seq) → oid_first=None."""
+    if physical_stops:
+        # Iter2: nowy kontrakt działa tylko przy swojej fladze i deleguje całą
+        # tożsamość + PICKUP_MERGE_MIN do route_order. Legacy klucz ~1 m poniżej
+        # pozostaje bajt-w-bajt dla OFF i dla istniejącego HARD NO-RETURN.
+        if not ENABLE_NONCARRIED_COMMITTED_PICKUP_REORDER:
+            return []
+        out = []
+        visits = []
+        for carried_oid in (carried_rest_keys or ()):
+            record = orders_state.get(str(carried_oid))
+            if isinstance(record, dict):
+                visits.append(
+                    {
+                        "first_idx": -2,
+                        "last_idx": -2,
+                        "first_oid": str(carried_oid),
+                        "members": [record],
+                    }
+                )
+        for index, stop in enumerate(seq):
+            if stop.get("type") != "pickup":
+                continue
+            oid = str(stop.get("order_id"))
+            record = orders_state.get(oid)
+            if not isinstance(record, dict):
+                continue
+            visit = next(
+                (
+                    candidate
+                    for candidate in visits
+                    if all(
+                        _route_order.same_physical_pickup_point(member, record)
+                        for member in candidate["members"]
+                    )
+                ),
+                None,
+            )
+            if visit is None:
+                visits.append(
+                    {
+                        "first_idx": index,
+                        "last_idx": index,
+                        "first_oid": oid,
+                        "members": [record],
+                    }
+                )
+                continue
+            if index - visit["last_idx"] >= 2:
+                out.append(
+                    (visit["first_idx"], index, [visit["first_oid"], oid])
+                )
+            visit["last_idx"] = index
+            visit["members"].append(record)
+        return out
+
     out = []
     first_at = {}
     for rk in (carried_rest_keys or ()):
@@ -2203,6 +2267,23 @@ def _lex_canonical_carry_map(
     }
 
 
+def _r6_candidate_not_worse(baseline_by_order, candidate_by_order, cap_min):
+    """Monotoniczny HARD per sztuka; liczba breachy nie może zamienić ofiary."""
+    cap = float(cap_min)
+    for oid, baseline_value in baseline_by_order.items():
+        candidate_value = candidate_by_order.get(oid)
+        if candidate_value is None:
+            return False
+        baseline_value = float(baseline_value)
+        candidate_value = float(candidate_value)
+        if baseline_value <= cap:
+            if candidate_value > cap:
+                return False
+        elif candidate_value > baseline_value + 1e-9:
+            return False
+    return True
+
+
 def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
                                   ledger_ctx=None):
     """P-1 (handoff 2026-06-24): okno odbioru committed (R-DECLARED-TIME ±tol) PRZED
@@ -2212,7 +2293,12 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
     baseline, żadna INNA dostawa nie później >TOL vs baseline). SHADOW: loguje rozjazd zawsze
     (gdy flaga shadow|apply); APPLY: zmienia kolejność tylko gdy ENABLE_LEX_COMMITTED_WINDOW.
     Replay D zero-harm: eod_drafts/2026-06-24/lex_window_replay.py."""
-    if not (ENABLE_LEX_COMMITTED_WINDOW_SHADOW or ENABLE_LEX_COMMITTED_WINDOW):
+    _noncarried_apply = bool(ENABLE_NONCARRIED_COMMITTED_PICKUP_REORDER)
+    if not (
+        ENABLE_LEX_COMMITTED_WINDOW_SHADOW
+        or ENABLE_LEX_COMMITTED_WINDOW
+        or _noncarried_apply
+    ):
         return seq
     if start_pos is None or now is None:
         return seq
@@ -2227,8 +2313,12 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
     kind_pick = [s.get("type") == "pickup" for s in seq]
     carried = {oid_of[i] for i in range(n) if not kind_pick[i]
                and (orders_state.get(oid_of[i]) or {}).get("status") == "picked_up"}
-    if not carried:
+    if not carried and not _noncarried_apply:
         return seq                      # bez niesionych carried-first nie wiąże — to nie P-1
+    _r6_guard_on = bool(not carried and _noncarried_apply)
+    _apply_enabled = (
+        bool(ENABLE_LEX_COMMITTED_WINDOW) if carried else _noncarried_apply
+    )
     coords = []
     for i in range(n):
         rec = orders_state.get(oid_of[i]) or {}
@@ -2277,6 +2367,15 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
     carried_rest = {_pickup_rest_key({"type": "pickup", "order_id": o}, orders_state)
                     for o in carried}
     carried_rest.discard(None)
+    _baseline_hard_no_return = bool(
+        not carried
+        and _noncarried_apply
+        and _detect_departed_pickup_revisit(
+            seq,
+            orders_state,
+            physical_stops=True,
+        )
+    )
     # G5 (WB2, strict-stub): tolerancja okna wraz z PROWENIENCJĄ. Bez guardów
     # zostaje stała modułu (bajt-w-bajt). Z guardami idzie przez czytnik snapshotu
     # loadgov, który dziś zawsze zwraca strict — ale zapisuje w ledgerze, DLACZEGO,
@@ -2336,6 +2435,7 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
                 return None
             _metric_carry_maps[tuple(perm)] = canonical_carry
         n_viol = 0; breaches = 0; maxcarry = 0.0
+        r6_by_order = {} if _r6_guard_on else None
         for i in range(n):
             if kind_pick[i]:
                 cr = committed_rel[i]
@@ -2357,14 +2457,16 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
                 bp = pick[ppos[oid]] if oid in ppos else None
                 bag = _r6_thermal_bag_min(dt, bp,
                                           committed_rel[ppos[oid]] if oid in ppos else None, _ra_on)
+            if r6_by_order is not None and bag is not None:
+                r6_by_order[oid] = float(bag)
             if bag is not None and bag > _alarm_cap:
                 breaches += 1
-        return drive, deliv, pick, n_viol, breaches, maxcarry, legs
+        return drive, deliv, pick, n_viol, breaches, maxcarry, legs, r6_by_order
 
     base = _metrics(tuple(range(n)))
     if base is None:
         return seq
-    bdrive, bdeliv, bpick, bviol, bbreach, bcarry, blegs = base
+    bdrive, bdeliv, bpick, bviol, bbreach, bcarry, blegs, br6 = base
     # Ten writer porównuje permutacje ISTNIEJĄCEGO worka. Absolutny HARD35
     # należy do granicy przydziału w core.selection/alarm_certificate; tutaj
     # kanonem jest ciągłość i brak pogorszenia fizycznego stanu. Dzięki temu
@@ -2387,12 +2489,15 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
     _guard_exempt = 0
     _best_guard = None
     best = None
+    hard_best = None
     # WB1: liczniki puli kandydatów (ledger v2). Czysta obserwacja — nie dotykają
     # ani jednego warunku decyzyjnego poniżej.
     _pool = 0
     _feasible = 0
     _rej = {"precedence": 0, "no_return": 0, "metrics": 0,
             "carry_cap": 0, "breaches": 0, "delay_tol": 0}
+    if _r6_guard_on:
+        _rej["r6_per_order"] = 0
     _summary = []
     for perm in itertools.permutations(range(n)):
         _pool += 1
@@ -2402,19 +2507,44 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
         if any(pos[p] > pos[d] for p, d in pairs):
             _rej["precedence"] += 1
             continue
-        if _detect_departed_pickup_revisit([seq[i] for i in perm], orders_state, carried_rest):
+        candidate_seq = [seq[i] for i in perm]
+        if _detect_departed_pickup_revisit(
+            candidate_seq,
+            orders_state,
+            carried_rest,
+            physical_stops=bool(not carried and _noncarried_apply),
+        ):
             _rej["no_return"] += 1
             continue
         m = _metrics(perm)
         if m is None:
             _rej["metrics"] += 1
             continue
-        drive, deliv, pick, n_viol, breaches, maxcarry, _mlegs = m
+        drive, deliv, pick, n_viol, breaches, maxcarry, _mlegs, _r6 = m
         # R6 HARD zostaje bezwarunkowy w OBU trybach — SOFT nie osłabia HARD,
         # a wyjątek D1 dotyczy wyłącznie guardów SOFT (delta i zysk jazdy).
         if breaches > bbreach:
             _rej["breaches"] += 1
             continue
+        if _r6_guard_on and not _r6_candidate_not_worse(
+            br6, _r6, _alarm_cap
+        ):
+            _rej["r6_per_order"] += 1
+            continue
+        key = (n_viol, round(drive, 1), round(maxcarry, 1))
+        hard_candidate = (
+            key,
+            perm,
+            n_viol,
+            drive,
+            deliv,
+            pick,
+            breaches,
+            maxcarry,
+            _mlegs,
+        )
+        if _r6_guard_on and (hard_best is None or key < hard_best[0]):
+            hard_best = hard_candidate
         _gres = None
         if _guards_on:
             _identity_perm = list(perm) == list(range(n))
@@ -2448,19 +2578,28 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
             if bad:
                 _rej["delay_tol"] += 1
                 continue
-        key = (n_viol, round(drive, 1), round(maxcarry, 1))
         _feasible += 1
         # Krotka, nie dict: worek 8 stopów daje do 40320 permutacji, a budowa dicta
         # per kandydat byłaby najdroższą częścią ledgera. Top-K wybieramy raz, niżej.
         _summary.append((n_viol, round(drive, 2), round(maxcarry, 2), perm))
         if best is None or key < best[0]:
-            best = (key, perm, n_viol, drive, deliv, pick, breaches, maxcarry, _mlegs)
+            best = hard_candidate
             _best_guard = _gres    # werdykty guardów ZWYCIĘZCY → ledger v2
+    if best is None and _baseline_hard_no_return and hard_best is not None:
+        # Hierarchia HARD>SOFT: WB2 może wybrać preferowany kandydat, lecz nie
+        # może pozostawić już istniejącego powrotu do opuszczonego stopu. Ten
+        # fallback nadal przeszedł precedence, kanoniczny NO-RETURN i R6 per sztuka.
+        best = hard_best
+        _best_guard = None
+        _log.warning(
+            "HARD_NO_RETURN overrides SOFT guards rejected=%s",
+            _guard_rej,
+        )
     if best is None:
         return seq
     _bkey, bperm, dviol, ddrive, ddeliv, dpick, dbreach, dcarry, dlegs = best
     _identity = list(bperm) == list(range(n))
-    _decided = bool(ENABLE_LEX_COMMITTED_WINDOW) and not _identity
+    _decided = _apply_enabled and not _identity
 
     # WB1 (spec docs/WB1_LEDGER_V2_SCHEMA.md): JEDEN kanoniczny writer ledgera.
     # Rola wywołania przychodzi JAWNIE w `ledger_ctx` (brak = obserwator → plik
@@ -2542,7 +2681,7 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
                          G5=_lex_guards.g5_verdict(_win_tol, _g5_src))
                     if (_guards_on and _best_guard is not None) else None),
             loadgov=(_lg_meta if _guards_on else None),
-            apply_flag=bool(ENABLE_LEX_COMMITTED_WINDOW),
+            apply_flag=_apply_enabled,
             shadow_flag=bool(ENABLE_LEX_COMMITTED_WINDOW_SHADOW),
             decided=_decided,
             identity=_identity,
@@ -2556,15 +2695,24 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
         # Writer zapisuje plan dopiero wyżej (po CAS) — przekaż uchwyt, żeby fakt
         # `written` powstał osobno od faktu `decided`.
         _lex_pending_attempt(ledger_ctx, _attempt_id)
-    _log.info("LEX_COMMITTED_WINDOW base_viol=%d lex_viol=%d d_drive=%.1f apply=%s",
-              bviol, dviol, ddrive - bdrive, ENABLE_LEX_COMMITTED_WINDOW)
+    if _r6_guard_on:
+        _log.info(
+            "LEX_COMMITTED_WINDOW base_viol=%d lex_viol=%d d_drive=%.1f apply=%s noncarried=True",
+            bviol,
+            dviol,
+            ddrive - bdrive,
+            _apply_enabled,
+        )
+    else:
+        _log.info("LEX_COMMITTED_WINDOW base_viol=%d lex_viol=%d d_drive=%.1f apply=%s",
+                  bviol, dviol, ddrive - bdrive, ENABLE_LEX_COMMITTED_WINDOW)
     if _guards_on:
         # Osobna linia, żeby NIE zmieniać kształtu linii wyżej (czytają ją
         # istniejące narzędzia i test odtworzenia incydentu).
         _log.info("LEX_WINDOW_GUARDS exempt=%d rejected=%s tol=%.1f cap=%.1f gain=%.1f",
                   _guard_exempt, _guard_rej, _thr.delay_tol_min,
                   _thr.carry_cap_min, _thr.min_gain_min)
-    if ENABLE_LEX_COMMITTED_WINDOW:
+    if _apply_enabled:
         return [seq[i] for i in bperm]
     return seq
 
@@ -2632,7 +2780,8 @@ def _apply_canon_order_invariants(stops, orders_state, start_pos=None, now=None,
         try:
             lexed = _lex_committed_window_reorder(seq, orders_state, start_pos, now,
                                                   ledger_ctx=ledger_ctx)
-            if lexed is not seq and ENABLE_LEX_COMMITTED_WINDOW and \
+            if lexed is not seq and (ENABLE_LEX_COMMITTED_WINDOW or
+                                     ENABLE_NONCARRIED_COMMITTED_PICKUP_REORDER) and \
                     [s.get("order_id") for s in lexed] != [s.get("order_id") for s in seq]:
                 _log.info("LEX_COMMITTED_WINDOW applied seq=%s",
                           [(s.get("order_id"), s.get("type")) for s in lexed])

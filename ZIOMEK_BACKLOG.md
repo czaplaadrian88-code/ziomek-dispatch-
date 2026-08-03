@@ -1,4 +1,26 @@
 # ZIOMEK AI DISPATCHER - BACKLOG ROZWOJU
+> **KANDYDAT SOURCE-ONLY 2026-08-03 — FIX 491870 ITERACJA 2 PO BLOCKERZE:**
+> HARD NO-RETURN pozostaje nienaruszalny także dla `n_carried=0`; pierwotny
+> oracle zachowano bez odwracania, a siedem klas mutacji dowodzi jego działania.
+> Wszystkie cztery zmiany zachowania Iteracji 1 są teraz za
+> `ENABLE_NONCARRIED_COMMITTED_PICKUP_REORDER=OFF`; exact cross-worktree proof
+> daje identyczny wynik i digest 27 przypadków TIME-B na bazie `6317f4553`.
+> Jedynym ownerem fizycznego pickup pozostaje `route_order`: klucz adres+miasto
+> (fallback exact merchant), bez użycia tolerancji GPS 180 m; istniejący
+> `PICKUP_MERGE_MIN=10` rozstrzyga tylko membership stopu i ma boundary oracle.
+> Jedynym ownerem committed pozostaje wdrożony kontrakt TIME-B
+> `committed_pickup_authority`; nie dodano drugiego evaluatora ani scalara.
+> Przy ON kandydat HARD-safe wygrywa z filtrami SOFT tylko wtedy, gdy baseline
+> łamie fizyczny NO-RETURN, z osobnym per-order R6 non-worsening. Replay 34
+> przypadków obejmuje 27 zamrożonych tras TIME-B i 7 wariantów 491870; trzy
+> warianty zmieniają trasę ON i usuwają HARD revisit. Finalna hermetyczna suita:
+> `6929P/7F/74S/8X/159W` wobec baseline `6902P/7F/74S/8X/159W`; siedem failów
+> to dokładnie te same zależne od pory dnia testy `test_parser_health_layer3`,
+> delta nowych failów/skips/xfails/warnings = 0. Branch
+> `wt/fix-491870-i2-codex292-20260803`; zero live, ledgera, flipa, deployu,
+> restartu i migracji. Raport:
+> `/root/artifacts/jakub-491870-20260802/REPORT_FIX_491870_ITER2.md`.
+
 > **KANDYDAT OFFLINE 2026-08-02 — TIME-C FAZA 1, ITERACJA 2:** blind review
 > `3×HIGH + 3×MEDIUM` domknięte u źródła. Producent izoluje zły stop/kuriera i
 > publikuje zdrową część cyklu; trzy repo dowodzą, że ta sama `plan_version` z

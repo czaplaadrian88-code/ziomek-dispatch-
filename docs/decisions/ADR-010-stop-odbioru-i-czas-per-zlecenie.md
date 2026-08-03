@@ -27,6 +27,33 @@ fizycznego stopu i ukrywały dokładny czas zlecenia.
 5. `live_eta` konsumuje `stop_id` i membership. Nie scala stopów po samych
    koordynatach.
 
+## Rozszerzenie kontraktu — case 491870 Iteracja 2 (source-only)
+
+Rozszerzenie nie tworzy drugiego ownera czasu ani stopu. `route_order` nadal
+jest jedynym ownerem, a istniejący committed per zlecenie nadal pochodzi bez
+przekształcenia z `czas_kuriera_warsaw` (authority Rutcom pozostaje w
+`committed_pickup_authority`).
+
+- Tożsamość fizycznego punktu odbioru to klucz z kanonicznego tekstu adresu i
+  miasta; przy braku adresu pozostaje konserwatywny exact merchant. Nazwa
+  biznesu i współrzędne GPS nie mogą rozdzielić ani scalić dwóch adresów.
+- Membership jednego stopu TIME-B wymaga jednocześnie tego samego klucza
+  fizycznego oraz pełnego rozrzutu committed `<= PICKUP_MERGE_MIN`. Nie ma
+  drugiego progu czasu ani wspólnego czasu prezentowanego stopu.
+- NO-RETURN i F5 pytają o ten sam fizyczny punkt, natomiast writer route-order
+  pyta o pełny stop (punkt + committed). Obie odpowiedzi pochodzą z tego samego
+  modułu i tego samego klucza; konsumenci nie implementują lokalnych fallbacków.
+- `RELAX_COLOC_PICKUP_M=180` zachowuje jedyną rolę: tolerancja pozycji kuriera.
+  Nie uczestniczy w tożsamości lokalu ani membershipie stopu.
+- Całe nowe zachowanie jest za
+  `ENABLE_NONCARRIED_COMMITTED_PICKUP_REORDER` (default/brak klucza = OFF).
+  OFF zachowuje istniejący writer NO-RETURN, F5=80 m, grouping exact merchant i
+  carried P-1. W tym zakresie nie wykonano flipa, deployu ani zmiany runtime.
+
+Ratchet `test_pickup_physical_contract_ratchet_491870.py` sprawdza strukturę
+delegacji AST, a nie występowanie umownych nazw. Corpus obejmuje 27 przypadków
+TIME-B oraz siedem wariantów topologii 491870.
+
 ## Skutki i granice
 
 - Zlecenia z tej samej restauracji w oknie do 10 minut nadal mogą tworzyć jeden

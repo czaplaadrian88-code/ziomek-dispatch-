@@ -573,6 +573,19 @@ zwraca STRICT 5, więc flaga nie zmienia dziś decyzji.
   too. Live: q3_route_mismatches 15.1%→0 (app==console==canon). These re-sequence an **already
   assigned** bag only; they do **not** touch assignment/feasibility (a courier carrying a restaurant's
   food can still be assigned new orders, incl. from that restaurant).
+
+- 🟡 **`ENABLE_NONCARRIED_COMMITTED_PICKUP_REORDER` (case 491870 Iteracja 2,
+  source-only, default OFF, brak klucza live).** Przy ON `route_order` ustanawia
+  jeden klucz fizycznego punktu z adresu+miasta, bez współrzędnych; pełny stop
+  TIME-B dodatkowo wymaga spreadu committed per zlecenie
+  `<=PICKUP_MERGE_MIN`. Ten sam owner zasila NO-RETURN, F5, grouping i shadow.
+  `RELAX_COLOC_PICKUP_M=180` pozostaje wyłącznie tolerancją pozycji kuriera.
+  Selektor P-1 działa także dla `n_carried=0`: najpierw precedence, fizyczny
+  NO-RETURN i per-order R6, potem guardy SOFT; gdy SOFT odrzuci wszystkie
+  kandydaty, nie może zachować istniejącego naruszenia HARD i wybiera najlepszy
+  kandydat HARD-safe. OFF zachowuje master `6317f4553` bajtowo, w tym stary
+  coalesce, F5=80 m, exact-merchant grouping i carried/WB1. Rollback przyszłego
+  eksperymentu = brak klucza/false; Iteracja 2 nie wykonuje flipa ani deployu.
 - 🟢 **`ENABLE_RECANON_ON_WRITE` (2026-06-23, LIVE on `dispatch-panel-watcher`).** Root cause fixed
   "from the foundations": the canon order-invariants above were applied **only** by the 5-min
   `plan_recheck` tick. Event-time writers of `courier_plans.json` (`_save_plan_on_assign` proposal-save,
@@ -957,6 +970,9 @@ the agent citation was not line-verified.
 - `ENABLE_LEX_COMMITTED_WINDOW` / `ENABLE_LEX_COMMITTED_WINDOW_SHADOW` — constrained-lex okno odbioru (APPLY / SHADOW).
 - `ENABLE_RELAX_COLOC_PICKUP` — współlokalny odbiór (start==restauracja) brany od razu, nie po powrocie.
 - `ENABLE_NONCARRIED_DROPOFF_REORDER` — min-jazda reorder dropoffów w worku bez niesionych.
+- `ENABLE_NONCARRIED_COMMITTED_PICKUP_REORDER` — case 491870: fizyczny klucz
+  stopu TIME-B i HARD-safe pickup-forward dla `n_carried=0`; default OFF,
+  source-only, 180 m nie uczestniczy w tożsamości lokalu.
 - `ENABLE_V326_OR_TOOLS_TSP` / `ENABLE_V326_SAME_RESTAURANT_GROUPING` — para atomowa (OR-Tools TSP + same-restaurant grouping); rozjazd = double-insert super-pickupa (#13, check_v326_pair_coherence).
 
 ### FALA-2 (2026-07-02) — observability
