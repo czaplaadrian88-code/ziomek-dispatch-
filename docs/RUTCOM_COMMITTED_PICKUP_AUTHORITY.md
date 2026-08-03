@@ -4,6 +4,18 @@ Status: kandydat v28 niewdrożony, kod ciemny, nowa flaga domyślnie `OFF`.
 Owner 2026-08-01 polecił docelowo włączyć ją `ON`, ale wdrożenie kodu,
 kontrolowane restarty i weryfikacja runtime pozostają osobną operacją live.
 
+I2 (2026-08-03, kandydat source-only) domyka lifetime initial-time intentu.
+Watcher jest jedynym dostawcą bieżącego `as_of`, ale nie właścicielem polityki:
+przekazuje czas do `resolve_czasowka_initial_time_intent`. Resolver najpierw
+zachowuje zwykłe pierwszeństwo CK i pickup. Gdy oba pozostają nierozstrzygnięte
+i `as_of >= decision_deadline`, ten sam resolver wybiera fail-closed pierwotny,
+zapieczętowany `pickup_at_warsaw` (declared). Wynik nadal idzie jedynym
+`PICKUP_TIME_UPDATED`, przez pełny proof/policy/CAS i atomowo lustrzy declared do
+CK oraz czyści pending intent. Specjalne źródło deadline nie jest samodzielnym
+authority: bez exact pending intentu i trwałego NEW_ORDER receiptu walidacja je
+odrzuca. Po wyczyszczeniu intentu recovery sweep przestaje emitować okresowe
+`rutcom_status_not_active`.
+
 V28 zamyka trzy klasy ustaleń dwóch blind review exact-byte v27 i audytu MAIN.
 Queue oraz committed-authority używają teraz tego samego kontraktu zegara:
 kanoniczny v4/v5/v6 bez jawnej strefy jest poison evidence i nigdy nie staje

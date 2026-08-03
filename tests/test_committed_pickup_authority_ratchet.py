@@ -332,6 +332,25 @@ def test_only_canonical_module_defines_rutcom_authority_policy():
     assert "_PANEL_STATUS_IDS_BY_STATE" not in _source("state_machine.py")
 
 
+def test_initial_intent_deadline_has_one_policy_owner_and_one_clock_input():
+    authority = _source("committed_pickup_authority.py")
+    watcher = _source("panel_watcher.py")
+    literal_owners = [
+        path.relative_to(ROOT)
+        for path in _production_sources()
+        if "new_order_declared_deadline" in path.read_text(encoding="utf-8")
+    ]
+
+    assert literal_owners == [Path("committed_pickup_authority.py")]
+    assert authority.count(
+        "def _initial_time_decision_deadline_reached("
+    ) == 1
+    assert authority.count(
+        "_initial_time_decision_deadline_reached("
+    ) == 2
+    assert watcher.count("as_of=now_iso(),") == 1
+
+
 def test_both_producers_and_defense_route_to_one_resolver():
     state = _source("state_machine.py")
     watcher = _source("panel_watcher.py")
@@ -1249,7 +1268,7 @@ def test_semantic_literal_closure_blocks_constant_alias_bypass():
             "c9edda9bb32eca416a1aff4e5954ca33a9337a777d789cf6fdadd0edb5b4e9bd"
         ),
         "pickup_at_warsaw": (
-            "2672d9f69eb106272ee116c4482ea2215f27e1957c4451886ec24bbea0bc8e48"
+            "310fd5746b779235d1458005fecc3dd12caa75d66a5ed721d8db2069570b7e5d"
         ),
         "czas_kuriera_warsaw": (
             "5955ba81da75513c505ee3555eefeeef9854bec58836fec8ccaa7e18f0c47978"
@@ -1258,7 +1277,7 @@ def test_semantic_literal_closure_blocks_constant_alias_bypass():
             "8b3ac2022a394820435167ac7286b3df6c63bd90b3f31a788451c5a8691d004d"
         ),
         "committed_pickup_authority": (
-            "b8ee93c09667747c07e44a617ca56e66f09bda1de984618a1b470d1bcdce9b0a"
+            "2cc14d312a8e14fade5adaafa4f6b791c2fd02381c699f62d80d7887fc4d955c"
         ),
         "pickup_time_revision": (
             "9aac8f82f4cac792c672f2bbbc8f0e228699c20602090205b271dfe1ae3660fb"
