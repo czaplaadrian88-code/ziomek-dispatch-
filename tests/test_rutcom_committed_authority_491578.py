@@ -2146,6 +2146,281 @@ def test_real_tick_recovers_pending_initial_intent_before_later_restamp(
     assert stored["pending_committed_time_intent"] is None
 
 
+def test_fa_on_pending_initial_contract_triggers_auto_koord_on_recovery(
+    tmp_path, monkeypatch
+):
+    """Regression oracle: pending FA receipt must not consume the one-life hook."""
+    from dispatch_v2 import auto_koord
+    from dispatch_v2 import panel_detail_prefetch
+    from dispatch_v2 import parse_continuity_guard
+    from dispatch_v2.committed_pickup_authority import (
+        RUTCOM_FORWARD_AUTHORITY_FLAG,
+    )
+
+    oid = "fa-on-pending-auto-koord"
+    pw, sm, _original = _seed_pending_initial_time_contract(
+        tmp_path, monkeypatch, oid=oid
+    )
+    assert sm.get_order_strict(oid)["pending_committed_time_intent"] is not None
+
+    def decision(name):
+        return name == RUTCOM_FORWARD_AUTHORITY_FLAG
+
+    def runtime_flag(name, default=None):
+        if name == "AUTO_KOORD_ON_NEW_ORDER_ENABLED":
+            return True
+        if name in {
+            "AUTO_KOORD_TELEGRAM_INFO_ENABLED",
+            "ENABLE_COORDINATOR_FORCE_TIME_RECHECK",
+        }:
+            return False
+        return _authority_runtime_flag(name, default)
+
+    monkeypatch.setattr(pw, "decision_flag", decision)
+    monkeypatch.setattr(pw.C, "decision_flag", decision)
+    monkeypatch.setattr(pw.C, "flag", runtime_flag)
+    monkeypatch.setattr(pw, "flag", runtime_flag)
+    monkeypatch.setattr(pw.C, "ENABLE_V319G_CK_DETECTION", False)
+    monkeypatch.setattr(pw.C, "ENABLE_PICKUP_TIME_DETECTION", False)
+    monkeypatch.setattr(
+        panel_detail_prefetch,
+        "prefetch_details",
+        lambda *_args, **_kwargs: ({}, {"prefetch_enabled": False}),
+    )
+    monkeypatch.setattr(
+        parse_continuity_guard,
+        "evaluate",
+        lambda *_args, **_kwargs: {
+            "freeze_new": False,
+            "suspicious": False,
+        },
+    )
+    monkeypatch.setattr(
+        pw,
+        "_heal_missing_order_details",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        pw,
+        "fetch_order_details",
+        lambda *_args, **_kwargs: {
+            "id_kurier": None,
+            "id_status_zamowienia": 2,
+            "czas_odbioru": 60,
+        },
+    )
+    attempts = []
+
+    def perform(*, order_id, fetch_details_fn):
+        attempts.append(str(order_id))
+        return {
+            "success": True,
+            "attempts": 1,
+            "skipped": False,
+            "reason": "ok",
+            "panel_response": "fixture",
+        }
+
+    monkeypatch.setattr(auto_koord, "perform_auto_koord", perform)
+    monkeypatch.setattr(
+        auto_koord,
+        "emit_event_log",
+        lambda *_args, **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        auto_koord,
+        "send_telegram_info",
+        lambda *_args, **_kwargs: True,
+    )
+
+    stats = pw._diff_and_emit(
+        {
+            "order_ids": [oid],
+            "assigned_ids": set(),
+            "unassigned_ids": [oid],
+            "rest_names": {},
+            "courier_packs": {},
+            "courier_load": {},
+            "html_times": {},
+            "closed_ids": set(),
+            "pickup_addresses": {},
+            "delivery_addresses": {},
+        },
+        csrf="test",
+        _state_outbox_sweeper_on=True,
+    )
+
+    stored = sm.get_order_strict(oid)
+    assert stats["errors"] == 0
+    assert stored["pending_committed_time_intent"] is None
+    assert attempts == [oid]
+    marker = stored[sm.AUTO_KOORD_INITIAL_ATTEMPT_FIELD]
+    assert marker["schema"] == "auto_koord_initial_attempt.v1"
+    assert marker["trigger"] == "initial_time_contract_recovered"
+
+    # Koordynator moze pozniej oddac zlecenie, a panel moze pokazac je znowu
+    # jako puste. Trwaly marker proby, nie aktualny courier_id, zachowuje
+    # semantyke „raz na zycie".
+    sm.upsert_order(oid, {"courier_id": "492"}, event="TEST_MANUAL_ASSIGN")
+    sm.upsert_order(oid, {"courier_id": None}, event="TEST_MANUAL_HAND_BACK")
+    pw._trigger_initial_auto_koord_once(
+        oid,
+        trigger="second_cycle",
+        stats=stats,
+        fetch_details_fn=lambda _z: None,
+    )
+    assert attempts == [oid]
+    assert sm.get_order_strict(oid)[
+        sm.AUTO_KOORD_INITIAL_ATTEMPT_FIELD
+    ] == marker
+
+
+def test_fa_off_new_order_keeps_immediate_auto_koord_path(
+    tmp_path, monkeypatch
+):
+    """Forward-authority OFF keeps the legacy immediate NEW_ORDER behavior."""
+    from dispatch_v2 import auto_koord
+    from dispatch_v2 import panel_detail_prefetch
+    from dispatch_v2 import panel_watcher as pw
+    from dispatch_v2 import parse_continuity_guard
+    from dispatch_v2 import state_machine as sm
+
+    _isolate_durable_bus(tmp_path, monkeypatch)
+    state_path = tmp_path / "orders_state.json"
+    state_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(sm, "_state_path", lambda: str(state_path))
+    monkeypatch.setattr(
+        pw,
+        "_panel_committed_time_policy_snapshot",
+        lambda: _panel_policy(manual=False, forward=False),
+    )
+    monkeypatch.setattr(pw, "decision_flag", lambda _name: False)
+    monkeypatch.setattr(pw.C, "decision_flag", lambda _name: False)
+    monkeypatch.setattr(sm, "decision_flag", lambda _name: False)
+    monkeypatch.setattr(sm, "flag", _authority_runtime_flag)
+
+    def runtime_flag(name, default=None):
+        if name == "AUTO_KOORD_ON_NEW_ORDER_ENABLED":
+            return True
+        if name in {
+            "AUTO_KOORD_TELEGRAM_INFO_ENABLED",
+            "ENABLE_COORDINATOR_FORCE_TIME_RECHECK",
+        }:
+            return False
+        return _authority_runtime_flag(name, default)
+
+    monkeypatch.setattr(pw.C, "flag", runtime_flag)
+    monkeypatch.setattr(pw, "flag", runtime_flag)
+    monkeypatch.setattr(pw.C, "ENABLE_V319G_CK_DETECTION", False)
+    monkeypatch.setattr(pw.C, "ENABLE_PICKUP_TIME_DETECTION", False)
+    monkeypatch.setattr(
+        panel_detail_prefetch,
+        "prefetch_details",
+        lambda *_args, **_kwargs: ({}, {"prefetch_enabled": False}),
+    )
+    monkeypatch.setattr(
+        parse_continuity_guard,
+        "evaluate",
+        lambda *_args, **_kwargs: {
+            "freeze_new": False,
+            "suspicious": False,
+        },
+    )
+    monkeypatch.setattr(
+        pw,
+        "_heal_missing_order_details",
+        lambda *_args, **_kwargs: None,
+    )
+
+    oid = "fa-off-immediate-auto-koord"
+    raw = {
+        "id_kurier": None,
+        "id_status_zamowienia": 2,
+        "czas_odbioru": 60,
+    }
+    normalized = {
+        "order_type": "czasowka",
+        "prep_minutes": 60,
+        "pickup_at_warsaw": "2099-08-02T19:16:00+02:00",
+        "czas_kuriera_warsaw": "2099-08-02T19:21:00+02:00",
+        "czas_kuriera_hhmm": "19:21",
+        "status_id": 2,
+        "restaurant": "fixture",
+        "pickup_address": "fixture",
+        "delivery_address": "fixture",
+        "id_kurier": None,
+        "is_koordynator": False,
+    }
+    payload = {
+        key: normalized[key]
+        for key in (
+            "order_type",
+            "prep_minutes",
+            "pickup_at_warsaw",
+            "czas_kuriera_warsaw",
+            "czas_kuriera_hhmm",
+            "status_id",
+            "restaurant",
+            "pickup_address",
+            "delivery_address",
+        )
+    }
+    monkeypatch.setattr(
+        pw,
+        "fetch_order_details",
+        lambda *_args, **_kwargs: dict(raw),
+    )
+    monkeypatch.setattr(
+        pw,
+        "_build_order_details_payload",
+        lambda *_args, **_kwargs: (dict(normalized), dict(payload)),
+    )
+    attempts = []
+
+    def perform(*, order_id, fetch_details_fn):
+        attempts.append(str(order_id))
+        return {
+            "success": True,
+            "attempts": 1,
+            "skipped": False,
+            "reason": "ok",
+            "panel_response": "fixture",
+        }
+
+    monkeypatch.setattr(auto_koord, "perform_auto_koord", perform)
+    monkeypatch.setattr(
+        auto_koord,
+        "emit_event_log",
+        lambda *_args, **_kwargs: None,
+    )
+
+    stats = pw._diff_and_emit(
+        {
+            "order_ids": [oid],
+            "assigned_ids": set(),
+            "unassigned_ids": [oid],
+            "rest_names": {},
+            "courier_packs": {},
+            "courier_load": {},
+            "html_times": {},
+            "closed_ids": set(),
+            "pickup_addresses": {},
+            "delivery_addresses": {},
+        },
+        csrf="test",
+        _state_outbox_sweeper_on=True,
+    )
+
+    stored = sm.get_order_strict(oid)
+    assert stats["errors"] == 0
+    assert stats["new"] == 1
+    assert attempts == [oid]
+    assert stored.get("pending_committed_time_intent") is None
+    assert stored[sm.AUTO_KOORD_INITIAL_ATTEMPT_FIELD]["trigger"] == (
+        "new_order_time_contract_ready"
+    )
+
+
 def test_restart_tick_recovers_initial_intent_before_assignment_writer(
     tmp_path, monkeypatch
 ):

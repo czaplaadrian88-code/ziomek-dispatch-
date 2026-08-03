@@ -39,6 +39,17 @@ SUBPROCESS_TIMEOUT_SEC = 30
 _log = logging.getLogger("auto_koord")
 
 
+def _panel_or_state_field(
+    order: Dict[str, Any],
+    panel_field: str,
+    state_field: str,
+) -> Any:
+    """Prefer an explicit panel value; otherwise read canonical state."""
+    if panel_field in order:
+        return order.get(panel_field)
+    return order.get(state_field)
+
+
 def is_czasowka(prep_minutes: Optional[int]) -> bool:
     """Czasówka detection: czas_odbioru >= 60 min (>= jest hard rule per Adrian).
 
@@ -53,9 +64,12 @@ def is_czasowka(prep_minutes: Optional[int]) -> bool:
 
 
 def is_unassigned(raw_order: Dict[str, Any]) -> bool:
-    """id_kurier=None lub 0 → unassigned. Koordynator (id=26) NIE liczy się jako
-    unassigned — już przypisany (no auto-KOORD potrzebny)."""
-    cid = raw_order.get("id_kurier")
+    """Panel ``id_kurier`` / state ``courier_id`` empty → unassigned.
+
+    Koordynator (id=26) NIE liczy się jako unassigned — już przypisany
+    (no auto-KOORD potrzebny).
+    """
+    cid = _panel_or_state_field(raw_order, "id_kurier", "courier_id")
     if cid in (None, "", 0, "0"):
         return True
     try:
@@ -66,8 +80,12 @@ def is_unassigned(raw_order: Dict[str, Any]) -> bool:
 
 
 def is_cancelled(raw_order: Dict[str, Any]) -> bool:
-    """status_id=9 = anulowane. Skip auto-KOORD."""
-    sid = raw_order.get("id_status_zamowienia")
+    """Panel ``id_status_zamowienia`` / state ``status_id`` 9 = cancelled."""
+    sid = _panel_or_state_field(
+        raw_order,
+        "id_status_zamowienia",
+        "status_id",
+    )
     try:
         return int(sid) == 9
     except (ValueError, TypeError):
@@ -88,9 +106,19 @@ def needs_auto_koord(
     if not is_czasowka(prep):
         return False, f"not_czasowka (prep_minutes={prep})"
     if is_cancelled(raw_order):
-        return False, f"already_cancelled (status_id={raw_order.get('id_status_zamowienia')})"
+        status_id = _panel_or_state_field(
+            raw_order,
+            "id_status_zamowienia",
+            "status_id",
+        )
+        return False, f"already_cancelled (status_id={status_id})"
     if not is_unassigned(raw_order):
-        return False, f"already_assigned (id_kurier={raw_order.get('id_kurier')})"
+        courier_id = _panel_or_state_field(
+            raw_order,
+            "id_kurier",
+            "courier_id",
+        )
+        return False, f"already_assigned (id_kurier={courier_id})"
     return True, "czasowka_unassigned"
 
 
