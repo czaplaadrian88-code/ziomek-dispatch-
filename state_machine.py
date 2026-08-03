@@ -893,6 +893,33 @@ def ensure_state_directory_durable(path: Optional[Path] = None) -> None:
     _state_store.fsync_parent(path)
 
 
+def _orders_state_persistence_v2_on() -> bool:
+    """Effective hot kill-switch for the hardened orders_state policy."""
+    try:
+        return bool(decision_flag("ENABLE_ORDERS_STATE_PERSISTENCE_V2"))
+    except Exception:
+        return False
+
+
+def _write_state(path: Path, state: dict) -> None:
+    """Select the whole orders_state write transaction at one choke point."""
+    if _orders_state_persistence_v2_on():
+        _state_store.atomic_write_json(
+            path,
+            state,
+            indent=2,
+            ensure_directory_durable=ensure_state_directory_durable,
+            logger=_log,
+        )
+        return
+    _state_store.legacy_atomic_write_json(
+        path,
+        state,
+        ensure_directory_durable=ensure_state_directory_durable,
+        logger=_log,
+    )
+
+
 def _guarded_write(path: Path, new_state: dict, old_count: int, op: str):
     """Faza 1 count-regression guard: zapis state z weryfikacją liczności.
 
@@ -903,15 +930,10 @@ def _guarded_write(path: Path, new_state: dict, old_count: int, op: str):
 
     Defense-in-depth: łapie KAŻDY przyszły bug kurczący stan, nie tylko znany
     wektor _read_state→{}. Kill-switch: ENABLE_STATE_WRITE_GUARD=false
-    (flags.json) — wyłącza count guard, ale nie wspólną politykę durability."""
+    (flags.json) wyłącza count guard. Osobna flaga
+    ENABLE_ORDERS_STATE_PERSISTENCE_V2 wybiera całą transakcję zapisu."""
     if not flag("ENABLE_STATE_WRITE_GUARD", True):
-        _state_store.atomic_write_json(
-            path,
-            new_state,
-            indent=2,
-            ensure_directory_durable=ensure_state_directory_durable,
-            logger=_log,
-        )
+        _write_state(path, new_state)
         return
     new_count = len(new_state)
     if op == "delete":
@@ -923,13 +945,7 @@ def _guarded_write(path: Path, new_state: dict, old_count: int, op: str):
                   f"przy op={op!r} — zapis ZABLOKOWANY (możliwy clobber orders_state)")
         _alert_state_read_failure(detail)
         raise StateReadError(detail)
-    _state_store.atomic_write_json(
-        path,
-        new_state,
-        indent=2,
-        ensure_directory_durable=ensure_state_directory_durable,
-        logger=_log,
-    )
+    _write_state(path, new_state)
 
 
 # Faza 1: throttled alert gdy state RMW odmawia zapisu (clobber prevention).
@@ -975,10 +991,18 @@ def _read_state() -> dict:
     loguje warning). JSONDecodeError → zwraca {} + error log.
     """
     path = Path(_state_path())
-    result = _state_store.read_json_object(
+    hardened = _orders_state_persistence_v2_on()
+    reader = (
+        _state_store.read_json_object
+        if hardened
+        else _state_store.read_json_value
+    )
+    result = reader(
         path,
         legacy_empty=True,
         retry_delays=(0.05, 0.10),
+        retry_transient_os_errors=hardened,
+        shared_file_lock=True,
     )
     if result.source == "legacy_empty_missing":
         _log.warning(f"_read_state: {path} not found after 3 attempts")
@@ -1024,11 +1048,19 @@ def _read_state_strict() -> dict:
     cichy {} z RMW nadpisałby cały orders_state.json. Pusty wynik dozwolony
     tylko przy świadomym bootstrapie (plik nigdy nie istniał)."""
     path = Path(_state_path())
+    hardened = _orders_state_persistence_v2_on()
+    reader = (
+        _state_store.read_json_object
+        if hardened
+        else _state_store.read_json_value
+    )
     try:
-        result = _state_store.read_json_object(
+        result = reader(
             path,
             allow_bootstrap=True,
             retry_delays=(0.05, 0.10),
+            retry_transient_os_errors=hardened,
+            shared_file_lock=True,
         )
     except (OSError, ValueError) as last_err:
         detail = (f"_read_state_strict: {path} nieczytelny po retry "
@@ -3074,13 +3106,7 @@ def prune_terminal_orders(retention_hours: float = 12.0, dry_run: bool = True) -
             )
             return report
 
-        _state_store.atomic_write_json(
-            path,
-            new_state,
-            indent=2,
-            ensure_directory_durable=ensure_state_directory_durable,
-            logger=_log,
-        )
+        _write_state(path, new_state)
         _log.info(
             f"prune_terminal_orders: usunięto {len(to_prune)} terminalnych "
             f"({old_count}→{new_count}); active={active_count} nietknięte; "

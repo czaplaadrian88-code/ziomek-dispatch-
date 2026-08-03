@@ -13,6 +13,7 @@ from __future__ import annotations
 import ast
 import json
 import os
+import signal
 import subprocess
 import sys
 import tempfile
@@ -327,7 +328,9 @@ def test_d2_warm_cache_cannot_hide_missing_hwm(store, monkeypatch):
         PM._read_raw_shared()
 
 
-def test_d1_warm_recovery_cache_tracks_predecessor_generation(store, monkeypatch):
+def test_d1_recovery_heals_main_and_later_prev_change_cannot_override_it(
+    store, monkeypatch
+):
     _flag_on(monkeypatch)
     first = PM.save_plan("9", _body("previous-a"))
     PM.save_plan(
@@ -337,6 +340,7 @@ def test_d1_warm_recovery_cache_tracks_predecessor_generation(store, monkeypatch
 
     initial = PM._read_raw_shared()
     assert initial["9"]["start_pos"]["source"] == "previous-a"
+    assert json.loads(PM.PLANS_FILE.read_text(encoding="utf-8")) == initial
 
     replacement = {"9": _raw_plan("previous-b", int(first["plan_version"]))}
     replacement_tmp = store / "replacement-prev.json"
@@ -344,10 +348,10 @@ def test_d1_warm_recovery_cache_tracks_predecessor_generation(store, monkeypatch
     os.replace(replacement_tmp, _prev_path())
 
     refreshed = PM._read_raw_shared()
-    assert refreshed["9"]["start_pos"]["source"] == "previous-b"
+    assert refreshed["9"]["start_pos"]["source"] == "previous-a"
 
 
-def test_recovered_synthetic_epoch_is_not_recorded_without_covering_hwm(
+def test_recovered_snapshot_is_recorded_only_with_covering_hwm(
     store, monkeypatch
 ):
     _flag_on(monkeypatch)
@@ -359,11 +363,14 @@ def test_recovered_synthetic_epoch_is_not_recorded_without_covering_hwm(
     _prev_path().write_bytes(first_main)
     _corrupt_main(store)
 
-    with pytest.raises(PM.PlanVersionStateError, match="covering durable HWM"):
-        PM.snapshot_for_recording({"9"})
+    snapshot, hwm = PM.snapshot_for_recording({"9"})
+    assert snapshot["9"]["start_pos"]["source"] == "v1"
+    assert hwm is not None
+    assert int(hwm["last_issued"]) >= int(snapshot["9"]["plan_version"])
+    assert json.loads(PM.PLANS_FILE.read_text(encoding="utf-8")) == snapshot
 
 
-def test_flag_off_after_epoch_keeps_counter_monotonic_without_new_prev(
+def test_flag_off_after_epoch_is_legacy_and_does_not_touch_sidecars(
     store, monkeypatch
 ):
     _flag_on(monkeypatch)
@@ -380,8 +387,8 @@ def test_flag_off_after_epoch_keeps_counter_monotonic_without_new_prev(
     second_hwm = int(json.loads(
         _hwm_path().read_text(encoding="utf-8")
     )["last_issued"])
-    assert int(second["plan_version"]) > int(first["plan_version"])
-    assert second_hwm > first_hwm
+    assert int(second["plan_version"]) == int(first["plan_version"]) + 1
+    assert second_hwm == first_hwm
     assert not _prev_path().exists()
 
 
@@ -396,6 +403,8 @@ def _wait_for(path: Path, timeout_s: float = 20.0) -> None:
 def _spawn_worker(
     *, mode: str, store: Path, scratch: Path, ready: Path, go: Path,
     result: Path, expected: int | None = None,
+    issued_marker: Path | None = None,
+    tag: str | None = None,
 ) -> subprocess.Popen:
     worker = Path(__file__).with_name("a2_plan_mp_worker.py")
     command = [
@@ -410,6 +419,10 @@ def _spawn_worker(
     ]
     if expected is not None:
         command.extend(("--expected", str(expected)))
+    if issued_marker is not None:
+        command.extend(("--issued-marker", str(issued_marker)))
+    if tag is not None:
+        command.extend(("--tag", tag))
     env = os.environ.copy()
     env["DISPATCH_UNDER_PYTEST"] = "1"
     env["PYTEST_CURRENT_TEST"] = "a2_multiprocess_parent"
@@ -538,10 +551,127 @@ def test_d2_two_recovery_writers_real_multiprocess_race_has_one_winner(
     assert int(winner["expected"]) > lost_version
     assert int(winner["saved_version"]) > int(winner["expected"])
     assert int(loser["current_version"]) == int(winner["saved_version"])
-    assert _prev_path().read_bytes() == first_main
+    predecessor = json.loads(_prev_path().read_text(encoding="utf-8"))["9"]
+    assert predecessor["start_pos"]["source"] == "v1"
+    assert int(predecessor["plan_version"]) == int(winner["expected"])
 
     final = json.loads(PM.PLANS_FILE.read_text(encoding="utf-8"))["9"]
     assert int(final["plan_version"]) == int(winner["saved_version"])
+
+
+def test_iter3_emfile_kill9_with_waiting_writer_never_accepts_old_token(
+    store, monkeypatch
+):
+    """Real processes: EMFILE -> recovery commit -> SIGKILL -> waiting writer."""
+    _flag_on(monkeypatch)
+    first = PM.save_plan("9", _body("v1"))
+    first_main = PM.PLANS_FILE.read_bytes()
+    second = PM.save_plan(
+        "9", _body("lost-v2"), expected_version=first["plan_version"]
+    )
+    lost_version = int(second["plan_version"])
+    old_token = int(first["plan_version"])
+    _prev_path().write_bytes(first_main)
+    _corrupt_main(store)
+
+    crash_ready = store / "crash.ready"
+    crash_escape = store / "crash.escape"
+    issued_marker = store / "crash.issued.json"
+    crash = _spawn_worker(
+        mode="recovery_pause_after_commit",
+        store=store,
+        scratch=store / "scratch-crash",
+        ready=crash_ready,
+        go=crash_escape,
+        result=store / "crash.unused.json",
+        issued_marker=issued_marker,
+    )
+    legal = None
+    try:
+        _wait_for(issued_marker)
+        _wait_for(crash_ready)
+        issued = json.loads(issued_marker.read_text(encoding="utf-8"))
+        recovery_token = int(issued["token"])
+        assert issued["emfile_count"] == 1
+        assert int(issued["hwm"]) >= recovery_token > lost_version
+
+        committed_before_kill = json.loads(
+            PM.PLANS_FILE.read_text(encoding="utf-8")
+        )["9"]
+        assert int(committed_before_kill["plan_version"]) == recovery_token
+        assert committed_before_kill["start_pos"]["source"] == "v1"
+
+        legal_ready = store / "legal.ready"
+        legal_go = store / "legal.go"
+        legal_result = store / "legal.json"
+        legal = _spawn_worker(
+            mode="stale",
+            store=store,
+            scratch=store / "scratch-legal",
+            ready=legal_ready,
+            go=legal_go,
+            result=legal_result,
+            expected=recovery_token,
+            tag="LEGAL-AFTER-KILL",
+        )
+        _wait_for(legal_ready)
+        legal_go.touch()
+        time.sleep(0.10)
+        assert legal.poll() is None, "writer should be waiting on recovery EX lock"
+
+        crash.kill()  # subprocess.kill() is SIGKILL on POSIX
+        crash_stdout, crash_stderr = crash.communicate(timeout=10)
+        assert crash.returncode == -signal.SIGKILL, (
+            crash_stdout, crash_stderr
+        )
+
+        legal_stdout, legal_stderr = legal.communicate(timeout=20)
+        assert legal.returncode == 0, (legal_stdout, legal_stderr)
+        legal_value = json.loads(legal_result.read_text(encoding="utf-8"))
+        assert legal_value["status"] == "saved"
+        assert int(legal_value["saved_version"]) > recovery_token
+
+        for label, stale_token in (
+            ("synthetic", recovery_token),
+            ("pre-recovery", old_token),
+        ):
+            ready = store / f"{label}.ready"
+            go = store / f"{label}.go"
+            result = store / f"{label}.json"
+            stale = _spawn_worker(
+                mode="stale",
+                store=store,
+                scratch=store / f"scratch-{label}",
+                ready=ready,
+                go=go,
+                result=result,
+                expected=stale_token,
+                tag=f"STALE-{label}",
+            )
+            try:
+                _wait_for(ready)
+                go.touch()
+                stdout, stderr = stale.communicate(timeout=20)
+                assert stale.returncode == 0, (label, stdout, stderr)
+            finally:
+                if stale.poll() is None:
+                    stale.kill()
+                    stale.communicate(timeout=5)
+            stale_value = json.loads(result.read_text(encoding="utf-8"))
+            assert stale_value["status"] == "conflict", (label, stale_value)
+
+        final = json.loads(PM.PLANS_FILE.read_text(encoding="utf-8"))["9"]
+        assert final["start_pos"]["source"] == "LEGAL-AFTER-KILL"
+        assert int(final["plan_version"]) == int(legal_value["saved_version"])
+        assert _hwm_path().exists()
+        assert int(json.loads(_hwm_path().read_text(
+            encoding="utf-8"
+        ))["last_issued"]) >= int(final["plan_version"])
+    finally:
+        for process in (crash, legal):
+            if process is not None and process.poll() is None:
+                process.kill()
+                process.communicate(timeout=5)
 
 
 def test_strict_caller_raises_before_recovery(store, monkeypatch):
