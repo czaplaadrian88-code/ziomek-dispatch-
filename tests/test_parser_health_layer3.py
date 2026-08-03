@@ -98,7 +98,7 @@ def mock_telegram(monkeypatch):
     """Capture send_admin_alert calls instead of real send."""
     from dispatch_v2 import telegram_utils
     sent = []
-    monkeypatch.setattr(telegram_utils, "send_admin_alert", lambda text: (sent.append(text), True)[1])
+    monkeypatch.setattr(telegram_utils, "send_admin_alert", lambda text, **_kw: (sent.append(text), True)[1])
     return sent
 
 
