@@ -36,10 +36,11 @@ carried-first.
 from __future__ import annotations
 import hashlib
 import json
-import re
 from datetime import datetime, timedelta, timezone
 from typing import Iterable
 from zoneinfo import ZoneInfo
+
+from . import address_canon as _address_canon
 
 WARSAW = ZoneInfo("Europe/Warsaw")
 PICKUP_MERGE_MIN = 10          # jedyny próg sklejania odbiorów w jeden podjazd
@@ -48,14 +49,6 @@ _BIG = 1 << 30
 ROUTE_SEQUENCE_HASH_DOMAIN = "ziomek.route_sequence.v1"
 PHYSICAL_PICKUP_CONTRACT_VERSION = "route_order.physical_pickup.v1"
 PHYSICAL_PICKUP_FLAG = "ENABLE_NONCARRIED_COMMITTED_PICKUP_REORDER"
-
-# Alias jest częścią ownera fizycznego stopu, nie geokodera. Oba zapisy są
-# spotykane dla tego samego oficjalnego adresu; działa wyłącznie przy nowej
-# fladze. OFF nie dotyka globalnego cache/geokodu ani istniejących aliasów.
-_PHYSICAL_STREET_ALIASES = {
-    "kilińskiego": "jana kilińskiego",
-}
-
 
 def _iso(s):
     """Parsuj ISO (z 'Z' lub offsetem) → aware datetime; None gdy się nie da."""
@@ -87,26 +80,10 @@ def _normalized_pickup_address(order) -> str:
         raw = candidate if candidate and any(ch.isdigit() for ch in str(candidate)) else None
     if not raw:
         return ""
-    text = " ".join(str(raw).strip().casefold().split())
-    text = re.sub(r"\b\d{2}-\d{3}\b", "", text)
-    text = re.sub(r"^(?:ul(?:ica)?\.?\s+)", "", text)
-    # Lokal/piętro nie tworzą osobnego podjazdu pod budynek. Usuwamy zarówno
-    # wariant po slashu, jak i tekstowy `lok. 1U`; numer domu zostaje.
-    text = re.sub(
-        r"(?:[/,]\s*|\s+)(?:lok(?:al)?|m(?:ieszkanie)?|pi[eę]tro)\.?\s*[0-9a-z-]+.*$",
-        "",
-        text,
+    return _address_canon.normalize_physical_building(
+        str(raw),
+        str(_attr(order, "pickup_city") or ""),
     )
-    text = re.sub(r"/[^\s]+$", "", text)
-    text = " ".join(text.strip(" ,./").split())
-    match = re.match(r"^(.*?)(\d+[a-z]?)$", text)
-    if match:
-        street = match.group(1).strip(" ,.")
-        house = match.group(2)
-        street = _PHYSICAL_STREET_ALIASES.get(street, street)
-        text = f"{street} {house}".strip()
-    city = " ".join(str(_attr(order, "pickup_city") or "").strip().casefold().split())
-    return f"{text}|{city}" if city else text
 
 
 def _normalized_pickup_merchant(order) -> str:
@@ -130,34 +107,80 @@ def pickup_physical_key(order):
     return None
 
 
-def same_physical_pickup_point(first, second) -> bool:
+def pickup_physical_key_cache(orders):
+    """Policz klucz raz per obiekt na czas jednego przebiegu algorytmu.
+
+    Rekordy zleceń są mutowalne, dlatego cache jest jawny i lokalny dla callera;
+    nie ma globalnego TTL ani ryzyka zwrócenia klucza po zmianie adresu.
+    """
+    cache = {}
+    for order in orders:
+        identity = id(order)
+        if identity not in cache:
+            cache[identity] = pickup_physical_key(order)
+    return cache
+
+
+_CACHE_MISS = object()
+
+
+def _key_from_cache(order, key_cache):
+    if key_cache is not None:
+        cached = key_cache.get(id(order), _CACHE_MISS)
+        if cached is not _CACHE_MISS:
+            return cached
+    return pickup_physical_key(order)
+
+
+def same_physical_pickup_point(first, second, *, key_cache=None) -> bool:
     """Czy dwa zlecenia mają ten sam adresowy punkt odbioru (bez GPS)."""
-    first_key = pickup_physical_key(first)
-    second_key = pickup_physical_key(second)
+    # Jawne wywołania fallbacku pozostają w ownerze kontraktu; hot-path podaje
+    # invocation-scoped cache i nie przelicza regexów w każdej permutacji.
+    first_key = (
+        _key_from_cache(first, key_cache)
+        if key_cache is not None
+        else pickup_physical_key(first)
+    )
+    second_key = (
+        _key_from_cache(second, key_cache)
+        if key_cache is not None
+        else pickup_physical_key(second)
+    )
     return bool(first_key is not None and first_key == second_key)
 
 
-def same_physical_pickup_stop(first, second) -> bool:
+def same_physical_pickup_stop(first, second, *, key_cache=None) -> bool:
     """Czy dwa zlecenia należą do jednego stopu TIME-B.
 
     Tożsamość punktu = jeden klucz adresowy. Membership stopu wymaga dodatkowo
     pełnego committed spreadu ``<= PICKUP_MERGE_MIN``. Współrzędne nie
     uczestniczą w odpowiedzi; 180 m zostaje wyłącznie tolerancją pozycji kuriera.
     """
-    return same_physical_pickup_point(first, second) and _pickup_spread_ok(
-        [first, second]
-    )
+    return same_physical_pickup_point(
+        first,
+        second,
+        key_cache=key_cache,
+    ) and _pickup_spread_ok([first, second])
 
 
 def group_physical_pickup_points(orders):
     """Stabilne complete-link grupy jednego adresowego punktu."""
+    orders = list(orders)
+    key_cache = pickup_physical_key_cache(orders)
     groups = []
     for order in orders:
         target = next(
             (
                 group
                 for group in groups
-                if all(same_physical_pickup_point(order, member) for member in group)
+                if all(
+                    same_physical_pickup_point(
+                        order,
+                        member,
+                        key_cache=key_cache,
+                    )
+                    for member in group
+                )
             ),
             None,
         )
@@ -170,13 +193,22 @@ def group_physical_pickup_points(orders):
 
 def group_physical_pickup_stops(orders):
     """Stabilne complete-link grupy kanonicznego stopu TIME-B."""
+    orders = list(orders)
+    key_cache = pickup_physical_key_cache(orders)
     groups = []
     for order in orders:
         target = next(
             (
                 group
                 for group in groups
-                if all(same_physical_pickup_stop(order, member) for member in group)
+                if all(
+                    same_physical_pickup_stop(
+                        order,
+                        member,
+                        key_cache=key_cache,
+                    )
+                    for member in group
+                )
             ),
             None,
         )

@@ -595,3 +595,38 @@ def test_r6_per_order_guard_and_victim_swap_mutation():
     assert guard({"A": 36.0}, {"A": 35.9}, 35.0) is True
     assert guard({"A": 36.0}, {"A": 36.0001}, 35.0) is False
     assert guard({"A": 34.0}, {}, 35.0) is False
+
+
+def test_new5_n_factorial_path_memoizes_pickup_key_once_per_order(monkeypatch):
+    _set_new_path(monkeypatch, True)
+    orders = _orders()
+    orders["D"] = {
+        "status": "assigned",
+        "restaurant": "Punkt D",
+        "pickup_address": "Testowa 17",
+        "pickup_city": "Białystok",
+        "czas_kuriera_warsaw": (
+            NOW + timedelta(minutes=7)
+        ).astimezone(C.WARSAW).isoformat(),
+        "pickup_coords": [52.004, 20.004],
+        "delivery_coords": [51.988, 19.987],
+    }
+    sequence = [
+        *[_stop(oid, "pickup") for oid in orders],
+        *[_stop(oid, "dropoff") for oid in orders],
+    ]
+    original = route_order.pickup_physical_key
+    calls = 0
+
+    def counted(order):
+        nonlocal calls
+        calls += 1
+        return original(order)
+
+    monkeypatch.setattr(route_order, "pickup_physical_key", counted)
+    result = P._lex_committed_window_reorder(sequence, orders, START, NOW)
+
+    assert sorted(_ids(result)) == sorted(_ids(sequence))
+    assert calls == len(orders), (
+        "klucz ma być policzony raz przed 8!, nie ponownie per permutacja"
+    )

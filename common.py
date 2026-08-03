@@ -10,6 +10,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
+from dispatch_v2 import address_canon as _address_canon
 from dispatch_v2.committed_pickup_authority import (
     COMMITTED_CK_DELTA_THRESHOLD_MIN,
 )
@@ -2496,124 +2497,19 @@ ENABLE_V319H_BUG1_DROP_PROXIMITY_FACTOR = _os.environ.get(
     "ENABLE_V319H_BUG1_DROP_PROXIMITY_FACTOR", "1") == "1"
 
 
-# V3.27 Bug Z Step D (2026-04-25 wieczór): street name aliases (canonicalization).
-# Real-world adresy mają różne formy tej samej ulicy:
-#   "M. Curie-Skłodowskiej", "Marii Curie-Skłodowskiej", "Skłodowskiej",
-#   "Curie-Skłodowskiej" — wszystkie → canonical "skłodowskiej-curie marii"
-# (canonical form matches BIALYSTOK_DISTRICTS or its qualified supplements).
-# Aliases are normally applied after non-identity prefix stripping
-# (ul./al./gen.) + lower-casing.  Identity-bearing prefixes such as ``plac``
-# may remain in both the alias key and canonical value.
-# Format: {input_lc (street_part_only, no number) → canonical_lc}.
-# Extend incrementally w V3.28 ticket per discovery z shadow log.
-V327_STREET_ALIASES = {
-    # Marii Skłodowskiej-Curie variants
-    "skłodowskiej": "skłodowskiej-curie marii",
-    "skłodowskiej-curie": "skłodowskiej-curie marii",
-    "curie-skłodowskiej": "skłodowskiej-curie marii",
-    "marii curie-skłodowskiej": "skłodowskiej-curie marii",
-    "marii skłodowskiej-curie": "skłodowskiej-curie marii",
-    "m. skłodowskiej-curie": "skłodowskiej-curie marii",
-    "m. curie-skłodowskiej": "skłodowskiej-curie marii",
-    # Władysława Bełzy variants
-    "bełzy": "władysława bełzy",
-    "wł. bełzy": "władysława bełzy",
-    "władysława bełzy": "władysława bełzy",  # identity (gdy already canonical)
-    # Feliksa Filipowicza variants (Białystok-side; Kleosin handled przez city-aware)
-    "filipowicza": "feliksa filipowicza",
-    "f. filipowicza": "feliksa filipowicza",
-    "feliksa filipowicza": "feliksa filipowicza",  # identity
-    # Aleja Jana Pawła II: panel/parser sometimes omits the official prefix.
-    # Keep the prefix in the canonical form: without it Nominatim resolves a
-    # different object, while district data used to conflate the avenue with
-    # Plac Jana Pawła II.
-    "jana pawła ii": "aleja jana pawła ii",
-    "aleja jana pawła ii": "aleja jana pawła ii",  # identity
-    "pl. jana pawła ii": "plac jana pawła ii",
-    "plac jana pawła ii": "plac jana pawła ii",  # distinct from the avenue
-}
+# Kompatybilny publiczny symbol V3.27; ownerem rejestru jest czysty moduł
+# address_canon, wspólny dla geokodera i fizycznego klucza pickup.
+V327_STREET_ALIASES = _address_canon.STREET_ALIASES
 
 
 def _v327_normalize_street_for_matching(addr_lc):
-    """V3.27 Bug Z Step D: apply street aliases pre-matching.
-
-    Args:
-        addr_lc: lowercased address (post prefix-strip), may include number suffix
-                 (e.g. "skłodowskiej 13/15", "m. curie-skłodowskiej 5").
-
-    Returns:
-        addr_lc z canonical street name jeśli match w V327_STREET_ALIASES,
-        else addr_lc unchanged.
-
-    Logic:
-        1. Identify pure street part (everything before first digit-led token).
-        2. Strip trailing whitespace/punctuation z pure street.
-        3. Lookup w V327_STREET_ALIASES → canonical.
-        4. Concat canonical + numeric suffix.
-    """
-    if not addr_lc:
-        return addr_lc
-    # Find first digit position
-    digit_idx = None
-    for i, ch in enumerate(addr_lc):
-        if ch.isdigit():
-            digit_idx = i
-            break
-    if digit_idx is None:
-        addr_pure = addr_lc.strip().rstrip(",.")
-        suffix = ""
-    else:
-        # Find last whitespace before digit
-        space_before_digit = addr_lc.rfind(" ", 0, digit_idx)
-        if space_before_digit < 0:
-            addr_pure = addr_lc[:digit_idx].strip().rstrip(",.")
-            suffix = addr_lc[digit_idx:]
-        else:
-            addr_pure = addr_lc[:space_before_digit].strip().rstrip(",.")
-            suffix = addr_lc[space_before_digit:]
-    if addr_pure in V327_STREET_ALIASES:
-        canonical = V327_STREET_ALIASES[addr_pure]
-        return canonical + suffix
-    return addr_lc
+    """Kompatybilny wrapper V3.27 do jednego ownera rejestru ulic."""
+    return _address_canon.normalize_street_for_matching(addr_lc)
 
 
 def canonicalize_geocode_address(address):
-    """Return one street spelling for cache, geocoders and verification.
-
-    The alias table remains the single source of canonical street names.  A
-    caller may provide a bare street (``Jana Pawła II 47``) or a conventional
-    ``ul./al./aleja`` prefix; aliases are applied to the street part and the
-    house/local suffix is preserved.  ``plac`` is intentionally not stripped:
-    Plac Jana Pawła II and Aleja Jana Pawła II are distinct objects.
-
-    Unrecognised addresses keep their spelling (apart from whitespace), which
-    limits the behavioural change to registered V3.27 aliases.
-    """
-    if not address or not isinstance(address, str):
-        return address
-    cleaned = " ".join(address.strip().split())
-    lowered = cleaned.lower()
-
-    # First try the complete street spelling, then only prefixes which do not
-    # carry identity.  ``plac``/``pl.`` are identity-bearing and stay intact.
-    candidates = [lowered]
-    for prefix in ('ul. ', 'ul ', 'ulica ', 'al. ', 'al ', 'aleja '):
-        if lowered.startswith(prefix):
-            candidates.append(lowered[len(prefix):])
-            break
-
-    for candidate in candidates:
-        normalized = _v327_normalize_street_for_matching(candidate)
-        # Identity aliases need membership detection because value == input.
-        digit_idx = next((i for i, ch in enumerate(candidate) if ch.isdigit()), None)
-        if digit_idx is None:
-            pure = candidate.strip().rstrip(",.")
-        else:
-            space_idx = candidate.rfind(" ", 0, digit_idx)
-            pure = candidate[:space_idx if space_idx >= 0 else digit_idx].strip().rstrip(",.")
-        if pure in V327_STREET_ALIASES:
-            return normalized
-    return cleaned
+    """Kompatybilny wrapper geokodera do jednego ownera kanonu adresowego."""
+    return _address_canon.canonicalize_street_address(address)
 
 
 def _district_from_qualified_street(addr_lc):

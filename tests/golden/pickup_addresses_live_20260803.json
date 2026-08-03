@@ -1,0 +1,177 @@
+{
+  "cases": [
+    {
+      "pickup_address": "Czesława Miłosza 2",
+      "pickup_city": ""
+    },
+    {
+      "pickup_address": "Gruntowa 9A",
+      "pickup_city": ""
+    },
+    {
+      "pickup_address": "Jana Kilińskiego 12/lok 1U",
+      "pickup_city": ""
+    },
+    {
+      "pickup_address": "Jarzębinowa 2A/1",
+      "pickup_city": ""
+    },
+    {
+      "pickup_address": "Kaczorowskiego 14 lok.13",
+      "pickup_city": ""
+    },
+    {
+      "pickup_address": "Kilińskiego 12 lok. 1U",
+      "pickup_city": ""
+    },
+    {
+      "pickup_address": "Kilińskiego 7 lok. U1",
+      "pickup_city": ""
+    },
+    {
+      "pickup_address": "Komisji Edukacji Narodowej 40/u8",
+      "pickup_city": ""
+    },
+    {
+      "pickup_address": "Kopernika 2",
+      "pickup_city": ""
+    },
+    {
+      "pickup_address": "Legionowa 30 lok. 6",
+      "pickup_city": ""
+    },
+    {
+      "pickup_address": "Legionowa 6",
+      "pickup_city": ""
+    },
+    {
+      "pickup_address": "Lipowa 14",
+      "pickup_city": ""
+    },
+    {
+      "pickup_address": "lipowa 16 lok.107",
+      "pickup_city": ""
+    },
+    {
+      "pickup_address": "Lipowa 28",
+      "pickup_city": ""
+    },
+    {
+      "pickup_address": "Marii Skłodowskiej-Curie 3/U1",
+      "pickup_city": ""
+    },
+    {
+      "pickup_address": "Narodowych Sił Zbrojnych 15B",
+      "pickup_city": ""
+    },
+    {
+      "pickup_address": "Nowy Świat 2",
+      "pickup_city": ""
+    },
+    {
+      "pickup_address": "Nowy Świat 3/U4",
+      "pickup_city": ""
+    },
+    {
+      "pickup_address": "Ogrodowa 12",
+      "pickup_city": ""
+    },
+    {
+      "pickup_address": "przesyłki około 10",
+      "pickup_city": ""
+    },
+    {
+      "pickup_address": "Przyjazd 13",
+      "pickup_city": ""
+    },
+    {
+      "pickup_address": "Rycerska 1",
+      "pickup_city": ""
+    },
+    {
+      "pickup_address": "Rynek Kościuszki 28/1",
+      "pickup_city": ""
+    },
+    {
+      "pickup_address": "Rynek Kościuszki 32",
+      "pickup_city": ""
+    },
+    {
+      "pickup_address": "Sienkiewicza 52",
+      "pickup_city": ""
+    },
+    {
+      "pickup_address": "Sienkiewicza 81/3/u12",
+      "pickup_city": ""
+    },
+    {
+      "pickup_address": "Skłodowskiej-Curie 19",
+      "pickup_city": ""
+    },
+    {
+      "pickup_address": "Starobojarska 25",
+      "pickup_city": ""
+    },
+    {
+      "pickup_address": "Transportowa 2D/U7",
+      "pickup_city": ""
+    },
+    {
+      "pickup_address": "ul. Mickiewicza 2",
+      "pickup_city": ""
+    },
+    {
+      "pickup_address": "Waszyngtona 17",
+      "pickup_city": ""
+    },
+    {
+      "pickup_address": "WASZYNGTONA 34",
+      "pickup_city": ""
+    },
+    {
+      "pickup_address": "Waszyngtona 38/lok U3",
+      "pickup_city": ""
+    },
+    {
+      "pickup_address": "Wiejska 55 lok u1",
+      "pickup_city": ""
+    },
+    {
+      "pickup_address": "Wiejska 65",
+      "pickup_city": ""
+    },
+    {
+      "pickup_address": "Węglowa 1 (MUZEUM)",
+      "pickup_city": ""
+    },
+    {
+      "pickup_address": "Zabłudowska 1",
+      "pickup_city": ""
+    }
+  ],
+  "privacy": {
+    "excluded_classes": [
+      "order_ids",
+      "restaurant_names",
+      "delivery_addresses",
+      "coordinates",
+      "courier_identity",
+      "history"
+    ],
+    "included_fields": [
+      "pickup_address",
+      "pickup_city"
+    ]
+  },
+  "schema": "pickup-address-live-replay.v1",
+  "source": {
+    "basename": "orders_state.json",
+    "kind": "read-only-orders-state",
+    "mtime_ns": 1785751816982055120,
+    "records_total": 152,
+    "records_with_pickup": 152,
+    "sha256": "6cc0890cc90ca78b1832ac2fbda7e5be50a72acd0ce2df0848579c74aa07058f",
+    "size_bytes": 524794,
+    "unique_pickup_pairs": 37
+  }
+}

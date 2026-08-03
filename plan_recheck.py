@@ -1777,6 +1777,7 @@ def _detect_departed_pickup_revisit(
     carried_rest_keys=None,
     *,
     physical_stops=False,
+    physical_key_cache=None,
 ):
     """Z-RULE detekcja: odbiór w restauracji R występujący PO ≥1 stopie pośrednim,
     gdy WCZEŚNIEJ w trasie był już odbiór w tej samej R → kurier opuścił R i ma do
@@ -1818,7 +1819,11 @@ def _detect_departed_pickup_revisit(
                     candidate
                     for candidate in visits
                     if all(
-                        _route_order.same_physical_pickup_point(member, record)
+                        _route_order.same_physical_pickup_point(
+                            member,
+                            record,
+                            key_cache=physical_key_cache,
+                        )
                         for member in candidate["members"]
                     )
                 ),
@@ -2367,6 +2372,19 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
     carried_rest = {_pickup_rest_key({"type": "pickup", "order_id": o}, orders_state)
                     for o in carried}
     carried_rest.discard(None)
+    # NEW-5: fizyczny klucz jest czystą funkcją pól rekordu, ale rekordy są
+    # mutowalne. Liczymy go więc raz dla TEGO wywołania, przed pętlą n!, i
+    # przekazujemy jawnie do detektora; nie powstaje globalny/stary cache.
+    _physical_key_cache = None
+    if not carried and _noncarried_apply:
+        _physical_records = []
+        for oid in dict.fromkeys(oid_of):
+            record = orders_state.get(oid)
+            if isinstance(record, dict):
+                _physical_records.append(record)
+        _physical_key_cache = _route_order.pickup_physical_key_cache(
+            _physical_records
+        )
     _baseline_hard_no_return = bool(
         not carried
         and _noncarried_apply
@@ -2374,6 +2392,7 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
             seq,
             orders_state,
             physical_stops=True,
+            physical_key_cache=_physical_key_cache,
         )
     )
     # G5 (WB2, strict-stub): tolerancja okna wraz z PROWENIENCJĄ. Bez guardów
@@ -2513,6 +2532,7 @@ def _lex_committed_window_reorder(seq, orders_state, start_pos, now, *,
             orders_state,
             carried_rest,
             physical_stops=bool(not carried and _noncarried_apply),
+            physical_key_cache=_physical_key_cache,
         ):
             _rej["no_return"] += 1
             continue
