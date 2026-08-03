@@ -1,4 +1,4 @@
-"""A-2 iteration 4 negative oracles for the iter3 blind findings.
+"""A-2 iteration 4/5 negative oracles for the iter3/iter4 blind findings.
 
 The root/child conftests isolate flags, state, logs and notifications before
 this module is imported.  Every plan test additionally pins the module-level
@@ -7,6 +7,7 @@ before its first write.
 """
 from __future__ import annotations
 
+import ast
 import errno
 import json
 import sys
@@ -85,8 +86,11 @@ def _plan_body(tag: str) -> dict:
 
 
 def _hwm_value() -> int:
-    payload = json.loads(PM.version_hwm_path().read_text(encoding="utf-8"))
-    return int(payload["last_issued"])
+    return int(_hwm_payload()["last_issued"])
+
+
+def _hwm_payload() -> dict:
+    return json.loads(PM.version_hwm_path().read_text(encoding="utf-8"))
 
 
 def _prepare_reflip(monkeypatch, *, delete_hwm: bool) -> tuple[int, bytes, bytes]:
@@ -114,6 +118,200 @@ def _prepare_reflip(monkeypatch, *, delete_hwm: bool) -> tuple[int, bytes, bytes
 
     _set_plan_guard(monkeypatch, True)
     return off_version, main_before_reflip, prev_before_reflip
+
+
+def _prepare_uncovered_off_window(monkeypatch) -> tuple[int, bytes, bytes]:
+    """Build the blind's exact stale-CAS overlap while HWM stays frozen."""
+    _set_plan_guard(monkeypatch, True)
+    PM.save_plan("c1", _plan_body("on-c1"))
+    current = PM.save_plan("c2", _plan_body("on-c2"))
+    PM.save_plan("c3", _plan_body("on-c3"))
+    hwm_before_off = _hwm_value()
+
+    _set_plan_guard(monkeypatch, False)
+    # .prev contains c1+c2. With the old frozen-HWM recovery, sorted rebasing
+    # gives c2 exactly the token issued by the third OFF write below.
+    for index in range(3):
+        current = PM.save_plan(
+            "c2",
+            _plan_body(f"off-window-{index}"),
+            expected_version=int(current["plan_version"]),
+        )
+    stale_off_token = int(current["plan_version"])
+    assert stale_off_token > hwm_before_off
+    assert _hwm_value() == hwm_before_off
+    return (
+        stale_off_token,
+        SP.previous_path(PM.PLANS_FILE).read_bytes(),
+        PM.version_hwm_path().read_bytes(),
+    )
+
+
+@pytest.mark.parametrize("lost_main", ["corrupt", "missing"])
+def test_off_window_recovery_without_continuity_fails_closed(
+    plan_store, monkeypatch, lost_main
+):
+    """N-1: a frozen HWM can never authorize recovery after an OFF window."""
+    stale_off_token, prev_before, hwm_after_off = (
+        _prepare_uncovered_off_window(monkeypatch)
+    )
+    if lost_main == "corrupt":
+        PM.PLANS_FILE.write_text("{ corrupt after OFF window", encoding="utf-8")
+        main_after_loss = PM.PLANS_FILE.read_bytes()
+    else:
+        PM.PLANS_FILE.unlink()
+        main_after_loss = None
+
+    _set_plan_guard(monkeypatch, True)
+    # A mutating public entrypoint must fail at the same boundary. In
+    # particular the stale CAS token issued in the OFF window is never replayed.
+    with pytest.raises(PM.PlanVersionStateError, match="continuity"):
+        PM.save_plan(
+            "c2",
+            _plan_body("stale-off-cas-replay"),
+            expected_version=stale_off_token,
+        )
+    with pytest.raises(PM.PlanVersionStateError, match="continuity"):
+        PM.load_plans()
+
+    assert SP.previous_path(PM.PLANS_FILE).read_bytes() == prev_before
+    assert PM.version_hwm_path().read_bytes() == hwm_after_off
+    if main_after_loss is None:
+        assert not PM.PLANS_FILE.exists()
+    else:
+        assert PM.PLANS_FILE.read_bytes() == main_after_loss
+
+
+def test_mutation_removed_off_invalidation_accepts_stale_cas(
+    plan_store, monkeypatch
+):
+    """Mutation proof: deleting the one OFF invalidation reopens N-1/ABA."""
+    monkeypatch.setattr(
+        PM, "_invalidate_version_hwm_continuity", lambda: None
+    )
+    stale_off_token, _prev_before, _hwm_after_off = (
+        _prepare_uncovered_off_window(monkeypatch)
+    )
+    PM.PLANS_FILE.write_text("{ mutant corrupt main", encoding="utf-8")
+
+    _set_plan_guard(monkeypatch, True)
+    recovered = PM.load_plans()
+    assert int(recovered["c2"]["plan_version"]) == stale_off_token
+    accepted = PM.save_plan(
+        "c2",
+        _plan_body("mutant-stale-cas-accepted"),
+        expected_version=stale_off_token,
+    )
+    assert int(accepted["plan_version"]) > stale_off_token
+
+
+def test_first_off_write_invalidates_continuity_before_legacy_main_once(
+    plan_store, monkeypatch
+):
+    """Ratchet: one sidecar invalidation, ordered before byte-legacy main."""
+    _set_plan_guard(monkeypatch, True)
+    current = PM.save_plan("c1", _plan_body("on"))
+    hwm_path = PM.version_hwm_path()
+    hwm_before = _hwm_payload()
+    assert hwm_before["covers_all_issued"] is True
+    hwm_inode_before = hwm_path.stat().st_ino
+    main_before = json.loads(PM.PLANS_FILE.read_text(encoding="utf-8"))
+
+    _set_plan_guard(monkeypatch, False)
+    fixed_now = "2026-08-03T22:30:00+00:00"
+    monkeypatch.setattr(PM, "_now_iso", lambda: fixed_now)
+    destinations: list[Path] = []
+    real_replace = SP.os.replace
+
+    def record_replace(source, destination):
+        destination = Path(destination)
+        if destination in {hwm_path, PM.PLANS_FILE}:
+            destinations.append(destination)
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(SP.os, "replace", record_replace)
+    first_off = PM.save_plan(
+        "c1", _plan_body("off-first"),
+        expected_version=int(current["plan_version"]),
+    )
+    expected = dict(main_before)
+    expected["c1"] = first_off
+    assert PM.PLANS_FILE.read_bytes() == json.dumps(
+        expected, ensure_ascii=False, separators=(",", ":")
+    ).encode("utf-8")
+    assert destinations[:2] == [hwm_path, PM.PLANS_FILE]
+    invalidated = _hwm_payload()
+    assert invalidated["last_issued"] == hwm_before["last_issued"]
+    assert invalidated["covers_all_issued"] is False
+    assert hwm_path.stat().st_ino != hwm_inode_before
+
+    invalidated_inode = hwm_path.stat().st_ino
+    destinations.clear()
+    PM.save_plan(
+        "c1", _plan_body("off-second"),
+        expected_version=int(first_off["plan_version"]),
+    )
+    assert destinations == [PM.PLANS_FILE]
+    assert hwm_path.stat().st_ino == invalidated_inode
+
+
+def test_off_invalidation_failure_aborts_before_legacy_main(
+    plan_store, monkeypatch
+):
+    """Fail-closed ordering: no OFF token escapes without invalidation."""
+    _set_plan_guard(monkeypatch, True)
+    current = PM.save_plan("c1", _plan_body("on"))
+    main_before = PM.PLANS_FILE.read_bytes()
+    hwm_before = PM.version_hwm_path().read_bytes()
+    real_atomic_write = SP.atomic_write_json
+
+    def fail_hwm(path, data, **kwargs):
+        if Path(path) == PM.version_hwm_path():
+            raise OSError(errno.EIO, "synthetic HWM invalidation failure")
+        return real_atomic_write(path, data, **kwargs)
+
+    _set_plan_guard(monkeypatch, False)
+    monkeypatch.setattr(SP, "atomic_write_json", fail_hwm)
+    with pytest.raises(OSError, match="HWM invalidation failure"):
+        PM.save_plan(
+            "c1",
+            _plan_body("must-not-land"),
+            expected_version=int(current["plan_version"]),
+        )
+    assert PM.PLANS_FILE.read_bytes() == main_before
+    assert PM.version_hwm_path().read_bytes() == hwm_before
+
+
+def test_continuity_marker_has_one_invalidator_and_one_write_choke_point():
+    """Source ratchet: no competing OFF continuity writer or bypass."""
+    tree = ast.parse(Path(PM.__file__).read_text(encoding="utf-8"))
+    invalid_marker_writers = []
+    invalidation_callers = []
+    for function in (
+        node for node in tree.body if isinstance(node, ast.FunctionDef)
+    ):
+        for call in (
+            node for node in ast.walk(function) if isinstance(node, ast.Call)
+        ):
+            if (
+                isinstance(call.func, ast.Name)
+                and call.func.id == "_write_version_hwm"
+                and any(
+                    keyword.arg == "covers_all_issued"
+                    and isinstance(keyword.value, ast.Constant)
+                    and keyword.value.value is False
+                    for keyword in call.keywords
+                )
+            ):
+                invalid_marker_writers.append(function.name)
+            if (
+                isinstance(call.func, ast.Name)
+                and call.func.id == "_invalidate_version_hwm_continuity"
+            ):
+                invalidation_callers.append(function.name)
+
+    assert invalid_marker_writers == ["_invalidate_version_hwm_continuity"]
+    assert invalidation_callers == ["_write_raw"]
 
 
 @pytest.mark.parametrize("delete_hwm", [False, True], ids=["keep-hwm", "delete-hwm"])

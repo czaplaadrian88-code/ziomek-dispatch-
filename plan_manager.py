@@ -20,6 +20,7 @@ import fcntl
 import logging
 import threading
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -58,6 +59,20 @@ class _VersionHwmReconciliationRequired(RuntimeError):
     """A shared reader found legal main versions not yet covered by HWM."""
 
     pass
+
+
+@dataclass(frozen=True)
+class _VersionHwmState:
+    """Parsed HWM plus its explicit proof that no issued token is above it.
+
+    ``None`` for ``covers_all_issued`` is the pre-N-1 sidecar format. It remains
+    readable for an in-place upgrade from a healthy main, but is deliberately
+    not accepted as recovery evidence.
+    """
+
+    last_issued: int
+    covers_all_issued: Optional[bool]
+
 
 # Procesowy, monotoniczny licznik odrzuconych zapisow CAS. Dwa procesy
 # (panel-watcher i plan-recheck) publikuja delte we wlasnych podsumowaniach;
@@ -116,7 +131,8 @@ def ensure_storage_durable(path: Optional[Path] = None) -> None:
 # ─── A-2 REWORK (2026-08-03): corruption + monotonic anti-ABA ───────────────
 # Persistence mechanics live only in state_persistence. This module owns the
 # plan-domain decision: normal guarded reads may recover, explicit strict reads
-# never recover, and every epoch token is reserved in a durable HWM before main.
+# never recover. ON writers reserve every epoch token before main; the first
+# OFF write durably invalidates that recovery proof while keeping main legacy.
 
 
 def _corrupt_guard_on() -> bool:
@@ -150,7 +166,7 @@ def _max_plan_version(plans: Dict[str, Any]) -> int:
     return maximum
 
 
-def _read_version_hwm() -> Optional[int]:
+def _read_version_hwm_state() -> Optional[_VersionHwmState]:
     path = version_hwm_path()
     try:
         payload = _state_store.read_json_object(
@@ -169,15 +185,43 @@ def _read_version_hwm() -> Optional[int]:
         raise PlanVersionStateError(f"version HWM below epoch floor path={path}")
     if value > _VERSION_MAX_SAFE:
         raise PlanVersionStateError(f"version HWM exceeds JSON-safe range path={path}")
-    return value
+    continuity = payload.get("covers_all_issued")
+    if continuity is not None and not isinstance(continuity, bool):
+        raise PlanVersionStateError(
+            f"invalid version HWM continuity marker path={path}"
+        )
+    return _VersionHwmState(
+        last_issued=value,
+        covers_all_issued=continuity,
+    )
 
 
-def _write_version_hwm(value: int) -> None:
+def _read_version_hwm() -> Optional[int]:
+    """Compatibility view of the HWM value; safety decisions use full state."""
+    state = _read_version_hwm_state()
+    return None if state is None else state.last_issued
+
+
+def _version_hwm_payload(
+    value: int, *, covers_all_issued: bool
+) -> Dict[str, Any]:
+    return {
+        "schema": _VERSION_HWM_SCHEMA,
+        "last_issued": value,
+        "covers_all_issued": covers_all_issued,
+    }
+
+
+def _write_version_hwm(
+    value: int, *, covers_all_issued: bool = True
+) -> None:
     if value > _VERSION_MAX_SAFE:
         raise PlanVersionStateError("plan version namespace exhausted")
     _state_store.atomic_write_json(
         version_hwm_path(),
-        {"schema": _VERSION_HWM_SCHEMA, "last_issued": value},
+        _version_hwm_payload(
+            value, covers_all_issued=covers_all_issued
+        ),
         backup_previous=False,
         separators=(",", ":"),
         ensure_directory_durable=ensure_storage_durable,
@@ -185,61 +229,111 @@ def _write_version_hwm(value: int) -> None:
     )
 
 
+def _invalidate_version_hwm_continuity() -> None:
+    """Invalidate a pre-existing recovery proof before the first OFF write.
+
+    The OFF main writer remains byte-for-byte legacy. A missing sidecar stays
+    missing, and an already-invalid marker is not rewritten on later OFF
+    writes. If this durable invalidation fails, the main write must not happen.
+    """
+    state = _read_version_hwm_state()
+    if state is None or state.covers_all_issued is False:
+        return
+    _write_version_hwm(
+        state.last_issued,
+        covers_all_issued=False,
+    )
+    _invalidate_plan_cache()
+    _log.warning(
+        "PLAN_VERSION_CONTINUITY_INVALIDATED path=%s last_issued=%s; "
+        "first feature-OFF plan write",
+        version_hwm_path(),
+        state.last_issued,
+    )
+
+
 def _validate_or_reconcile_main_epoch(
     plans: Dict[str, Any], *, allow_reconcile: bool
 ) -> None:
-    """Validate main/HWM or reconcile a legal feature-OFF interval under EX.
+    """Validate continuity or rebuild its proof from a readable main under EX.
 
-    Guarded writers reserve HWM before main, so a valid main ahead of a valid
-    HWM can only be produced while the guard's byte-legacy path is OFF (or by an
-    explicit operator rollback that removes the ON-only HWM).  The version
-    owner adopts that observed maximum when the flag is enabled again.  A
-    shared reader requests an unlock + EX re-read first; malformed HWM content
-    still fails closed in ``_read_version_hwm`` and is never repaired here.
+    Only an explicit true marker proves that every potentially lost main token
+    is at or below HWM. The first OFF write invalidates that proof before
+    changing main. If main is readable after re-enable, this owner can adopt its
+    observed maximum while preserving any higher burned HWM and mark continuity
+    proven again. Recovery has no readable main and therefore cannot do this.
+    A shared reader requests an unlock + EX re-read before changing the marker;
+    malformed HWM content remains fail-closed.
     """
     observed = _max_plan_version(plans)
-    hwm = _read_version_hwm()
-    if hwm is None:
+    state = _read_version_hwm_state()
+    if state is None:
         if observed < _VERSION_EPOCH_FLOOR:
             return
-    elif observed <= hwm:
+    elif state.covers_all_issued is True and observed <= state.last_issued:
         return
 
     if not allow_reconcile:
         raise _VersionHwmReconciliationRequired()
 
-    previous = hwm
-    _write_version_hwm(observed)
+    previous = None if state is None else state.last_issued
+    previous_continuity = (
+        "missing" if state is None else state.covers_all_issued
+    )
+    reconciled = max(
+        observed,
+        _VERSION_EPOCH_FLOOR,
+        0 if state is None else state.last_issued,
+    )
+    _write_version_hwm(reconciled)
     _invalidate_plan_cache()
     _log.warning(
-        "PLAN_VERSION_HWM_RECONCILED path=%s previous=%s observed=%s; "
-        "adopted versions written while guard was OFF",
+        "PLAN_VERSION_HWM_RECONCILED path=%s previous=%s "
+        "previous_continuity=%s observed=%s reconciled=%s; "
+        "readable main re-established continuity",
         version_hwm_path(),
         "missing" if previous is None else previous,
+        previous_continuity,
         observed,
+        reconciled,
     )
 
 
 def _rebase_recovered_versions(plans: Dict[str, Any]) -> Dict[str, Any]:
     """Give every recovered plan a deterministic token newer than lost main.
 
-    Every guarded write reserves HWM before main. Therefore any token from the
-    lost main is <= HWM. The whole synthetic recovery range is durably reserved
-    before this function returns. A crash before the HWM commit issues nothing;
-    a crash after it burns the range instead of ever reusing it.
+    Only an explicit continuity marker proves that every token from the lost
+    main is <= HWM. The first OFF write invalidates that proof, so recovery must
+    fail closed until a readable main can re-establish it. With a valid proof,
+    the whole synthetic recovery range is durably reserved before this function
+    returns. A crash before the HWM commit issues nothing; a crash after it
+    burns the range instead of ever reusing it.
     """
     observed = _max_plan_version(plans)
-    hwm = _read_version_hwm()
-    if hwm is None:
+    state = _read_version_hwm_state()
+    if state is None:
         if observed >= _VERSION_EPOCH_FLOOR:
             raise PlanVersionStateError(
                 "recovered epoch plan exists but durable HWM is missing"
             )
         hwm = _VERSION_EPOCH_FLOOR
-    elif observed > hwm:
-        raise PlanVersionStateError(
-            f"recovered predecessor version {observed} exceeds HWM {hwm}"
-        )
+    else:
+        hwm = state.last_issued
+        if state.covers_all_issued is not True:
+            _log.error(
+                "PLAN_VERSION_RECOVERY_BLOCKED path=%s last_issued=%s "
+                "continuity=%s; unreadable main cannot prove token boundary",
+                version_hwm_path(),
+                hwm,
+                state.covers_all_issued,
+            )
+            raise PlanVersionStateError(
+                "version HWM continuity is unproven; recovery blocked"
+            )
+        if observed > hwm:
+            raise PlanVersionStateError(
+                f"recovered predecessor version {observed} exceeds HWM {hwm}"
+            )
     rebased = copy.deepcopy(plans)
     next_value = max(hwm, _VERSION_EPOCH_FLOOR)
     for cid in sorted(rebased, key=str):
@@ -408,12 +502,13 @@ def _next_plan_version(
 ) -> int:
     """Allocate once for every plan mutation; reserve durable HWM first."""
     if not guard_on:
-        # Full rollback contract: ON-only HWM/.prev sidecars are inert and the
-        # old writer remains native current+1 byte-for-byte.
+        # The old allocator remains native current+1. _write_raw later changes
+        # only the HWM continuity marker, then writes legacy main byte-for-byte;
+        # .prev stays inert throughout OFF.
         return current_version + 1
-    hwm = _read_version_hwm()
+    state = _read_version_hwm_state()
     observed = _max_plan_version(plans)
-    if hwm is None:
+    if state is None:
         if observed >= _VERSION_EPOCH_FLOOR:
             # _read_raw validates a real main before returning. Therefore this
             # guarded, HWM-less epoch object can only be a synthetic recovery
@@ -421,6 +516,12 @@ def _next_plan_version(
             hwm = observed
         else:
             hwm = _VERSION_EPOCH_FLOOR
+    else:
+        if state.covers_all_issued is not True:
+            raise PlanVersionStateError(
+                "version HWM continuity is unproven; allocation blocked"
+            )
+        hwm = state.last_issued
     next_value = max(hwm, observed, _VERSION_EPOCH_FLOOR) + 1
     if next_value > _VERSION_MAX_SAFE:
         raise PlanVersionStateError("plan version namespace exhausted")
@@ -432,13 +533,18 @@ def _ensure_hwm_covers_write(data: Dict[str, Any], *, guard_on: bool) -> None:
     """Reserve synthetic recovery tokens before any version-neutral write."""
     if not guard_on:
         return
-    hwm = _read_version_hwm()
+    state = _read_version_hwm_state()
     observed = _max_plan_version(data)
-    if hwm is None:
+    if state is None:
         if observed < _VERSION_EPOCH_FLOOR:
             return
         _write_version_hwm(observed)
         return
+    if state.covers_all_issued is not True:
+        raise PlanVersionStateError(
+            "version HWM continuity is unproven; guarded write blocked"
+        )
+    hwm = state.last_issued
     if observed > hwm:
         _write_version_hwm(observed)
 
@@ -446,7 +552,12 @@ def _ensure_hwm_covers_write(data: Dict[str, Any], *, guard_on: bool) -> None:
 def _write_raw(data: Dict[str, Any], *, guard_on: Optional[bool] = None) -> None:
     """Write plans through the canonical owner under the exclusive plan lock."""
     enabled = _corrupt_guard_on() if guard_on is None else bool(guard_on)
-    _ensure_hwm_covers_write(data, guard_on=enabled)
+    if enabled:
+        _ensure_hwm_covers_write(data, guard_on=True)
+    else:
+        # This sidecar write is the only OFF-path addition. It precedes main,
+        # happens once per OFF interval, and never changes legacy main bytes.
+        _invalidate_version_hwm_continuity()
     preserve_previous = bool(
         enabled
         and getattr(_plan_tx_local, "preserve_previous_once", False)
@@ -579,7 +690,7 @@ def snapshot_for_recording(
                 plans = _read_raw(
                     guard_on=True, allow_exclusive_repair=False
                 )
-                hwm_value = _read_version_hwm()
+                hwm_state = _read_version_hwm_state()
         except (
             _RecoveryReservationRequired,
             _VersionHwmReconciliationRequired,
@@ -588,18 +699,23 @@ def snapshot_for_recording(
                 plans = _read_raw(
                     guard_on=True, allow_exclusive_repair=True
                 )
-                hwm_value = _read_version_hwm()
+                hwm_state = _read_version_hwm_state()
         observed = _max_plan_version(plans)
         if observed >= _VERSION_EPOCH_FLOOR and (
-            hwm_value is None or observed > hwm_value
+            hwm_state is None
+            or hwm_state.covers_all_issued is not True
+            or observed > hwm_state.last_issued
         ):
             raise PlanVersionStateError(
                 "cannot record plans without a covering durable HWM"
             )
         hwm = (
             None
-            if hwm_value is None
-            else {"schema": _VERSION_HWM_SCHEMA, "last_issued": hwm_value}
+            if hwm_state is None
+            else _version_hwm_payload(
+                hwm_state.last_issued,
+                covers_all_issued=(hwm_state.covers_all_issued is True),
+            )
         )
     if courier_ids is not None:
         allowed = {str(cid) for cid in courier_ids}

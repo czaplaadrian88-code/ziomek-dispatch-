@@ -386,7 +386,7 @@ def test_recovered_snapshot_is_recorded_only_with_covering_hwm(
     assert json.loads(PM.PLANS_FILE.read_text(encoding="utf-8")) == snapshot
 
 
-def test_flag_off_after_epoch_is_legacy_and_does_not_touch_sidecars(
+def test_flag_off_after_epoch_is_byte_legacy_and_invalidates_hwm_continuity(
     store, monkeypatch
 ):
     _flag_on(monkeypatch)
@@ -403,8 +403,12 @@ def test_flag_off_after_epoch_is_legacy_and_does_not_touch_sidecars(
     second_hwm = int(json.loads(
         _hwm_path().read_text(encoding="utf-8")
     )["last_issued"])
+    second_marker = json.loads(_hwm_path().read_text(encoding="utf-8"))[
+        "covers_all_issued"
+    ]
     assert int(second["plan_version"]) == int(first["plan_version"]) + 1
     assert second_hwm == first_hwm
+    assert second_marker is False
     assert not _prev_path().exists()
 
 

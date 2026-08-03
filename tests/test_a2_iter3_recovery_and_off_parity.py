@@ -4,7 +4,8 @@ These tests are intentionally narrow:
 
 * every recovery CAS token is durably reserved before it can escape;
 * one transient EMFILE is retried against the healthy main;
-* PLAN feature-OFF ignores ON sidecars, including after rollback;
+* PLAN feature-OFF keeps legacy main bytes and ignores .prev; this file's
+  rollback case removes HWM before writing (N-1 separately covers its marker);
 * orders_state persistence v2 is a separate default-OFF switch and OFF keeps
   the exact legacy writer/reader contract.
 
@@ -185,7 +186,7 @@ def test_recovery_hwm_rename_precedes_recovered_main_rename(
     assert events.index(PM.version_hwm_path()) < events.index(PM.PLANS_FILE)
 
 
-def test_plan_off_after_on_is_byte_legacy_and_sidecars_are_inert(
+def test_plan_off_after_on_without_hwm_is_byte_legacy_and_prev_is_inert(
     plan_store, monkeypatch
 ):
     first = PM.save_plan("9", _plan_body("on"))

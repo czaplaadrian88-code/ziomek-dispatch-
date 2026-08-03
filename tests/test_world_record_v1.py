@@ -77,6 +77,7 @@ def test_snapshot_prunes_to_fleet(tmp_path, monkeypatch):
     assert snap["reliability"]["fleet_median_breach_rate"] == 0.2
     assert set(snap["plans"]) == {"111"}, "plans przycięte do floty"
     assert snap["plan_version_hwm"]["last_issued"] == (1 << 52) + 17
+    assert snap["plan_version_hwm"]["covers_all_issued"] is True
     assert snap["eta_quantile"] == {"slot": {"q": 1}}  # eta całość
     assert snap["prep_bias"] == {"R": 0.5}
     assert snap["courier_last_pos"] == {"111": {"lat": 53.1, "lon": 23.1}}
