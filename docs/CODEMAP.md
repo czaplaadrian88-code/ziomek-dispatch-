@@ -54,8 +54,9 @@ Pominięto szum: `.git`, `__pycache__`, `.pytest_cache`. ⚠ `.claude/skills/` t
 - `shadow_dispatcher.py` — **SILNIK**: pętla `_tick`/`run` (systemd `dispatch-shadow`); serializer `_serialize_result` → shadow log
 - `decision_eta_log.py` — wspólny, fail-safe writer snapshotów ETA dokładnie w chwili finalnej decyzji/commitu planu; addytywne, opcjonalne pickup `pred_op`=P50 + `p80` z provenance/version; flaga `ENABLE_DECISION_ETA_LOG` default OFF
 - `state_machine.py` — jedyne źródło prawdy o stanie zlecenia (upsert `orders_state`, 26 ścieżek); observer FSM Phase A log-only
+- `state_persistence.py` — jedyny leaf-owner trwałości JSON state: strict/legacy read, pochodna `.prev`, walidowany predecessor backup-on-write i temp→fsync→rename→dir-fsync
 - `order_fsm.py` — formalny validator cyklu życia + jawne wyjątki reconcile; w Phase A nie blokuje writera
-- `plan_manager.py` — zapis/odczyt `courier_plans.json` (atomic); ładowanie planu
+- `plan_manager.py` — domenowy zapis/odczyt `courier_plans.json`; guarded recovery oraz globalny, JSON-safe version-HWM anti-ABA delegujący I/O do `state_persistence`
 - `plan_recheck.py` — periodyczny re-canon kolejności (timer 5 min); `_apply_canon_order_invariants`
 - `panel_watcher.py` — ingest z panelu gastro (event-driven poll); 4 handlery recanon
 - `panel_client.py` — dostęp do `gastro.nadajesz.pl` (login/CSRF/edit; cykl z `panel_html_parser`)
@@ -97,6 +98,7 @@ Pominięto szum: `.git`, `__pycache__`, `.pytest_cache`. ⚠ `.claude/skills/` t
 | Plany / kanon kolejności / re-canon | `plan_manager.py` + `plan_recheck.py` (+4 handlery w `panel_watcher.py`) |
 | Ingest z panelu gastro | `panel_watcher.py` + `panel_client.py` |
 | Stan zleceń (źródło prawdy) | `state_machine.py` → `orders_state.json` (**workspace/dispatch_state/, POZA repo**) |
+| Trwałość plików state / `.prev` / strict read | `state_persistence.py` (jedyny owner) ← `state_machine.py`, `plan_manager.py`; plan version/HWM policy pozostaje w `plan_manager.py` |
 | Formalny FSM / obserwacja przejść | `order_fsm.py` + hook w `state_machine.py`; Phase A `observer=True`, `enforcement=False`, wyjątki reconcile wymagają jawnego source |
 | Pozycje kurierów / no-GPS / last-known-pos | `courier_resolver.py` → `courier_last_pos.json` (workspace) |
 | ETA / kalibracja | `live_eta.py` + `live_eta_daemon.py` (kanoniczne żywe ETA, jeden producer), `chain_eta.py`, `eta_calibration_logger.py`, `calib_maps.py` |

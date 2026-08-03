@@ -33,7 +33,8 @@ różnic „krytyczne/miękkie" B/K17). Domykane:
     orders_state.json + in-proc EWMA _LOADGOV_STATE — nieodtwarzalne w świeżym
     procesie);
   - `files` — treść (przycięta do floty) plików czytanych w scoringu:
-    courier_reliability, courier_plans, eta_quantile_map, restaurant_prep_bias.
+    courier_reliability, courier_plans wraz z anti-ABA version-HWM,
+    eta_quantile_map, restaurant_prep_bias.
 `k07`/`loadgov` łapane cienkim hookiem `note_decision_input` z silnika (main
 thread, first-note-wins → odporne na rekurencyjny kontrfaktyk early-bird);
 `files` snapshotowane NA WEJŚCIU around_assess (czyste odczyty — ZERO patchowania
@@ -176,12 +177,15 @@ def _snapshot_live_files(fleet_snapshot: Any) -> Dict[str, Any]:
             }
     except Exception:
         pass
-    # plans (plan_manager.PLANS_FILE) — tylko plany kurierów z floty.
+    # plans (plan_manager.PLANS_FILE) — tylko plany kurierów z floty. HWM jest
+    # częścią tego samego snapshotu anti-ABA: po wejściu w epokę sam main bez
+    # sidecara byłby celowo nieczytelny (fail-closed) podczas replayu.
     try:
         from dispatch_v2 import plan_manager as _pm
-        raw = _read_json_safe(str(_pm.PLANS_FILE))
-        if isinstance(raw, dict):
-            out["plans"] = {str(k): v for k, v in raw.items() if str(k) in fleet_cids}
+        raw, raw_hwm = _pm.snapshot_for_recording(fleet_cids)
+        out["plans"] = raw
+        if raw_hwm is not None:
+            out["plan_version_hwm"] = raw_hwm
     except Exception:
         pass
     # calib eta/bias (małe mapy keyed po slocie/restauracji) — całość.

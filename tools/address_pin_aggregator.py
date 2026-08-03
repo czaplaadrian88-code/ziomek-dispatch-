@@ -30,6 +30,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from dispatch_v2 import address_pin_memory as apm
+from dispatch_v2.state_persistence import previous_path
 
 _log = logging.getLogger("address_pin_aggregator")
 WARSAW = ZoneInfo("Europe/Warsaw")
@@ -54,7 +55,7 @@ TRAIL_STALE_S = 3600
 TRAIL_CAP_PER_RUN = 1500        # cap pracy trail na żywy tick (seed bez capa)
 
 HISTORY_FILES = [
-    os.path.join(STATE_DIR, "orders_state.json.prev"),
+    str(previous_path(ORDERS_STATE)),
     os.path.join(STATE_DIR, "orders_state.json.bak-pre-backfill-delivered-20260613-143557"),
     os.path.join(STATE_DIR, "orders_state.pre-prune-2026-06-04.json"),
 ]
