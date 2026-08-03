@@ -201,6 +201,29 @@ def test_serializer_emits_least_damage_alert_when_flag_on(monkeypatch):
     assert out["proposal_output_silent"] is False
 
 
+@pytest.mark.parametrize(
+    "reason,expected_class",
+    [
+        ("state_likely_stale (age=90s)", "STALE"),
+        ("geometry_blind_fallback (pool=2)", "GEOMETRY"),
+        ("commit_divergence_gate (delta=16min)", "COMMIT"),
+        ("difficult_geometry_redirect (score=-40)", "DIFFICULT"),
+        ("no_solo_candidates (fleet_n=2)", "UNKNOWN"),
+    ],
+)
+def test_serializer_emits_explicit_escalation_class_when_flag_on(
+    monkeypatch, reason, expected_class
+):
+    monkeypatch.setattr(C, "load_flags", lambda: {"ENABLE_ALWAYS_PROPOSE": True})
+    out = shadow_dispatcher._serialize_result(
+        _full_result("KOORD", reason, None),
+        event_id="ev",
+        latency_ms=1.0,
+    )
+    assert out["proposal_output_type"] == po.COORDINATOR_ESCALATION
+    assert out["coordinator_escalation_class"] == expected_class
+
+
 def test_serializer_flags_silent_nothing_when_flag_on(monkeypatch):
     monkeypatch.setattr(C, "load_flags", lambda: {"ENABLE_ALWAYS_PROPOSE": True})
     out = shadow_dispatcher._serialize_result(

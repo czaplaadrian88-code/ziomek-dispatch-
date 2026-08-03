@@ -144,10 +144,10 @@ ENABLE_HARD35_ENFORCE = False
 
 # A-3 ALWAYS-PROPOSE (OD-1, 2026-08-02): kanoniczny TYP wyjścia decyzji w
 # shadow_decisions (EXECUTABLE_PROPOSAL / LEAST_DAMAGE_ALERT / OWNER_EXCEPTION /
-# COORDINATOR_ESCALATION) + inwariant „nigdy ciche nic". Klasyfikator
-# (core/proposal_output.py) jest CZYSTĄ funkcją nad wynikiem — flaga steruje TYLKO
-# emisją pól obserwacyjnych w serializerze; ZERO zmiany verdiktu/decyzji. Default
-# OFF, shadow-first; flip za ACK ownera po oknie SHADOW.
+# COORDINATOR_ESCALATION) + inwariant „nigdy ciche nic". D-A3-1/2/3 obejmuje
+# także nested no_solo best-of-worst i trwałą parę kontekst→ręczny assignment w
+# istniejącym learning_log. Wszystko jest obserwacyjne: ZERO zmiany verdict/best,
+# auto-route ani wykonania. Default OFF, shadow-first; flip za ACK ownera.
 ENABLE_ALWAYS_PROPOSE = False
 
 # ─── K05 refaktor (2026-07-06, ADR-R01): FlagSnapshot per tick ───

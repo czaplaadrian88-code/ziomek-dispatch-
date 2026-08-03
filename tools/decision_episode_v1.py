@@ -16,7 +16,6 @@ import hashlib
 import json
 import os
 import re
-import shlex
 import sqlite3
 import sys
 import tempfile
@@ -31,6 +30,35 @@ try:
 except ImportError:  # pragma: no cover - samodzielne uruchomienie z tools/
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import _rotated_logs  # type: ignore
+
+try:
+    from dispatch_v2.core.learning_actor import (
+        ALLOWED_ACTOR_DOMAINS,
+        FILTERED_ACTOR_IDENTITIES,
+        FILTERED_LOCAL_PARTS,
+        actor_status as _canonical_actor_status,
+        effective_live_assign as _canonical_effective_live_assign,
+        legacy_live_assign_signature as _canonical_legacy_assign_signature,
+    )
+except ModuleNotFoundError:  # pragma: no cover - live standalone script
+    import importlib.util
+
+    _actor_path = Path(__file__).resolve().parents[1] / "core" / "learning_actor.py"
+    _actor_spec = importlib.util.spec_from_file_location(
+        "_decision_episode_learning_actor", _actor_path
+    )
+    if _actor_spec is None or _actor_spec.loader is None:
+        raise ImportError(f"cannot load canonical actor helper: {_actor_path}")
+    _actor_module = importlib.util.module_from_spec(_actor_spec)
+    _actor_spec.loader.exec_module(_actor_module)
+    ALLOWED_ACTOR_DOMAINS = _actor_module.ALLOWED_ACTOR_DOMAINS
+    FILTERED_ACTOR_IDENTITIES = _actor_module.FILTERED_ACTOR_IDENTITIES
+    FILTERED_LOCAL_PARTS = _actor_module.FILTERED_LOCAL_PARTS
+    _canonical_actor_status = _actor_module.actor_status
+    _canonical_effective_live_assign = _actor_module.effective_live_assign
+    _canonical_legacy_assign_signature = (
+        _actor_module.legacy_live_assign_signature
+    )
 
 
 UTC = timezone.utc
@@ -86,18 +114,7 @@ ACTOR_PROVENANCE = (
     "ACTOR_TEST_FILTERED",
 )
 
-# Jawny allowlist domen oraz jawne konta techniczne/testowe z audytu konsoli.
-# Kazdy adres spoza allowlisty lub o testowym local-part jest filtrowany
-# fail-closed. Surowy e-mail nigdy nie trafia do outputu.
-ALLOWED_ACTOR_DOMAINS = frozenset({"nadajesz.pl"})
-FILTERED_ACTOR_IDENTITIES = frozenset({
-    "",
-    "t",
-    "test@op",
-    "test@nadajesz.pl",
-    "admin@ziomek.pl",
-})
-FILTERED_LOCAL_PARTS = frozenset({"admin", "test"})
+# Allowlist i pseudonimizacja mają jednego ownera w core.learning_actor.
 
 # Bezpieczna, bez-PII czesc zapisanego wektora cech. Pola nieobecne pozostaja
 # null; nie sa zerowane ani forward-fillowane.
@@ -122,11 +139,22 @@ CANDIDATE_FEATURES = (
     "pos_source",
     "cs_tier_label",
     "feasibility",
+    "feasibility_verdict",
+    "hard_safe",
+    "has_plan",
     "best_effort",
     "free_at_min",
     "shift_remaining_min",
     "n_waves",
     "paczka_is",
+    "a3_diagnostic",
+    "a3_diagnostic_marker",
+    "a3_solo_score",
+    "a3_hard_safe",
+    "a3_feasibility_verdict",
+    "a3_feasibility_reason",
+    "a3_pickup_dist_km",
+    "a3_has_plan",
 )
 PLAN_FIELDS = (
     "pickup_at",
@@ -388,24 +416,60 @@ def _index_latest(records: Iterable[Mapping], time_fields: Sequence[str]) -> dic
     return {oid: item[1] for oid, item in index.items()}
 
 
+def _a3_diagnostic_overlay(candidate: Mapping) -> dict:
+    """Namespaced overlay A-3; nigdy nie nadpisuje kanonicznych cech/score."""
+    solo_score = candidate.get("a3_solo_score")
+    if "a3_solo_score" not in candidate:
+        # Backward read compatibility dla rekordów 79ff801af. Stara wartość
+        # `score` była skalą R29, więc migrujemy ją wyłącznie do pola A-3.
+        solo_score = candidate.get("score")
+    return {
+        "a3_diagnostic": True,
+        "a3_diagnostic_marker": candidate.get("diagnostic_marker"),
+        "a3_solo_score": solo_score,
+        "a3_hard_safe": candidate.get("hard_safe"),
+        "a3_feasibility_verdict": candidate.get("feasibility_verdict"),
+        "a3_feasibility_reason": candidate.get("feasibility_reason"),
+        "a3_pickup_dist_km": candidate.get("pickup_dist_km"),
+        "a3_has_plan": candidate.get("has_plan"),
+    }
+
+
 def _shadow_candidates(shadow: Mapping) -> list[dict]:
     candidates: list[dict] = []
+    # Kanoniczny pełny wiersz pochodzi z legacy best/alternatives. Diagnostyka
+    # A-3 jest dopiero namespaced overlayem dla tego CID (F4), więc nie może
+    # wyprzeć pełnego wektora ani wprowadzić skali R29 do ogólnego `score`.
     best = shadow.get("best")
     if isinstance(best, Mapping):
         candidates.append(dict(best))
     alternatives = shadow.get("alternatives")
     if isinstance(alternatives, list):
         candidates.extend(dict(x) for x in alternatives if isinstance(x, Mapping))
-    # Pierwszy zapis danego courier_id wygrywa. To usuwa historyczny duplikat
-    # best w alternatives bez dopisywania jakiejkolwiek cechy.
+
     unique: list[dict] = []
-    seen: set[str] = set()
+    index_by_cid: dict[str, int] = {}
     for candidate in candidates:
         cid = _cid(candidate.get("courier_id"))
-        if cid is None or cid in seen:
+        if cid is None or cid in index_by_cid:
             continue
-        seen.add(cid)
+        index_by_cid[cid] = len(unique)
         unique.append(candidate)
+
+    best_of_worst = shadow.get("proposal_best_of_worst")
+    diagnostic = (
+        best_of_worst.get("candidate")
+        if isinstance(best_of_worst, Mapping) else None
+    )
+    if isinstance(diagnostic, Mapping):
+        cid = _cid(diagnostic.get("courier_id"))
+        if cid is not None:
+            overlay = _a3_diagnostic_overlay(diagnostic)
+            if cid in index_by_cid:
+                unique[index_by_cid[cid]].update(overlay)
+            else:
+                index_by_cid[cid] = len(unique)
+                unique.append({"courier_id": cid, **overlay})
     return unique
 
 
@@ -474,22 +538,7 @@ def _normalize_human_name(value: object) -> Optional[str]:
 
 
 def _legacy_audit_assign_signature(record: Mapping) -> bool:
-    if record.get("mode") != "live":
-        return False
-    if record.get("kind") not in (None, ""):
-        return False
-    required = ("actor", "command", "courier", "order_id", "ts")
-    if any(key not in record for key in required):
-        return False
-    command = record.get("command")
-    if not isinstance(command, str):
-        return False
-    try:
-        tokens = shlex.split(command)
-    except ValueError:
-        return False
-    basenames = {os.path.basename(token) for token in tokens[:4]}
-    return "gastro_assign.py" in basenames
+    return _canonical_legacy_assign_signature(record)
 
 
 def _effective_audit_assign(record: Mapping) -> Optional[str]:
@@ -499,33 +548,11 @@ def _effective_audit_assign(record: Mapping) -> Optional[str]:
     rekordy bez kind, lecz z waskim podpisem wywolania gastro_assign.py; tylko
     67 z nich ma potwierdzony sukces wykonania.
     """
-    if record.get("mode") != "live":
-        return None
-    failed = record.get("ok") is False or record.get("rc") not in (None, 0)
-    if record.get("kind") == "assign":
-        return None if failed else "kind_assign"
-    if not _legacy_audit_assign_signature(record):
-        return None
-    if record.get("ok") is not True or record.get("rc") != 0:
-        return None
-    return "legacy_gastro_assign_signature"
+    return _canonical_effective_live_assign(record)
 
 
 def _actor_status(value: object) -> tuple[str, Optional[str]]:
-    normalized = str(value or "").strip().casefold()
-    if normalized in FILTERED_ACTOR_IDENTITIES:
-        return "filtered", None
-    if normalized.count("@") != 1:
-        return "filtered", None
-    local, domain = normalized.split("@", 1)
-    if not local or domain not in ALLOWED_ACTOR_DOMAINS:
-        return "filtered", None
-    if local in FILTERED_LOCAL_PARTS or local.startswith("test"):
-        return "filtered", None
-    pseudonym = "actor_sha256:" + hashlib.sha256(
-        normalized.encode("utf-8")
-    ).hexdigest()[:16]
-    return "attested", pseudonym
+    return _canonical_actor_status(value)
 
 
 def _prepare_audit(records: Iterable[Mapping]) -> tuple[list[dict], dict]:
@@ -590,15 +617,23 @@ def _join_assignment(
 ) -> tuple[Optional[dict], dict]:
     oid = _oid(learning)
     actual = _cid(learning.get("actual_courier_id", learning.get("courier_id")))
-    lifecycle = _id(learning.get("lifecycle_event_id"))
-    if lifecycle:
+    exact_ids = (
+        (
+            _id(learning.get("assignment_lifecycle_event_id")),
+            "assignment_lifecycle_event_id",
+        ),
+        (_id(learning.get("lifecycle_event_id")), "lifecycle_event_id"),
+    )
+    for lifecycle, method in exact_ids:
+        if not lifecycle:
+            continue
         exact_by_id = assignments_by_event.get(lifecycle, [])
         exact = [
             row for row in exact_by_id
             if row.get("order_id") == oid and row.get("courier_id") == actual
         ]
         if exact_by_id:
-            return _unique_join(exact, "lifecycle_event_id", learning_at)
+            return _unique_join(exact, method, learning_at)
     if oid is None or actual is None:
         return _unique_join([], "order_courier_time_30s", learning_at)
     candidates = [
@@ -633,6 +668,12 @@ def _join_shadow(
     shadow_by_order: Mapping[str, list[dict]],
     anchor: datetime,
 ) -> tuple[Optional[dict], dict]:
+    engine_event_id = _id(learning.get("engine_decision_event_id"))
+    if engine_event_id:
+        exact_by_id = shadow_by_event.get(engine_event_id, [])
+        exact = [row for row in exact_by_id if _oid(row) == _oid(learning)]
+        if exact_by_id:
+            return _unique_join(exact, "engine_decision_event_id", anchor)
     embedded = _valid_embedded_shadow(learning)
     if embedded is not None:
         return embedded, {
@@ -1023,7 +1064,11 @@ def extract_decision_episodes(
     prepared_learning = []
     for raw in learning_records:
         action = raw.get("action")
-        if action not in ("PANEL_OVERRIDE", "PANEL_AGREE"):
+        if action not in (
+            "PANEL_OVERRIDE",
+            "PANEL_AGREE",
+            "COORDINATOR_ESCALATION_RESOLVED",
+        ):
             continue
         learning_at = parse_timestamp(raw.get("ts"))
         if learning_at is None:
@@ -1049,7 +1094,7 @@ def extract_decision_episodes(
             learning, shadow_by_event, shadow_by_order, shadow_anchor
         )
         shadow_event_id = _id(shadow.get("event_id")) if shadow else None
-        if learning.get("action") == "PANEL_OVERRIDE":
+        if learning.get("action") != "PANEL_AGREE":
             proposal_at = (
                 shadow.get("ts") if shadow and shadow.get("ts") else proposal_fallback
             )
@@ -1063,16 +1108,43 @@ def extract_decision_episodes(
         human_name = _normalize_human_name(
             human_candidate_raw.get("name") if human_candidate_raw else None
         )
-        actor_match, actor_join, actor_provenance, actor_id = _join_actor(
-            audit_by_pair, oid, human_name, assignment_at or learning_at
-        )
+        recorded_actor = learning.get("assigned_by")
+        if (
+            isinstance(recorded_actor, Mapping)
+            and recorded_actor.get("status") == "ATTESTED"
+            and str(recorded_actor.get("actor_id") or "").startswith(
+                "actor_sha256:"
+            )
+        ):
+            actor_id = str(recorded_actor["actor_id"])
+            actor_match = {"source": "learning.assigned_by"}
+            actor_join = {
+                "status": "UNIQUE",
+                "method": "learning.assigned_by",
+                "match_count": 1,
+                "delta_seconds": None,
+            }
+            actor_provenance = "ACTOR_ATTESTED_CONSOLE"
+        else:
+            actor_match, actor_join, actor_provenance, actor_id = _join_actor(
+                audit_by_pair, oid, human_name, assignment_at or learning_at
+            )
 
         reassign = _is_reassignment(
             learning, assignment, assignments_by_order, learning_at
         )
         category = "REASSIGN" if reassign else "FIRST_ASSIGNMENT"
         lifecycle_event_id = _id(learning.get("lifecycle_event_id"))
-        if lifecycle_event_id:
+        assignment_lifecycle_event_id = _id(
+            learning.get("assignment_lifecycle_event_id")
+        )
+        engine_decision_event_id = _id(
+            learning.get("engine_decision_event_id")
+        )
+        if assignment_lifecycle_event_id:
+            decision_key = assignment_lifecycle_event_id
+            decision_key_source = "assignment_lifecycle_event_id"
+        elif lifecycle_event_id:
             decision_key = lifecycle_event_id
             decision_key_source = "lifecycle_event_id"
         elif shadow_event_id:
@@ -1127,17 +1199,37 @@ def extract_decision_episodes(
         missing_reasons = [reason for reason in MISSING_REASON_ORDER if reason in missing]
 
         pool_total = shadow.get("pool_total_count") if shadow else None
+        public_action = {
+            "COORDINATOR_ESCALATION_RESOLVED": "ESCALATION_RESOLUTION",
+        }.get(
+            learning.get("action"),
+            str(learning.get("action") or "").removeprefix("PANEL_"),
+        )
         episode = {
             "schema_version": SCHEMA_VERSION,
             "episode_id": episode_id,
             "decision_key": decision_key,
             "decision_key_source": decision_key_source,
             "lifecycle_event_id": lifecycle_event_id,
+            "assignment_lifecycle_event_id": assignment_lifecycle_event_id,
+            "engine_decision_event_id": engine_decision_event_id,
+            "learning_event_id": _id(learning.get("learning_event_id")),
             "shadow_event_id": shadow_event_id,
             "order_id": oid,
             "category": category,
             "first_choice_eligible": not reassign,
-            "action": learning.get("action").removeprefix("PANEL_"),
+            "action": public_action,
+            "proposal_output_type": learning.get("proposal_output_type"),
+            "coordinator_escalation_class": (
+                learning.get("coordinator_escalation_class")
+                or (
+                    shadow.get("coordinator_escalation_class")
+                    if shadow is not None else None
+                )
+            ),
+            "learning_event_type": learning.get("learning_event_type"),
+            "reason": learning.get("reason"),
+            "explanation": learning.get("explanation"),
             "panel_source": learning.get("panel_source"),
             "cohort": cohort,
             "proposal_at": iso_utc(proposal_at),
@@ -1150,6 +1242,10 @@ def extract_decision_episodes(
             "actor": "ATTESTED_CONSOLE" if actor_id else "ACTOR_UNKNOWN",
             "actor_id": actor_id,
             "actor_provenance": actor_provenance,
+            "actor_audit_schema": (
+                recorded_actor.get("audit_schema")
+                if isinstance(recorded_actor, Mapping) else None
+            ),
             "joins": {
                 "assignment": assignment_join,
                 "shadow": shadow_join,
@@ -1288,18 +1384,39 @@ def _cohort_census(episodes: Sequence[Mapping], cohort: str) -> dict:
         if row.get("actor_provenance") == "ACTOR_ATTESTED_CONSOLE"
     )
     actor_provenance = Counter(row.get("actor_provenance") for row in first)
+    learning_actions_all = {
+        "AGREE": actions.get("AGREE", 0),
+        "OVERRIDE": actions.get("OVERRIDE", 0),
+        "total": len(rows),
+    }
+    first_choice_actions = {
+        "AGREE": first_actions.get("AGREE", 0),
+        "OVERRIDE": first_actions.get("OVERRIDE", 0),
+        "total": len(first),
+    }
+    actor_attested_actions = {
+        "AGREE": actor_actions.get("AGREE", 0),
+        "OVERRIDE": actor_actions.get("OVERRIDE", 0),
+        "total": actor_clean,
+    }
+    # Legacy census shape pozostaje bajtowo stabilny, dopóki wejście nie ma
+    # nowej klasy. Po D1 licznik staje się jawny zamiast ginąć w ``total``.
+    if actions.get("ESCALATION_RESOLUTION", 0):
+        learning_actions_all["ESCALATION_RESOLUTION"] = actions[
+            "ESCALATION_RESOLUTION"
+        ]
+    if first_actions.get("ESCALATION_RESOLUTION", 0):
+        first_choice_actions["ESCALATION_RESOLUTION"] = first_actions[
+            "ESCALATION_RESOLUTION"
+        ]
+    if actor_actions.get("ESCALATION_RESOLUTION", 0):
+        actor_attested_actions["ESCALATION_RESOLUTION"] = actor_actions[
+            "ESCALATION_RESOLUTION"
+        ]
     return {
         "truth_class": "OBSERVED",
-        "learning_actions_all": {
-            "AGREE": actions.get("AGREE", 0),
-            "OVERRIDE": actions.get("OVERRIDE", 0),
-            "total": len(rows),
-        },
-        "first_choice_actions": {
-            "AGREE": first_actions.get("AGREE", 0),
-            "OVERRIDE": first_actions.get("OVERRIDE", 0),
-            "total": len(first),
-        },
+        "learning_actions_all": learning_actions_all,
+        "first_choice_actions": first_choice_actions,
         "reassign_count": len(rows) - len(first),
         "unique_join_rate": _rate(unique, len(first)),
         "assignment_unique_join_rate": _rate(assignment_unique, len(first)),
@@ -1308,11 +1425,7 @@ def _cohort_census(episodes: Sequence[Mapping], cohort: str) -> dict:
         "human_in_recorded_pool_rate": _rate(h_in_pool, len(h_evaluable)),
         "human_in_recorded_pool_population": "first-choice OVERRIDE with unique shadow",
         "n_actor_clean": actor_clean,
-        "actor_attested_actions": {
-            "AGREE": actor_actions.get("AGREE", 0),
-            "OVERRIDE": actor_actions.get("OVERRIDE", 0),
-            "total": actor_clean,
-        },
+        "actor_attested_actions": actor_attested_actions,
         "actor_attestation_rate": _rate(actor_clean, len(first)),
         "audit_match_including_test_filtered_rate": _rate(audit_any, len(first)),
         "actor_distribution_after_filter": dict(sorted(actors.items())),
@@ -1333,7 +1446,7 @@ def build_census(
         "schema_version": CENSUS_SCHEMA_VERSION,
         "truth_class": "OBSERVED",
         "cutoff_a8_2": iso_utc(A8_CUTOFF),
-        "population": "learning_log PANEL_OVERRIDE/PANEL_AGREE; first-choice metrics exclude REASSIGN",
+        "population": "learning_log PANEL_OVERRIDE/PANEL_AGREE/COORDINATOR_ESCALATION_RESOLVED; first-choice metrics exclude REASSIGN",
         "cohorts": {
             "POST_A8": _cohort_census(episodes, "POST_A8"),
             "PRE_A8": _cohort_census(episodes, "PRE_A8"),

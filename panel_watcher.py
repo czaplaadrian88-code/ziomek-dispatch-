@@ -677,6 +677,18 @@ def _resume_durable_learning_projection(
             lifecycle_event_id,
             _raise_on_error=_raise_on_error,
         )
+        if canonical_record.get("schema") == "always_propose.learning_pair.v1":
+            try:
+                from dispatch_v2.core import always_propose_learning as _a3_learning
+                _a3_learning.acknowledge_from_learning(canonical_record)
+            except Exception as exc:
+                # Cleanup indeksu jest CAS+TTL i nie jest częścią prawdy pary,
+                # która już ma trwały receipt + JSONL. Nie blokuj lifecycle.
+                _log.warning(
+                    "A3 context acknowledge retry fail event=%s: %s",
+                    lifecycle_event_id,
+                    type(exc).__name__,
+                )
         return True
     except Exception:
         if _raise_on_error:
@@ -770,23 +782,133 @@ def _check_panel_override(
             with open(_PENDING_PROPOSALS_PATH, "r", encoding="utf-8") as f:
                 pending = json.load(f)
         except FileNotFoundError:
-            _seal_no_panel_learning(
-                lifecycle_event_id, order_id, _raise_on_error=_raise_on_error
-            )
-            return
+            pending = {}
         except Exception as e:
             _log.warning(f"PANEL_OVERRIDE read pending fail: {e}")
             if _raise_on_error:
                 raise
             return
         rec = pending.get(str(order_id)) if isinstance(pending, dict) else None
+    dr = rec.get("decision_record") or {} if rec else {}
+
+    # A-3 D1/D3: klasyfikację buduje jeden owner kontraktu, panel dostarcza
+    # wyłącznie exact assignment. Snapshot flagi/kontekstu jest receipt-bound,
+    # więc retry po flipie ani po nowszej decyzji nie zmieni pary uczącej.
+    _a3_enabled = (
+        bool(_context_by_receipt.get("always_propose_enabled", False))
+        if _context_by_receipt is not None
+        else decision_flag("ENABLE_ALWAYS_PROPOSE")
+    )
+    # KOORDYNATOR_ID jest technicznym holdem, nie finalną odpowiedzią D1.
+    # Hold omija cały opcjonalny tor A-3 (także jego import), aby żaden jego
+    # błąd nie mógł odciąć kanonicznego legacy writera PANEL_OVERRIDE (F5).
+    _a3_coordinator_hold = bool(
+        _a3_enabled and (
+            not panel_courier_id
+            or str(panel_courier_id) == str(KOORDYNATOR_ID)
+        )
+    )
+    if _a3_enabled and not _a3_coordinator_hold:
+        try:
+            from dispatch_v2.core import always_propose_learning as _a3_learning
+
+            _a3_context = (
+                _context_by_receipt.get("always_propose_decision_context")
+                if _context_by_receipt is not None
+                else None
+            )
+            if (
+                not isinstance(_a3_context, dict)
+                and _context_by_receipt is None
+            ):
+                _a3_context = _a3_learning.peek_decision(order_id)
+            if (
+                not isinstance(_a3_context, dict)
+                and isinstance(dr, dict)
+                and dr
+            ):
+                _a3_context = _a3_learning.decision_context_from_record(dr)
+            if (
+                not isinstance(_a3_context, dict)
+                and _context_by_receipt is not None
+            ):
+                _a3_assign_direct = _context_by_receipt.get("assign_direct")
+                _a3_direct_decision = (
+                    _a3_assign_direct.get("decision")
+                    if isinstance(_a3_assign_direct, dict) else None
+                )
+                if isinstance(_a3_direct_decision, dict):
+                    _a3_context = _a3_learning.decision_context_from_record(
+                        _a3_direct_decision
+                    )
+            if isinstance(_a3_context, dict):
+                _a3_record = _a3_learning.build_learning_record(
+                    context=_a3_context,
+                    actual_courier_id=panel_courier_id,
+                    assigned_at=(
+                        _context_by_receipt.get("captured_at")
+                        if _context_by_receipt is not None else now_iso()
+                    ),
+                    assigned_by=(
+                        _context_by_receipt.get("assigned_by")
+                        if _context_by_receipt is not None
+                        else _a3_learning.capture_assigned_by(
+                            order_id,
+                            now_iso(),
+                        )
+                    ),
+                    panel_source=source,
+                    assignment_lifecycle_event_id=lifecycle_event_id,
+                )
+                if _a3_record is not None:
+                    _append_learning_record(
+                        _a3_record,
+                        lifecycle_event_id,
+                        _raise_on_error=_raise_on_error,
+                    )
+                    try:
+                        _a3_learning.acknowledge_from_learning(_a3_record)
+                    except Exception as exc:
+                        _log.warning(
+                            "A3 context acknowledge fail oid=%s: %s",
+                            order_id,
+                            type(exc).__name__,
+                        )
+                    _log.info(
+                        "A3_LEARNING oid=%s type=%s actual=%s src=%s",
+                        order_id,
+                        _a3_record.get("learning_event_type"),
+                        panel_courier_id,
+                        source,
+                    )
+                    return
+                # Exact receipt A-3 jest nowszą prawdą niż mutable/stary
+                # pending_proposals. Brak D1/D3 oznacza zgodność albo klasę
+                # poza learningiem; nie wolno wtedy spaść do legacy override
+                # i sfabrykować rozjazdu z innej decyzji.
+                _seal_no_panel_learning(
+                    lifecycle_event_id,
+                    order_id,
+                    _raise_on_error=_raise_on_error,
+                )
+                return
+        except Exception as e:
+            _log.warning(
+                "A3 learning write fail oid=%s: %s: %s",
+                order_id,
+                type(e).__name__,
+                e,
+            )
+            if _raise_on_error:
+                raise
+            return
+
     if not rec:
         _seal_no_panel_learning(
             lifecycle_event_id, order_id, _raise_on_error=_raise_on_error
         )
         return
 
-    dr = rec.get("decision_record") or {}
     best = dr.get("best") or {}
     proposed_courier_id = str(best.get("courier_id") or "")
     proposed_score = best.get("score")
@@ -914,9 +1036,11 @@ def _capture_panel_learning_context(order_id: str) -> dict:
     """
     import json
 
+    captured_at = now_iso()
+    always_propose_enabled = decision_flag("ENABLE_ALWAYS_PROPOSE")
     context = {
         "schema_version": 3,
-        "captured_at": now_iso(),
+        "captured_at": captured_at,
         # Threshold jest czescia klasyfikacji tego exact ASSIGNED. Retry po
         # restarcie nie moze zmienic AGREE/NONE tylko dlatego, ze config procesu
         # zostal zmieniony po utrwaleniu receiptu.
@@ -930,6 +1054,42 @@ def _capture_panel_learning_context(order_id: str) -> dict:
         "pending_record": None,
         "assign_direct": None,
     }
+    if always_propose_enabled:
+        # A-3 ma wspólny kill-switch. Snapshot w durable receipt gwarantuje,
+        # że retry po późniejszym flipie zachowuje semantykę exact assignmentu.
+        context.update({
+            "schema_version": 4,
+            "always_propose_enabled": True,
+            "always_propose_decision_context": None,
+            "always_propose_context_status": "absent",
+            "assigned_by": None,
+        })
+        try:
+            from dispatch_v2.core import always_propose_learning as _a3_learning
+
+            a3_context = _a3_learning.peek_decision(order_id)
+            if isinstance(a3_context, dict):
+                context["always_propose_decision_context"] = a3_context
+                context["always_propose_context_status"] = "captured"
+            context["assigned_by"] = _a3_learning.capture_assigned_by(
+                order_id,
+                captured_at,
+            )
+        except Exception as exc:
+            # Instrument log-only nie może zablokować canonical assignment.
+            context["always_propose_context_status"] = "unavailable"
+            context["assigned_by"] = {
+                "status": "UNKNOWN",
+                "actor_id": None,
+                "provenance": "coordinator_assign_audit",
+                "reason": f"capture_error:{type(exc).__name__}",
+            }
+            _log.warning(
+                "A3_LEARNING snapshot fail-safe oid=%s: %s: %s",
+                order_id,
+                type(exc).__name__,
+                exc,
+            )
     try:
         with open(_PENDING_PROPOSALS_PATH, "r", encoding="utf-8") as f:
             pending = json.load(f)
@@ -1057,6 +1217,26 @@ def _check_panel_agree(
             return
         if not panel_courier_id or str(panel_courier_id) == str(KOORDYNATOR_ID):
             return  # hold na Koordynatora = nie-decyzja (edge a, belt-and-suspenders)
+
+        # Exact context A-3 rozstrzyga D1/D3 przed legacy pending. Bez tego
+        # starsza propozycja, której wpis nie został jeszcze usunięty, mogłaby
+        # zapisać PANEL_AGREE i first-wins projekcją zablokować prawdziwe
+        # rozwiązanie eskalacji albo OWNER_EXCEPTION.
+        if (
+            isinstance(_context_by_receipt, dict)
+            and _context_by_receipt.get("always_propose_enabled") is True
+            and isinstance(
+                _context_by_receipt.get("always_propose_decision_context"),
+                dict,
+            )
+        ):
+            from dispatch_v2.core import always_propose_learning as _a3_learning
+
+            if _a3_learning.resolution_kind(
+                _context_by_receipt["always_propose_decision_context"],
+                panel_courier_id,
+            ) is not None:
+                return
 
         if _context_by_receipt is not None:
             if not isinstance(_context_by_receipt, dict):

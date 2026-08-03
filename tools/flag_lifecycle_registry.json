@@ -3376,8 +3376,15 @@
    ],
    "consumers": [
     "dispatch_v2/common.py",
+    "dispatch_v2/core/always_propose.py",
+    "dispatch_v2/core/always_propose_learning.py",
+    "dispatch_v2/core/learning_actor.py",
     "dispatch_v2/core/proposal_output.py",
-    "dispatch_v2/shadow_dispatcher.py"
+    "dispatch_v2/core/selection.py",
+    "dispatch_v2/lifecycle_downstream.py",
+    "dispatch_v2/panel_watcher.py",
+    "dispatch_v2/shadow_dispatcher.py",
+    "dispatch_v2/tools/decision_episode_v1.py"
    ],
    "curated_at": "2026-08-02",
    "current_snapshot": {
@@ -3393,15 +3400,15 @@
    "lifecycle": "planned",
    "lifecycle_seeded": false,
    "name": "ENABLE_ALWAYS_PROPOSE",
-   "notes": "A-3 always-propose (OD-1). Klasyfikator core/proposal_output.py; serializer shadow log-only za flagą; shadow-first, flip za ACK ownera.",
+   "notes": "A-3 always-propose D-A3-1/2/3. Klasyfikator core/proposal_output.py; nested no_solo best-of-worst bez mutacji verdict/best; kompaktowy context index łączy decyzję z późniejszym assignmentem, a istniejący learning_log jest jedynym strumieniem par D1/D3. Całość log-only/shadow, flip za ACK ownera.",
    "owner": {
     "business": "Adrian",
-    "service": "dispatch-shadow.service"
+    "service": "dispatch-shadow.service + dispatch-panel-watcher.service"
    },
    "removal_condition": "aktywacja lub retire wg roadmapy (ACK Adrian)",
    "review_date": "2026-08-10",
-   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
-   "source_of_truth": "common.py-const",
+   "rollback": "ustaw ENABLE_ALWAYS_PROPOSE=false w kanonicznym flags.json (hot rollback); restart tylko jeśli fingerprint nie odświeży się i wyłącznie ZA ACK",
+   "source_of_truth": "flags.json + common.py fallback false",
    "twin_of": [],
    "worlds": [
     "engine"

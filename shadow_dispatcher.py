@@ -1261,8 +1261,23 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
     # = telegram (parytet _is_hard35_owner_alert), panel, konsola, upsert (A-4).
     if C.decision_flag("ENABLE_ALWAYS_PROPOSE"):
         from dispatch_v2.core import proposal_output as _po
-        out["proposal_output_type"] = _po.output_label(result)
+        _proposal_output_type = _po.output_label(result)
+        out["proposal_output_type"] = _proposal_output_type
         out["proposal_output_silent"] = _po.is_silent_nothing(result)
+        if _proposal_output_type == _po.COORDINATOR_ESCALATION:
+            _escalation_class = _po.coordinator_escalation_class(result)
+            out["coordinator_escalation_class"] = (
+                _escalation_class.value
+                if _escalation_class is not None
+                else _po.CoordinatorEscalationClass.UNKNOWN.value
+            )
+        _best_of_worst = getattr(
+            result, "always_propose_best_of_worst", None
+        )
+        if isinstance(_best_of_worst, dict):
+            # Nested, PII-free podpowiedź no_solo. Nie zastępuje ``best`` i nie
+            # jest czytana przez żaden tor wykonawczy.
+            out["proposal_best_of_worst"] = _json_safe(_best_of_worst)
     if out["best"] is not None:
         _propagate_prefixed_metrics(out["best"], best_m)
     return out
@@ -2324,6 +2339,7 @@ def _tick(shadow_log_path: str, meta: Optional[dict], *,
                     _preledger_effects_ms, 3)
                 _ledger_append_started_ns = time.perf_counter_ns()
             _append_decision(shadow_log_path, record)
+
             if _stage_timing_on:
                 if _attach_tick_snapshot:
                     _tick_snapshot_logged = True
@@ -2333,6 +2349,28 @@ def _tick(shadow_log_path: str, meta: Optional[dict], *,
                 ) / 1_000_000.0
                 # Append duration istnieje dopiero w post-append sidecarze.
                 _postledger_started_ns = _ledger_append_ended_ns
+
+            # A-3 D1/D3: pełny shadow record jest najpierw trwale opublikowany,
+            # potem powstaje jego kompaktowy causal pointer, a dopiero niżej
+            # pending proposal staje się widoczny człowiekowi. Instrument jest
+            # log-only: awaria indeksu nie może zmienić verdictu ani zablokować
+            # starego toru publikacji. OFF = zero importu i zero I/O.
+            try:
+                if (
+                    C.decision_flag("ENABLE_ALWAYS_PROPOSE")
+                    and record.get("proposal_output_type") is not None
+                ):
+                    from dispatch_v2.core import (
+                        always_propose_learning as _a3_learning,
+                    )
+                    _a3_learning.remember_decision(record)
+            except Exception as _a3_context_exc:
+                _log.warning(
+                    "A3 decision-context write fail-safe oid=%s: %s: %s",
+                    oid,
+                    type(_a3_context_exc).__name__,
+                    _a3_context_exc,
+                )
 
             # Opcja B: zbierz PROPOSE do pending_proposals (zapis po pętli, atomowo)
             if _pp_write and record.get("verdict") == "PROPOSE" and oid is not None:
