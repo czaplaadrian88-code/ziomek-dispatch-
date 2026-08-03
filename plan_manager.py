@@ -17,15 +17,15 @@ from __future__ import annotations
 
 import copy
 import fcntl
-import json
 import logging
-import os
-import tempfile
 import threading
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+from dispatch_v2 import common as C
+from dispatch_v2 import state_persistence as _state_store
 
 _log = logging.getLogger("plan_manager")
 
@@ -35,6 +35,17 @@ CANONICAL_PLANS_FILE = Path(
 PLANS_FILE = CANONICAL_PLANS_FILE
 LOCK_FILE = Path("/root/.openclaw/workspace/dispatch_state/courier_plans.lock")
 SCHEMA_VERSION = 1
+# New namespace is far above every legacy counter while remaining exactly
+# representable by JavaScript/JSON consumers (IEEE-754 safe integer contract).
+_VERSION_EPOCH_FLOOR = 1 << 52
+_VERSION_MAX_SAFE = (1 << 53) - 1
+_VERSION_HWM_SCHEMA = "courier_plans.version_hwm.v1"
+
+
+class PlanVersionStateError(RuntimeError):
+    """Persistent version epoch/counter is missing, corrupt, or behind main."""
+
+    pass
 
 # Procesowy, monotoniczny licznik odrzuconych zapisow CAS. Dwa procesy
 # (panel-watcher i plan-recheck) publikuja delte we wlasnych podsumowaniach;
@@ -79,148 +90,257 @@ def _locked(exclusive: bool):
 def ensure_storage_durable(path: Optional[Path] = None) -> None:
     """Utrwal rename courier_plans przed zamknieciem durable receiptu."""
     target = PLANS_FILE if path is None else Path(path)
-    dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-    dir_fd = os.open(str(target.parent), dir_flags)
-    try:
-        os.fsync(dir_fd)
-    finally:
-        os.close(dir_fd)
+    _state_store.fsync_parent(target)
 
 
-def _atomic_write(path: Path, data: Any) -> None:
-    """Write JSON atomically and durably: fsync file + rename + fsync dir."""
-    _ensure_parent()
-    fd, tmp_name = tempfile.mkstemp(
-        prefix=path.name + ".",
-        suffix=".tmp",
-        dir=str(path.parent),
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(data, fh, ensure_ascii=False, separators=(",", ":"))
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp_name, path)
-        ensure_storage_durable(path)
-    except Exception as _e:
-        # A1: log path PRZED re-raise żeby caller widział co fail'owało.
-        # Re-raise pattern OK (cleanup tmpfile + propagate do callera).
-        _log.error(f"atomic write fail path={path} ({type(_e).__name__}: {_e})")
-        try:
-            os.unlink(tmp_name)
-        except FileNotFoundError:
-            pass
-        raise
-
-
-# ─── A-2 (2026-08-02): recovery przy korupcji courier_plans.json ─────────────
-# PROBLEM: korupcja pliku planów CICHO stawała się ``{}`` (pusty plan) → silnik
-# gubił CAŁY plan floty i re-planował od zera, bez śladu (utrata stanu/decyzji).
-# FIX U ŹRÓDŁA — jeden kanoniczny owner kontraktu ładowania (`_read_raw`), za
-# flagą ENABLE_PLAN_CORRUPT_RAISE (ETAP4, shadow-first, DEFAULT OFF):
-#   1) każdy udany zapis utrwala kopię ``.prev`` (ostatni DOBRY plan);
-#   2) odczyt uszkodzonego pliku ODZYSKUJE z ``.prev`` zamiast zwracać ``{}``;
-#   3) gdy ``.prev`` też brak/uszkodzony → RAISE (nie ciche ``{}``) — silnik nie
-#      resetuje po cichu całego stanu floty.
-# Ścieżka ``.prev`` jest POCHODNA od PLANS_FILE → monkeypatch PLANS_FILE
-# (testy / HERMETIC-GUARD) przekierowuje też backup, bez osobnej izolacji.
-# CAS „nie nadpisać nowszego" = ISTNIEJĄCY per-courier ``expected_version``
-# (zachowany przez recovery: token wersji pochodzi z .prev, stary zapis → konflikt)
-# + serializacja exclusive-lock (writers nie przeplatają się; .prev pisany pod tym
-# samym lockiem co główny plik → monotoniczny). NIE dokładamy drugiego mechanizmu.
+# ─── A-2 REWORK (2026-08-03): corruption + monotonic anti-ABA ───────────────
+# Persistence mechanics live only in state_persistence. This module owns the
+# plan-domain decision: normal guarded reads may recover, explicit strict reads
+# never recover, and every epoch token is reserved in a durable HWM before main.
 
 
 def _corrupt_guard_on() -> bool:
-    """EFEKTYWNY stan flagi ENABLE_PLAN_CORRUPT_RAISE (flags.json → stała → False).
-    Lazy import common (jak _perf_lazy_on) — plan_manager zostaje pure lib (bez
-    importu dispatch_pipeline/panel_watcher). Fail-safe False = zachowanie legacy."""
+    """Effective hot flag; import is module-level, never lazy under plan lock."""
     try:
-        from dispatch_v2 import common as _C
-        return bool(_C.decision_flag("ENABLE_PLAN_CORRUPT_RAISE"))
+        return bool(C.decision_flag("ENABLE_PLAN_CORRUPT_RAISE"))
     except Exception:
         return False
 
 
-def _prev_path() -> Path:
-    """Backup ostatniego dobrego planu — ścieżka POCHODNA od PLANS_FILE."""
-    return PLANS_FILE.with_name(PLANS_FILE.name + ".prev")
+def version_hwm_path() -> Path:
+    """Return the durable anti-ABA sidecar paired with ``PLANS_FILE``."""
+    return _state_store.sidecar_path(PLANS_FILE, ".version_hwm")
 
 
-def _read_prev() -> Optional[Dict[str, Any]]:
-    """Odczytaj ``.prev``. None gdy brak / nie-JSON / nie-obiekt (bez recovery)."""
-    prev = _prev_path()
-    try:
-        if not prev.exists():
-            return None
-        with open(prev, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-    except (json.JSONDecodeError, OSError) as e:
-        _log.error(f"courier_plans.prev unusable ({type(e).__name__}: {e})")
-        return None
-    if not isinstance(data, dict):
-        _log.error("courier_plans.prev is not an object; cannot recover")
-        return None
-    return data
-
-
-def _snapshot_prev(data: Dict[str, Any]) -> None:
-    """Utrwal świeżo zapisany DOBRY stan jako ``.prev`` (źródło recovery).
-    Best-effort: błąd backupu NIE może wywrócić udanego zapisu głównego pliku."""
-    try:
-        _atomic_write(_prev_path(), data)
-    except Exception as e:  # defense-in-depth: .prev to backup, nie critical path
-        _log.warning(f"courier_plans.prev snapshot fail ({type(e).__name__}: {e})")
-
-
-def _read_raw(*, _raise_on_corrupt: Optional[bool] = None) -> Dict[str, Any]:
-    """Load entire plans dict. Must be called under shared or exclusive lock.
-
-    A-2 (2026-08-02, flaga ENABLE_PLAN_CORRUPT_RAISE, shadow-first DEFAULT OFF):
-    korupcja pliku NIE może już cicho stać się ``{}``. Kolejność przy korupcji:
-      1) flaga ON → recovery z ``.prev`` (ostatni dobry plan), jeśli zdrowy;
-      2) w przeciwnym razie honoruj efektywne ``_raise_on_corrupt`` → RAISE
-         (ten sam typ wyjątku co dotąd) zamiast cichego ``{}``.
-
-    ``_raise_on_corrupt``: True/False = jawny kontrakt callera (strict-read /
-    opt-out zachowane bajt-w-bajt). None (domyślne) = wartość z flagi: ON→raise,
-    OFF→legacy ``{}``. **Flaga OFF ⇒ zachowanie identyczne jak przed A-2.**
-    """
-    guard_on = _corrupt_guard_on()
-    raise_eff = guard_on if _raise_on_corrupt is None else _raise_on_corrupt
-    if not PLANS_FILE.exists():
-        return {}
-    corrupt_exc: Optional[Exception] = None
-    try:
-        with open(PLANS_FILE, "r", encoding="utf-8") as fh:
-            data = json.load(fh)
-        if isinstance(data, dict):
-            return data
-        _log.warning("courier_plans.json is not an object; treating as corrupt")
-        corrupt_exc = ValueError("courier_plans.json is not an object")
-    except json.JSONDecodeError as e:
-        _log.error(f"courier_plans.json corrupt: {e}")
-        corrupt_exc = e
-    # --- korupcja: najpierw recovery z .prev (flaga ON), potem raise vs {} ---
-    if guard_on:
-        recovered = _read_prev()
-        if recovered is not None:
-            _log.error(
-                "PLAN_CORRUPT_RECOVERED courier_plans.json uszkodzony — odzyskano "
-                f"z .prev (ostatni dobry plan); przyczyna={type(corrupt_exc).__name__}"
+def _max_plan_version(plans: Dict[str, Any]) -> int:
+    maximum = 0
+    for cid, plan in plans.items():
+        if not isinstance(plan, dict):
+            continue
+        value = plan.get("plan_version", 0)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise PlanVersionStateError(
+                f"invalid plan_version cid={cid!r} value={value!r}"
             )
-            return recovered
-    if raise_eff:
-        raise corrupt_exc
-    return {}
+        if value > _VERSION_MAX_SAFE:
+            raise PlanVersionStateError(
+                f"plan_version exceeds JSON-safe range cid={cid!r}"
+            )
+        maximum = max(maximum, value)
+    return maximum
 
 
-def _write_raw(data: Dict[str, Any]) -> None:
-    """Write entire plans dict. Must be called under exclusive lock."""
-    _atomic_write(PLANS_FILE, data)
-    # A-2 (2026-08-02): utrwal ostatni DOBRY plan do recovery (flaga ON). Pod tym
-    # samym exclusive lockiem co zapis głównego pliku → .prev monotoniczny.
-    if _corrupt_guard_on():
-        _snapshot_prev(data)
+def _existing_epoch_version(plans: Dict[str, Any]) -> Optional[int]:
+    """Find an already-active epoch without validating legacy OFF payloads."""
+    maximum: Optional[int] = None
+    for plan in plans.values():
+        if not isinstance(plan, dict):
+            continue
+        value = plan.get("plan_version", 0)
+        if isinstance(value, bool) or not isinstance(value, int):
+            continue
+        if value >= _VERSION_EPOCH_FLOOR:
+            maximum = value if maximum is None else max(maximum, value)
+    return maximum
+
+
+def _read_version_hwm() -> Optional[int]:
+    path = version_hwm_path()
+    try:
+        payload = _state_store.read_json_object(path).data
+    except FileNotFoundError:
+        return None
+    if payload.get("schema") != _VERSION_HWM_SCHEMA:
+        raise PlanVersionStateError(f"invalid version HWM schema path={path}")
+    value = payload.get("last_issued")
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise PlanVersionStateError(f"invalid version HWM value path={path}")
+    if value < _VERSION_EPOCH_FLOOR:
+        raise PlanVersionStateError(f"version HWM below epoch floor path={path}")
+    if value > _VERSION_MAX_SAFE:
+        raise PlanVersionStateError(f"version HWM exceeds JSON-safe range path={path}")
+    return value
+
+
+def _write_version_hwm(value: int) -> None:
+    if value > _VERSION_MAX_SAFE:
+        raise PlanVersionStateError("plan version namespace exhausted")
+    _state_store.atomic_write_json(
+        version_hwm_path(),
+        {"schema": _VERSION_HWM_SCHEMA, "last_issued": value},
+        backup_previous=False,
+        separators=(",", ":"),
+        ensure_directory_durable=ensure_storage_durable,
+        logger=_log,
+    )
+
+
+def _validate_main_epoch(plans: Dict[str, Any]) -> None:
+    observed = _max_plan_version(plans)
+    hwm = _read_version_hwm()
+    if hwm is None:
+        if observed >= _VERSION_EPOCH_FLOOR:
+            raise PlanVersionStateError(
+                "epoch plan exists but durable version HWM is missing"
+            )
+        return
+    if observed > hwm:
+        raise PlanVersionStateError(
+            f"plan version {observed} exceeds durable HWM {hwm}"
+        )
+
+
+def _rebase_recovered_versions(plans: Dict[str, Any]) -> Dict[str, Any]:
+    """Give every recovered plan a deterministic token newer than lost main.
+
+    Every guarded write reserves HWM before main. Therefore any token from the
+    lost main is <= HWM. Synthetic recovery tokens are strictly above it and
+    cannot equal an old CAS token (ABA). They are persisted on the next write.
+    """
+    observed = _max_plan_version(plans)
+    hwm = _read_version_hwm()
+    if hwm is None:
+        if observed >= _VERSION_EPOCH_FLOOR:
+            raise PlanVersionStateError(
+                "recovered epoch plan exists but durable HWM is missing"
+            )
+        hwm = _VERSION_EPOCH_FLOOR
+    elif observed > hwm:
+        raise PlanVersionStateError(
+            f"recovered predecessor version {observed} exceeds HWM {hwm}"
+        )
+    rebased = copy.deepcopy(plans)
+    next_value = max(hwm, _VERSION_EPOCH_FLOOR)
+    for cid in sorted(rebased, key=str):
+        plan = rebased[cid]
+        if not isinstance(plan, dict):
+            continue
+        next_value += 1
+        if next_value > _VERSION_MAX_SAFE:
+            raise PlanVersionStateError("plan version namespace exhausted")
+        plan["plan_version"] = next_value
+    return rebased
+
+
+def _read_raw_result(
+    *,
+    guard_on: Optional[bool] = None,
+    _raise_on_corrupt: Optional[bool] = None,
+) -> _state_store.JsonObjectRead:
+    """Read plans through the canonical store; caller must hold plan lock."""
+    enabled = _corrupt_guard_on() if guard_on is None else bool(guard_on)
+    strict = _raise_on_corrupt is True
+    try:
+        result = _state_store.read_json_object(
+            PLANS_FILE,
+            recover_previous=enabled and not strict,
+            allow_bootstrap=True,
+            legacy_empty=not enabled and not strict,
+        )
+    except (OSError, ValueError) as exc:
+        _log.error(
+            "courier_plans read failed path=%s (%s: %s)",
+            PLANS_FILE,
+            type(exc).__name__,
+            exc,
+        )
+        raise
+    if result.source == "previous":
+        result = _state_store.JsonObjectRead(
+            data=_rebase_recovered_versions(result.data),
+            source=result.source,
+            main_error=result.main_error,
+        )
+        _log.error(
+            "PLAN_CORRUPT_RECOVERED path=%s cause=%s; versions rebased above HWM",
+            PLANS_FILE,
+            type(result.main_error).__name__,
+        )
+    elif result.source == "main" and enabled:
+        _validate_main_epoch(result.data)
+    return result
+
+
+def _read_raw(
+    *,
+    guard_on: Optional[bool] = None,
+    _raise_on_corrupt: Optional[bool] = None,
+) -> Dict[str, Any]:
+    return _read_raw_result(
+        guard_on=guard_on,
+        _raise_on_corrupt=_raise_on_corrupt,
+    ).data
+
+
+def _next_plan_version(
+    plans: Dict[str, Any],
+    current_version: int,
+    *,
+    guard_on: bool,
+) -> int:
+    """Allocate once for every plan mutation; reserve durable HWM first."""
+    hwm = _read_version_hwm()
+    if not guard_on and hwm is None:
+        epoch_version = _existing_epoch_version(plans)
+        if epoch_version is None:
+            # Exact feature-OFF legacy path: do not add validation/coercion of
+            # unrelated historical payloads and preserve native ``+ 1``.
+            return current_version + 1
+        raise PlanVersionStateError(
+            "cannot allocate: epoch plan exists but HWM is missing"
+        )
+    observed = _max_plan_version(plans)
+    if hwm is None:
+        if observed >= _VERSION_EPOCH_FLOOR:
+            # _read_raw validates a real main before returning. Therefore this
+            # guarded, HWM-less epoch object can only be a synthetic recovery
+            # view; reserve its maximum before allocating the mutation token.
+            hwm = observed
+        else:
+            hwm = _VERSION_EPOCH_FLOOR
+    next_value = max(hwm, observed, _VERSION_EPOCH_FLOOR) + 1
+    if next_value > _VERSION_MAX_SAFE:
+        raise PlanVersionStateError("plan version namespace exhausted")
+    _write_version_hwm(next_value)
+    return next_value
+
+
+def _ensure_hwm_covers_write(data: Dict[str, Any], *, guard_on: bool) -> None:
+    """Reserve synthetic recovery tokens before any version-neutral write."""
+    hwm = _read_version_hwm()
+    if not guard_on and hwm is None:
+        if _existing_epoch_version(data) is None:
+            return
+        raise PlanVersionStateError(
+            "cannot write epoch plan while durable HWM is missing"
+        )
+    observed = _max_plan_version(data)
+    if hwm is None:
+        if observed < _VERSION_EPOCH_FLOOR:
+            return
+        _write_version_hwm(observed)
+        return
+    if observed > hwm:
+        if not guard_on:
+            raise PlanVersionStateError(
+                f"cannot advance HWM {hwm} to unverified plan {observed}"
+            )
+        _write_version_hwm(observed)
+
+
+def _write_raw(data: Dict[str, Any], *, guard_on: Optional[bool] = None) -> None:
+    """Write plans through the canonical owner under the exclusive plan lock."""
+    enabled = _corrupt_guard_on() if guard_on is None else bool(guard_on)
+    _ensure_hwm_covers_write(data, guard_on=enabled)
+    _state_store.atomic_write_json(
+        PLANS_FILE,
+        data,
+        backup_previous=enabled,
+        unreadable_main_policy="recover" if enabled else "replace",
+        separators=(",", ":"),
+        ensure_directory_durable=ensure_storage_durable,
+        logger=_log,
+    )
     # perf-lazy write-through (03.07): unieważnij read-cache W TYM procesie
     # natychmiast po zapisie. Klucz mtime NIE wystarcza sam: dwa zapisy w tym
     # samym ticku zegara jądra dają IDENTYCZNY st_mtime_ns (a size bywa równy)
@@ -234,9 +354,9 @@ def _write_raw(data: Dict[str, Any]) -> None:
 
 # ─── FALA perf-lazy (2026-07-02, finding E audytu 2.0): read-cache planów ───
 # Problem: load_plan czytany PER KANDYDAT (ThreadPoolExecutor) → N× pełny
-# `_read_raw` (open+json.load) POD fcntl-lockiem → wątki serializują się na
+# `_read_raw` (parse JSON) POD fcntl-lockiem → wątki serializują się na
 # lockfile (kontencja rośnie w peak). Cache po (mtime_ns, size, ino) NAD lockiem:
-# ciepły hit pomija fcntl-lock+open+json.load. Używany WYŁĄCZNIE przez ścieżki
+# ciepły hit pomija fcntl-lock+parse. Używany WYŁĄCZNIE przez ścieżki
 # READ (load_plan/load_plans), które zwracają deepcopy → caller nigdy nie mutuje
 # współdzielonego obiektu cache. WRITERS (save/invalidate/advance/insert) dalej
 # wołają surowy `_read_raw()` pod exclusive lock i mutują świeży parse.
@@ -251,50 +371,122 @@ _perf_plans_cache = {"key": None, "data": None}
 _perf_plans_lock = threading.Lock()
 
 
+def _state_file_fingerprint(path: Path) -> tuple[Any, ...]:
+    try:
+        stat = path.stat()
+    except FileNotFoundError:
+        return ("missing",)
+    return (stat.st_mtime_ns, stat.st_size, stat.st_ino)
+
+
 def _perf_lazy_on() -> bool:
     """EFEKTYWNY stan flagi perf-lazy (flags.json → stała common → False)."""
     try:
-        from dispatch_v2 import common as _C
-        return bool(_C.flag("ENABLE_PERF_LAZY_MEMBERS",
-                            getattr(_C, "ENABLE_PERF_LAZY_MEMBERS", False)))
+        return bool(C.flag("ENABLE_PERF_LAZY_MEMBERS",
+                           getattr(C, "ENABLE_PERF_LAZY_MEMBERS", False)))
     except Exception:
         return False
 
 
-def _read_raw_shared() -> Dict[str, Any]:
+def _read_raw_shared(*, guard_on: Optional[bool] = None) -> Dict[str, Any]:
     """mtime-keyed cache parsowanego pliku planów (perf-lazy). Zwraca WSPÓLNY
     obiekt — TYLKO dla ścieżek READ, które deepcopy'ują przed zwrotem. Ciepły hit
-    pomija fcntl-lock + open + json.load."""
+    pomija fcntl-lock + parse JSON."""
+    enabled = _corrupt_guard_on() if guard_on is None else bool(guard_on)
     try:
         st = PLANS_FILE.stat()
-        # st_ino w kluczu (03.07): _atomic_write robi os.replace = NOWY inode
+        hwm_key: Optional[tuple[Any, ...]] = None
+        prev_key: Optional[tuple[Any, ...]] = None
+        if enabled:
+            hwm_key = _state_file_fingerprint(version_hwm_path())
+            prev_key = _state_file_fingerprint(
+                _state_store.previous_path(PLANS_FILE)
+            )
+        # st_ino w kluczu (03.07): canonical writer robi rename = NOWY inode
         # przy każdym zapisie → klucz zmienia się nawet gdy dwa zapisy trafią
-        # w ten sam tick zegara (identyczny mtime_ns) i mają równy size.
-        key = (st.st_mtime_ns, st.st_size, st.st_ino)
+        # w ten sam tick zegara (identyczny mtime_ns) i mają równy size. Guard
+        # ON obejmuje wszystkie dodatkowe wejścia: HWM i predecessor. Warm
+        # cache nie może ukryć ich utraty ani zmiany podczas recovery.
+        key = (
+            enabled,
+            st.st_mtime_ns,
+            st.st_size,
+            st.st_ino,
+            hwm_key,
+            prev_key,
+        )
     except FileNotFoundError:
-        return {}
+        if not enabled:
+            return {}
+        with _locked(exclusive=False):
+            return _read_raw(guard_on=enabled)
     with _perf_plans_lock:
         if _perf_plans_cache["key"] == key and _perf_plans_cache["data"] is not None:
             return _perf_plans_cache["data"]
     with _locked(exclusive=False):
-        data = _read_raw()
+        data = _read_raw(guard_on=enabled)
     with _perf_plans_lock:
         _perf_plans_cache["key"] = key
         _perf_plans_cache["data"] = data
     return data
 
 
+def snapshot_for_recording(
+    courier_ids: Optional[set[str]] = None,
+) -> tuple[Dict[str, Any], Optional[Dict[str, Any]]]:
+    """Read plans, and under A-2 also their HWM, for world-record.
+
+    Feature OFF preserves the historical lock-free strict file read and emits
+    no new sidecar field. Feature ON must not pair a newer main with an older
+    HWM while a writer advances both files, so it snapshots both under the one
+    shared plan lock. Returned values are detached copies.
+    """
+    guard_on = _corrupt_guard_on()
+    if not guard_on:
+        # Do not add lock contention or HWM semantics to the default-OFF path.
+        # world_record already owns the outer fail-soft policy for this strict
+        # direct read, matching its pre-A-2 `_read_json_safe` behaviour.
+        plans = _state_store.read_json_object(PLANS_FILE).data
+        hwm = None
+    else:
+        with _locked(exclusive=False):
+            plans = _read_raw(guard_on=True)
+            hwm_value = _read_version_hwm()
+            observed = _max_plan_version(plans)
+            if observed >= _VERSION_EPOCH_FLOOR and (
+                hwm_value is None or observed > hwm_value
+            ):
+                raise PlanVersionStateError(
+                    "cannot record plans without a covering durable HWM"
+                )
+            hwm = (
+                None
+                if hwm_value is None
+                else {"schema": _VERSION_HWM_SCHEMA, "last_issued": hwm_value}
+            )
+    if courier_ids is not None:
+        allowed = {str(cid) for cid in courier_ids}
+        plans = {
+            str(cid): value for cid, value in plans.items()
+            if str(cid) in allowed
+        }
+    return copy.deepcopy(plans), copy.deepcopy(hwm)
+
+
 # ---- public API ----
 
 def load_plans(*, _raise_on_corrupt: Optional[bool] = None) -> Dict[str, Any]:
     """Load all plans (read-only copy). Shared lock (perf-lazy: mtime-cache)."""
+    guard_on = _corrupt_guard_on()
     if _raise_on_corrupt:
         with _locked(exclusive=False):
-            return _read_raw(_raise_on_corrupt=True)
+            return _read_raw(
+                guard_on=guard_on, _raise_on_corrupt=True
+            )
     if _perf_lazy_on():
-        return copy.deepcopy(_read_raw_shared())
+        return copy.deepcopy(_read_raw_shared(guard_on=guard_on))
     with _locked(exclusive=False):
-        return _read_raw()
+        return _read_raw(guard_on=guard_on)
 
 
 def load_plan(
@@ -324,18 +516,23 @@ def load_plan(
     Returns None if no plan or plan invalidated.
     """
     cid = str(courier_id)
+    guard_on = _corrupt_guard_on()
     _lazy = _perf_lazy_on() and not _raise_on_corrupt
     if _raise_on_corrupt:
         # Durable callback musi odczytać świeży store i odróżnić brak planu od
         # uszkodzonego JSON-u. Cache ani legacy fallback ``{}`` nie mogą wtedy
         # pozwolić na przedwczesne zamknięcie receiptu.
         with _locked(exclusive=False):
-            plans = _read_raw(_raise_on_corrupt=True)
+            plans = _read_raw(
+                guard_on=guard_on, _raise_on_corrupt=True
+            )
     elif _lazy:
-        plans = _read_raw_shared()  # WSPÓLNY — tylko czytamy, zwracamy deepcopy
+        plans = _read_raw_shared(
+            guard_on=guard_on
+        )  # WSPÓLNY — tylko czytamy, zwracamy deepcopy
     else:
         with _locked(exclusive=False):
-            plans = _read_raw()
+            plans = _read_raw(guard_on=guard_on)
     plan = plans.get(cid)
     if plan is None:
         return None
@@ -403,12 +600,17 @@ def save_plan(
     """
     cid = str(courier_id)
     _validate_plan_body(plan_body)
+    guard_on = _corrupt_guard_on()
     with _locked(exclusive=True):
-        plans = _read_raw(_raise_on_corrupt=_raise_on_corrupt)
+        plans = _read_raw(
+            guard_on=guard_on, _raise_on_corrupt=_raise_on_corrupt
+        )
         current = plans.get(cid)
         prev_version = (current or {}).get("plan_version", 0)
         _check_expected_version(cid, expected_version, prev_version)
-        new_version = prev_version + 1
+        new_version = _next_plan_version(
+            plans, prev_version, guard_on=guard_on
+        )
         now_iso = _now_iso()
         created_at = (current or {}).get("created_at", now_iso)
         saved = {
@@ -430,7 +632,7 @@ def save_plan(
             "invalidation_reason": None,
         }
         plans[cid] = saved
-        _write_raw(plans)
+        _write_raw(plans, guard_on=guard_on)
     # Commit-point telemetry stays outside the plan lock. The write is already
     # durable/visible; logger failure must never turn a successful CAS into an
     # apparent plan failure or lengthen the critical section.
@@ -464,8 +666,11 @@ def invalidate_plan(
     cid = str(courier_id)
     if reason not in INVALIDATION_REASONS:
         _log.warning(f"invalidate_plan: unknown reason {reason!r}, allowing")
+    guard_on = _corrupt_guard_on()
     with _locked(exclusive=True):
-        plans = _read_raw(_raise_on_corrupt=_raise_on_corrupt)
+        plans = _read_raw(
+            guard_on=guard_on, _raise_on_corrupt=_raise_on_corrupt
+        )
         plan = plans.get(cid)
         current_version = (plan or {}).get("plan_version", 0)
         _check_expected_version(cid, expected_version, current_version)
@@ -473,9 +678,12 @@ def invalidate_plan(
             return
         plan["invalidated_at"] = _now_iso()
         plan["invalidation_reason"] = reason
-        plan["plan_version"] = int(plan.get("plan_version", 0)) + 1
+        new_version = _next_plan_version(
+            plans, current_version, guard_on=guard_on
+        )
+        plan["plan_version"] = new_version
         plan["last_modified_at"] = plan["invalidated_at"]
-        _write_raw(plans)
+        _write_raw(plans, guard_on=guard_on)
 
 
 def touch_plan(
@@ -499,15 +707,20 @@ def touch_plan(
     No-op (False) gdy brak planu w pliku (apka i tak na pełnym worku z fresh czas_kuriera).
     Zwraca True gdy bumpnięto. Bump monotoniczny — spójny z save_plan/advance_plan."""
     cid = str(courier_id)
+    guard_on = _corrupt_guard_on()
     with _locked(exclusive=True):
-        plans = _read_raw(_raise_on_corrupt=_raise_on_corrupt)
+        plans = _read_raw(
+            guard_on=guard_on, _raise_on_corrupt=_raise_on_corrupt
+        )
         plan = plans.get(cid)
         if plan is None:
             return False
-        plan["plan_version"] = int(plan.get("plan_version", 0)) + 1
+        new_ver = _next_plan_version(
+            plans, int(plan.get("plan_version", 0)), guard_on=guard_on
+        )
+        plan["plan_version"] = new_ver
         plan["last_modified_at"] = _now_iso()
-        new_ver = plan["plan_version"]
-        _write_raw(plans)
+        _write_raw(plans, guard_on=guard_on)
     _log.info(f"touch_plan cid={cid} reason={reason} → plan_version={new_ver}")
     return True
 
@@ -526,8 +739,11 @@ def advance_plan(
     """
     cid = str(courier_id)
     doid = str(delivered_order_id)
+    guard_on = _corrupt_guard_on()
     with _locked(exclusive=True):
-        plans = _read_raw(_raise_on_corrupt=_raise_on_corrupt)
+        plans = _read_raw(
+            guard_on=guard_on, _raise_on_corrupt=_raise_on_corrupt
+        )
         plan = plans.get(cid)
         if plan is None or plan.get("invalidated_at") is not None:
             return
@@ -540,10 +756,13 @@ def advance_plan(
         new_stops = [
             s for s in plan.get("stops", []) if s.get("order_id") != doid
         ]
+        new_version = _next_plan_version(
+            plans, int(plan.get("plan_version", 0)), guard_on=guard_on
+        )
         if not new_stops:
             plan["invalidated_at"] = _now_iso()
             plan["invalidation_reason"] = "ORDER_DELIVERED_ALL"
-            plan["plan_version"] = int(plan.get("plan_version", 0)) + 1
+            plan["plan_version"] = new_version
             plan["last_modified_at"] = plan["invalidated_at"]
         else:
             plan["stops"] = new_stops
@@ -555,9 +774,9 @@ def advance_plan(
                     "source_ts": delivered_at,
                 }
             plan["start_ts"] = delivered_at
-            plan["plan_version"] = plan.get("plan_version", 0) + 1
+            plan["plan_version"] = new_version
             plan["last_modified_at"] = _now_iso()
-        _write_raw(plans)
+        _write_raw(plans, guard_on=guard_on)
 
 
 def remove_stops(
@@ -586,8 +805,11 @@ def remove_stops(
     """
     cid = str(courier_id)
     oid = str(order_id)
+    guard_on = _corrupt_guard_on()
     with _locked(exclusive=True):
-        plans = _read_raw(_raise_on_corrupt=_raise_on_corrupt)
+        plans = _read_raw(
+            guard_on=guard_on, _raise_on_corrupt=_raise_on_corrupt
+        )
         plan = plans.get(cid)
         current_version = (plan or {}).get("plan_version", 0)
         _check_expected_version(cid, expected_version, current_version)
@@ -597,16 +819,19 @@ def remove_stops(
         new_stops = [s for s in stops if s.get("order_id") != oid]
         if len(new_stops) == len(stops):
             return  # oid nieobecny → no-op (zero zapisu, zero bumpu)
+        new_version = _next_plan_version(
+            plans, current_version, guard_on=guard_on
+        )
         if not new_stops:
             plan["invalidated_at"] = _now_iso()
             plan["invalidation_reason"] = "NO_STOPS_REMAINING"
-            plan["plan_version"] = int(plan.get("plan_version", 0)) + 1
+            plan["plan_version"] = new_version
             plan["last_modified_at"] = plan["invalidated_at"]
         else:
             plan["stops"] = new_stops
-            plan["plan_version"] = plan.get("plan_version", 0) + 1
+            plan["plan_version"] = new_version
             plan["last_modified_at"] = _now_iso()
-        _write_raw(plans)
+        _write_raw(plans, guard_on=guard_on)
 
 
 def mark_stale(
@@ -627,8 +852,11 @@ def mark_picked_up(courier_id: str, order_id: str,
     """
     cid = str(courier_id)
     oid = str(order_id)
+    guard_on = _corrupt_guard_on()
     with _locked(exclusive=True):
-        plans = _read_raw(_raise_on_corrupt=_raise_on_corrupt)
+        plans = _read_raw(
+            guard_on=guard_on, _raise_on_corrupt=_raise_on_corrupt
+        )
         plan = plans.get(cid)
         if plan is None or plan.get("invalidated_at") is not None:
             return
@@ -648,9 +876,12 @@ def mark_picked_up(courier_id: str, order_id: str,
         if not changed:
             return
         plan["stops"] = new_stops
-        plan["plan_version"] = plan.get("plan_version", 0) + 1
+        new_version = _next_plan_version(
+            plans, int(plan.get("plan_version", 0)), guard_on=guard_on
+        )
+        plan["plan_version"] = new_version
         plan["last_modified_at"] = _now_iso()
-        _write_raw(plans)
+        _write_raw(plans, guard_on=guard_on)
 
 
 def _parse_iso_aware(iso: Optional[str]) -> Optional[datetime]:
@@ -697,8 +928,9 @@ def refloor_pickup(courier_id: str, order_id: str, czas_kuriera_iso: str,
     floor = _parse_iso_aware(czas_kuriera_iso)
     if floor is None:
         return 0.0
+    guard_on = _corrupt_guard_on()
     with _locked(exclusive=True):
-        plans = _read_raw()
+        plans = _read_raw(guard_on=guard_on)
         plan = plans.get(cid)
         if plan is None or plan.get("invalidated_at") is not None:
             return 0.0
@@ -723,9 +955,12 @@ def refloor_pickup(courier_id: str, order_id: str, czas_kuriera_iso: str,
             if sp is not None:
                 s["predicted_at"] = (sp + shift).isoformat()
         plan["stops"] = stops
-        plan["plan_version"] = plan.get("plan_version", 0) + 1
+        new_version = _next_plan_version(
+            plans, int(plan.get("plan_version", 0)), guard_on=guard_on
+        )
+        plan["plan_version"] = new_version
         plan["last_modified_at"] = _now_iso()
-        _write_raw(plans)
+        _write_raw(plans, guard_on=guard_on)
         return delta_sec / 60.0
 
 
@@ -755,9 +990,10 @@ def log_read_shadow_diff(
     cid = str(courier_id)
     if not cid or not active_bag_oids:
         return
+    guard_on = _corrupt_guard_on()
     try:
         with _locked(exclusive=False):
-            plans = _read_raw()
+            plans = _read_raw(guard_on=guard_on)
         saved = plans.get(cid)
         has_saved = saved is not None and saved.get("invalidated_at") is None
         if has_saved:
@@ -810,8 +1046,9 @@ def gc_invalidated(
         if courier_ids is not None
         else None
     )
+    guard_on = _corrupt_guard_on()
     with _locked(exclusive=True):
-        plans = _read_raw()
+        plans = _read_raw(guard_on=guard_on)
         to_del = []
         for cid, p in plans.items():
             if only_cids is not None and str(cid) not in only_cids:
@@ -837,7 +1074,7 @@ def gc_invalidated(
             del plans[cid]
             removed += 1
         if removed:
-            _write_raw(plans)
+            _write_raw(plans, guard_on=guard_on)
     return removed
 
 

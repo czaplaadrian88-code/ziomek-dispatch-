@@ -245,9 +245,9 @@ def isolated_return_seam(tmp_path, monkeypatch):
             raise RuntimeError("synthetic snapshot plan write failure")
         return real_remove_stops(cid, oid, **kwargs)
 
-    def record_write_raw(data):
+    def record_write_raw(data, **kwargs):
         writes.append(copy.deepcopy(data))
-        return real_write_raw(data)
+        return real_write_raw(data, **kwargs)
 
     monkeypatch.setattr(PM, "remove_stops", record_remove_stops)
     monkeypatch.setattr(PM, "_write_raw", record_write_raw)

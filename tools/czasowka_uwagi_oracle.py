@@ -28,15 +28,18 @@ import sys
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-sys.path.insert(0, "/root/.openclaw/workspace/scripts")
+sys.path.insert(0, os.environ.get(
+    "ZIOMEK_SCRIPTS_ROOT", "/root/.openclaw/workspace/scripts"
+))
 from dispatch_v2 import courier_ground_truth as _cgt  # noqa: E402
 from dispatch_v2.czasowka_uwagi import parse_delivery_deadline  # noqa: E402
+from dispatch_v2.state_persistence import previous_path  # noqa: E402
 
 WARSAW = ZoneInfo("Europe/Warsaw")
 STATE_DIR = "/root/.openclaw/workspace/dispatch_state"
 _DEFAULT_FILES = [
     os.path.join(STATE_DIR, "orders_state.json"),
-    os.path.join(STATE_DIR, "orders_state.json.prev"),
+    str(previous_path(os.path.join(STATE_DIR, "orders_state.json"))),
     os.path.join(STATE_DIR, "orders_state.pre-prune-2026-06-04.json"),
 ]
 _DEADLINE_HINT = ("czasów", "czasow", "czasów", "czasówk", "czasowk")

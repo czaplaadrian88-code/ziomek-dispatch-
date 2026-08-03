@@ -353,10 +353,38 @@ def _serve_live_inputs(rec, dp, C, tmpdir, _patch):
     # cache dp._A2_FEED_CACHE (mtime-keyed → reset mtime=None).
     _redirect(C, "A2_RELIABILITY_FEED_PATH", li["reliability"],
               getattr(dp, "_A2_FEED_CACHE", None), {"mtime": None})
-    # plans — plan_manager.PLANS_FILE, cache _perf_plans_cache (key-keyed → reset).
+    # plans + optional durable anti-ABA HWM. Even scratch materialization goes
+    # through the one state-persistence owner; replay must not become a second
+    # JSON-state writer. Starsze wr1 z wersjami legacy nie miały sidecara i
+    # pozostają odtwarzalne; rekord epokowy bez HWM zostanie odrzucony
+    # fail-closed przez plan_manager zamiast wymyślić nowy licznik.
     from dispatch_v2 import plan_manager as _pm
-    _redirect(_pm, "PLANS_FILE", li["plans"],
-              getattr(_pm, "_perf_plans_cache", None), {"key": None, "data": None})
+    from dispatch_v2 import state_persistence as _state_store
+    plan_path = Path(tmpdir) / "PLANS_FILE.json"
+    _state_store.atomic_write_json(
+        plan_path,
+        li["plans"],
+        backup_previous=False,
+        unreadable_main_policy="replace",
+        separators=(",", ":"),
+    )
+    _patch(_pm, "PLANS_FILE", plan_path)
+    getattr(_pm, "_perf_plans_cache", {}).update({"key": None, "data": None})
+    recorded_hwm = li.get("plan_version_hwm")
+    hwm_path = _pm.version_hwm_path()
+    if isinstance(recorded_hwm, dict):
+        _state_store.atomic_write_json(
+            hwm_path,
+            recorded_hwm,
+            backup_previous=False,
+            unreadable_main_policy="replace",
+            separators=(",", ":"),
+        )
+    else:
+        try:
+            hwm_path.unlink()
+        except FileNotFoundError:
+            pass
     lock_path = os.path.join(tmpdir, "PLANS_FILE.lock")
     with open(lock_path, "wb"):
         pass

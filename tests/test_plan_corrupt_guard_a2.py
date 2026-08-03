@@ -1,37 +1,55 @@
-"""A-2 (2026-08-02): guard korupcji ``courier_plans.json``.
+"""A-2 rework: corruption-safe route-plan persistence.
 
-PROBLEM: ładowanie planów przy korupcji CICHO zwracało ``{}`` (pusty plan) →
-silnik gubił CAŁY plan floty i re-planował od zera, bez śladu (utrata stanu/
-decyzji). FIX U ŹRÓDŁA (``plan_manager._read_raw`` = jeden kanoniczny owner),
-za flagą ``ENABLE_PLAN_CORRUPT_RAISE`` (ETAP4, shadow-first, DEFAULT OFF):
-  * backup ``.prev`` (ostatni dobry plan) na każdym udanym zapisie;
-  * odczyt uszkodzonego pliku → recovery z ``.prev`` zamiast ``{}``;
-  * brak/uszkodzony ``.prev`` → RAISE (nie ciche ``{}``); mutator NIE resetuje
-    po cichu całego stanu floty;
-  * CAS ``expected_version`` („nie nadpisać nowszego") zachowany przez recovery.
+Oracles correspond directly to blind findings:
+  D-1: missing main + healthy .prev must preserve both fleet and backup bytes;
+  D-2: recovered versions enter a newer epoch and stale CAS tokens never revive;
+  D-3: one shared owner implements .prev backup-on-write + strict JSON reads.
 
-Zakres testów:
-  - ORACLE NEGATYWNY: korupcja + brak .prev + flaga ON → RAISE (nie ``{}``);
-  - MUTACJA/parytet: ta sama korupcja + flaga OFF → legacy ``{}`` (ON≠OFF);
-  - RECOVERY z .prev; backup .prev na zapisie; brak backupu przy OFF;
-  - MUTATOR nie resetuje stanu po cichu (save RAISE zamiast nadpisania ``{}``);
-  - CAS ``expected_version`` przez recovery + współbieżny zapis (nie nadpisać
-    nowszego); współbieżni writerzy → plik ważny + wersja monotoniczna;
-  - RATCHET: ``_read_raw`` NIGDY nie zwraca cicho ``{}`` na korupcji (flaga ON).
+The multiprocess oracle launches two real Python writers. Each child arms a
+fail-closed Telegram/notify/logging harness before importing state modules.
 """
+from __future__ import annotations
+
+import ast
 import json
-import threading
+import os
+import subprocess
+import sys
+import tempfile
+import time
+from contextlib import contextmanager
+from pathlib import Path
 
 import pytest
 
+# Worktree nie zawiera żywego flags.json. Pinujemy scratch zanim autouse fixture
+# zaimportuje telegram_approver. To dzieje się przed pierwszym importem modułu
+# stanu; mocniejszy harness procesów potomnych jest w a2_plan_mp_worker.py.
 from dispatch_v2 import common as C
+
+_IMPORT_SCRATCH = Path(tempfile.mkdtemp(prefix="a2_import_safety_"))
+_IMPORT_FLAGS = _IMPORT_SCRATCH / "flags.json"
+_IMPORT_FLAGS.write_text("{}\n", encoding="utf-8")
+C.FLAGS_PATH = _IMPORT_FLAGS
+C._flags_cache = None
+C._flags_mtime = 0
+
+from dispatch_v2 import telegram_utils as _telegram_utils
+
+_telegram_utils.send_admin_alert = lambda *_args, **_kwargs: True
+
 from dispatch_v2 import plan_manager as PM
 
+try:
+    from dispatch_v2 import state_persistence as SP
+except ImportError:  # RED collection against rejected candidate (D-3)
+    SP = None
 
-def _body(tag="base"):
+
+def _body(tag: str = "base") -> dict:
     return {
         "start_pos": {"lat": 53.13, "lng": 23.15, "source": tag},
-        "start_ts": "2026-08-02T12:00:00+00:00",
+        "start_ts": "2026-08-03T12:00:00+00:00",
         "stops": [{
             "order_id": tag,
             "type": "dropoff",
@@ -43,21 +61,29 @@ def _body(tag="base"):
     }
 
 
-@pytest.fixture
-def store(tmp_path, monkeypatch):
-    """Sandbox PLANS_FILE/LOCK_FILE do tmp. ``.prev`` jest POCHODNA od PLANS_FILE
-    (``_prev_path``) → przekierowuje się automatycznie (HERMETIC-safe)."""
-    monkeypatch.setattr(PM, "PLANS_FILE", tmp_path / "courier_plans.json")
-    monkeypatch.setattr(PM, "LOCK_FILE", tmp_path / "courier_plans.lock")
+def _prev_path() -> Path:
+    return Path(str(PM.PLANS_FILE) + ".prev")
+
+
+def _hwm_path() -> Path:
+    return Path(str(PM.PLANS_FILE) + ".version_hwm")
+
+
+def _clear_cache() -> None:
     with PM._perf_plans_lock:
         PM._perf_plans_cache["key"] = None
         PM._perf_plans_cache["data"] = None
+
+
+@pytest.fixture
+def store(tmp_path, monkeypatch):
+    monkeypatch.setattr(PM, "PLANS_FILE", tmp_path / "courier_plans.json")
+    monkeypatch.setattr(PM, "LOCK_FILE", tmp_path / "courier_plans.lock")
+    _clear_cache()
     return tmp_path
 
 
 def _flag_on(monkeypatch):
-    # conftest wycina klucze ETAP4 z tmp flags.json → decision_flag() spada na
-    # stałą modułu; patch stałej = ENABLE_PLAN_CORRUPT_RAISE ON tylko w tym teście.
     monkeypatch.setattr(C, "ENABLE_PLAN_CORRUPT_RAISE", True, raising=False)
 
 
@@ -65,133 +91,636 @@ def _flag_off(monkeypatch):
     monkeypatch.setattr(C, "ENABLE_PLAN_CORRUPT_RAISE", False, raising=False)
 
 
-def _corrupt_main(store):
-    (store / "courier_plans.json").write_text("{ this is : not json ]", encoding="utf-8")
-    with PM._perf_plans_lock:  # unieważnij read-cache (korupcja poza _write_raw)
-        PM._perf_plans_cache["key"] = None
-        PM._perf_plans_cache["data"] = None
+def _corrupt_main(store: Path) -> None:
+    (store / "courier_plans.json").write_text(
+        "{ this is : not json ]", encoding="utf-8"
+    )
+    _clear_cache()
 
 
-# ── ORACLE NEGATYWNY: korupcja + brak .prev + flaga ON → RAISE (nie {}) ───────
-def test_corrupt_no_prev_raises_when_flag_on(store, monkeypatch):
+def _raw_plan(tag: str, version: int | str) -> dict:
+    value = _body(tag)
+    value.update({
+        "plan_version": version,
+        "created_at": "2026-08-03T12:00:00+00:00",
+        "last_modified_at": "2026-08-03T12:00:00+00:00",
+        "invalidated_at": None,
+        "invalidation_reason": None,
+    })
+    return value
+
+
+# D-1 negative oracle: the rejected candidate returns {} when main is missing,
+# then overwrites both fleet and .prev with a one-courier document.
+def test_d1_missing_main_first_write_preserves_fleet_and_prev_bytes(
+    store, monkeypatch
+):
     _flag_on(monkeypatch)
+    previous = {
+        "7": _raw_plan("fleet-7", 7),
+        "9": _raw_plan("fleet-9", 11),
+    }
+    _prev_path().write_text(
+        json.dumps(previous, sort_keys=True, separators=(",", ":")),
+        encoding="utf-8",
+    )
+    prev_before = _prev_path().read_bytes()
+    assert not PM.PLANS_FILE.exists()
+
+    PM.save_plan("9", _body("after-loss"))
+
+    healed = json.loads(PM.PLANS_FILE.read_text(encoding="utf-8"))
+    assert set(healed) == {"7", "9"}
+    assert healed["7"]["start_pos"]["source"] == "fleet-7"
+    assert healed["9"]["start_pos"]["source"] == "after-loss"
+    assert _prev_path().read_bytes() == prev_before
+
+
+def test_backup_on_write_is_predecessor_not_postwrite_clone(store, monkeypatch):
+    _flag_on(monkeypatch)
+    first = PM.save_plan("9", _body("v1"))
+    first_main = PM.PLANS_FILE.read_bytes()
+    assert not _prev_path().exists()
+
+    second = PM.save_plan(
+        "9", _body("v2"), expected_version=first["plan_version"]
+    )
+    assert second["plan_version"] > first["plan_version"]
+    assert _prev_path().read_bytes() == first_main
+    assert _prev_path().read_bytes() != PM.PLANS_FILE.read_bytes()
+
+
+def test_predecessor_directory_fsync_precedes_main_rename(store, monkeypatch):
+    """A durable main may advance only after the predecessor entry is durable."""
+    assert SP is not None, "canonical owner missing"
+    PM.PLANS_FILE.write_text('{"generation":1}', encoding="utf-8")
+    events = []
+    real_replace = SP.os.replace
+    real_fsync_parent = SP.fsync_parent
+
+    def record_replace(source, destination):
+        destination = Path(destination)
+        if destination in {_prev_path(), PM.PLANS_FILE}:
+            events.append(("rename", destination.name))
+        return real_replace(source, destination)
+
+    def record_predecessor_fsync(path):
+        events.append(("dir_fsync", Path(path).name))
+        real_fsync_parent(path)
+
+    def record_main_fsync(path):
+        events.append(("dir_fsync", Path(path).name))
+        real_fsync_parent(path)
+
+    monkeypatch.setattr(SP.os, "replace", record_replace)
+    monkeypatch.setattr(SP, "fsync_parent", record_predecessor_fsync)
+    SP.atomic_write_json(
+        PM.PLANS_FILE,
+        {"generation": 2},
+        ensure_directory_durable=record_main_fsync,
+    )
+
+    assert events == [
+        ("rename", _prev_path().name),
+        ("dir_fsync", _prev_path().name),
+        ("rename", PM.PLANS_FILE.name),
+        ("dir_fsync", PM.PLANS_FILE.name),
+    ]
+
+
+def test_main_and_predecessor_temps_are_fsynced_before_first_rename(
+    store, monkeypatch
+):
+    """Both temp payloads must be durable before predecessor becomes visible."""
+    assert SP is not None, "canonical owner missing"
+    PM.PLANS_FILE.write_text('{"generation":1}', encoding="utf-8")
+    events = []
+    real_fsync = SP.os.fsync
+    real_replace = SP.os.replace
+
+    def record_fsync(descriptor):
+        events.append(("fsync", descriptor))
+        return real_fsync(descriptor)
+
+    def record_replace(source, destination):
+        events.append(("rename", Path(destination).name))
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(SP.os, "fsync", record_fsync)
+    monkeypatch.setattr(SP.os, "replace", record_replace)
+    SP.atomic_write_json(PM.PLANS_FILE, {"generation": 2})
+
+    first_rename = next(
+        index for index, event in enumerate(events) if event[0] == "rename"
+    )
+    assert events[first_rename] == ("rename", _prev_path().name)
+    assert sum(event[0] == "fsync" for event in events[:first_rename]) == 2
+
+
+def test_backup_failure_aborts_main_and_retry_skips_reserved_gap(
+    store, monkeypatch
+):
+    _flag_on(monkeypatch)
+    assert SP is not None, "canonical owner missing"
+    first = PM.save_plan("9", _body("v1"))
+    main_before = PM.PLANS_FILE.read_bytes()
+    real_replace = SP.os.replace
+
+    def fail_predecessor_replace(source, destination):
+        if Path(destination) == _prev_path():
+            raise OSError("synthetic predecessor rename failure")
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(SP.os, "replace", fail_predecessor_replace)
+    with pytest.raises(OSError, match="predecessor rename"):
+        PM.save_plan(
+            "9", _body("must-not-land"),
+            expected_version=int(first["plan_version"]),
+        )
+    assert PM.PLANS_FILE.read_bytes() == main_before
+    assert not _prev_path().exists()
+    reserved_after_failure = json.loads(
+        _hwm_path().read_text(encoding="utf-8")
+    )["last_issued"]
+
+    monkeypatch.setattr(SP.os, "replace", real_replace)
+    retry = PM.save_plan(
+        "9", _body("retry"), expected_version=int(first["plan_version"])
+    )
+    assert int(retry["plan_version"]) > int(reserved_after_failure)
+    assert _prev_path().read_bytes() == main_before
+
+
+# D-2: lost main had a newer token than .prev. Recovery must never expose the
+# old token again, and an old CAS token must not be accepted (ABA).
+def test_d2_recovery_rebases_version_above_lost_main_and_rejects_stale_cas(
+    store, monkeypatch
+):
+    _flag_on(monkeypatch)
+    first = PM.save_plan("9", _body("v1"))
+    first_main = PM.PLANS_FILE.read_bytes()
+    second = PM.save_plan(
+        "9", _body("v2"), expected_version=first["plan_version"]
+    )
+    lost_version = int(second["plan_version"])
+
+    # Exact crash-window fixture: predecessor is v1 while the lost main was v2.
+    _prev_path().write_bytes(first_main)
     _corrupt_main(store)
-    assert not PM._prev_path().exists()
-    with pytest.raises((json.JSONDecodeError, ValueError)):
+    recovered = PM.load_plan("9")
+    assert recovered is not None
+    assert int(recovered["plan_version"]) > lost_version
+
+    with pytest.raises(PM.ConcurrencyError):
+        PM.save_plan(
+            "9", _body("stale-writer"),
+            expected_version=int(first["plan_version"]),
+        )
+    assert PM.load_plan("9")["start_pos"]["source"] == "v1"
+
+
+def test_d2_hwm_is_durable_before_main_and_crash_gap_is_never_reused(
+    store, monkeypatch
+):
+    _flag_on(monkeypatch)
+    assert SP is not None, "canonical owner missing"
+    real_atomic = SP.atomic_write_json
+
+    def fail_plan_main(path, data, **kwargs):
+        if Path(path) == PM.PLANS_FILE:
+            raise OSError("synthetic main crash after HWM")
+        return real_atomic(path, data, **kwargs)
+
+    monkeypatch.setattr(SP, "atomic_write_json", fail_plan_main)
+    with pytest.raises(OSError, match="main crash after HWM"):
+        PM.save_plan("9", _body("crashed"))
+    assert not PM.PLANS_FILE.exists()
+    reserved = int(json.loads(
+        _hwm_path().read_text(encoding="utf-8")
+    )["last_issued"])
+
+    monkeypatch.setattr(SP, "atomic_write_json", real_atomic)
+    retry = PM.save_plan("9", _body("retry"))
+    assert int(retry["plan_version"]) > reserved
+    assert int(retry["plan_version"]) <= (1 << 53) - 1
+
+
+def test_d2_epoch_main_without_hwm_fails_closed(store, monkeypatch):
+    _flag_on(monkeypatch)
+    PM.save_plan("9", _body("epoch"))
+    _hwm_path().unlink()
+    _clear_cache()
+    with pytest.raises(PM.PlanVersionStateError, match="HWM is missing"):
         PM.load_plans()
-    with pytest.raises((json.JSONDecodeError, ValueError)):
-        PM.load_plan("9")
 
 
-# ── MUTACJA/parytet: ta sama korupcja + flaga OFF → legacy {} (ON≠OFF) ────────
-def test_corrupt_flag_off_is_legacy_silent(store, monkeypatch):
-    """Odwrócenie fixu (flaga OFF) = zachowanie SPRZED A-2: ciche {} / None.
-    Kontrast do oracle powyżej = dowód ON≠OFF."""
+def test_d2_warm_cache_cannot_hide_missing_hwm(store, monkeypatch):
+    _flag_on(monkeypatch)
+    saved = PM.save_plan("9", _body("epoch"))
+    _clear_cache()
+    assert PM._read_raw_shared()["9"]["plan_version"] == saved["plan_version"]
+    assert PM._perf_plans_cache["data"] is not None
+
+    _hwm_path().unlink()
+
+    with pytest.raises(PM.PlanVersionStateError, match="HWM is missing"):
+        PM._read_raw_shared()
+
+
+def test_d1_warm_recovery_cache_tracks_predecessor_generation(store, monkeypatch):
+    _flag_on(monkeypatch)
+    first = PM.save_plan("9", _body("previous-a"))
+    PM.save_plan(
+        "9", _body("lost-main"), expected_version=first["plan_version"]
+    )
+    _corrupt_main(store)
+
+    initial = PM._read_raw_shared()
+    assert initial["9"]["start_pos"]["source"] == "previous-a"
+
+    replacement = {"9": _raw_plan("previous-b", int(first["plan_version"]))}
+    replacement_tmp = store / "replacement-prev.json"
+    replacement_tmp.write_text(json.dumps(replacement), encoding="utf-8")
+    os.replace(replacement_tmp, _prev_path())
+
+    refreshed = PM._read_raw_shared()
+    assert refreshed["9"]["start_pos"]["source"] == "previous-b"
+
+
+def test_recovered_synthetic_epoch_is_not_recorded_without_covering_hwm(
+    store, monkeypatch
+):
+    _flag_on(monkeypatch)
+    first = PM.save_plan("9", _body("v1"))
+    first_main = PM.PLANS_FILE.read_bytes()
+    PM.save_plan(
+        "9", _body("v2"), expected_version=first["plan_version"]
+    )
+    _prev_path().write_bytes(first_main)
+    _corrupt_main(store)
+
+    with pytest.raises(PM.PlanVersionStateError, match="covering durable HWM"):
+        PM.snapshot_for_recording({"9"})
+
+
+def test_flag_off_after_epoch_keeps_counter_monotonic_without_new_prev(
+    store, monkeypatch
+):
+    _flag_on(monkeypatch)
+    first = PM.save_plan("9", _body("on"))
+    first_hwm = int(json.loads(
+        _hwm_path().read_text(encoding="utf-8")
+    )["last_issued"])
+    assert not _prev_path().exists()
+
     _flag_off(monkeypatch)
+    second = PM.save_plan(
+        "9", _body("off"), expected_version=int(first["plan_version"])
+    )
+    second_hwm = int(json.loads(
+        _hwm_path().read_text(encoding="utf-8")
+    )["last_issued"])
+    assert int(second["plan_version"]) > int(first["plan_version"])
+    assert second_hwm > first_hwm
+    assert not _prev_path().exists()
+
+
+def _wait_for(path: Path, timeout_s: float = 20.0) -> None:
+    deadline = time.monotonic() + timeout_s
+    while not path.exists():
+        if time.monotonic() >= deadline:
+            raise AssertionError(f"timeout waiting for child marker: {path}")
+        time.sleep(0.01)
+
+
+def _spawn_worker(
+    *, mode: str, store: Path, scratch: Path, ready: Path, go: Path,
+    result: Path, expected: int | None = None,
+) -> subprocess.Popen:
+    worker = Path(__file__).with_name("a2_plan_mp_worker.py")
+    command = [
+        sys.executable,
+        str(worker),
+        "--mode", mode,
+        "--state-dir", str(store),
+        "--scratch", str(scratch),
+        "--ready", str(ready),
+        "--go", str(go),
+        "--result", str(result),
+    ]
+    if expected is not None:
+        command.extend(("--expected", str(expected)))
+    env = os.environ.copy()
+    env["DISPATCH_UNDER_PYTEST"] = "1"
+    env["PYTEST_CURRENT_TEST"] = "a2_multiprocess_parent"
+    env.pop("ALLOW_TELEGRAM_IN_TEST", None)
+    env.pop("ALLOW_FILE_LOG_IN_TEST", None)
+    return subprocess.Popen(
+        command,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+
+
+def test_d2_two_process_writers_recovery_between_never_reuses_cas_token(
+    store, monkeypatch
+):
+    _flag_on(monkeypatch)
+    first = PM.save_plan("9", _body("v1"))
+    first_main = PM.PLANS_FILE.read_bytes()
+    second = PM.save_plan(
+        "9", _body("v2"), expected_version=first["plan_version"]
+    )
+    lost_version = int(second["plan_version"])
+    stale_token = int(first["plan_version"])
+    _prev_path().write_bytes(first_main)
+    _corrupt_main(store)
+
+    stale_ready, stale_go = store / "stale.ready", store / "stale.go"
+    recover_ready, recover_go = store / "recover.ready", store / "recover.go"
+    stale_result, recover_result = store / "stale.json", store / "recover.json"
+    stale = _spawn_worker(
+        mode="stale", store=store, scratch=store / "scratch-stale",
+        ready=stale_ready, go=stale_go, result=stale_result,
+        expected=stale_token,
+    )
+    recovery = _spawn_worker(
+        mode="recovery", store=store, scratch=store / "scratch-recovery",
+        ready=recover_ready, go=recover_go, result=recover_result,
+    )
+    try:
+        _wait_for(stale_ready)
+        _wait_for(recover_ready)
+        stale_go.touch()
+        stale_out, stale_err = stale.communicate(timeout=20)
+        assert stale.returncode == 0, (stale_out, stale_err)
+
+        recover_go.touch()
+        recover_out, recover_err = recovery.communicate(timeout=20)
+        assert recovery.returncode == 0, (recover_out, recover_err)
+    finally:
+        for process in (stale, recovery):
+            if process.poll() is None:
+                process.kill()
+                process.communicate(timeout=5)
+
+    stale_value = json.loads(stale_result.read_text(encoding="utf-8"))
+    recover_value = json.loads(recover_result.read_text(encoding="utf-8"))
+    assert stale_value["status"] == "conflict"
+    assert int(recover_value["expected"]) > lost_version
+    assert recover_value["status"] == "saved"
+    assert int(recover_value["saved_version"]) > int(recover_value["expected"])
+
+    final = json.loads(PM.PLANS_FILE.read_text(encoding="utf-8"))["9"]
+    assert final["start_pos"]["source"] == "recovery"
+    assert int(final["plan_version"]) == int(recover_value["saved_version"])
+
+    # Mechanical safety ratchet: worker must arm transports/log before state import.
+    worker_source = Path(__file__).with_name("a2_plan_mp_worker.py").read_text(
+        encoding="utf-8"
+    )
+    assert worker_source.index("_arm_safety(scratch)") < worker_source.index(
+        "from dispatch_v2 import plan_manager as PM"
+    )
+
+
+def test_d2_two_recovery_writers_real_multiprocess_race_has_one_winner(
+    store, monkeypatch
+):
+    _flag_on(monkeypatch)
+    first = PM.save_plan("9", _body("v1"))
+    first_main = PM.PLANS_FILE.read_bytes()
+    second = PM.save_plan(
+        "9", _body("v2"), expected_version=first["plan_version"]
+    )
+    lost_version = int(second["plan_version"])
+    _prev_path().write_bytes(first_main)
+    _corrupt_main(store)
+
+    race_go = store / "race.go"
+    workers = []
+    for label in ("a", "b"):
+        process = _spawn_worker(
+            mode="recovery",
+            store=store,
+            scratch=store / f"scratch-race-{label}",
+            ready=store / f"race-{label}.ready",
+            go=race_go,
+            result=store / f"race-{label}.json",
+        )
+        workers.append((label, process))
+
+    try:
+        for label, _process in workers:
+            _wait_for(store / f"race-{label}.ready")
+        # One marker releases both independent processes against the same
+        # fcntl lock and the same recovered CAS token.
+        race_go.touch()
+        for label, process in workers:
+            stdout, stderr = process.communicate(timeout=20)
+            assert process.returncode == 0, (label, stdout, stderr)
+    finally:
+        for _label, process in workers:
+            if process.poll() is None:
+                process.kill()
+                process.communicate(timeout=5)
+
+    results = [
+        json.loads((store / f"race-{label}.json").read_text(encoding="utf-8"))
+        for label, _process in workers
+    ]
+    assert sorted(value["status"] for value in results) == ["conflict", "saved"]
+    winner = next(value for value in results if value["status"] == "saved")
+    loser = next(value for value in results if value["status"] == "conflict")
+    assert int(winner["expected"]) == int(loser["expected"])
+    assert int(winner["expected"]) > lost_version
+    assert int(winner["saved_version"]) > int(winner["expected"])
+    assert int(loser["current_version"]) == int(winner["saved_version"])
+    assert _prev_path().read_bytes() == first_main
+
+    final = json.loads(PM.PLANS_FILE.read_text(encoding="utf-8"))["9"]
+    assert int(final["plan_version"]) == int(winner["saved_version"])
+
+
+def test_strict_caller_raises_before_recovery(store, monkeypatch):
+    _flag_on(monkeypatch)
+    _prev_path().write_text(
+        json.dumps({"9": _raw_plan("healthy-prev", 1)}), encoding="utf-8"
+    )
+    _corrupt_main(store)
+    with pytest.raises((json.JSONDecodeError, ValueError)):
+        PM.load_plans(_raise_on_corrupt=True)
+    with pytest.raises((json.JSONDecodeError, ValueError)):
+        PM.load_plan("9", _raise_on_corrupt=True)
+
+
+def test_strict_caller_missing_main_does_not_recover_previous(
+    store, monkeypatch
+):
+    _flag_on(monkeypatch)
+    _prev_path().write_text(
+        json.dumps({"9": _raw_plan("healthy-prev", 1)}), encoding="utf-8"
+    )
+    with pytest.raises(FileNotFoundError):
+        PM.load_plans(_raise_on_corrupt=True)
+
+
+def test_flag_off_preserves_legacy_without_prev_or_version_hwm(store, monkeypatch):
+    _flag_off(monkeypatch)
+    saved = PM.save_plan("9", _body("legacy"))
+    assert saved["plan_version"] == 1
+    assert not _prev_path().exists()
+    assert not _hwm_path().exists()
     _corrupt_main(store)
     assert PM.load_plans() == {}
-    assert PM.load_plan("9") is None
 
 
-# ── RECOVERY: korupcja + zdrowy .prev → ostatni dobry plan (nie {}) ───────────
-def test_corrupt_recovers_from_prev_when_flag_on(store, monkeypatch):
-    _flag_on(monkeypatch)
-    PM.save_plan("9", _body("good-v1"))    # main=v1, .prev=v1
-    PM.save_plan("9", _body("good-v2"))    # main=v2, .prev=v2
-    assert PM._prev_path().exists()
-    good = PM.load_plans()
-    assert good["9"]["start_pos"]["source"] == "good-v2"
-
-    _corrupt_main(store)
-
-    recovered = PM.load_plans()
-    assert recovered == good               # ostatni dobry plan odtworzony
-    assert recovered["9"]["plan_version"] == 2
-    one = PM.load_plan("9")
-    assert one is not None and one["start_pos"]["source"] == "good-v2"
-
-
-# ── backup .prev powstaje na zapisie (ON); brak nowych plików przy OFF ────────
-def test_prev_backup_written_on_save_flag_on(store, monkeypatch):
-    _flag_on(monkeypatch)
-    assert not PM._prev_path().exists()
-    PM.save_plan("9", _body("v1"))
-    assert PM._prev_path().exists()
-    prev = json.loads(PM._prev_path().read_text(encoding="utf-8"))
-    assert prev["9"]["start_pos"]["source"] == "v1"
-
-
-def test_no_prev_backup_when_flag_off(store, monkeypatch):
+def test_flag_off_preserves_legacy_unicode_failure(store, monkeypatch):
     _flag_off(monkeypatch)
-    PM.save_plan("9", _body("v1"))
-    assert not PM._prev_path().exists()    # shadow-first: OFF = zero nowych artefaktów
+    PM.PLANS_FILE.write_bytes(b"\xff\xfe\x00")
+    _clear_cache()
+    with pytest.raises(UnicodeDecodeError):
+        PM.load_plans()
 
 
-# ── MUTATOR nie resetuje stanu po cichu: korupcja bez .prev → save RAISE ──────
-def test_mutator_raises_not_resets_on_unrecoverable_corruption(store, monkeypatch):
-    """Krytyczna ścieżka WRITE: pod flagą ON save_plan na nieodwracalnej korupcji
-    RAISE zamiast odczytać {} i nadpisać (= reset planów całej floty)."""
-    _flag_on(monkeypatch)
-    _corrupt_main(store)                    # brak .prev
-    with pytest.raises((json.JSONDecodeError, ValueError)):
-        PM.save_plan("9", _body("would-reset"))
+def test_flag_off_does_not_validate_unrelated_legacy_version(store, monkeypatch):
+    _flag_off(monkeypatch)
+    plans = {
+        "7": _raw_plan("legacy-other", "historical-weird-version"),
+        "9": _raw_plan("target", 1),
+    }
+    PM.PLANS_FILE.write_text(json.dumps(plans), encoding="utf-8")
 
+    saved = PM.save_plan("9", _body("updated"), expected_version=1)
 
-# ── CAS „nie nadpisać nowszego" zachowany przez recovery ─────────────────────
-def test_cas_preserved_through_recovery(store, monkeypatch):
-    _flag_on(monkeypatch)
-    PM.save_plan("9", _body("v1"))          # v1; .prev=v1
-    _corrupt_main(store)                     # główny uszkodzony, .prev trzyma v1
-
-    # writer zgodny z .prev (expected_version=1) → recovery + zapis v2, heal main
-    saved = PM.save_plan("9", _body("v2"), expected_version=1)
     assert saved["plan_version"] == 2
-    healed = json.loads(PM.PLANS_FILE.read_text(encoding="utf-8"))
-    assert healed["9"]["plan_version"] == 2  # główny plik uzdrowiony
-
-    # spóźniony writer ze starym expected_version=1 → NIE nadpisuje nowszego (v2)
-    before = PM.cas_conflicts_total()
-    with pytest.raises(PM.ConcurrencyError):
-        PM.save_plan("9", _body("stale"), expected_version=1)
-    final = PM.load_plan("9")
-    assert final["plan_version"] == 2
-    assert final["start_pos"]["source"] == "v2"
-    assert PM.cas_conflicts_total() == before + 1
+    persisted = json.loads(PM.PLANS_FILE.read_text(encoding="utf-8"))
+    assert persisted["7"]["plan_version"] == "historical-weird-version"
+    assert not _prev_path().exists()
+    assert not _hwm_path().exists()
 
 
-# ── współbieżni writerzy (ON): plik ważny + wersja monotoniczna ───────────────
-def test_concurrent_writers_flag_on_keep_valid_and_monotonic(store, monkeypatch):
-    _flag_on(monkeypatch)
-    PM.save_plan("1", _body("init"))         # v1
+def test_flag_off_writer_adds_no_backup_validation_read(store, monkeypatch):
+    _flag_off(monkeypatch)
+    PM.PLANS_FILE.write_text(
+        json.dumps({"9": _raw_plan("legacy", 1)}), encoding="utf-8"
+    )
+    real_read_bytes = Path.read_bytes
 
-    errors = []
+    def forbidden_owner_read(path):
+        if path == PM.PLANS_FILE:
+            raise AssertionError("A-2 OFF writer must not inspect replaced main")
+        return real_read_bytes(path)
 
-    def worker():
-        try:
-            for _ in range(25):
-                PM.save_plan("1", _body("w"))
-        except Exception as e:  # noqa: BLE001
-            errors.append(e)
+    monkeypatch.setattr(Path, "read_bytes", forbidden_owner_read)
+    saved = PM.save_plan("9", _body("updated"), expected_version=1)
 
-    threads = [threading.Thread(target=worker) for _ in range(2)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join(timeout=30)
-
-    assert not errors, errors
-    final = PM.load_plan("1")
-    assert final["plan_version"] == 1 + 2 * 25   # monotonic, żaden zapis nie zgubiony
-    assert isinstance(PM.load_plans(), dict)       # główny plik = ważny JSON
-    assert isinstance(json.loads(PM._prev_path().read_text(encoding="utf-8")), dict)
+    assert saved["plan_version"] == 2
+    assert not _prev_path().exists()
+    assert not _hwm_path().exists()
 
 
-# ── RATCHET: _read_raw NIGDY nie zwraca cicho {} na korupcji (flaga ON) ───────
-def test_read_raw_never_silent_empty_on_corruption_flag_on(store, monkeypatch):
-    """Blokuje powrót silent-{}: jedyny owner ładowania (_read_raw) MUSI podnieść
-    wyjątek na korupcji bez .prev przy fladze ON. Return {} = czerwony."""
-    _flag_on(monkeypatch)
-    _corrupt_main(store)
-    with PM._locked(exclusive=False):
-        with pytest.raises((json.JSONDecodeError, ValueError)):
-            PM._read_raw()
+def test_flag_off_record_snapshot_keeps_legacy_lockless_path(store, monkeypatch):
+    _flag_off(monkeypatch)
+    plans = {"9": _raw_plan("legacy", 4)}
+    PM.PLANS_FILE.write_text(json.dumps(plans), encoding="utf-8")
+
+    @contextmanager
+    def forbidden_lock(*_args, **_kwargs):
+        raise AssertionError("A-2 OFF world-record must not acquire plan lock")
+        yield  # pragma: no cover - makes this an explicit context manager
+
+    monkeypatch.setattr(PM, "_locked", forbidden_lock)
+    snapshot, hwm = PM.snapshot_for_recording({"9"})
+
+    assert snapshot == plans
+    assert snapshot is not plans
+    assert hwm is None
+
+
+# D-3 source ratchet: rejected code defined two divergent owners. The new owner
+# is a leaf module; consumers may wrap domain errors, but not persistence logic.
+def test_d3_single_canonical_state_persistence_owner():
+    root = Path(PM.__file__).parent
+    owner = root / "state_persistence.py"
+    assert owner.exists(), "missing canonical state persistence owner"
+
+    owner_source = owner.read_text(encoding="utf-8")
+    assert "def previous_path(" in owner_source
+    assert "def read_json_object(" in owner_source
+    assert "def atomic_write_json(" in owner_source
+
+    forbidden_defs = {
+        "_prev_path", "_read_prev", "_snapshot_prev", "_backup_prev",
+        "_atomic_write",
+    }
+    for name in ("plan_manager.py", "state_machine.py"):
+        source = (root / name).read_text(encoding="utf-8")
+        tree = ast.parse(source)
+        defs = {
+            node.name for node in ast.walk(tree)
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        }
+        assert not defs.intersection(forbidden_defs), (name, defs & forbidden_defs)
+        assert "state_persistence" in source
+        direct_prev_literals = {
+            node.value for node in ast.walk(tree)
+            if isinstance(node, ast.Constant)
+            and isinstance(node.value, str)
+            and node.value.endswith(".prev")
+        }
+        assert not direct_prev_literals, (name, direct_prev_literals)
+
+    for name in (
+        "tools/address_pin_aggregator.py",
+        "tools/czasowka_uwagi_oracle.py",
+        "tools/rebuild_state_from_events.py",
+    ):
+        source = (root / name).read_text(encoding="utf-8")
+        assert "previous_path" in source, name
+
+    replay_source = (root / "tools/world_replay.py").read_text(encoding="utf-8")
+    assert "state_persistence as _state_store" in replay_source
+    assert replay_source.count("_state_store.atomic_write_json(") >= 2
+    assert '_redirect(_pm, "PLANS_FILE"' not in replay_source
+    assert "open(hwm_path" not in replay_source
+
+
+def test_version_writers_use_single_allocator_ratchet():
+    source = Path(PM.__file__).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    plan_value_assignments = []
+    allocator_assignments = []
+    for function in (
+        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef)
+    ):
+        for node in ast.walk(function):
+            if not isinstance(node, ast.Assign):
+                continue
+            for target in node.targets:
+                if (
+                    isinstance(target, ast.Subscript)
+                    and isinstance(target.slice, ast.Constant)
+                    and target.slice.value == "plan_version"
+                ):
+                    plan_value_assignments.append(
+                        (function.name, ast.unparse(node.value))
+                    )
+                if isinstance(target, ast.Name) and target.id in {
+                    "new_version", "new_ver"
+                }:
+                    allocator_assignments.append(
+                        (function.name, ast.unparse(node.value))
+                    )
+    assert plan_value_assignments
+    assert all(
+        value in {"next_value", "new_version", "new_ver"}
+        for _, value in plan_value_assignments
+    ), plan_value_assignments
+    assert allocator_assignments
+    assert all(
+        value.startswith("_next_plan_version(")
+        for _, value in allocator_assignments
+    ), allocator_assignments

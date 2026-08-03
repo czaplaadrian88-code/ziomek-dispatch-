@@ -11597,11 +11597,11 @@
   },
   "ENABLE_PLAN_CORRUPT_RAISE": {
    "carriers": [
-    "common.py:ETAP4_DECISION_FLAGS"
+    "common.py:ETAP4_DECISION_FLAGS",
+    "common.py:ENABLE_PLAN_CORRUPT_RAISE"
    ],
    "consumers": [
-    "dispatch_v2/common.py",
-    "dispatch_v2/plan_manager.py"
+    "dispatch_v2/plan_manager.py:_corrupt_guard_on"
    ],
    "curated_at": "2026-08-02",
    "current_snapshot": {
@@ -11617,15 +11617,15 @@
    "lifecycle": "planned",
    "lifecycle_seeded": false,
    "name": "ENABLE_PLAN_CORRUPT_RAISE",
-   "notes": "A-2 shadow-first: recovery z .prev / RAISE zamiast cichego {} przy korupcji courier_plans.json; flip za ACK ownera po >=2d SHADOW.",
+   "notes": "A-2 rework shadow-first: ON = strict read + recovery z predecessor .prev oraz monotoniczny version-HWM anti-ABA; OFF bez istniejącego HWM = legacy bez nowych artefaktów. Flip/obserwacja/blind za ACK ownera.",
    "owner": {
     "business": "Adrian",
     "service": "dispatch-shadow.service"
    },
    "removal_condition": "aktywacja lub retire wg roadmapy (ACK Adrian)",
    "review_date": "2026-08-10",
-   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
-   "source_of_truth": "common.py-const",
+   "rollback": "flags.json false albo brak klucza (hot reload, bez restartu); istniejący version-HWM pozostaje monotonicznym fence'em",
+   "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [
     "engine"
