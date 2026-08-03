@@ -2,16 +2,16 @@
  "_meta": {
   "counts": {
    "apka": 29,
-   "engine": 444,
+   "engine": 445,
    "engine_1b_units": 13,
-   "etap4": 157,
+   "etap4": 158,
    "flags_json_keys": 271,
    "fp_extra": 37,
    "known_drift": 0,
    "numeric": 36,
    "panel": 88,
    "test_isolated": 13,
-   "total": 561,
+   "total": 562,
    "twins_concepts": 8
   },
   "generator": "tools/flag_lifecycle_seed.py",
@@ -4855,7 +4855,6 @@
     "explicit-dynamic-source-scan"
    ],
    "consumers": [
-    "dispatch_v2/dispatch_pipeline.py",
     "dispatch_v2/durable_event_apply.py",
     "dispatch_v2/panel_watcher.py"
    ],
@@ -5221,9 +5220,11 @@
     "common.py:ETAP4_DECISION_FLAGS"
    ],
    "consumers": [
-    "dispatch_v2/common.py",
+    "dispatch_v2/coordinator_time_recheck.py",
     "dispatch_v2/dispatch_pipeline.py",
-    "dispatch_v2/state_machine.py"
+    "dispatch_v2/panel_watcher.py",
+    "dispatch_v2/state_machine.py",
+    "dispatch_v2/tools/rutcom_committed_authority_rollback.py"
    ],
    "curated_at": "2026-07-20",
    "current_snapshot": {
@@ -5258,6 +5259,9 @@
     "flags.json"
    ],
    "consumers": [
+    "dispatch_v2/coordinator_time_recheck.py",
+    "dispatch_v2/dispatch_pipeline.py",
+    "dispatch_v2/durable_event_apply.py",
     "dispatch_v2/panel_watcher.py",
     "dispatch_v2/state_machine.py"
    ],
@@ -5365,6 +5369,46 @@
    "twin_of": [
     "ENABLE_CZASOWKA_RECLAIM_LIVE"
    ],
+   "worlds": [
+    "engine"
+   ]
+  },
+  "ENABLE_CZASOWKA_RUTCOM_FORWARD_AUTHORITY": {
+   "carriers": [
+    "common.py:ETAP4_DECISION_FLAGS"
+   ],
+   "consumers": [
+    "dispatch_v2/coordinator_time_recheck.py",
+    "dispatch_v2/dispatch_pipeline.py",
+    "dispatch_v2/durable_event_apply.py",
+    "dispatch_v2/panel_watcher.py",
+    "dispatch_v2/state_machine.py",
+    "dispatch_v2/tools/rutcom_committed_authority_rollback.py"
+   ],
+   "curated_at": "2026-08-01",
+   "current_snapshot": {
+    "default": false
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_CZASOWKA_RUTCOM_FORWARD_AUTHORITY",
+   "notes": "Incydent #491578: aktywna czasowka + Rutcom status 2 + przyszly ruch CK do przodu, nie przed pickup_at, przechodzi przez jeden resolver do PICKUP_TIME_UPDATED. #483023 (ruch wstecz/przed gotowoscia) i post-pickup pozostaja blokowane. Owner 2026-08-01 jawnie polecil docelowy flip ON po zielonych bramkach i wdrozeniu.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-shadow.service + dispatch-panel-watcher.service"
+   },
+   "removal_condition": "po minimum 2 dniach poprawnej obserwacji i utrwaleniu kontraktu jako bezwarunkowego kanonu albo retire za decyzja ownera",
+   "review_date": "2026-08-08",
+   "rollback": "flags.json OFF hot-reload (bez restartu)",
+   "source_of_truth": "common.py-const",
+   "twin_of": [],
    "worlds": [
     "engine"
    ]
@@ -6761,7 +6805,7 @@
    "lifecycle": "dead",
    "lifecycle_seeded": false,
    "name": "ENABLE_FALLBACK_HONEST_OSRM_ETA",
-   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
+   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
    "owner": {
     "business": "Adrian",
     "service": "courier-api.service"
@@ -7208,7 +7252,7 @@
    "lifecycle": "dead",
    "lifecycle_seeded": false,
    "name": "ENABLE_FROZEN_PICKUP_ETA",
-   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
+   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
    "owner": {
     "business": "Adrian",
     "service": "courier-api.service"
@@ -8998,7 +9042,7 @@
    "lifecycle": "dead",
    "lifecycle_seeded": false,
    "name": "ENABLE_LIVE_ETA_FRESH_OVERRIDE_ONLY",
-   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
+   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
    "owner": {
     "business": "Adrian",
     "service": "courier-api.service"
@@ -13456,7 +13500,7 @@
    "lifecycle": "dead",
    "lifecycle_seeded": false,
    "name": "ENABLE_SAME_DEST_DROPOFF_ONE_ETA",
-   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
+   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
    "owner": {
     "business": "Adrian",
     "service": "courier-api.service"
@@ -13512,7 +13556,6 @@
    "consumers": [
     "dispatch_v2/common.py",
     "dispatch_v2/common.py:ENABLE_SAVED_PLANS",
-    "dispatch_v2/dispatch_pipeline.py",
     "dispatch_v2/durable_event_apply.py",
     "dispatch_v2/lifecycle_downstream.py",
     "dispatch_v2/panel_watcher.py"
@@ -17138,7 +17181,7 @@
    "lifecycle": "dead",
    "lifecycle_seeded": false,
    "name": "LIVE_ETA_FRESH_OVERRIDE_ONLY",
-   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
+   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
    "owner": {
     "business": "Adrian",
     "service": "nadajesz-panel.service"
@@ -17172,7 +17215,7 @@
    "lifecycle": "dead",
    "lifecycle_seeded": false,
    "name": "LIVE_ETA_MAX_AGE_MIN",
-   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
+   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
    "owner": {
     "business": "Adrian",
     "service": "courier-api.service"
@@ -17527,7 +17570,7 @@
    "lifecycle": "dead",
    "lifecycle_seeded": false,
    "name": "MONOTONIC_ROUTE_TIMES",
-   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
+   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
    "owner": {
     "business": "Adrian",
     "service": "nadajesz-panel.service"
@@ -18833,7 +18876,7 @@
    "lifecycle": "dead",
    "lifecycle_seeded": false,
    "name": "PIN_AGREED_PICKUP_TIME",
-   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
+   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
    "owner": {
     "business": "Adrian",
     "service": "nadajesz-panel.service"
@@ -19744,7 +19787,7 @@
    "lifecycle": "dead",
    "lifecycle_seeded": false,
    "name": "SEED_PICKUP_TIME_FROM_AGREED",
-   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
+   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
    "owner": {
     "business": "Adrian",
     "service": "nadajesz-panel.service"

@@ -16,7 +16,7 @@ import threading
 import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional
 from zoneinfo import ZoneInfo
 
 from dispatch_v2.common import load_config, now_iso, setup_logger
@@ -831,6 +831,7 @@ def list_pending_state_applies_for_key(
         decoded
         for row in rows
         if (decoded := _decode_outbox_row(row)) is not None
+        and not state_apply_outbox_row_is_terminal(decoded)
     ]
 
 
@@ -975,6 +976,59 @@ def get_oldest_unfinished_apply() -> Optional[Dict[str, Any]]:
                LIMIT 1"""
         ).fetchone()
     return _decode_outbox_row(row)
+
+
+_STATE_APPLY_TERMINAL_PAIRS = frozenset(
+    {
+        ("superseded", "skipped"),
+        ("applied", "applied"),
+        ("applied", "skipped"),
+    }
+)
+
+
+def state_apply_outbox_row_is_terminal(
+    row: Mapping[str, object] | None,
+) -> bool:
+    """Jeden owner terminalności state+downstream durable receiptu."""
+    if not isinstance(row, Mapping):
+        return False
+    pair = (
+        str(row.get("state_status") or ""),
+        str(row.get("downstream_status") or ""),
+    )
+    return pair in _STATE_APPLY_TERMINAL_PAIRS
+
+
+def list_unfinished_state_applies() -> List[Dict[str, Any]]:
+    """Read-only complete set of rows unsafe for a code-contract rollback.
+
+    Runtime workers use bounded/fair lane queries. A rollback preflight has a
+    different contract: overlooking row 101 would be worse than reading the
+    full unfinished set, so this operator-facing API is deliberately unbounded.
+    """
+    _ensure_state_apply_outbox_initialized()
+    terminal_terms = " OR ".join(
+        "(state_status = ? AND downstream_status = ?)"
+        for _pair in sorted(_STATE_APPLY_TERMINAL_PAIRS)
+    )
+    terminal_params = tuple(
+        value
+        for pair in sorted(_STATE_APPLY_TERMINAL_PAIRS)
+        for value in pair
+    )
+    with _conn() as conn:
+        rows = conn.execute(
+            f"""SELECT * FROM state_apply_outbox
+                WHERE NOT ({terminal_terms})
+                ORDER BY rowid ASC""",
+            terminal_params,
+        ).fetchall()
+    return [
+        decoded
+        for row in rows
+        if (decoded := _decode_outbox_row(row)) is not None
+    ]
 
 
 def begin_state_apply_downstream(event_id: str) -> Optional[int]:
@@ -1544,6 +1598,36 @@ def stats() -> dict:
         return result
 
 
+_INITIAL_TIME_INTENT_RETENTION_RELEASE_SQL = """
+    AND json_valid(state_apply_outbox.state_event) = 1
+    AND (
+        json_type(
+            state_apply_outbox.state_event,
+            '$.pending_committed_time_intent'
+        ) IS NULL
+        OR EXISTS (
+            SELECT 1
+            FROM state_apply_outbox AS intent_consumer
+            WHERE intent_consumer.order_id = state_apply_outbox.order_id
+              AND intent_consumer.event_id != state_apply_outbox.event_id
+              AND intent_consumer.state_status = 'applied'
+              AND json_valid(intent_consumer.state_event) = 1
+              AND json_extract(
+                    intent_consumer.state_event,
+                    '$.event_type'
+                  ) = 'PICKUP_TIME_UPDATED'
+              AND json_extract(
+                    intent_consumer.state_event,
+                    '$.payload.committed_new_order_time_intent_id'
+                  ) = json_extract(
+                    state_apply_outbox.state_event,
+                    '$.pending_committed_time_intent.intent_id'
+                  )
+        )
+    )
+"""
+
+
 def cleanup(retention_hours: int = 48) -> int:
     """Czysci stare processed events. Zwraca liczbe usunietych.
 
@@ -1566,7 +1650,7 @@ def cleanup(retention_hours: int = 48) -> int:
             # retencje calej trojki, aby cleanup nie utworzyl orphan/collision
             # window przy ponownej emisji tego samego deterministic event_id.
             outbox_cur = conn.execute(
-                """DELETE FROM state_apply_outbox
+                f"""DELETE FROM state_apply_outbox
                    WHERE event_id IN (
                        SELECT event_id FROM events
                        WHERE status = 'processed'
@@ -1582,7 +1666,8 @@ def cleanup(retention_hours: int = 48) -> int:
                                OR (child.state_status = 'applied'
                                    AND child.downstream_status = 'pending')
                            )
-                     )""",
+                     )
+                     {_INITIAL_TIME_INTENT_RETENTION_RELEASE_SQL}""",
                 (cutoff,),
             )
             cur = conn.execute(
@@ -1851,7 +1936,7 @@ def cleanup_audit_log(retention_days: int = 90) -> int:
             )
             deleted = cur.rowcount
             outbox_cur = conn.execute(
-                """DELETE FROM state_apply_outbox
+                f"""DELETE FROM state_apply_outbox
                    WHERE state_status IN ('applied', 'superseded')
                      AND downstream_status IN ('applied', 'skipped')
                      AND created_at < datetime('now', ?)
@@ -1868,7 +1953,8 @@ def cleanup_audit_log(retention_days: int = 90) -> int:
                                OR (child.state_status = 'applied'
                                    AND child.downstream_status = 'pending')
                            )
-                     )""",
+                     )
+                     {_INITIAL_TIME_INTENT_RETENTION_RELEASE_SQL}""",
                 (f"-{retention_days} days",),
             )
             conn.execute("COMMIT;")

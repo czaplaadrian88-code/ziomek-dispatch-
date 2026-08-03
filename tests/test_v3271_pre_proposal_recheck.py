@@ -27,13 +27,25 @@ Tests (10 cases):
 10. test_recheck_normalize_returns_none_skip_emit — NEW V3.27.1 sesja 3:
     status=7 (delivered) → normalize None → helper (None, None) → skip emit
 """
+import json
+import sqlite3
 import sys
+import tempfile
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, '/root/.openclaw/workspace/scripts')
 
-from dispatch_v2 import common, dispatch_pipeline, panel_client
+from dispatch_v2 import (
+    committed_pickup_apply,
+    common,
+    dispatch_pipeline,
+    event_bus,
+    lifecycle_downstream,
+    panel_client,
+    state_machine,
+)
 from dispatch_v2.route_simulator_v2 import OrderSim
 
 
@@ -148,7 +160,11 @@ def test_recheck_force_fetch_old_emits_event():
 
     Mock fetch_order_details boundary z REAL raw response (czas_kuriera HH:MM).
     Helper wywołuje REAL normalize_order → ISO Warsaw + HH:MM (oba pola).
-    Emit synth event z source=pre_proposal_recheck + new_ck_hhmm populated.
+    Trwale zapisuje event z source=pre_proposal_recheck + new_ck_hhmm.
+
+    Oracle nie mockuje osobno emit/apply: wynik scoringu wolno odswiezyc
+    dopiero po potwierdzonym postcondition w orders_state. To chroni przed
+    powrotem luki, w ktorej pre-proposal widzial nowy czas tylko lokalnie.
     """
     _reset_state()
     _set_flag(True)
@@ -164,33 +180,96 @@ def test_recheck_force_fetch_old_emits_event():
         fetch_count[0] += 1
         return raw
 
-    emit_calls = []
-    def _spy_emit(*args, **kwargs):
-        emit_calls.append(kwargs)
-    apply_calls = []
-    def _spy_apply(event):
-        apply_calls.append(event)
+    # Osobne hermetyczne stores zachowuja ten test bezpiecznym rowniez przy
+    # uruchomieniu legacy script-runnerem poza pytestowym conftestem.
+    with tempfile.TemporaryDirectory(prefix="v327_durable_") as tmpdir:
+        root = Path(tmpdir)
+        events_db = root / "events.db"
+        state_path = root / "orders_state.json"
+        state_path.write_text("{}", encoding="utf-8")
+        with sqlite3.connect(events_db) as conn:
+            conn.executescript(
+                """
+                CREATE TABLE events (
+                    event_id TEXT PRIMARY KEY,
+                    event_type TEXT NOT NULL,
+                    order_id TEXT,
+                    courier_id TEXT,
+                    payload TEXT,
+                    created_at TEXT NOT NULL,
+                    processed_at TEXT,
+                    status TEXT DEFAULT 'pending'
+                );
+                CREATE INDEX idx_events_status ON events(status);
+                CREATE TABLE processed_events (
+                    event_id TEXT PRIMARY KEY,
+                    processed_at TEXT NOT NULL
+                );
+                """
+            )
 
-    # MOCK panel HTTP boundary (fetch_order_details), ale REAL normalize_order
-    with patch.object(panel_client, "fetch_order_details", side_effect=_spy_fetch), \
-         patch("dispatch_v2.event_bus.emit_audit", side_effect=_spy_emit), \
-         patch("dispatch_v2.state_machine.update_from_event", side_effect=_spy_apply):
-        result = dispatch_pipeline.get_fresh_czas_kuriera_for_bag(bag, now)
+        with patch.object(event_bus, "_db_path", return_value=str(events_db)), \
+             patch.object(event_bus, "_audit_log_initialized", False), \
+             patch.object(event_bus, "_state_apply_outbox_initialized", False), \
+             patch.object(event_bus, "_state_apply_outbox_db_path", None), \
+             patch.object(
+                 common,
+                 "decision_flag",
+                 side_effect=lambda name: name
+                 == "ENABLE_CZASOWKA_RUTCOM_FORWARD_AUTHORITY",
+             ), \
+             patch.object(state_machine, "_state_path", return_value=str(state_path)), \
+             patch.object(lifecycle_downstream, "apply", return_value=None), \
+             patch.object(panel_client, "fetch_order_details", side_effect=_spy_fetch), \
+             patch.object(
+                 committed_pickup_apply,
+                 "apply_event",
+                 wraps=committed_pickup_apply.apply_event,
+             ) as durable_apply:
+            state_machine.upsert_order(
+                "1004",
+                {
+                    "order_id": "1004",
+                    "status": "assigned",
+                    "commitment_level": "assigned",
+                    "courier_id": "100",
+                    "order_type": "elastic",
+                    "pickup_at_warsaw": "2026-04-26T16:30:00+02:00",
+                    "czas_kuriera_warsaw": "2026-04-26T17:00:00+02:00",
+                    "czas_kuriera_hhmm": "17:00",
+                },
+                event="TEST_SEED",
+            )
+            result = dispatch_pipeline.get_fresh_czas_kuriera_for_bag(
+                bag, now
+            )
+            stored = state_machine.get_order_strict("1004")
+            with sqlite3.connect(events_db) as conn:
+                outbox = conn.execute(
+                    "SELECT state_status, downstream_status "
+                    "FROM state_apply_outbox"
+                ).fetchone()
+
+        assert durable_apply.call_count == 1
+        durable_event = durable_apply.call_args.args[0]
 
     assert fetch_count[0] == 1, f"old order MUST fetch, got {fetch_count[0]}"
     # Result: ISO Warsaw computed by normalize_order
     assert result["1004"] == "2026-04-26T17:30:00+02:00", \
         f"fresh ISO MUST be returned (computed via normalize), got {result}"
-    assert len(emit_calls) == 1, f"MUST emit 1 synth event, got {len(emit_calls)}"
-    payload = emit_calls[0]["payload"]
+    assert stored is not None
+    assert stored["czas_kuriera_warsaw"] == "2026-04-26T17:30:00+02:00"
+    assert stored["czas_kuriera_hhmm"] == "17:30"
+    payload = durable_event["payload"]
     assert payload["source"] == "pre_proposal_recheck"
     # KEY FIX V3.27.1 sesja 3: oba pola w payload
     assert payload["new_ck_iso"] == "2026-04-26T17:30:00+02:00", \
         f"payload MUST have ISO new_ck_iso, got {payload.get('new_ck_iso')}"
     assert payload["new_ck_hhmm"] == "17:30", \
         f"payload MUST have HH:MM new_ck_hhmm (state_machine sanity), got {payload.get('new_ck_hhmm')}"
-    assert "_PRE_RECHECK_" in emit_calls[0]["event_id"]
-    assert len(apply_calls) == 1, "MUST call state_machine.update_from_event"
+    marker = stored["last_lifecycle_event_id_czas_kuriera_updated"]
+    assert marker.startswith("1004_CZAS_KURIERA_UPDATED")
+    assert outbox == ("applied", "applied")
 
 
 def test_recheck_parallel_no_bag_limit():
@@ -224,6 +303,55 @@ def test_recheck_fetch_failure_defensive():
         result = dispatch_pipeline.get_fresh_czas_kuriera_for_bag(bag, now)
 
     assert result["3001"] == "cached_value", f"fetch fail MUST fallback to cached, got {result}"
+
+
+def test_recheck_freezes_authority_policy_before_async_fetch(monkeypatch):
+    """OFF-started HTTP work cannot become authority after a mid-flight flip."""
+    _reset_state()
+    monkeypatch.setattr(
+        dispatch_pipeline.C, "ENABLE_V327_PRE_PROPOSAL_RECHECK", True
+    )
+    live = {"forward": False}
+
+    def decision(name):
+        if name == "ENABLE_CZASOWKA_RUTCOM_FORWARD_AUTHORITY":
+            return live["forward"]
+        return False
+
+    monkeypatch.setattr(dispatch_pipeline.C, "decision_flag", decision)
+    seen = []
+
+    def fetch(_oid, timeout=None, *, authority_policy):
+        seen.append(("fetch", authority_policy))
+        live["forward"] = True
+        return ("2026-04-26T17:05:00+02:00", "17:05")
+
+    def emit(*_args, authority_policy, **_kwargs):
+        seen.append(("emit", authority_policy))
+        return False
+
+    monkeypatch.setattr(
+        dispatch_pipeline, "_v327_safe_fetch_czas_kuriera", fetch
+    )
+    monkeypatch.setattr(
+        dispatch_pipeline, "_v327_emit_pre_recheck_event", emit
+    )
+    bag = [
+        _make_order_sim(
+            "policy-snapshot",
+            assigned_min_ago=20,
+            ck_warsaw="2026-04-26T17:00:00+02:00",
+        )
+    ]
+
+    dispatch_pipeline.get_fresh_czas_kuriera_for_bag(
+        bag, datetime.now(timezone.utc)
+    )
+
+    assert [kind for kind, _policy in seen] == ["fetch", "emit"]
+    assert seen[0][1] is seen[1][1]
+    assert seen[0][1].rutcom_forward_authority_enabled is False
+    assert live["forward"] is True
 
 
 def test_recheck_cache_eviction():

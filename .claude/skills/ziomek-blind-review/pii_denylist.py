@@ -78,7 +78,7 @@ PRUNED_DIRS = (".git", "__pycache__", ".pytest_cache", ".mypy_cache", ".ruff_cac
 # najpierw oracle, że KAŻDY limit/early-stop jego parsera zwraca content_done=False;
 # inaczej nowy typ stałby się kopiowalny po tylko częściowym skanie treści.
 BUNDLE_COPYABLE_SUFFIXES = (
-    ".md", ".json", ".yaml", ".yml", ".py", ".schema.json", ".txt",
+    ".md", ".json", ".yaml", ".yml", ".py", ".sh", ".schema.json", ".txt",
 )
 DATA_SUFFIXES = (
     ".json", ".jsonl", ".ndjson", ".csv", ".tsv", ".yaml", ".yml", ".txt",

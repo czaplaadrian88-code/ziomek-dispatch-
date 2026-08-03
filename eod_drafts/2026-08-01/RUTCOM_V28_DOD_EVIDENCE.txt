@@ -1,0 +1,129 @@
+RUTCOM COMMITTED PICKUP AUTHORITY v28 — DoD evidence
+Date: 2026-08-03 UTC
+Gate: engine.rutcom-committed-pickup-authority-491578
+Status at capture: candidate only; production unchanged; target flag effective OFF
+regresja: 6791 passed, 0 failed, 74 skipped, 8 xfailed, 153 warnings; full canonical HERMETIC_STRICT suite.
+e2e: 14/14 focused queue/authority/ABA/manifest/target-mode/ratchet checks; 166/166 direct contract cluster; 338/338 sibling authority/state/outbox/recovery cluster.
+pozytywny-wplyw: the same timezone-aware receipt contract now owns queue readiness and committed authority; a stale release cannot remove a newer rollback fence; only the exact measured production code and systemd target can reopen writers. Incident 491578 remains canonical 19:21 at ON.
+rollback: hot target flag false; code revert only after exact quiesce, terminal outbox, empty queue, persistent backup, UUID fence and a byte-exact roll-forward manifest. No durable receipt projection or caller-asserted code mode exists.
+N-D: feasibility, scoring, selection, routes, plan consumers, serializers, panel UI and courier app do not parse this receipt or write the rollback fence; they continue to consume the same coupled canonical state. No HARD/SOFT precedence or display contract changed.
+model: gpt-5.6-sol; effort=xhigh; cross-layer time authority, durable transaction identity and production rollback have high error cost.
+
+ROOT CAUSE / REVIEW INPUT
+- Rejected v27 commit: a168e7a519f19425ba8aef69120f9e8ad93f2e49.
+- v27 authority verdict SHA-256:
+  57fb04abfb7234fa429558b520c7aee993948b07f3adc5e950af021f7e8aefb7
+- v27 rollout verdict SHA-256:
+  ce35134afb0505f6897f723829f5858c237d517c6e2218428e0ebfbc02ca70a5
+- Both verdicts were CONFIRMED_DEFECT and passed blind-review driver check.
+- MAIN independently reproduced on the exact v27 bytes:
+  1. A naive canonical v6 clock was queue-shape-valid and ready while the
+     committed-authority oracle rejected the same receipt.
+  2. Rollback fence release had no transaction ID; a delayed release A could
+     unlink a later fence B (ABA).
+  3. --v4-code-active was a reusable operator assertion, not proof of the
+     deployed bytes or the systemd target that would run them.
+- Pre-fix V28 oracle baseline: 7 failed / 0 passed.
+
+SOURCE FIX / SINGLE OWNERS
+- coordinator_time_recheck._receipt_clock_pair rejects requested_at or
+  eligible_at without an explicit usable timezone. It never invents UTC.
+- coordinator_time_recheck._legacy_rollback_audit has one contract:
+  safe_empty_queue is true only for an actually empty queue. The old
+  projection/readiness policy and all projected/pending-v4 output fields were
+  removed, not retained as a fallback.
+- rollback_fence.v3 contains one UUID v4, exact backup and fenced queue hashes,
+  plus a canonical manifest of all eleven executable authority/entrypoint/tool
+  files. The queue validates the exact schema and digest set.
+- release_legacy_rollback_fence requires the expected fence ID and active code
+  manifest under the same queue flock. ID or byte drift fails closed.
+- tools/rutcom_committed_authority_rollback measures only
+  /root/.openclaw/workspace/scripts/dispatch_v2 and refuses mutation when the
+  tool itself runs from another copy. There is no caller-selected root.
+- The systemd probe validates loaded+inactive plus exact WorkingDirectory,
+  dispatch venv interpreter and module ExecStart for panel watcher and shadow.
+- collect_status.safe_for_code_revert requires current deployed bytes to match
+  the manifest bound into the exact prepared fence.
+- prepare and release remeasure code and writer quiescence around mutation;
+  drift yields HOLD. No renderer override, second writer, migration, threshold,
+  fallback, new feature flag or target-data rewrite was added.
+
+COMPLETENESS MAP
+miejsce | rola | writer/consumer | dotknięte | powód/test
+coordinator_time_recheck._receipt_clock_pair | queue clock owner | consumer | TAK | naive v5/v6 poison oracle + authority parity
+coordinator_time_recheck prepare/status/release | rollback transaction owner | writer/consumer | TAK | empty queue, UUID ABA and manifest mismatch tests
+committed_pickup_authority._valid_coordinator_receipt | authority clock owner | consumer | N-D (code) | already strict; direct parity assertion proves shared rejection
+panel_watcher claim/apply/recovery | runtime receipt transport | consumer | N-D | existing exact claim/ACK contract; 338 sibling tests
+rollback operator tool | production mode gate | writer/operator | TAK | canonical-root, exact-byte, status and release tests
+panel watcher + shadow systemd units | executable target | consumers | TAK (probe) | exact WorkingDirectory/interpreter/module oracle; wrong module is RED
+feasibility/route/plan/scoring/selection | downstream decision logic | consumers | N-D | no receipt/fence parsing or time writer; same canonical state input
+panel/API/app serializers | display consumers | consumers | N-D | no UI override; still display canonical coupled CK/pickup state
+twins registry | future completeness owner | procedure | TAK | durable-time-authority-boundary finds 8/8 surfaces; skill selftest PASS
+tests queue/rollback/ratchet | release gate | verifiers | TAK | negative baseline, positive oracle, nine mutation groups and ratchets
+
+ORACLES AFTER FIX
+- Focused final set: 14 passed in 1.05 s.
+- Direct contract cluster: 166 passed in 87.63 s.
+- Sibling authority/state/outbox/recovery cluster: 338 passed in 17.56 s.
+- ziomek-cto skill registry selftest: PASS.
+- Runtime read-only unit probe: both exact targets verified; both units active,
+  therefore quiesced=false as expected and no release mutation was attempted.
+
+MUTATION PROBES AND EXACT RESTORE
+- Disable timezone rejection: 2 failed.
+- Disable exact fence-ID comparison: 1 failed.
+- Disable bound code-manifest comparison: 1 failed.
+- Permit a noncanonical tool copy: 1 failed.
+- Remove deployed-byte verification from safe_for_code_revert: 1 failed.
+- Make --fence-id optional: 1 failed.
+- Remove one executable path from the canonical manifest: 1 failed.
+- Weaken safe_empty_queue back to blocker-only projection semantics: 1 failed.
+- Accept a wrong systemd target module: 1 failed.
+- All mutations were restored with apply_patch; final focused set is 14/14 and
+  final py_compile/import/diff checks are rerun before candidate freeze.
+- Exact restored SHA-256 at evidence capture:
+  coordinator_time_recheck.py 218c5140666481ee19926d3cc1629f6df637b024d64b305a851e2036455b06ed
+  tools/rutcom_committed_authority_rollback.py 68811518ffc9ed59b219f54b001b5c91fe5945c7c0fffe305e8a4bfd68f62741
+  tests/test_coordinator_force_recheck_2026_06_30.py 28f905b413d67ef6f9a1f6e0eafff6f18bcc1d8d0f8d72ca32198d098174bcba
+  tests/test_rutcom_committed_authority_rollback.py 3b34dd801e9a1cc14736d447453dec9341f27ac6825e7da0d4f3ed69f5168e3e
+  tests/test_committed_pickup_authority_ratchet.py 3b110b9a7a9f84541a5f88c6d94644c72b9614775c56f6d1d85618d4a9b9abef
+  twins-registry.json a6c2873d662b86927dd1106f5fd903636992563adb55bf3a7c3e530875b0f17a
+
+CANONICAL REGRESSION
+- Environment:
+  ZIOMEK_SCRIPTS_ROOT=/root/worktrees/dispatch_v2/active/20260802-rutcom-v17-integration-pkgroot
+  PYTHONPATH=/root/worktrees/dispatch_v2/active/20260802-rutcom-v17-integration-pkgroot
+  HERMETIC_STRICT=1
+- Command:
+  /root/.openclaw/venvs/dispatch/bin/python -m pytest tests/ -q
+- Result: 6791 passed, 74 skipped, 8 xfailed, 153 warnings, 0 failed
+  in 463.33 s. Delta versus rejected v27: +10 passed with identical skipped,
+  xfailed and warning profile.
+
+STATIC / TOOLING GATES
+- py_compile production modules and three direct test modules: PASS.
+- import coordinator_time_recheck and rollback operator tool: PASS.
+- git diff --check: PASS before evidence capture; rerun before freeze.
+- flag lifecycle repo-hermetic: 557/557 curated, 0 errors.
+- flag lifecycle live: 557/557 curated, 0 errors.
+- run-dispatch-v2 flags: target remains production OFF; no flip performed.
+- entropy dashboard: sentinel-as-data remains 0; this diff adds no flag,
+  metric, threshold, HARD rule or serializer.
+- ziomek-cto scope: durable-time-authority-boundary 8/8 grep checks OK;
+  feasibility-hard is N-D for all four sites because no feasibility changed.
+- ziomek-cto mechanical DoD on tracked snapshot
+  d6ab95f30245cd7e1bae24b5862ace76a04e7949: PASS (37-file complete feature
+  diff; regression/e2e/positive-impact/rollback/flag/twin gates all PASS).
+
+ROLLBACK / LIVE
+- Candidate is not deployed and no service was restarted.
+- Target flag remains absent/effective OFF in production.
+- Primary kill switch: ENABLE_CZASOWKA_RUTCOM_FORWARD_AUTHORITY=false.
+- Hot OFF changes behavior immediately. Code rollback additionally requires
+  the exact empty queue, persistent 0600 backup, terminal outbox, UUID fence,
+  eleven-file target manifest and exact systemd target proof.
+- Production release still requires one frozen commit, two fresh independent
+  CLEAN exact-byte reviews, fresh collision/live preflight, explicit backups,
+  controlled quiesce/restarts of panel watcher and shadow only, target flip ON,
+  effective fingerprint/health/replay/smoke verification and prepared rollback.
+- dispatch-telegram is outside scope and must remain untouched.

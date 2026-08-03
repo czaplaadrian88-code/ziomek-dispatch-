@@ -1,0 +1,116 @@
+RUTCOM COMMITTED PICKUP AUTHORITY v26 — DoD evidence
+Date: 2026-08-03 UTC
+Gate: engine.rutcom-committed-pickup-authority-491578
+Status at capture: candidate only; production unchanged; forward flag effective OFF
+regresja: 6773 passed, 0 failed, 74 skipped, 8 xfailed, 153 warnings; full canonical HERMETIC_STRICT suite.
+e2e: 15/15 focused review oracles and 257/257 broad touched queue/authority/state/rollback tests.
+pozytywny-wplyw: durable exact click authority survives watcher delay/crash without reopening lifecycle or allowing an unclaimed raw CAS; incident 491578 remains canonical 19:21 at ON.
+rollback: hot forward flag false; code revert only after quiesce and exact queue/outbox preflight; ready durable legacy work is backed up and rebased, future/policy-bound/claimed work blocks.
+N-D: watcher transport, outbox, plan, scoring, feasibility, serializers and courier app consume the same queue/state contracts; no renderer, HARD/SOFT, selection or route policy changed.
+model: gpt-5.6-sol; effort=xhigh; cross-layer authority, crash recovery, lifecycle CAS and rollback have high error cost.
+
+ROOT CAUSE / REVIEW INPUT
+- v25 rollout verdict SHA-256:
+  2f49acc5bb02913a38ebeb95d480e3e4a035b9afac76f79c54cd8c6aade9e0d6
+- v25 authority verdict SHA-256:
+  b577691081c584da284be93fac0c9e0ee7302c27e3d47efced1faf5cb46d6dd9
+- Both verdicts: CONFIRMED_DEFECT; both validated by blind-review driver.
+- MAIN independently reproduced the findings and connected consumers:
+  1. Complete versioned raw coordinator CK/pickup CAS could write without the
+     exact queue claim.
+  2. Versioned pickup CAS bypassed the active lifecycle fence and could change
+     an elastic order after pickup when forward was ON.
+  3. A valid unclaimed canonical receipt was silently deleted after five
+     minutes when the watcher stopped or the order was absent.
+  4. Authority had a second five-minute age owner that suppressed an otherwise
+     live exact queue receipt.
+  5. Code rollback copied old eligible_at into the pre-v4 scalar TTL reader and
+     could immediately lose durable pending work.
+  6. Code rollback could rebase a future/not-ready receipt into ready work.
+- Initial pre-fix reproduction: six defect classes red and one control green;
+  unreadable-queue twin variants were added before final freeze.
+
+SOURCE FIX / SINGLE OWNERS
+- state_machine._legacy_time_claim_gate:
+  one fail-closed exact-claim gate for both raw time types, consumed by the
+  terminal oracle and immediately before both state writers. Missing claim is
+  terminally superseded. Queue read error is retryable pending but never write
+  permission.
+- committed_pickup_authority.time_event_cas_status:
+  one planned/assigned and not-picked/not-delivered lifecycle fence for pickup
+  CAS regardless of envelope version.
+- committed_pickup_authority._valid_coordinator_receipt:
+  exact verified live queue membership is the durable lease. Wall-clock age is
+  no longer a second authority owner; timestamps remain audit and future-skew
+  causality fences.
+- coordinator_time_recheck:
+  canonical v4/v5/v6 receipts are durable from enqueue through claim/exact ACK.
+  Only the pre-receipt scalar keeps the historical TTL. Old, future and corrupt
+  canonical records remain fail-closed evidence rather than silent deletion.
+- coordinator_time_recheck legacy rollback projection:
+  after an exact persistent backup, ready durable pre-policy work is projected
+  with migration time for the old scalar TTL reader. A future receipt is a
+  blocker and cannot be rebased into ready work.
+- No fallback, second state writer, renderer override, migration, new flag or
+  new threshold was added.
+
+COMPLETENESS MAP
+- Producers: coordinator enqueue v4/v5/v6 and historical scalar.
+- Transport authority: exact queue claim, verification, durable event replay.
+- Policy/CAS: receipt authority validation and pickup lifecycle fence.
+- State consumers/writers: both raw time event oracles and handlers.
+- Rollout/revert: queue audit, persistent backup and pre-v4 projection.
+- Downstream plan/scoring/serializer/app: N-D, consume canonical coupled state.
+- Tests cover missing and unreadable queue for both twins, ON/OFF lifecycle,
+  delayed enqueue/claim/ACK, authority age, old-work rollback and future blocker.
+
+ORACLES AFTER FIX
+- Focused exact restore: 15 passed.
+- Broad touched cluster: 257 passed in 90.91 s.
+- Full canonical suite includes all focused and broad cases.
+
+MUTATION PROBES AND EXACT RESTORE
+- Remove exact claim gate behavior: 4 failed.
+- Restore versioned pickup lifecycle bypass: 1 failed / 1 control passed.
+- Restore canonical queue five-minute expiry: 3 failed.
+- Restore authority five-minute max age: 1 failed.
+- Project old eligible_at during code rollback: 1 failed.
+- Remove future-receipt rollback blocker: 1 failed.
+- Exact restore SHA-256:
+  state_machine.py bd7a67ab0d89f6c533e76c3d4ad92f2347ab0bb3cf2a634c36f3e841144cdbbe
+  committed_pickup_authority.py 36d2a6c6fa91a2e4edef538655e46f6ca3fb5bcb5ffb7a5272d8a6ade459f616
+  coordinator_time_recheck.py cf6b8c00c6acbabdac74bebf98594ec56bb8a65a02c3a5dd3b62eea9cc527fe8
+  tests/test_rutcom_committed_authority_491578.py d7ddcaf30656cc9b2fe80bd94c1d9ec7b22b6548c407c6cce5724a8d672cd790
+  tests/test_coordinator_force_recheck_2026_06_30.py 6e323489bdb3ae2e724184b3d99d3ce19c2e2dd9b8ef9209663a4bc2e0f25b13
+  tests/test_committed_pickup_authority_ratchet.py ad36d5b1e4db2d36faaaea19d5a9908c34cc1ad55164eb2cc98b08568f8f53b6
+
+CANONICAL REGRESSION
+- Environment:
+  ZIOMEK_SCRIPTS_ROOT=/root/worktrees/dispatch_v2/active/20260802-rutcom-v17-integration-pkgroot
+  PYTHONPATH=/root/worktrees/dispatch_v2/active/20260802-rutcom-v17-integration-pkgroot
+  HERMETIC_STRICT=1
+- Command:
+  /root/.openclaw/venvs/dispatch/bin/python -m pytest tests/ -q -ra
+- Result: 6773 passed, 74 skipped, 8 xfailed, 153 warnings, 0 failed
+  in 463.30 s. Delta versus frozen v25: +12 passed with identical skipped,
+  xfailed and warning profile.
+
+STATIC / TOOLING GATES
+- py_compile production modules: PASS.
+- import dispatch_v2.state_machine/committed_pickup_authority/
+  coordinator_time_recheck: PASS.
+- git diff --check: PASS before evidence docs; rerun before freeze.
+- flag lifecycle repo-hermetic: 557/557 curated, 0 errors.
+- entropy dashboard: sentinel-as-data remains 0; no new flag or threshold.
+
+ROLLBACK / LIVE
+- Candidate is not deployed and no service was restarted.
+- Target flag remains absent/effective OFF in production.
+- Primary kill switch: ENABLE_CZASOWKA_RUTCOM_FORWARD_AUTHORITY=false.
+- Code rollback requires exact quiesce/fence/preflight and persistent 0600 queue
+  backup; policy-bound, claimed, future or malformed work blocks.
+- Production release still requires one frozen commit, two fresh independent
+  CLEAN exact-byte reviews, fresh production collision check, writer quiesce,
+  backups, compile/import, fenced preflight, controlled restarts of panel watcher
+  and shadow only, target flip ON, fingerprint/health/smoke verification.
+- dispatch-telegram is outside scope and must remain untouched.

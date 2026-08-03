@@ -27,8 +27,45 @@ if [ -f "$T/b1/SKILL.md" ] && [ ! -f "$T/b1/AUTHOR_REPORT.md" ]; then
   ok "blind: SKILL.md jest, AUTHOR_REPORT.md wyciety"
 else bad "blind: bundle niepoprawny [$(ls "$T/b1" 2>/dev/null | tr '\n' ' ')]"; fi
 
+# 2b. skill może recenzować własny kod, ale wyjątek nie przepuszcza wniosków
+mkdir -p "$T/self-review/.claude/skills/ziomek-blind-review/author-review"
+cp "$HERE/driver.py" "$T/self-review/.claude/skills/ziomek-blind-review/driver.py"
+cp "$HERE/pii_denylist.py" "$T/self-review/.claude/skills/ziomek-blind-review/pii_denylist.py"
+cp "$HERE/selftest.sh" "$T/self-review/.claude/skills/ziomek-blind-review/selftest.sh"
+printf 'cudzy wniosek\n' > "$T/self-review/.claude/skills/ziomek-blind-review/AUTHOR_REPORT.md"
+printf 'cudzy wniosek w katalogu\n' > "$T/self-review/.claude/skills/ziomek-blind-review/author-review/x.py"
+"$PY" "$HERE/driver.py" blind "$T/self-review" --out "$T/b-self-review" >/dev/null 2>&1
+if [ -f "$T/b-self-review/.claude/skills/ziomek-blind-review/driver.py" ] \
+   && [ -f "$T/b-self-review/.claude/skills/ziomek-blind-review/selftest.sh" ] \
+   && [ ! -e "$T/b-self-review/.claude/skills/ziomek-blind-review/AUTHOR_REPORT.md" ] \
+   && [ ! -e "$T/b-self-review/.claude/skills/ziomek-blind-review/author-review" ]; then
+  ok "self-review: kod i shell oracle skilla sa, wnioski nadal wyciete"
+else bad "self-review: wyjatek sciezki rozszerzyl lub wycial zly zakres"; fi
+
+# Exact verifier uruchomiony Z WNĘTRZA bundla nie może dopisać __pycache__
+"$PY" "$T/b-self-review/.claude/skills/ziomek-blind-review/driver.py" verify "$T/b-self-review.manifest.json" >/dev/null 2>&1
+want "self-verify: bundled driver nie mutuje exact set" 0 $?
+[ ! -e "$T/b-self-review/.claude/skills/ziomek-blind-review/__pycache__" ] \
+  && ok "self-verify: brak __pycache__ w bundlu" \
+  || bad "self-verify: verifier dopisal __pycache__ do bundla"
+
+# 2c. kopiowalny shell bez pełnego skanu treści blokuje CAŁY bundle
+mkdir -p "$T/unscannable-shell"
+printf 'neutral\n' > "$T/unscannable-shell/README.md"
+printf '\377\n' > "$T/unscannable-shell/oracle.sh"
+"$PY" "$HERE/driver.py" blind "$T/unscannable-shell" --out "$T/b-unscannable-shell" >/dev/null 2>&1
+want "shell bez pełnego skanu → ODMOWA (rc 3)" 3 $?
+[ ! -e "$T/b-unscannable-shell" ] && ok "odmowa shell nie zostawia bundla" || bad "odmowa shell zostawila bundle"
+
 # 3. manifest NIE w bundlu (leci obok)
 [ ! -f "$T/b1/_BLIND_MANIFEST.json" ] && ok "manifest poza bundlem" || bad "manifest wyciekl do bundla"
+
+# 3b. manifest wiąże każdy plik i mutation exact bytes czerwienieje
+"$PY" "$HERE/driver.py" verify "$T/b1.manifest.json" >/dev/null 2>&1
+want "digest manifest: exact bundle → PASS" 0 $?
+printf '\nmutation\n' >> "$T/b1/SKILL.md"
+"$PY" "$HERE/driver.py" verify "$T/b1.manifest.json" >/dev/null 2>&1
+want "digest manifest: mutation → HOLD" 1 $?
 
 # 4. pin fail-closed: podmiana bajtu → HOLD (rc 1)
 cp -r "$HERE/fixtures/case-clean-baseline" "$T/pin"
@@ -39,6 +76,17 @@ json.dump({"SKILL.md": hashlib.sha256(open(p, "rb").read()).hexdigest()}, open(s
 PYEOF
 printf "\nmutacja\n" >> "$T/pin/SKILL.md"
 "$PY" "$HERE/driver.py" blind "$T/pin" --pin "$T/pin.json" --out "$T/b2" >/dev/null 2>&1; want "pin mismatch → HOLD" 1 $?
+
+# 4b. częściowy pin nie może otrzymać pin_verified=true
+cp -r "$HERE/fixtures/case-clean-baseline" "$T/partial"
+"$PY" - "$T/partial/SKILL.md" "$T/partial.json" <<'PYEOF'
+import hashlib, json, sys
+p = sys.argv[1]
+json.dump({"SKILL.md": hashlib.sha256(open(p, "rb").read()).hexdigest()}, open(sys.argv[2], "w"))
+PYEOF
+printf 'neutral\n' > "$T/partial/EXTRA.md"
+"$PY" "$HERE/driver.py" blind "$T/partial" --pin "$T/partial.json" --out "$T/b-partial" >/dev/null 2>&1
+want "częściowy pin → HOLD" 1 $?
 
 # 5. check: dobry werdykt → 0
 echo '{"disposition":"CONFIRMED_DEFECT","findings":[{"file":"SKILL.md","line":20,"claim":"x","reproduction":"y"}]}' > "$T/good.json"

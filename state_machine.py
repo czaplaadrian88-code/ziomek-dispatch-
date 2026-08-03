@@ -36,13 +36,50 @@ from dispatch_v2.common import (
     now_utc,
     setup_logger,
 )
+from dispatch_v2.committed_pickup_authority import (
+    ASSIGNMENT_CK_FORWARD_SNAPSHOT_FIELD,
+    ASSIGNMENT_CK_PASSIVE_SNAPSHOT_FIELD,
+    CK_CHANGE_REVISION_OBSERVATION_FIELD,
+    CK_CHANGE_REVISION_STATE_FIELD,
+    COMMITTED_PICKUP_COUPLED_FIELDS,
+    COMMITTED_TIME_POLICY_SNAPSHOT_FIELD,
+    MANUAL_CK_AUTHORITY_FLAG,
+    NEW_ORDER_TIME_AUTHORITY_SNAPSHOT_FIELD,
+    NEW_ORDER_TIME_INTENT_FIELD,
+    NEW_ORDER_TIME_INTENT_ID_FIELD,
+    PASSIVE_CK_SOURCES,
+    RETIRED_CZASOWKA_CK_ONLY_SOURCES,
+    RUTCOM_FORWARD_AUTHORITY_FLAG,
+    CommittedPickupPolicySnapshot,
+    CommittedPickupResolution,
+    ResolutionOutcome,
+    committed_pickup_effect_applied,
+    committed_time_contract_is_complete,
+    deserialize_committed_time_policy,
+    deserialize_coordinator_event_policy,
+    new_order_time_intent_is_valid,
+    normalize_pickup_revision,
+    pickup_event_has_authority_artifact,
+    pickup_payload_requires_coordinator_receipt,
+    project_time_event_order,
+    project_time_observation_order,
+    resolve_czasowka_assignment_ck,
+    resolve_czasowka_committed_observation,
+    resolve_czasowka_pickup_observation as _resolve_pickup_observation,
+    state_has_committed_pickup_artifact,
+    time_event_cas_is_versioned,
+    time_event_cas_status,
+    validate_committed_pickup_event,
+    validate_committed_time_policy_source,
+)
 from dispatch_v2.core.jsonl_appender import append_jsonl
 from dispatch_v2.order_fsm import FsmOutcome, FsmVerdict, validate_order_event
 
 _WARSAW_TZ = ZoneInfo("Europe/Warsaw")
 
 # Kanoniczna allowlista merge-only eventu naprawiającego rekord utworzony przez
-# cold-start COURIER_ASSIGNED zanim NEW_ORDER zdążył utrwalić detale.  Pola
+# historyczny cold-start COURIER_ASSIGNED sprzed pełnej inicjalizacji mógł
+# utrwalić rekord bez detali. Pola
 # lifecycle/identity (status, courier_id, first_seen, markery) są świadomie poza
 # kontraktem i żaden caller nie utrzymuje drugiej kopii tej listy.
 ORDER_DETAILS_ENRICHMENT_FIELDS = (
@@ -163,20 +200,10 @@ def _verify_czas_kuriera_consistency(
 # → pasywny re-odczyt panelu (panel_re_check / pre_proposal_recheck) wpuszczał
 # ten śmieć jako zmianę committed (#483023: 16:22→15:04, 5 s po assignie).
 # Dla czasówek NIE ingestujemy pasywnego czas_kuriera. Umówiony czas zmienia
-# się TYLKO przez deklarację odbioru (pickup_at → PICKUP_TIME_UPDATED, dowolny
-# kierunek = koordynator/restauracja) albo deliberatny, otagowany kanał
-# (np. ziomek_late_extension). Źródła pasywne (re-odczyt gastro) → blok.
-_CK_PASSIVE_SOURCES = frozenset({"panel_re_check", "pre_proposal_recheck"})
-
-_CZASOWKA_CK_MANUAL_EDIT_FLAG = (
-    "ENABLE_CZASOWKA_CK_MANUAL_EDIT_PASSTHROUGH"
-)
-_PANEL_STATUS_IDS_BY_STATE = {
-    "planned": frozenset({2}),
-    "assigned": frozenset({3, 4, 6}),
-    "picked_up": frozenset({5}),
-}
-
+# się TYLKO przez kanoniczny PICKUP_TIME_UPDATED z policy ownera. Historyczne
+# CK-only kanały są jawnie wygaszone przez RETIRED_CZASOWKA_CK_ONLY_SOURCES;
+# źródła pasywne (re-odczyt gastro) przechodzą wyłącznie wspólny resolver.
+_CK_PASSIVE_SOURCES = PASSIVE_CK_SOURCES
 
 def _is_czasowka_order(o: Optional[dict]) -> bool:
     """Delegacja do jednego kanonicznego klasyfikatora common.py."""
@@ -190,108 +217,424 @@ def _czasowka_reclaim_live_authorized(event: dict) -> bool:
     return decision_flag("ENABLE_CZASOWKA_RECLAIM_LIVE")
 
 
+def resolve_czasowka_ck_observation(
+    existing: Optional[dict],
+    ck_payload: Optional[dict],
+    *,
+    policy_snapshot: Optional[CommittedPickupPolicySnapshot] = None,
+) -> CommittedPickupResolution:
+    """Powiąż flagi i jednorazowy receipt ze wspólnym czystym resolverem."""
+    existing = existing or {}
+    payload = dict(ck_payload or {})
+    is_czasowka = _is_czasowka_order(
+        project_time_observation_order(existing, payload)
+    )
+    if payload.get("source") == "coordinator_force":
+        from dispatch_v2 import coordinator_time_recheck as receipt_store
+
+        oid = str(payload.get("oid") or existing.get("order_id") or "")
+        receipt = payload.get("authority_receipt")
+        claimed_event = receipt_store.get_claimed_event(
+            receipt, order_id=oid
+        )
+        if is_czasowka and claimed_event is not None:
+            try:
+                claimed_policy = deserialize_coordinator_event_policy(
+                    claimed_event
+                )
+            except (TypeError, ValueError):
+                return CommittedPickupResolution(
+                    outcome=ResolutionOutcome.SUPPRESS,
+                    reason="claimed_receipt_policy_missing",
+                )
+            if not claimed_policy.coordinator_time_authority_enabled:
+                return CommittedPickupResolution(
+                    outcome=ResolutionOutcome.SUPPRESS,
+                    reason="claimed_receipt_policy_off",
+                )
+            validation = validate_committed_pickup_event(
+                existing,
+                claimed_event,
+                is_czasowka=_is_czasowka_order(
+                    project_time_event_order(existing, claimed_event)
+                ),
+                # Exact claim jest dziennikiem transakcji sprzed outboxa.
+                # Rollback blokuje nowe claimy, ale nie gubi juz zwiazanej
+                # intencji po crashu w oknie claim -> SQLite outbox.
+                passive_guard_enabled=(
+                    claimed_policy.passive_guard_enabled
+                ),
+                manual_passthrough_enabled=(
+                    claimed_policy.manual_passthrough_enabled
+                ),
+                rutcom_forward_authority_enabled=(
+                    claimed_policy.rutcom_forward_authority_enabled
+                ),
+                coordinator_receipt_verified=True,
+            )
+            if validation.outcome is ResolutionOutcome.APPLY:
+                return CommittedPickupResolution(
+                    outcome=ResolutionOutcome.APPLY,
+                    reason="coordinator_receipt",
+                    event=claimed_event,
+                )
+            return CommittedPickupResolution(
+                outcome=ResolutionOutcome.SUPPRESS,
+                reason=f"claimed_receipt_rejected:{validation.reason}",
+            )
+        if not receipt_store.verify_pending_receipt(
+            receipt, order_id=oid
+        ):
+            if is_czasowka:
+                return CommittedPickupResolution(
+                    outcome=ResolutionOutcome.SUPPRESS,
+                    reason="receipt_not_pending",
+                )
+            return resolve_czasowka_committed_observation(
+                existing,
+                payload,
+                is_czasowka=False,
+                passive_guard_enabled=False,
+                manual_passthrough_enabled=False,
+                rutcom_forward_authority_enabled=False,
+            )
+        receipt_policy = receipt_store.receipt_policy_snapshot(receipt)
+        if receipt_policy is None:
+            if is_czasowka:
+                return CommittedPickupResolution(
+                    outcome=ResolutionOutcome.SUPPRESS,
+                    reason="receipt_policy_missing",
+                )
+            manual_enabled = False
+            forward_enabled = False
+            passive_enabled = False
+        else:
+            manual_enabled = receipt_policy.manual_passthrough_enabled
+            forward_enabled = (
+                receipt_policy.rutcom_forward_authority_enabled
+            )
+            passive_enabled = receipt_policy.passive_guard_enabled
+        base_receipt = receipt_store.receipt_base(receipt)
+        payload["authority_receipt"] = base_receipt
+        preliminary = resolve_czasowka_committed_observation(
+            existing,
+            payload,
+            is_czasowka=is_czasowka,
+            passive_guard_enabled=passive_enabled,
+            manual_passthrough_enabled=manual_enabled,
+            rutcom_forward_authority_enabled=forward_enabled,
+            coordinator_receipt_verified=True,
+        )
+        if (
+            preliminary.outcome is not ResolutionOutcome.APPLY
+            or preliminary.event is None
+        ):
+            return preliminary
+        claimed = receipt_store.claim_receipt(
+            receipt,
+            order_id=oid,
+            event=preliminary.event,
+        )
+        if claimed is None:
+            return CommittedPickupResolution(
+                outcome=ResolutionOutcome.SUPPRESS,
+                reason="receipt_claim_failed",
+            )
+        return preliminary
+
+    if policy_snapshot is not None:
+        if type(policy_snapshot) is not CommittedPickupPolicySnapshot:
+            raise TypeError(
+                "policy_snapshot must be CommittedPickupPolicySnapshot"
+            )
+        validate_committed_time_policy_source(
+            policy_snapshot, payload.get("source")
+        )
+        manual_enabled = policy_snapshot.manual_passthrough_enabled
+        forward_enabled = policy_snapshot.rutcom_forward_authority_enabled
+        passive_enabled = policy_snapshot.passive_guard_enabled
+    else:
+        manual_enabled = decision_flag(MANUAL_CK_AUTHORITY_FLAG)
+        forward_enabled = decision_flag(
+            RUTCOM_FORWARD_AUTHORITY_FLAG
+        )
+        passive_enabled = flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True)
+
+    return resolve_czasowka_committed_observation(
+        existing,
+        payload,
+        is_czasowka=is_czasowka,
+        passive_guard_enabled=passive_enabled,
+        manual_passthrough_enabled=manual_enabled,
+        rutcom_forward_authority_enabled=forward_enabled,
+    )
+
+
+def _czasowka_raw_ck_writer_is_retired(
+    existing: Optional[dict],
+    resolution: CommittedPickupResolution,
+    *,
+    policy_snapshot: Optional[CommittedPickupPolicySnapshot] = None,
+) -> bool:
+    """Jedna polityka handlera i postcondition dla wygaszonych raw CK writerów."""
+    if policy_snapshot is not None and type(
+        policy_snapshot
+    ) is not CommittedPickupPolicySnapshot:
+        raise TypeError("policy_snapshot must be CommittedPickupPolicySnapshot")
+    forward_enabled = (
+        policy_snapshot.rutcom_forward_authority_enabled
+        if policy_snapshot is not None
+        else decision_flag(RUTCOM_FORWARD_AUTHORITY_FLAG)
+    )
+    return bool(
+        resolution.outcome is ResolutionOutcome.NOT_APPLICABLE
+        and _is_czasowka_order(existing)
+        and (
+            forward_enabled
+            or state_has_committed_pickup_artifact(existing)
+        )
+    )
+
+
+def _assignment_ck_resolution(
+    existing: Optional[dict],
+    event: dict,
+) -> CommittedPickupResolution:
+    """Resolve one receipt-bound assignment policy for handler and oracle."""
+    has_forward = ASSIGNMENT_CK_FORWARD_SNAPSHOT_FIELD in event
+    has_passive = ASSIGNMENT_CK_PASSIVE_SNAPSHOT_FIELD in event
+    if has_forward and has_passive:
+        forward_raw = event.get(ASSIGNMENT_CK_FORWARD_SNAPSHOT_FIELD)
+        passive_raw = event.get(ASSIGNMENT_CK_PASSIVE_SNAPSHOT_FIELD)
+        if isinstance(forward_raw, bool) and isinstance(passive_raw, bool):
+            forward_enabled = forward_raw
+            passive_enabled = passive_raw
+        else:
+            # Partial/corrupt durable policy can still apply the lifecycle
+            # assignment, but must never regain a competing CK writer.
+            forward_enabled = True
+            passive_enabled = True
+    elif not has_forward and not has_passive:
+        # Compatibility for pre-v16 direct/unfinished events.  Forward rollout
+        # mechanically requires zero unfinished rows before the live flip.
+        forward_enabled = decision_flag(RUTCOM_FORWARD_AUTHORITY_FLAG)
+        passive_enabled = flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True)
+    else:
+        forward_enabled = True
+        passive_enabled = True
+    return resolve_czasowka_assignment_ck(
+        existing,
+        is_czasowka=_is_czasowka_order(existing),
+        passive_guard_enabled=passive_enabled,
+        rutcom_forward_authority_enabled=forward_enabled,
+    )
+
+
+def _new_order_time_authority_enabled(event: dict) -> bool:
+    """Read one receipt-bound policy for initial pickup/CK persistence."""
+    snapshot = event.get(NEW_ORDER_TIME_AUTHORITY_SNAPSHOT_FIELD)
+    if isinstance(snapshot, bool):
+        return snapshot
+    if snapshot is not None:
+        # A malformed durable marker must not recover a competing raw writer.
+        return True
+    try:
+        return bool(decision_flag(RUTCOM_FORWARD_AUTHORITY_FLAG))
+    except Exception:
+        # Direct/legacy callers without a durable snapshot fail closed for the
+        # ambiguous time tuple. Forward deploy drains every old NEW_ORDER row.
+        return True
+
+
+def resolve_czasowka_pickup_observation(
+    existing: Optional[dict],
+    pickup_payload: Optional[dict],
+    *,
+    policy_snapshot: Optional[CommittedPickupPolicySnapshot] = None,
+) -> CommittedPickupResolution:
+    """Powiąż pickup z tym samym exact-claimem co CK koordynatora.
+
+    Zwykły panelowy pickup pozostaje czystą obserwacją. Tylko powrót do
+    zapamiętanego stale-baseline wymaga dodatniego receiptu; claim jednego
+    eventu sprawia, że ten sam klik nie może autoryzować równocześnie CK i
+    przeciwnego pickupu z jednego response Rutcom.
+    """
+    existing = existing or {}
+    payload = dict(pickup_payload or {})
+    is_czasowka = _is_czasowka_order(
+        project_time_observation_order(existing, payload)
+    )
+    if payload.get("source") == "coordinator_force":
+        # The receipt proves who requested this refresh; it does not change the
+        # business class of the observed order.  A projection that remains
+        # elastic belongs to the existing legacy pickup writer in
+        # panel_watcher, regardless of the receipt's rollout snapshot.  Return
+        # before policy/claim handling so ON cannot promote it to committed
+        # authority and OFF cannot swallow the legacy refresh.
+        if not is_czasowka:
+            return _resolve_pickup_observation(
+                existing,
+                payload,
+                is_czasowka=False,
+            )
+        from dispatch_v2 import coordinator_time_recheck as receipt_store
+
+        oid = str(payload.get("oid") or existing.get("order_id") or "")
+        receipt = payload.get("authority_receipt")
+        claimed_event = receipt_store.get_claimed_event(
+            receipt, order_id=oid
+        )
+        if is_czasowka and claimed_event is not None:
+            try:
+                claimed_policy = deserialize_coordinator_event_policy(
+                    claimed_event
+                )
+            except (TypeError, ValueError):
+                return CommittedPickupResolution(
+                    outcome=ResolutionOutcome.SUPPRESS,
+                    reason="claimed_receipt_policy_missing",
+                )
+            if not claimed_policy.coordinator_time_authority_enabled:
+                return CommittedPickupResolution(
+                    outcome=ResolutionOutcome.SUPPRESS,
+                    reason="claimed_receipt_policy_off",
+                )
+            validation = validate_committed_pickup_event(
+                existing,
+                claimed_event,
+                is_czasowka=_is_czasowka_order(
+                    project_time_event_order(existing, claimed_event)
+                ),
+                passive_guard_enabled=(
+                    claimed_policy.passive_guard_enabled
+                ),
+                manual_passthrough_enabled=(
+                    claimed_policy.manual_passthrough_enabled
+                ),
+                rutcom_forward_authority_enabled=(
+                    claimed_policy.rutcom_forward_authority_enabled
+                ),
+                coordinator_receipt_verified=True,
+            )
+            proof = (claimed_event.get("payload") or {}).get(
+                "committed_authority_proof"
+            )
+            if (
+                validation.outcome is ResolutionOutcome.APPLY
+                and isinstance(proof, dict)
+                and proof.get("observation_kind") == "rutcom_pickup"
+            ):
+                return CommittedPickupResolution(
+                    outcome=ResolutionOutcome.APPLY,
+                    reason=str(
+                        (claimed_event.get("payload") or {}).get(
+                            "committed_authority"
+                        )
+                    ),
+                    event=claimed_event,
+                )
+            return CommittedPickupResolution(
+                outcome=ResolutionOutcome.SUPPRESS,
+                reason="receipt_claimed_for_other_event",
+            )
+        if not receipt_store.verify_pending_receipt(
+            receipt, order_id=oid
+        ):
+            return CommittedPickupResolution(
+                outcome=ResolutionOutcome.SUPPRESS,
+                reason="receipt_not_pending",
+            )
+        receipt_policy = receipt_store.receipt_policy_snapshot(receipt)
+        if receipt_policy is None:
+            return CommittedPickupResolution(
+                outcome=ResolutionOutcome.SUPPRESS,
+                reason="receipt_policy_missing",
+            )
+        forward_enabled = receipt_policy.rutcom_forward_authority_enabled
+        passive_enabled = receipt_policy.passive_guard_enabled
+        # coordinator_force jest źródłem zarezerwowanym: brak flagi nie może
+        # zamienić go w NOT_APPLICABLE, bo watcher potraktowałby to jako zgodę
+        # na legacy fallback bez receiptu. Claim już istniejący został obsłużony
+        # wyżej; nowa intencja przy rollbacku pozostaje fail-closed.
+        if not forward_enabled:
+            return CommittedPickupResolution(
+                outcome=ResolutionOutcome.SUPPRESS,
+                reason="pickup_authority_off",
+            )
+        if not passive_enabled:
+            return CommittedPickupResolution(
+                outcome=ResolutionOutcome.SUPPRESS,
+                reason="authority_requires_passive_guard",
+            )
+        payload["authority_receipt"] = receipt_store.receipt_base(receipt)
+        preliminary = _resolve_pickup_observation(
+            existing,
+            payload,
+            is_czasowka=is_czasowka,
+            coordinator_receipt_verified=True,
+        )
+        if (
+            preliminary.outcome is not ResolutionOutcome.APPLY
+            or preliminary.event is None
+        ):
+            return preliminary
+        if receipt_store.claim_receipt(
+            receipt,
+            order_id=oid,
+            event=preliminary.event,
+        ) is None:
+            return CommittedPickupResolution(
+                outcome=ResolutionOutcome.SUPPRESS,
+                reason="receipt_claim_failed",
+            )
+        return preliminary
+
+    if policy_snapshot is not None:
+        if type(policy_snapshot) is not CommittedPickupPolicySnapshot:
+            raise TypeError(
+                "policy_snapshot must be CommittedPickupPolicySnapshot"
+            )
+        validate_committed_time_policy_source(
+            policy_snapshot, payload.get("source")
+        )
+        forward_enabled = policy_snapshot.rutcom_forward_authority_enabled
+        passive_enabled = policy_snapshot.passive_guard_enabled
+    else:
+        forward_enabled = decision_flag(
+            RUTCOM_FORWARD_AUTHORITY_FLAG
+        )
+        passive_enabled = flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True)
+
+    # Istniejaca flaga manual passthrough autoryzuje wylacznie krawedz CK
+    # False->True. Zwykly pickup Rutcom przechodzi nowym kontraktem dopiero po
+    # wlaczeniu nowej flagi; inaczej caller zachowuje exact legacy path.
+    if is_czasowka and not forward_enabled:
+        return CommittedPickupResolution(
+            outcome=ResolutionOutcome.NOT_APPLICABLE,
+            reason="pickup_authority_off",
+        )
+    if is_czasowka and not passive_enabled:
+        return CommittedPickupResolution(
+            outcome=ResolutionOutcome.SUPPRESS,
+            reason="authority_requires_passive_guard",
+        )
+
+    return _resolve_pickup_observation(
+        existing,
+        payload,
+        is_czasowka=is_czasowka,
+    )
+
+
 def build_czasowka_manual_ck_pickup_event(
     existing: Optional[dict],
     ck_payload: Optional[dict],
 ) -> Optional[dict]:
-    """Zamien potwierdzona reczna korekte CK na kanoniczny pickup event.
-
-    Gastro nie daje autora ani timestampu edycji. Daje natomiast boolean
-    ``zmiana_czasu_odbioru``. Dopuszczenie jest celowo fail-closed i wymaga
-    jednoczesnie:
-
-    * nowej flagi decyzyjnej ON oraz aktywnego passive guarda,
-    * czasowki i pasywnego zrodla panel/pre-proposal,
-    * krawedzi markera False -> True (nie stalego True),
-    * niezmienionego ``pickup_at_warsaw`` w tym samym odczycie,
-    * panelowego statusu zgodnego z biezaca klasa stanu.
-
-    Ostatnie dwa warunki odcinaja znane re-stampy przy zmianie statusu. Gdy
-    gastro zmienia rowniez pickup, zwykly ``_diff_pickup_time`` pozostaje
-    jedynym writerem. Zwracany PICKUP_TIME_UPDATED utrzymuje jeden kanoniczny
-    zapis pickup -> czas_kuriera dla czasowek i tym samym pole czytane przez
-    aplikacje kuriera.
-    """
-    existing = existing or {}
-    ck_payload = ck_payload or {}
-
-    if not decision_flag(_CZASOWKA_CK_MANUAL_EDIT_FLAG):
-        return None
-    if not flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True):
-        return None
-    if not _is_czasowka_order(existing):
-        return None
-    source = ck_payload.get("source")
-    if source not in _CK_PASSIVE_SOURCES:
-        return None
-
-    # None/legacy nie jest dowodem False: fail-closed zamiast uznania braku
-    # baseline za reczna edycje. NEW_ORDER od 07.05 persistuje jawny bool.
-    if existing.get("zmiana_czasu_odbioru") is not False:
-        return None
-    if ck_payload.get("new_zmiana_czasu_odbioru") is not True:
-        return None
-
-    old_pickup = existing.get("pickup_at_warsaw")
-    observed_pickup = ck_payload.get("observed_pickup_at_warsaw")
-    new_ck_iso = ck_payload.get("new_ck_iso")
-    new_ck_hhmm = ck_payload.get("new_ck_hhmm")
-    if not old_pickup or not observed_pickup or not new_ck_iso or not new_ck_hhmm:
-        return None
-    try:
-        old_pickup_dt = datetime.fromisoformat(old_pickup)
-        observed_pickup_dt = datetime.fromisoformat(observed_pickup)
-        new_ck_dt = datetime.fromisoformat(new_ck_iso)
-    except (TypeError, ValueError):
-        return None
-    if old_pickup_dt != observed_pickup_dt:
-        return None
-    if new_ck_dt.strftime("%H:%M") != new_ck_hhmm:
-        return None
-    if new_ck_dt == old_pickup_dt:
-        return None
-
-    allowed_status_ids = _PANEL_STATUS_IDS_BY_STATE.get(existing.get("status"))
-    try:
-        observed_status_id = int(ck_payload.get("observed_status_id"))
-    except (TypeError, ValueError):
-        return None
-    if not allowed_status_ids or observed_status_id not in allowed_status_ids:
-        return None
-
-    delta_min = round(
-        (new_ck_dt - old_pickup_dt).total_seconds() / 60.0, 2
-    )
-    oid = str(ck_payload.get("oid") or existing.get("order_id") or "")
-    if not oid:
-        return None
-    return {
-        "event_type": "PICKUP_TIME_UPDATED",
-        "order_id": oid,
-        "courier_id": ck_payload.get("courier_id") or existing.get("courier_id"),
-        "payload": {
-            "oid": oid,
-            "courier_id": ck_payload.get("courier_id") or existing.get("courier_id"),
-            "old_pickup_at_warsaw": old_pickup,
-            "new_pickup_at_warsaw": new_ck_iso,
-            "old_prep_minutes": existing.get("prep_minutes"),
-            "new_prep_minutes": ck_payload.get("observed_prep_minutes"),
-            "new_decision_deadline": ck_payload.get("observed_decision_deadline"),
-            "new_zmiana_czasu_odbioru": True,
-            "delta_min": delta_min,
-            "source": f"{source}_manual_ck_edit",
-            "manual_ck_edit_passthrough": True,
-            "assignment_event_id_at_observation": (
-                ck_payload.get("assignment_event_id_at_observation")
-                or existing.get("assignment_event_id")
-            ),
-            "courier_id_at_observation": (
-                ck_payload.get("courier_id_at_observation")
-                or existing.get("courier_id")
-            ),
-        },
-        "event_id_suffix": "_CK_MANUAL_EDIT",
-    }
+    """Kompatybilny alias; polityka istnieje tylko w centralnym resolverze."""
+    resolution = resolve_czasowka_ck_observation(existing, ck_payload)
+    if resolution.outcome is ResolutionOutcome.APPLY:
+        return resolution.event
+    return None
 
 
 def _ck_backward_delta(
@@ -802,6 +1145,293 @@ def get_by_courier(courier_id: str, statuses: Optional[list] = None) -> list:
     return result
 
 
+def _pickup_authority_flags(
+    event: dict,
+    *,
+    durable_authorized: bool,
+) -> tuple[bool, bool, bool, bool, bool]:
+    """Exact outbox attestation zamraża tylko autorytet tego konkretnego eventu."""
+    payload = event.get("payload") or {}
+    authority = payload.get("committed_authority")
+    receipt_verified = False
+    if durable_authorized:
+        # Exact event został autoryzowany przed zapisem outboxa. Recovery
+        # odtwarza dokładne booleany policy lease, nigdy typ authority ani
+        # bieżący store flag. Brak/korupcja snapshotu failuje closed.
+        try:
+            durable_policy = deserialize_committed_time_policy(
+                event.get(COMMITTED_TIME_POLICY_SNAPSHOT_FIELD)
+            )
+        except (TypeError, ValueError):
+            return False, False, False, False, False
+        passive_enabled = durable_policy.passive_guard_enabled
+        manual_enabled = durable_policy.manual_passthrough_enabled
+        forward_enabled = durable_policy.rutcom_forward_authority_enabled
+        receipt_verified = True
+    else:
+        proof = payload.get("committed_authority_proof")
+        observation = (
+            proof.get("observation") if isinstance(proof, dict) else None
+        )
+        needs_receipt = bool(
+            authority == "coordinator_receipt"
+            or pickup_payload_requires_coordinator_receipt(payload)
+            or (
+                isinstance(observation, dict)
+                and observation.get("source") == "coordinator_force"
+            )
+        )
+        if needs_receipt:
+            from dispatch_v2 import coordinator_time_recheck
+
+            receipt_verified = coordinator_time_recheck.verify_claimed_event(
+                event
+            )
+            if receipt_verified:
+                # The claim is only a durable journal. Its exact v6 receipt,
+                # not current flags and not claim existence, owns authority.
+                try:
+                    claimed_policy = deserialize_coordinator_event_policy(
+                        event
+                    )
+                except (TypeError, ValueError):
+                    return False, False, False, False, False
+                return (
+                    claimed_policy.passive_guard_enabled,
+                    claimed_policy.manual_passthrough_enabled,
+                    claimed_policy.rutcom_forward_authority_enabled,
+                    True,
+                    False,
+                )
+            return False, False, False, False, False
+        passive_enabled = flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True)
+        manual_enabled = decision_flag(MANUAL_CK_AUTHORITY_FLAG)
+        forward_enabled = decision_flag(
+            RUTCOM_FORWARD_AUTHORITY_FLAG
+        )
+    return (
+        passive_enabled,
+        manual_enabled,
+        forward_enabled,
+        receipt_verified,
+        durable_authorized,
+    )
+
+
+def _legacy_time_claim_status(event: dict) -> str:
+    """Rozpoznaj exact coordinator claim bez nadawania business authority.
+
+    ``verified`` służy wyłącznie do CAS/recovery już związanej legacy intencji.
+    Błąd odczytu kolejki pozostaje odróżniony od braku claimu, aby chwilowa
+    awaria dowodu nie zamieniła się w terminalne ``superseded``.
+    """
+    payload = event.get("payload")
+    if (
+        event.get("event_type")
+        not in {"CZAS_KURIERA_UPDATED", "PICKUP_TIME_UPDATED"}
+        or not isinstance(payload, dict)
+        or payload.get("source") != "coordinator_force"
+        or payload.get("committed_authority") is not None
+    ):
+        return "not_applicable"
+    try:
+        from dispatch_v2 import coordinator_time_recheck
+
+        return (
+            "verified"
+            if coordinator_time_recheck.verify_claimed_event(event)
+            else "unverified"
+        )
+    except Exception as exc:
+        _log.error(
+            "COORDINATOR_TIME_CLAIM_READ_FAILED "
+            f"oid={event.get('order_id')} type={event.get('event_type')} "
+            f"error={type(exc).__name__}: {exc}"
+        )
+        return "read_error"
+
+
+def _legacy_time_claim_gate(event: dict) -> tuple[str, Optional[str]]:
+    """One fail-closed gate before every non-authority coordinator time CAS.
+
+    The exact queue claim is transport authority for both historical time event
+    types.  A complete causal envelope cannot replace it.  A missing claim is
+    terminally stale; an unreadable queue remains retryable but must never be
+    interpreted by a state handler as permission to write.
+    """
+    claim_status = _legacy_time_claim_status(event)
+    if claim_status == "read_error":
+        return claim_status, "pending"
+    if claim_status == "unverified":
+        return claim_status, "superseded"
+    return claim_status, None
+
+
+def _pickup_time_event_status(event: dict, current: dict) -> str:
+    """Jeden oracle apply/CAS/generacji dla kazdego PICKUP_TIME_UPDATED."""
+    payload = event.get("payload") or {}
+    target = payload.get("new_pickup_at_warsaw")
+    try:
+        if not target:
+            raise ValueError("missing new_pickup_at_warsaw")
+        target_dt = datetime.fromisoformat(str(target))
+    except (ValueError, TypeError):
+        return "superseded"
+
+    pending_initial_intent = current.get(NEW_ORDER_TIME_INTENT_FIELD)
+    if pending_initial_intent is not None:
+        # A NEW_ORDER shell is an exclusive write lease for the exact durable
+        # initial intent. No sibling legacy pickup event may consume/erase it,
+        # even if that event would otherwise pass the ordinary pickup CAS.
+        if (
+            not new_order_time_intent_is_valid(
+                pending_initial_intent,
+                order_id=current.get("order_id"),
+            )
+            or payload.get(NEW_ORDER_TIME_INTENT_ID_FIELD)
+            != pending_initial_intent.get("intent_id")
+        ):
+            return "superseded"
+
+    authority = payload.get("committed_authority")
+    if not authority:
+        if pickup_event_has_authority_artifact(event):
+            # Dowolny zachowany marker authority rezerwuje całą kopertę. Utrata
+            # jednego pola nie może zdegradować proof-bound eventu do legacy.
+            return "superseded"
+        if (
+            _is_czasowka_order(current)
+            and pickup_payload_requires_coordinator_receipt(payload)
+        ):
+            # ``coordinator_force`` bez proofu jest zarezerwowany tylko dla
+            # czasówki. Ten sam source jest legalnym deliberate legacy eventem
+            # elastyka i nie może być klasyfikowany bez kontekstu zamówienia.
+            return "superseded"
+        legacy_claim, claim_effect = _legacy_time_claim_gate(event)
+        if claim_effect is not None:
+            return claim_effect
+        cas_status = time_event_cas_status(
+            current,
+            event,
+            allow_unversioned_ck_claim=(legacy_claim == "verified"),
+        )
+        if cas_status is not None:
+            return cas_status
+        if legacy_claim == "verified":
+            expected_revision = normalize_pickup_revision(
+                payload.get("pickup_time_revision_at_observation")
+            )
+            current_revision = normalize_pickup_revision(
+                current.get("pickup_time_revision", 0)
+            )
+            if expected_revision is None or current_revision is None:
+                return "superseded"
+            if current.get("pickup_at_warsaw") == target:
+                return (
+                    "applied"
+                    if current_revision == expected_revision + 1
+                    else "superseded"
+                )
+            if (
+                current.get("status") not in {"planned", "assigned"}
+                or current.get("picked_up_at") is not None
+                or current.get("delivered_at") is not None
+                or current.get("pickup_at_warsaw")
+                != payload.get("old_pickup_at_warsaw")
+                or current_revision != expected_revision
+                or str(current.get("courier_id") or "")
+                != str(payload.get("courier_id_at_observation") or "")
+                or str(current.get("assignment_event_id") or "")
+                != str(
+                    payload.get("assignment_event_id_at_observation") or ""
+                )
+            ):
+                return "superseded"
+            return "pending"
+        # Exact legacy oracle z base: dark deploy nie zmienia ani CAS, ani
+        # mirror-postcondition, ani retry już istniejących pickup eventów.
+        if current.get("status") in {
+            "delivered",
+            "returned_to_pool",
+            "cancelled",
+        }:
+            return "superseded"
+        return (
+            "applied"
+            if current.get("pickup_at_warsaw") == target
+            else "pending"
+        )
+
+    durable_authorized = False
+    if "committed_authority_attestation" in event:
+        from dispatch_v2.committed_pickup_apply import (
+            verify_durable_authority_attestation,
+        )
+
+        durable_authorized = verify_durable_authority_attestation(event)
+        if not durable_authorized:
+            return "superseded"
+
+    revision_raw = payload.get("pickup_time_revision_at_observation")
+    expected_revision = normalize_pickup_revision(
+        0 if revision_raw is None else revision_raw
+    )
+    current_revision = normalize_pickup_revision(
+        current.get("pickup_time_revision", 0)
+    )
+    if expected_revision is None or current_revision is None:
+        return "superseded"
+    if committed_pickup_effect_applied(current, payload):
+        return "applied"
+
+    if (
+        current.get("status") not in {"planned", "assigned"}
+        or current.get("picked_up_at") is not None
+        or current.get("delivered_at") is not None
+    ):
+        return "superseded"
+    if current.get("pickup_at_warsaw") != payload.get(
+        "old_pickup_at_warsaw"
+    ):
+        return "superseded"
+    if current_revision != expected_revision:
+        return "superseded"
+    if str(current.get("courier_id") or "") != str(
+        payload.get("courier_id_at_observation") or ""
+    ):
+        return "superseded"
+    if str(current.get("assignment_event_id") or "") != str(
+        payload.get("assignment_event_id_at_observation") or ""
+    ):
+        return "superseded"
+
+    (
+        passive_enabled,
+        manual_enabled,
+        forward_enabled,
+        receipt_verified,
+        durable_authorized,
+    ) = _pickup_authority_flags(
+        event,
+        durable_authorized=durable_authorized,
+    )
+    validation = validate_committed_pickup_event(
+        current,
+        event,
+        is_czasowka=_is_czasowka_order(
+            project_time_event_order(current, event)
+        ),
+        passive_guard_enabled=passive_enabled,
+        manual_passthrough_enabled=manual_enabled,
+        rutcom_forward_authority_enabled=forward_enabled,
+        coordinator_receipt_verified=receipt_verified,
+        durable_attestation_verified=durable_authorized,
+    )
+    if validation.outcome is not ResolutionOutcome.APPLY:
+        return "superseded"
+    return "pending"
+
+
 def event_effect_status(
     event: dict,
     current=_FSM_CURRENT_UNSET,
@@ -813,6 +1443,37 @@ def event_effect_status(
     zatrzymuje stale/out-of-order retry. Funkcja jest read-only; weryfikację
     wersji ``updated_at`` robi durable outbox.
     """
+    durable_policy = None
+    if COMMITTED_TIME_POLICY_SNAPSHOT_FIELD in event:
+        try:
+            durable_policy = deserialize_committed_time_policy(
+                event.get(COMMITTED_TIME_POLICY_SNAPSHOT_FIELD)
+            )
+            policy_payload = event.get("payload")
+            if event.get("event_type") == "NEW_ORDER":
+                if (
+                    durable_policy.producer != "panel_watcher"
+                    or event.get(NEW_ORDER_TIME_AUTHORITY_SNAPSHOT_FIELD)
+                    is not durable_policy.initial_time_authority_enabled
+                ):
+                    return "superseded"
+            else:
+                if (
+                    event.get("event_type")
+                    not in {"CZAS_KURIERA_UPDATED", "PICKUP_TIME_UPDATED"}
+                    or not isinstance(policy_payload, dict)
+                ):
+                    return "superseded"
+                validate_committed_time_policy_source(
+                    durable_policy,
+                    (
+                        policy_payload.get("observed_source")
+                        if policy_payload.get("committed_authority") is not None
+                        else policy_payload.get("source")
+                    ),
+                )
+        except (TypeError, ValueError):
+            return "superseded"
     oid = event.get("order_id")
     if not oid:
         return "pending"
@@ -821,13 +1482,56 @@ def event_effect_status(
     if not current:
         if event.get("event_type") == "ORDER_DETAILS_ENRICHED":
             return "superseded"
+        payload = event.get("payload")
+        if (
+            event.get("event_type") == "PICKUP_TIME_UPDATED"
+            and pickup_event_has_authority_artifact(event)
+        ):
+            # Claim może przeżyć długi crash i legalny prune terminalnego
+            # zlecenia. Brak rekordu oznacza wtedy, że historycznej intencji nie
+            # wolno już odtwarzać; exact outbox ma ją domknąć jako superseded.
+            # Błąd odczytu nie trafia tutaj — durable layer rozróżnia go i
+            # pozostawia receipt pending.
+            return "superseded"
+        event_type = str(event.get("event_type") or "")
+        if event_type in {"CZAS_KURIERA_UPDATED", "PICKUP_TIME_UPDATED"}:
+            payload = event.get("payload")
+            if time_event_cas_is_versioned(event_type, payload):
+                # A versioned observation proves that an aggregate existed at
+                # capture time. Once it is pruned, neither handler can recreate
+                # it; retry is impossible work and must terminalize.
+                return "superseded"
+        legacy_claim, claim_effect = _legacy_time_claim_gate(event)
+        if legacy_claim == "verified":
+            # Exact claim może przeżyć terminalizację i prune rekordu. Każdy
+            # claimowalny typ czasu kończymy tym samym oracle, nie tylko nową
+            # kopertę authority.
+            return "superseded"
+        if claim_effect is not None:
+            # Brak exact claimu jest terminalnie stale również przed istnieniem
+            # agregatu. Tylko błąd odczytu kolejki pozostaje retryable pending.
+            return claim_effect
         return "pending"
 
     etype = event.get("event_type")
     payload = event.get("payload") or {}
     status = current.get("status")
     if etype == "NEW_ORDER":
-        # Późniejsze lifecycle states także dowodzą, że NEW_ORDER był zastosowany.
+        if _new_order_time_authority_enabled(event):
+            expected_intent = event.get(NEW_ORDER_TIME_INTENT_FIELD)
+            if committed_time_contract_is_complete(current):
+                return "applied"
+            if (
+                new_order_time_intent_is_valid(
+                    expected_intent,
+                    order_id=oid,
+                )
+                and current.get(NEW_ORDER_TIME_INTENT_FIELD)
+                == expected_intent
+            ):
+                return "applied"
+            return "pending"
+        # Późniejsze lifecycle states także dowodzą, że legacy NEW_ORDER był zastosowany.
         return "applied"
     if etype == "ORDER_DETAILS_ENRICHED":
         # Merge-only event nie tworzy rekordu i nie dotyka terminalnego lifecycle.
@@ -859,13 +1563,17 @@ def event_effect_status(
         ck_iso = payload.get("czas_kuriera_warsaw")
         ck_hhmm = payload.get("czas_kuriera_hhmm")
         ck_valid = _verify_czas_kuriera_consistency(ck_iso, ck_hhmm, str(oid))
+        ck_resolution = _assignment_ck_resolution(current, event)
+        ck_write_expected = (
+            ck_resolution.outcome is not ResolutionOutcome.SUPPRESS
+        )
         # Handler przy uszkodzonym CK nadal trwale stosuje SAM assignment, ale
         # odrzuca oba pola czasu i podnosi CorruptedTimestampError. Oracle musi
         # wtedy oceniac postcondition assignmentu bez wadliwych pol; exact marker
         # rozstrzyga crash po tym czesciowym, swiadomym commicie.
-        if matches and ck_valid and ck_iso is not None:
+        if matches and ck_valid and ck_write_expected and ck_iso is not None:
             matches = current.get("czas_kuriera_warsaw") == ck_iso
-        if matches and ck_valid and ck_hhmm is not None:
+        if matches and ck_valid and ck_write_expected and ck_hhmm is not None:
             matches = current.get("czas_kuriera_hhmm") == ck_hhmm
         if matches:
             return "applied"
@@ -945,12 +1653,48 @@ def event_effect_status(
             # jego state/downstream zostaja terminalnie pominiete.
             return "superseded"
         source = payload.get("source")
+        resolution = None
+        if _is_czasowka_order(
+            project_time_observation_order(current, payload)
+        ):
+            resolution = resolve_czasowka_ck_observation(
+                current,
+                payload,
+                policy_snapshot=durable_policy,
+            )
         if (
-            flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True)
-            and _is_czasowka_order(current)
-            and source in _CK_PASSIVE_SOURCES
+            resolution is not None
+            and (source in _CK_PASSIVE_SOURCES or source == "coordinator_force")
+        ):
+            # Legalny committed event jest kanonizowany do PICKUP_TIME_UPDATED
+            # przed outboxem. Raw CK nie może zaliczyć cudzego efektu samą
+            # równością czasu/provenance; resolver rozstrzyga go od początku.
+            if resolution.outcome is ResolutionOutcome.APPLY:
+                # Od tej wersji każdy producent kanonizuje legalny raw CK
+                # PRZED outboxem. Stary durable raw row nie ma proof-bound
+                # attestation i nie może sam stać się drugim transportem.
+                return "superseded" if event.get("event_id") else "pending"
+            if resolution.outcome is ResolutionOutcome.SUPPRESS:
+                return "superseded"
+        if (
+            resolution is not None
+            and _czasowka_raw_ck_writer_is_retired(
+                current,
+                resolution,
+                policy_snapshot=durable_policy,
+            )
         ):
             return "superseded"
+        legacy_claim, claim_effect = _legacy_time_claim_gate(event)
+        if claim_effect is not None:
+            return claim_effect
+        cas_status = time_event_cas_status(
+            current,
+            event,
+            allow_unversioned_ck_claim=(legacy_claim == "verified"),
+        )
+        if cas_status is not None:
+            return cas_status
         if (
             flag("ENABLE_ELASTYK_CK_NO_BACKWARD", True)
             and not _is_czasowka_order(current)
@@ -965,21 +1709,7 @@ def event_effect_status(
             and current.get("czas_kuriera_hhmm") == new_ck_hhmm
         ) else "pending"
     if etype == "PICKUP_TIME_UPDATED":
-        if status in ("delivered", "returned_to_pool", "cancelled"):
-            return "superseded"
-        new_pickup = payload.get("new_pickup_at_warsaw")
-        try:
-            if not new_pickup:
-                raise ValueError("missing new_pickup_at_warsaw")
-            datetime.fromisoformat(str(new_pickup))
-        except (ValueError, TypeError):
-            return "superseded"
-        return (
-            "applied"
-            if current.get("pickup_at_warsaw")
-            == new_pickup
-            else "pending"
-        )
+        return _pickup_time_event_status(event, current)
     if etype == "ORDER_RECLAIMED_TO_CZASOWKA":
         if not _czasowka_reclaim_live_authorized(event):
             return "superseded"
@@ -1144,6 +1874,29 @@ def _r_declared_tripwire(order_id: str, merged: dict, event: Optional[str]) -> N
         _log.debug(f"R_DECLARED tripwire jsonl append skip oid={order_id}: {_e}")
 
 
+def _merge_new_order_time_intent_backfill(
+    order_id: str,
+    existing: dict,
+    incoming: dict,
+) -> tuple[dict, bool]:
+    """Backfill only the pending receipt, never replay NEW_ORDER lifecycle."""
+    intent = incoming.get(NEW_ORDER_TIME_INTENT_FIELD)
+    if not new_order_time_intent_is_valid(intent, order_id=order_id):
+        return dict(existing), False
+    current_intent = existing.get(NEW_ORDER_TIME_INTENT_FIELD)
+    if current_intent == intent or committed_time_contract_is_complete(existing):
+        return dict(existing), False
+    if current_intent is not None:
+        _log.error(
+            "NEW_ORDER initial intent conflict refused "
+            f"oid={order_id}"
+        )
+        return dict(existing), False
+    merged = dict(existing)
+    merged[NEW_ORDER_TIME_INTENT_FIELD] = dict(intent)
+    return merged, True
+
+
 @_lifecycle_state_mutation
 def upsert_order(
     order_id: str,
@@ -1177,7 +1930,22 @@ def upsert_order(
                         f"oid={order_id} first={existing_marker} "
                         f"incoming={incoming_marker}"
                     )
-                return dict(existing)
+                merged_existing, intent_changed = (
+                    _merge_new_order_time_intent_backfill(
+                        order_id,
+                        existing,
+                        data,
+                    )
+                )
+                if intent_changed:
+                    state[order_id] = merged_existing
+                    _guarded_write(
+                        path,
+                        state,
+                        old_count,
+                        op="new_order_intent_backfill",
+                    )
+                return merged_existing
             if existing:
                 # Rekord sprzed ery markerów jest już żywym agregatem. NEW_ORDER
                 # może tu wyłącznie uzupełnić brakujący dowód first-write; nie
@@ -1189,7 +1957,13 @@ def upsert_order(
                         f"oid={order_id}"
                     )
                     return dict(existing)
-                marked_existing = dict(existing)
+                marked_existing, _intent_changed = (
+                    _merge_new_order_time_intent_backfill(
+                        order_id,
+                        existing,
+                        data,
+                    )
+                )
                 marked_existing[
                     "last_lifecycle_event_id_new_order"
                 ] = str(incoming_marker)
@@ -1253,9 +2027,64 @@ def set_status(order_id: str, status: str, extra: Optional[dict] = None, event: 
 
 
 @_lifecycle_state_mutation
-def update_from_event(event: dict) -> Optional[dict]:
+def update_from_event(
+    event: dict,
+    *,
+    authority_policy: Optional[CommittedPickupPolicySnapshot] = None,
+) -> Optional[dict]:
     """Konsumuje event z event busa i aktualizuje state machine.
     Zwraca zaktualizowany rekord lub None."""
+    durable_policy = None
+    if COMMITTED_TIME_POLICY_SNAPSHOT_FIELD in event:
+        try:
+            durable_policy = deserialize_committed_time_policy(
+                event.get(COMMITTED_TIME_POLICY_SNAPSHOT_FIELD)
+            )
+        except (TypeError, ValueError) as exc:
+            _log.error(
+                "TIME_POLICY_SNAPSHOT_INVALID oid=%s error=%s",
+                event.get("order_id"),
+                exc,
+            )
+            return None
+    if authority_policy is not None:
+        if type(authority_policy) is not CommittedPickupPolicySnapshot:
+            raise TypeError(
+                "authority_policy must be CommittedPickupPolicySnapshot"
+            )
+        if durable_policy is not None and durable_policy != authority_policy:
+            raise ValueError(
+                "in-process and durable committed time policies differ"
+            )
+    else:
+        authority_policy = durable_policy
+    if authority_policy is not None:
+        policy_payload = event.get("payload")
+        if event.get("event_type") == "NEW_ORDER":
+            if (
+                authority_policy.producer != "panel_watcher"
+                or event.get(NEW_ORDER_TIME_AUTHORITY_SNAPSHOT_FIELD)
+                is not authority_policy.initial_time_authority_enabled
+            ):
+                raise ValueError("NEW_ORDER requires panel_watcher policy")
+        else:
+            if (
+                event.get("event_type")
+                not in {"CZAS_KURIERA_UPDATED", "PICKUP_TIME_UPDATED"}
+                or not isinstance(policy_payload, dict)
+            ):
+                raise ValueError(
+                    "authority_policy is reserved for time events"
+                )
+            policy_source = (
+                policy_payload.get("observed_source")
+                if policy_payload.get("committed_authority") is not None
+                else policy_payload.get("source")
+            )
+            validate_committed_time_policy_source(
+                authority_policy, policy_source
+            )
+
     # Z-P1-01 Phase A: formal FSM shadow.  It is intentionally fail-open and
     # log-only; legacy behavior below (including current fallbacks/exceptions)
     # remains the sole writer until a separately approved enforcement phase.
@@ -1281,18 +2110,58 @@ def update_from_event(event: dict) -> Optional[dict]:
             # Marker per typ nie ginie po ortogonalnym evencie (np. ASSIGNED,
             # potem CZAS_KURIERA_UPDATED przed receiptem outboxa).
             marked[f"last_lifecycle_event_id_{marker_type}"] = str(durable_event_id)
+        alias_type = "".join(
+            ch.lower() if ch.isalnum() else "_"
+            for ch in str(event.get("state_marker_alias_event_type") or "")
+        ).strip("_")
+        if alias_type:
+            # Raw CK defense tłumaczy efekt na PICKUP_TIME_UPDATED, ale receipt
+            # outboxa nadal ma typ CZAS_KURIERA_UPDATED. Oba markery powstają w
+            # tym samym atomowym rename, więc crash recovery nie gubi callbacku.
+            marked[f"last_lifecycle_event_id_{alias_type}"] = str(
+                durable_event_id
+            )
         return marked
 
     if etype == "NEW_ORDER":
         # V3.19f: sanity check czas_kuriera consistency przed persist.
-        ck_iso = payload.get("czas_kuriera_warsaw")
-        ck_hhmm = payload.get("czas_kuriera_hhmm")
+        initial_time_owned = bool(
+            _is_czasowka_order(payload)
+            and _new_order_time_authority_enabled(event)
+        )
+        # Under the new owner NEW_ORDER creates only the aggregate shell. The
+        # exact Rutcom tuple is resolved immediately by PICKUP_TIME_UPDATED;
+        # raw pickup and CK can never become two independently persisted truths.
+        pickup_at_warsaw = (
+            None if initial_time_owned else payload.get("pickup_at_warsaw")
+        )
+        ck_iso = (
+            None if initial_time_owned else payload.get("czas_kuriera_warsaw")
+        )
+        ck_hhmm = (
+            None if initial_time_owned else payload.get("czas_kuriera_hhmm")
+        )
+        initial_intent_fields = {}
+        if initial_time_owned:
+            raw_intent = event.get(NEW_ORDER_TIME_INTENT_FIELD)
+            if new_order_time_intent_is_valid(raw_intent, order_id=oid):
+                initial_intent_fields[NEW_ORDER_TIME_INTENT_FIELD] = dict(
+                    raw_intent
+                )
+            else:
+                # The shell stays mechanically incomplete and blocks rollout
+                # or code rollback.  Missing/corrupt receipt can never revive
+                # the legacy raw CK writer as an accidental recovery path.
+                initial_intent_fields[NEW_ORDER_TIME_INTENT_FIELD] = {
+                    "schema": "invalid_new_order_time_intent",
+                }
         if not _verify_czas_kuriera_consistency(ck_iso, ck_hhmm, oid):
             # Skip persist czas_kuriera fields; log ERROR w helper; raise signal.
             # Inne pola persistowane bez zmian (order dalej trafia do state).
             ck_iso = None
             ck_hhmm = None
             _result = upsert_order(oid, _marked({
+                **initial_intent_fields,
                 "status": "planned",
                 "commitment_level": "planned",
                 "restaurant": payload.get("restaurant"),
@@ -1303,7 +2172,7 @@ def update_from_event(event: dict) -> Optional[dict]:
                 "address_id": payload.get("address_id"),
                 "pickup_coords": payload.get("pickup_coords"),
                 "delivery_coords": payload.get("delivery_coords"),
-                "pickup_at_warsaw": payload.get("pickup_at_warsaw"),
+                "pickup_at_warsaw": pickup_at_warsaw,
                 "prep_minutes": payload.get("prep_minutes"),
                 "order_type": payload.get("order_type"),
                 "bag_time_alerted": False,
@@ -1319,6 +2188,7 @@ def update_from_event(event: dict) -> Optional[dict]:
                 f"persisted bez czas_kuriera fields"
             )
         return upsert_order(oid, _marked({
+            **initial_intent_fields,
             "status": "planned",
             "commitment_level": "planned",
             "restaurant": payload.get("restaurant"),
@@ -1329,7 +2199,7 @@ def update_from_event(event: dict) -> Optional[dict]:
             "address_id": payload.get("address_id"),
             "pickup_coords": payload.get("pickup_coords"),
             "delivery_coords": payload.get("delivery_coords"),
-            "pickup_at_warsaw": payload.get("pickup_at_warsaw"),
+            "pickup_at_warsaw": pickup_at_warsaw,
             "prep_minutes": payload.get("prep_minutes"),
             "order_type": payload.get("order_type"),
             "uwagi": payload.get("uwagi"),
@@ -1539,17 +2409,15 @@ def update_from_event(event: dict) -> Optional[dict]:
                 _log.debug(f"L4 effective_pickup_at skip oid={oid}: {_eff_e}")
         if ck_iso is not None or ck_hhmm is not None:
             if _verify_czas_kuriera_consistency(ck_iso, ck_hhmm, oid):
-                # Source-block (Adrian 2026-06-24): CZASÓWKA z już ustalonym
-                # committed czas_kuriera — NIE nadpisuj odczytem z assignu
-                # (pasywny read gastro, może być już przestempl­owany). Umówiony
-                # czas czasówki rządzi pickup_at. Przypisanie i tak zapisujemy.
-                if (flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True)
-                        and _is_czasowka_order(prev)
-                        and prev.get("czas_kuriera_warsaw")):
+                ck_resolution = _assignment_ck_resolution(prev, event)
+                if ck_resolution.outcome is ResolutionOutcome.SUPPRESS:
+                    # Assignment remains a legal lifecycle transition.  The
+                    # canonical authority resolver decides only whether its
+                    # parallel CK projection is part of the exact effect.
                     _log.info(
-                        f"CK_PASSIVE_SUPPRESSED oid={oid} czasówka (COURIER_ASSIGNED) "
-                        f"keep committed {prev.get('czas_kuriera_hhmm')} "
-                        f"(ignore assign read {ck_hhmm})"
+                        "CK_ASSIGNMENT_WRITER_SUPPRESSED "
+                        f"oid={oid} keep={prev.get('czas_kuriera_hhmm')!r} "
+                        f"ignore={ck_hhmm!r} reason={ck_resolution.reason}"
                     )
                     return _persist_assignment_and_availability(merged)
                 merged["czas_kuriera_warsaw"] = ck_iso
@@ -1581,32 +2449,77 @@ def update_from_event(event: dict) -> Optional[dict]:
         if existing is None:
             _log.warning(f"CZAS_KURIERA_UPDATED for unknown oid={oid}, skipping")
             return None
-        # Source-block (Adrian 2026-06-24, root #483023): CZASÓWKA — pasywny
-        # re-odczyt gastro (panel_re_check / pre_proposal_recheck) NIE zmienia
-        # committed czas_kuriera (to przestempl­owany przy zmianie statusu śmieć).
-        # Umówiony czas czasówki rządzi pickup_at (PICKUP_TIME_UPDATED, dowolny
-        # kierunek). first_acceptance + kanały deliberatne (np. ziomek_late_
-        # extension/coordinator_edit) NIE są w _CK_PASSIVE_SOURCES → przechodzą.
+        # Czasowka: wspolny resolver jest jedynym wlascicielem rozroznienia
+        # legalnego committed czasu Rutcom od statusowego re-stampu. Kazdy
+        # zaakceptowany CK zostaje przetlumaczony na PICKUP_TIME_UPDATED, nigdy
+        # nie zapisuje tylko pola czytanego przez aplikacje.
         _src = payload.get("source")
-        # Incydent #489052: pasywny producer moze niesc pozytywny sygnal
-        # recznej korekty gastro. Nie omijamy kanonu bezposrednim zapisem CK:
-        # tlumaczymy go na PICKUP_TIME_UPDATED, czyli writer, ktory atomowo
-        # aktualizuje pickup_at i pole czasu czytane przez aplikacje kuriera.
-        _manual_pickup_evt = build_czasowka_manual_ck_pickup_event(existing, payload)
-        if _manual_pickup_evt is not None:
+        _authority = resolve_czasowka_ck_observation(
+            existing,
+            payload,
+            policy_snapshot=authority_policy,
+        )
+        if _authority.outcome is ResolutionOutcome.APPLY:
+            if durable_event_id:
+                # Legalny committed CK jest kanonizowany przed outboxem przez
+                # committed_pickup_apply. Historyczny raw durable row nie ma
+                # exact attestation kanonicznej koperty; zamykamy go fail-closed
+                # zamiast produkować drugi, niezweryfikowany transport state.
+                _log.error(
+                    "CK_COMMITTED_RAW_DURABLE_REJECTED "
+                    f"oid={oid} event_id={durable_event_id}"
+                )
+                return None
             _log.info(
-                f"CK_MANUAL_EDIT_PASSTHROUGH oid={oid} czasówka ck "
+                f"CK_COMMITTED_AUTHORITY_APPLIED oid={oid} czasówka ck "
                 f"{existing.get('czas_kuriera_hhmm')}→{new_ck_hhmm} src={_src} "
-                f"→ PICKUP_TIME_UPDATED"
+                f"authority={_authority.reason} → PICKUP_TIME_UPDATED"
             )
-            return update_from_event(_manual_pickup_evt)
-        if (flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True)
-                and _is_czasowka_order(existing)
-                and _src in _CK_PASSIVE_SOURCES):
+            return update_from_event(dict(_authority.event))
+        if _czasowka_raw_ck_writer_is_retired(
+            existing,
+            _authority,
+            policy_snapshot=authority_policy,
+        ):
+            # Po aktywacji authority czasówki nie może już zmienić drugi,
+            # CK-only writer — także gdy stary CK jest pusty. Brak baseline nie
+            # nadaje authority; każda nowa prawda idzie atomowym pickup+CK.
+            if _src in RETIRED_CZASOWKA_CK_ONLY_SOURCES:
+                _log.warning(
+                    "CK_COMMITTED_RETIRED_WRITER_BLOCKED "
+                    f"oid={oid} source={_src!r} "
+                    f"reason={_authority.reason}"
+                )
+            else:
+                # Nieznany przyszły raw CK także nie może zostać cichym drugim
+                # writerem. Rejestracja wymaga rozszerzenia jednego policy
+                # ownera i oracle, nie fallbacku w state handlerze.
+                _log.warning(
+                    "CK_COMMITTED_UNREGISTERED_WRITER_BLOCKED "
+                    f"oid={oid} source={_src!r} "
+                    f"reason={_authority.reason}"
+                )
+            return None
+        if _authority.outcome is ResolutionOutcome.SUPPRESS:
             _log.info(
-                f"CK_PASSIVE_SUPPRESSED oid={oid} czasówka ck "
+                f"CK_COMMITTED_SUPPRESSED oid={oid} czasówka ck "
                 f"{existing.get('czas_kuriera_hhmm')}→{new_ck_hhmm} src={_src} "
-                f"— committed=pickup_at, gastro re-stamp ignorowany (skip persist)"
+                f"reason={_authority.reason} (skip persist)"
+            )
+            return None
+        legacy_claim, claim_effect = _legacy_time_claim_gate(event)
+        if claim_effect is not None:
+            return None
+        cas_status = time_event_cas_status(
+            existing,
+            event,
+            allow_unversioned_ck_claim=(legacy_claim == "verified"),
+        )
+        if cas_status == "applied":
+            return existing
+        if cas_status == "superseded":
+            _log.info(
+                f"CZAS_KURIERA_UPDATED_STALE oid={oid} src={_src!r} (skip)"
             )
             return None
         # Elastyk (non-czasówka) forward-only (Adrian 2026-06-24, opcja B):
@@ -1626,10 +2539,18 @@ def update_from_event(event: dict) -> Optional[dict]:
                 )
                 return None
         prev_count = int(existing.get("v319g_ck_change_count") or 0)
+        next_count = prev_count + 1
+        if time_event_cas_is_versioned(etype, payload):
+            expected_count = normalize_pickup_revision(
+                payload.get(CK_CHANGE_REVISION_OBSERVATION_FIELD)
+            )
+            if expected_count is None or expected_count != prev_count:
+                return None
+            next_count = expected_count + 1
         update_fields = {
             "czas_kuriera_warsaw": new_ck_iso,
             "czas_kuriera_hhmm": new_ck_hhmm,
-            "v319g_ck_change_count": prev_count + 1,
+            "v319g_ck_change_count": next_count,
         }
         _delta = payload.get("delta_min")
         _delta_str = f"Δ={_delta:+.1f}min" if _delta is not None else "Δ=null(first_ack)"
@@ -1668,35 +2589,158 @@ def update_from_event(event: dict) -> Optional[dict]:
         if existing is None:
             _log.warning(f"PICKUP_TIME_UPDATED for unknown oid={oid}, skipping")
             return None
+        pending_initial_intent = existing.get(NEW_ORDER_TIME_INTENT_FIELD)
+        if pending_initial_intent is not None and (
+            not new_order_time_intent_is_valid(
+                pending_initial_intent,
+                order_id=oid,
+            )
+            or payload.get(NEW_ORDER_TIME_INTENT_ID_FIELD)
+            != pending_initial_intent.get("intent_id")
+        ):
+            _log.warning(
+                "PICKUP_TIME_UPDATED blocked by pending NEW_ORDER intent "
+                f"oid={oid}"
+            )
+            return None
+        committed_authority = payload.get("committed_authority")
+        # ``pending`` is normally permission to apply, except when the exact
+        # coordinator claim cannot currently be read.  Run the same canonical
+        # gate immediately before the state writer; status/oracle alone cannot
+        # encode both retryability and write permission in three public states.
+        _legacy_claim, claim_effect = _legacy_time_claim_gate(event)
+        if claim_effect is not None:
+            return None
+        pickup_effect = _pickup_time_event_status(event, existing)
+        if pickup_effect == "applied":
+            return existing
+        if pickup_effect != "pending":
+            _log.info(
+                f"PICKUP_TIME_UPDATED_STALE oid={oid} authority="
+                f"{committed_authority or 'legacy'} status="
+                f"{existing.get('status')} (skip)"
+            )
+            return None
         prev_count = int(existing.get("pickup_time_change_count") or 0)
         update_fields = {
             "pickup_at_warsaw": new_pickup,
             "pickup_time_change_count": prev_count + 1,
         }
+        current_revision = normalize_pickup_revision(
+            existing.get("pickup_time_revision", 0)
+        )
+        if current_revision is None:
+            return None
+        if (
+            committed_authority is not None
+            or time_event_cas_is_versioned(etype, payload)
+            or "pickup_time_revision_at_observation" in payload
+        ):
+            expected_revision = normalize_pickup_revision(
+                payload.get("pickup_time_revision_at_observation")
+            )
+            if (
+                expected_revision is None
+                or expected_revision != current_revision
+            ):
+                return None
+            update_fields["pickup_time_revision"] = expected_revision + 1
+        else:
+            # Revision należy do kanonicznego pickup, nie do jednej flagi.
+            # Każdy legalny legacy write przesuwa fence, także zanim pierwszy
+            # authority event zdążył wejść do state. Inaczej pending A→B może
+            # wrócić po legacy cyklu A→C→A z niezmienioną rewizją 0.
+            update_fields["pickup_time_revision"] = current_revision + 1
         # Mirror committed pickup → czas_kuriera (Adrian 2026-06-24): dla czasówki
         # umówiony czas rządzi pickup_at, ale apka/kurier pokazują czas_kuriera —
         # więc musi nadążać za LEGALNĄ zmianą odbioru (koordynator/restauracja,
-        # dowolny kierunek; w przyszłości ziomek_late_extension). To jest kanał,
+        # dowolny kierunek). To jest kanał,
         # którym committed czasówki ma się zmieniać (zamiast pasywnego czas_kuriera).
-        if (flag("ENABLE_PICKUP_TIME_MIRRORS_CK", True)
-                and _is_czasowka_order(existing)):
+        prospective_order = project_time_event_order(existing, payload)
+        if (
+            _is_czasowka_order(prospective_order)
+            and (
+                committed_authority is not None
+                or flag("ENABLE_PICKUP_TIME_MIRRORS_CK", True)
+            )
+        ):
+            current_ck_revision = normalize_pickup_revision(
+                existing.get(CK_CHANGE_REVISION_STATE_FIELD, 0)
+            )
+            if current_ck_revision is None:
+                return None
+            if committed_authority is not None:
+                expected_ck_revision = normalize_pickup_revision(
+                    payload.get(CK_CHANGE_REVISION_OBSERVATION_FIELD)
+                )
+                if (
+                    expected_ck_revision is None
+                    or expected_ck_revision != current_ck_revision
+                ):
+                    return None
+            update_fields[CK_CHANGE_REVISION_STATE_FIELD] = (
+                current_ck_revision + 1
+            )
             try:
                 _np_dt = datetime.fromisoformat(new_pickup)
                 update_fields["czas_kuriera_warsaw"] = new_pickup
                 update_fields["czas_kuriera_hhmm"] = _np_dt.strftime("%H:%M")
+                # Consumption of the initial receipt is part of this exact
+                # atomic pickup+CK write.  No crash can leave a complete tuple
+                # with a replayable stale NEW_ORDER intent.
+                if pending_initial_intent is not None:
+                    update_fields[NEW_ORDER_TIME_INTENT_FIELD] = None
             except (ValueError, TypeError):
                 pass  # new_pickup już zwalidowany wyżej; defensywnie
-        # prep_minutes / decision_deadline / zmiana_czasu_odbioru — odśwież
-        # gdy panel dostarczył świeże; NIE nadpisuj realnej wartości None'em.
-        new_prep = payload.get("new_prep_minutes")
-        if new_prep is not None:
-            update_fields["prep_minutes"] = new_prep
-        new_dd = payload.get("new_decision_deadline")
-        if new_dd is not None:
-            update_fields["decision_deadline"] = new_dd
-        new_zco = payload.get("new_zmiana_czasu_odbioru")
-        if new_zco is not None:
-            update_fields["zmiana_czasu_odbioru"] = new_zco
+        # Wszystkie pola sprzężone są własnością jednego kontraktu policy/CAS.
+        # None oznacza „zachowaj snapshot”, więc writer nie tworzy drugiej listy.
+        for state_field, _old_key, new_key in COMMITTED_PICKUP_COUPLED_FIELDS:
+            new_value = payload.get(new_key)
+            if new_value is not None:
+                update_fields[state_field] = new_value
+        if committed_authority is not None:
+            proof = payload.get("committed_authority_proof")
+            update_fields.update({
+                "committed_pickup_authority": committed_authority,
+                "committed_pickup_observed_source": payload.get(
+                    "observed_source"
+                ),
+                "committed_pickup_observed_at": payload.get("observed_at"),
+                "committed_pickup_authority_receipt_id": payload.get(
+                    "committed_authority_receipt_id"
+                ),
+                "committed_pickup_panel_baseline_at_observation": payload.get(
+                    "committed_pickup_panel_baseline_at_observation"
+                ),
+                "committed_ck_panel_baseline_at_observation": payload.get(
+                    "committed_ck_panel_baseline_at_observation"
+                ),
+                "committed_pickup_authority_proof_schema": (
+                    proof.get("schema")
+                    if isinstance(proof, dict)
+                    else None
+                ),
+                "committed_pickup_event_key": payload.get(
+                    "committed_pickup_event_key"
+                ),
+            })
+        elif (
+            _is_czasowka_order(existing)
+            and state_has_committed_pickup_artifact(existing)
+        ):
+            # Legacy durable event moze jeszcze dojechac po deployu. Jesli
+            # legalnie zmienia pickup, nie wolno zostawic provenance poprzedniej
+            # prawdy; wszystkie nowe producery czasowki niosa proof.
+            update_fields.update({
+                "committed_pickup_authority": None,
+                "committed_pickup_observed_source": None,
+                "committed_pickup_observed_at": None,
+                "committed_pickup_authority_receipt_id": None,
+                "committed_pickup_panel_baseline_at_observation": None,
+                "committed_ck_panel_baseline_at_observation": None,
+                "committed_pickup_authority_proof_schema": None,
+                "committed_pickup_event_key": None,
+            })
         _p_delta = payload.get("delta_min")
         _p_delta_str = (
             f"Δ={_p_delta:+.1f}min" if _p_delta is not None else "Δ=null(late)"

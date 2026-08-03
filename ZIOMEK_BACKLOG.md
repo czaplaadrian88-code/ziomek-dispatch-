@@ -1,5 +1,254 @@
 # ZIOMEK AI DISPATCHER - BACKLOG ROZWOJU
 
+> **KANDYDAT v27 2026-08-03 — RUTCOM COMMITTED PICKUP AUTHORITY / OID 491578:**
+> root cause potwierdzony: guard pasywny 52 razy stłumił zmianę umówionego
+> czasu Rutcom 19:16→19:21, przez co aplikacja poprawnie pokazywała stary stan
+> 19:16. Jeden resolver autorytetu zastępuje rozproszoną politykę.
+> V27 po dwóch `CONFIRMED_DEFECT` v26 prowadzi także missing-state przez exact
+> claim gate, usuwa oba future-skew granty, promuje successor monotonicznie,
+> zabrania oid-only drainowi kasować v4/v5/v6 i prowadzi każdy mutator przez
+> jednego ownera forward/rollback fence. Code revert nie rebazuje już trwałej
+> pracy do pięciominutowego scalara: hot OFF jest natychmiastowy, a revert kodu
+> czeka na pustą, exact-zapieczętowaną kolejkę. Baseline findings miał 11F/2P;
+> po fixie targeted 22/22, broad 265/265, scalar compatibility 1/1, a siedem
+> mutation probes czerwieniło 2F/1F/1F/1F/3F/2F/1F. Pełna regresja ma
+> `6781P/0F/74S/8X/153W` w 460,43 s; dwa świeże `CLEAN` exact-byte v27
+> pozostają przed live. Produkcja nadal bez zmian/OFF.
+> V26 wcześniej ustanowił dokładny claim jako wspólną bramkę raw coordinator
+> CK/pickup, lifecycle parity i trwały lease queue membership; commit
+> `7266686b29a5bcc0e6e3f9948574d55afef2c8dc` został odrzucony po review V26.
+> V25 po dwóch `CONFIRMED_DEFECT` v24 usuwa cztery kolejne przyczyny u
+> istniejących ownerów. Receipt koordynatora nie zmienia klasy biznesowej:
+> prawdziwy elastyk wraca do jedynego legacy writera przy `OFF` i `ON`. Jeden
+> transaction-policy helper wiąże oba pola, claim, apply i crash replay z exact
+> v6 click lease, więc późniejszy tick/hot flip nie zmienia CAS. Forward gate
+> akceptuje obie wartości forward poprawnego explicit-elastic v6, a wspólny
+> retention guard obu cleanupów zachowuje source `NEW_ORDER` aż exact applied
+> pickup skonsumuje ten sam initial intent ID. Review findings były 8F+1P
+> przed fixem; po fixie 13/13, mutacje 1F/4F/1F/1F, pełna regresja
+> `6761P/0F/74S/8X/153W` w 459,67 s, lifecycle 557/557. Produkcja nadal bez
+> zmian/OFF; dwa świeże `CLEAN` exact-byte v25 pozostają przed live.
+> V24 po dwóch `CONFIRMED_DEFECT` v23 wiąże queue click→claim→proof→outbox→
+> recovery jednym exact policy lease schema v6, klasyfikuje coordinator CK na
+> post-observation state i usuwa każdy live reread z durable recovery. Claim
+> jest tylko journalem: wymaga własnego `forward AND passive`; manual flaga nie
+> może zastąpić click-time OFF. Pre-policy v4/v5 nie nabywa authority, forward
+> preflight ignoruje tylko v6 dowodzący OFF, a code revert blokuje policy-bound
+> v6. V23 wcześniej dodał atomowy UUID+SHA fence na okno preflight→flip. Wszystkie
+> mutatory kolejki używają jednego flocka; release wymaga exact ID, quiesce i
+> zgodności efektywnego ON albo jawnego abortu OFF. Historyczne bramki v24:
+> główny klaster queue/apply/rollback 272/272, ratchet/mutation 28/28 i pełna
+> regresja `6752P/0F/74S/8X/153W` w 462,43 s.
+> Historyczny kontrakt poniżej pozostaje obowiązujący: jeden resolver akceptuje
+> wyłącznie bezpieczny forward aktywnej czasówki lub korektę z markerem/
+> queue-bound receiptem v6. Jedna granica kanonizuje raw CK przed durable
+> outboxem, a `PICKUP_TIME_UPDATED` jest jedyną drogą zapisu
+> pickup+CK+HH:MM+revision+provenance. Immutable claimed head, coalesced
+> successor i exact attestation wiążą retry z realnym rekordem kolejki/outboxa.
+> V10 blokuje cofnięcie przez równoległy stary
+> `pickup_at`, wyciek do scoringu, forge/reuse receiptu, złego courier lane,
+> legacy ABA przed pierwszym authority apply i alias event key; kolejny forward
+> 19:21→19:26 przechodzi. Historyczny durable raw CK jest terminalny, exact
+> outbox wznawia własną transakcję przed rewalidacją, a `coordinator_force`
+> nigdy nie degraduje się do legacy bez receiptu. Oba flags OFF zachowują
+> pre-proposal exact legacy path; zwykły pickup ma ten sam wynik legacy i tylko
+> addytywny revision fence. Ochrona 483023 i post-pickup pozostaje zamknięta.
+> V7 zachowuje exact legacy event key przy OFF, rezerwuje także normalized
+> `observed_source`, nie pozwala kompatybilnemu drainowi skasować claimu i ma
+> mechaniczny rollback gate: pełny unfinished-outbox audit, fence, exact backup
+> i bezpieczną projekcję v4→legacy. Dwa blind review v6 znalazły pięć unikalnych
+> luk; wszystkie niezależnie odtworzono i zamknięto w v7. Kolejne dwa blind
+> review v7 wykryły stuck claim po przegranym CAS/prune, przedwczesny ACK po
+> samym state, fence bez wiarygodnego rollback receipt, niepełny classifier i
+> obejścia AST. V8 utrwala stale claim jako terminalne superseded, wymaga exact
+> outbox state+downstream do ACK, zapisuje fence jako ostatni commit związany z
+> SHA backupu/projekcji i rozwiązuje alias/concat/static-fstring w ratchecie.
+> Dwa blind review v8 wydały `CONFIRMED_DEFECT`: recovery było
+> błędnie zagnieżdżone w pętli bieżącego state, proof nie wiązał starego CK,
+> niekanoniczny CK-only writer mógł wygrać, rollback audit pomijał nieznane
+> statusy/częściowo uszkodzony authority row, a `dict(keyword=...)` omijał oba
+> ratchety. V9 odtwarza każdy claim bez zależności od obecności OID w state,
+> wiąże proof z aktualnym CK i snapshotem state bliźniaka, wygasza równoległy
+> CK-only writer przy ON, failuje closed dla każdego nieznanego układu outboxa
+> i domyka keyword AST. Dwa świeże blind review v9 ponownie wydały
+> `CONFIRMED_DEFECT`: code-revert nie sprawdzał manual authority flag; stripped
+> authority artefakty mogły spaść do legacy; assignment i first_acceptance
+> mogły utworzyć CK z pustego baseline; attestation nie wiązała finalnych
+> markerów downstream, a ratchet rezerwował zbyt wąską klasę artefaktów.
+> V10 ustanowiła jedną kanoniczną listę wszystkich authority flags, jeden
+> fail-closed oracle całej klasy artefaktów, wygasiła oba CK-only writery także
+> przy pustym CK i zapieczętowała pełną trwałą kopertę dopiero po zamrożeniu
+> markerów downstream. Dwa świeże blind review v10 poprawnie wydały
+> `CONFIRMED_DEFECT`: część osieroconych/null authority keys i trwały event ID
+> mogły spaść do legacy; rollback patrzył tylko wewnątrz `state_event`, release
+> fence ignorował manual writer; bezkontekstowy `coordinator_force` blokował
+> legalny pickup elastyka; rejestr flag wskazywał definicje zamiast runtime
+> readerów. V11 rezerwuje schemat po obecności klucza i durable identity,
+> klasyfikuje cały związany row outboxa, stosuje source receipt dopiero po
+> rozpoznaniu czasówki, sprawdza wszystkie authority flags przy release oraz
+> mechanicznie wymusza dokładny zbiór trzech aliasowych consumerów przez AST.
+> Pierwsza pełna suita v11 wykryła zbyt szerokie uznawanie ogólnych markerów
+> downstream za authority; zawężenie u źródła ma osobny negatywny oracle i
+> mutation probe. Finalny szeroki klaster ma 336/336, pełna regresja
+> `6482P/0F/74S/8X` przy identycznych skip/xfail/warnings jak base, a jedenaście
+> mutacji nowych zabezpieczeń zostało zabitych i przywróconych bajtowo. Dwa
+> blind review v11 poprawnie zatrzymały live: generic receipt mógł przywrócić
+> stale pickup 19:16 po CK-derived 19:21, legacy force event nie miał claimu
+> przed apply, manual flaga miała niepełną mapę readerów, a CK-only źródła nie
+> były jawnie wygaszone. V12 blokuje stale baseline także z receiptem, claimuje
+> każdy force event przed side effectem, promuje neutralną continuation dla
+> drugiego legacy pola, podnosi stary timestamp bez nadawania authority,
+> odrzuca poison claim, przypina obie flagi do trzech realnych readerów i jawnie
+> wygasza `coordinator_edit`/`first_acceptance`/`ziomek_late_extension` dla
+> czasówki. Osiem nowych mutation probes zostało zabitych i przywróconych do
+> identycznych SHA. Finalna regresja v12 jest zielona:
+> `6493P/0F/74S/8X/149W`, szeroki klaster `329/329`, profil identyczny z base.
+> Dwa review v12 poprawnie zatrzymały live i wykryły osiem dalszych klas:
+> oscylację sprzecznego snapshotu, brak CK CAS w pickup proofie, rozbieżną
+> terminalność outboxa, nieskończoną continuation jednego kliknięcia, niepełny
+> CAS legacy claimu, claim więziony po prune OID, rollback ignorujący aktywne
+> provenance/hot-OFF split oraz brak rollback readera w rejestrze flag. Każda
+> została odtworzona RED na v12 i naprawiona u ownera kontraktu w v13. Pełna
+> hermetyczna regresja v13: `6510P/0F/74S/8X/149W`. Dwa review v13 ponownie
+> zatrzymały live i wykryły dziewięć klas: brak wspólnego CAS legacy pickup/
+> claimed CK, fail-soft canonicalization, drift raw-writer handler/oracle,
+> null-attestation, częściowe provenance cleanup, nieatomowy rollback oraz
+> alias/static-join bypassy ratchetów. V14 ustanawia jeden `time_update_cas.v1`
+> owner dla statusu/courier/assignment/revision, strict read przed outboxem,
+> fail-closed partial envelope, wspólny terminal policy, pełny artifact cleanup,
+> transaction-like rollback z ochroną obcego fence i pełniejsze AST ratchety.
+> Szeroki klaster v14 miał 350 pass, lecz dwa review v14 poprawnie zatrzymały
+> live: wykazały CK ABA claimu, niepełny CAS/postcondition pól sprzężonych,
+> `delta=None`, partial CK downgrade, utratę poison receiptu, literalny bypass
+> rejestru i brak preflightu starych raw eventów przy dark deployu. V15 wiąże
+> obie monotoniczne rewizje i jedną mapę prep/deadline/markera, zachowuje poison,
+> rozpoznaje literalny reader oraz dodaje `forward-status` po quiesce — bez
+> fallbacku runtime. Negatywne oracles były 12/12 RED; wielomutacja daje
+> 12 fail, exact restore 14/14 green. Pełna hermetyczna regresja v15:
+> `6544P/0F/74S/8X/149W`. Dwa świeże review v15 poprawnie zatrzymały live:
+> oracle assignmentu nie zgadzał się z wygaszonym CK writerem, pierwszy
+> `null→wartość` omijał resolver, successor zużywał TTL za trwałym claimem,
+> a legacy czasówka mogła utracić tożsamość po obniżeniu prep. V16 ustanawia
+> jeden assignment resolver z durable snapshotem flag, jeden null/value path,
+> receipt v5 z osobnym `requested_at`/`eligible_at` i atomowo materializuje
+> `order_type=czasowka` przez wspólną mapę proof/CAS/writer/postcondition.
+> Negatywne oracles review były 4/4 RED; MAIN dodatkowo domknął exact OFF
+> first-acceptance parity. Pięć mutation probes czerwieniło 1/2/2/1/2, exact
+> restore 8/8 green, a finalny szeroki klaster ma 399/399 PASS. Regresja
+> v16: `6561P/0F/74S/8X/149W` w 433,93 s. Dwa świeże review v16 poprawnie
+> zatrzymały live: projekcja rollbacku używała `requested_at` zamiast
+> `eligible_at`; pickup `null→wartość` i cold-start assignment mogły ominąć
+> pełny kontrakt; preflight nie blokował pre-v16 assignmentu bez snapshotów ani
+> aktywnego niepełnego state czasówki. V17 naprawia te przyczyny u ownerów
+> kolejki, ingestu i bramki wydania. Sześć negatywnych oracles było RED przed
+> fixem i ma 6/6 green; pięć mutacji czerwieni 2/2/2/1/1, exact restore ma 8/8,
+> ratchet 22/22, a pełna regresja v17 to `6576P/0F/74S/8X/149W` w 450,57 s.
+> Dwa świeże review v17 poprawnie zatrzymały live: forward gate ignorował
+> policzoną klasę unfinished authority rows; re-click mógł nadpisać poison
+> claimed head/successor; preflight duplikował classifier i pomijał legacy
+> prep>=60 bez kuriera; nowa czasówka z pierwszym tuple po NEW_ORDER nie miała
+> legalnego `None→czas` u policy ownera. V18 domyka wszystkie cztery przyczyny
+> u gate/queue/wspólnego classifiera/authority. Oracles: 6F+1P przed, 7/7 po;
+> sześć mutation probes po 1F; focused 376/376; pełna regresja na aktualnym
+> masterze `49aed3215`: `6599P/0F/74S/8X/149W` w 452,70 s.
+> Dwa świeże review v18 ponownie poprawnie zatrzymały live: initialny
+> `NEW_ORDER`/cold-start był konkurencyjnym writerem split pickup/CK, preflight
+> przepuszczał niepusty lecz rozjechany lub malformed tuple, bezkontekstowy raw
+> CK fałszywie blokował jawnego elastyka, a wersjonowany event po prune wisiał
+> `pending`. V19 wiąże `NEW_ORDER` z durable snapshotem; ON tworzy shell bez raw
+> czasu i materializuje initial tuple wyłącznie przez kanoniczny resolver/
+> `PICKUP_TIME_UPDATED`, a forward flag wymusza oba detektory recovery po
+> crashu. Jeden complete-contract validator i kontekstowy forward classifier
+> z osobną bramką starego `NEW_ORDER` zastępują duplikaty preflightu; code
+> revert nadal failuje closed dla każdego raw CK. Oba wersjonowane eventy po
+> prune terminalizują się jako `superseded`. Siedem mutacji zostało zabitych,
+> exact zestaw ma 30/30, focused 432/432, pełna regresja
+> `6610P/0F/74S/8X/149W` w 466,95 s przy identycznym profilu v18.
+> Dwa świeże review v19 ponownie zatrzymały live: policy snapshot mógł zostać
+> nadpisany hot-OFF przed initial writerem, pierwotny tuple ginął trwale między
+> `NEW_ORDER` i inicjalizatorem, preflight pomijał pending legacy pickup oraz
+> fałszywie przepuszczał sanitizowany czasowy `NEW_ORDER`. V20 zapisuje
+> niezmienny hash-bound initial intent w tej samej transakcji co shell,
+> materializuje go dokładnie jednym `PICKUP_TIME_UPDATED` również po ON→OFF i
+> atomowo usuwa receipt z zapisem pickup+CK+HH:MM+provenance. Zwykły restart
+> tick konsumuje trwały intent przed świeżym panelem, więc restamp 19:16 nie
+> zastępuje umówionego 19:21. Preflight blokuje każdego pending writera czasu i
+> każdy czasowy `NEW_ORDER`; tylko w pełni związany jawny elastyk jest wyjątkiem.
+> Cztery findings były 4/4 RED przed fixem; v20 miała 6 mutation kills, exact 7/7,
+> szeroki klaster 592/592 i pełną regresję `6617P/0F/74S/8X/149W`.
+> Review v20 ujawniły osiem dalszych klas, zamkniętych w v21 przez exact binding
+> applied `NEW_ORDER`, recovery niezależne od board/fetch, wyłączność pending
+> intentu, źródłowy broadcast, wspólny classifier i mechaniczne quiesce. V21:
+> 8/8 oracles, 8 mutation kills, 367/367 focused i
+> `6706P/0F/74S/8X/153W`. Dwa review v21 zatrzymały jeszcze późny recovery za
+> assignment/pickup writerami, klasyfikację starego agregatu sprzed zmiany
+> `prep_minutes` w state/preflight oraz ponowne czytanie żywych flag po HTTP.
+> V22 odzyskuje receipt przed każdym writerem lifecycle, usuwa późnego bliźniaka,
+> współdzieli jeden post-event projector i zamraża jeden request-scoped policy
+> snapshot przez fetch→resolver→legacy/durable apply. Review findings były 4/4
+> RED przed i 4/4 PASS po; oba kierunki hot-flipu mają osobne oracles, pięć
+> mutation kills wraca do exact SHA, focused 226/226, broad 456/456, pełna suita
+> `6713P/0F/74S/8X/153W` w 637,32 s. Lifecycle repo/live 557/557, hygiene
+> 271/271, zero sierot i nowej luki effect coverage.
+> Read-only live preflight ma pustą kolejkę, zero unfinished outboxa i zero
+> aktywnych niepełnych kontraktów; naturalna terminalizacja usunęła wcześniejszy
+> blocker danych. `safe_for_forward_deploy=false` wyłącznie dlatego, że oba
+> exact writery są nadal aktywne. Produkcja pozostaje bez zmian do dwóch świeżych
+> `CLEAN`, kontrolowanego quiesce i ponownego zielonego preflightu.
+> Flaga
+> `ENABLE_CZASOWKA_RUTCOM_FORWARD_AUTHORITY` jest default OFF; owner wydał ACK
+> na docelowe ON po wdrożeniu. Kod nie jest jeszcze wdrożony, procesy nie były
+> restartowane, runtime i produkcyjne flagi są niezmienione.
+> Kontrakt: `docs/RUTCOM_COMMITTED_PICKUP_AUTHORITY.md`; dowód:
+> `eod_drafts/2026-08-01/RUTCOM_COMMITTED_AUTHORITY_491578_REPORT.md`.| ID | Zadanie | Dowod / problem | Co zmieni sie po wykonaniu | Effort | Bramka | Status |
+|---|---|---|---|---:|---|---|
+| COM-P0-CONTAIN-01 | OpenClaw: trwałe containment i bezpieczne recovery po V8 OOM | Zatwierdzony recreate wszedł w powtarzalny V8 heap OOM. Read-only chronologia Docker dowodzi: stary proces przeżył restart configu, a pierwszy OOM wystąpił dopiero po utworzeniu nowego kontenera; kernel/cgroup OOM nie wystąpił. Systemd base-only writer dodatkowo odtwarzał LAN/public i pętlę. | Osobna faza w izolowanym, network-disabled środowisku odtworzy recreate delta i dopiero po ustaleniu triggera przygotuje bezpieczny loopback-only recovery. | M | `HOLD_OFFLINE`; zachować maskę. Bez startu/deployu/unmask/rollbacku/re-enable/NODE_OPTIONS. Disposable reproduction bez produkcyjnych mountów wymaga nowego runbooku, review i osobnego `ACK_RECOVERY`. | PARTIAL / FAIL_CLOSED; NIE DONE. Klasyfikacja: `V8_STARTUP_HEAP_EXHAUSTION_AFTER_CONTAINER_RECREATE / TRIGGER_NOT_ISOLATED`; nie host OOM i nie cgroup kill. Postcheck 16:50Z masked+inactive, porty absent, kanały false. Raporty: `eod_drafts/2026-07-15/COM_P0_CONTAIN_01_FINAL.md` i `COM_P0_OOM_MASK_RECON_03.md`. |
+| COM-P0-PERSIST-HOLD-02 | OpenClaw: trwała maska fail-closed bez uruchamiania usługi | v1.0 miała scope mismatch. W v1.1 CTO odwołał wstępny ACK jako `HOLD_ROLLBACK_FAIL_OPEN`, lecz non-MAIN zastosował maskę ze starego kontekstu. Owner zatwierdził później wyłącznie read-only disposition, bez retroaktywnej ratyfikacji apply. | Zachować istniejący bezpieczniejszy postimage: unit maska `/dev/null`, enablement absent, service inactive, 18789/18790 absent, kanały false. | S | `RECONCILED_PRESERVE_FAIL_CLOSED`; `AUTHORITY_VIOLATION_RECORDED_NOT_RATIFIED`; rollback denied bez nowej hash-bound bramki; recovery `HOLD_OFFLINE`. | Reconciliation przyjęta read-only przez COM-P0-OOM-MASK-RECON-03 v1.0. Backup preimage SHA `b85e073d…07e8d` zachowany. Żadnej dalszej mutacji; raport: `eod_drafts/2026-07-15/COM_P0_PERSIST_HOLD_02_HOLD.md`. |
+| COM-P0-OOM-MASK-RECON-03 | OpenClaw: formalna read-only rekoncyliacja maski i klasyfikacja OOM | Owner ACK związał runbook SHA `160ea078…bd4a`; receipt SHA `fce0987a…36c3` potwierdza zero mutation authority. Niezależny postcheck 16:50Z zachował masked+inactive, gateway+CLI exited, 18789/18790 absent, TG/WA false, watchdog no-op i siblings healthy. | Kanon jednoznacznie zachowuje maskę bez ratyfikacji stale-ACK apply; oddziela potwierdzony mechanizm V8 od nieustalonego triggera i wyznacza granicę następnej fazy. | XS | READ_ONLY tylko; zero systemd/Docker/Compose/channel/runtime mutation. Każdy drift = HOLD_EVIDENCE_DRIFT. | DONE READ-ONLY: `READ_ONLY_RECONCILIATION_ACCEPTED_NOT_RECOVERY`; recovery nadal HOLD_OFFLINE. Raport: `eod_drafts/2026-07-15/COM_P0_OOM_MASK_RECON_03.md`. |
+| COM-P0-OOM-DISPOSABLE-REPRO-04 | OpenClaw: projekt izolowanej reprodukcji triggera V8 OOM | Non-MAIN przygotował draft 0600 SHA `e22e53fd…be79a` i handoff SHA `47821e46…5c14e`; reprodukcja nie została uruchomiona. Dwa niezależne review dały `HOLD_DESIGN`: `docker run` startuje przed inspect, gate C65 nie jest mechaniczny, fixtures nie trafiają do ścieżek aplikacji, macierz nie jest czystym OVAT, oracle/telemetria i crash-safe cleanup są niegotowe, a budżet create/repeat jest sprzeczny. | Poprawiony v1.1-DRAFT zbuduje hash-bound harness i manifest, rzeczywiste synthetic schemas/manipulation checks, create→durable ledger→inspect→start, mechaniczny nonce/revoke, host+container isolation, prawdziwe pary A/B oraz wykonalny budżet. | M | Nadal DESIGN_ONLY. Nowy hash po korekcie, dwa independent review i CTO gate; execution dopiero po osobnym owner ACK dla jednego disposable NON-PROD campaign. Zero produkcji/recovery. | `HOLD_DESIGN`; draft zachowany jako input, nie execution authority. Recovery `HOLD_OFFLINE`; raport: `eod_drafts/2026-07-15/COM_P0_OOM_DISPOSABLE_REPRO_04_DESIGN_REVIEW.md`. |
+| Z-P0-01 | Kanon R6/R27/SLA i koncowy invariant firewall | OD-04/OD-07 rozstrzygnely intencje: R6=`in_vehicle_age` possession→handoff 35/40 Alarm; R27 commitment immutable, `5<|Δ|<=10` jawny breach, `|Δ|>10` zakaz. Baseline ma inne anchory i niepelny Alarm/Always-propose. | Osobny sprint zwiąże physical eventy, wszystkie bliźniaki, replay i execution authority bez zmiany decyzji przez samą dokumentację. | L + 2 dni obserwacji | Semantyka OWNER_CONFIRMED; event binding, implementacja, replay, flip i live ACK nadal HOLD | OWNER DECISION DONE 12.07; R0 TECH ACCEPT/HOLD `1b38447`; D1 branch `e193f2a`; nic nie flipnięto |
+| Z-P0-02 | Naprawa wieloprocesowego zapisu geocode cache | `flock` jest zakladany na unikalnym tempfile, wiec nie serializuje load-merge-save miedzy procesami. | Cache adresow, restauracji i negative cache przestanie gubic poprawne wpisy przy rownoleglym geokodowaniu. | M | Bez flipa; pelna regresja geocode | DONE - LIVE |
+| Z-P0-03 | Przywrocenie zielonego baseline testow | REOPENED 10.07 po flipie parsera i Audycie 360: default 4846/1; STRICT 4792/6. TEST-11 czytal live `flags.json`, a TEST-12 mial piec klas live reads i dwa ukryte prod-write. | Baseline jest deterministyczny: syntetyczne flags/systemd/state, dokladny live-smoke i tripwire anty-prod bez oslabenia guarda. | M | Zero zmian produkcyjnych; rollback = revert test-only fix-forward | DONE — `4e782e8` + T0 fix-forward z brancha `f015c9f`; tmux57 CLOSED |
+| Z-P0-04 | CAS i wspolna granica planu — REOPENED 10.07 | Dispatcherowe call-site'y CAS sa LIVE, ale Audyt 360 potwierdzil pominiety writer panelu (SPRI-02/DANE-01), odrzucanie strategii solvera, rozjazd stops i null-duration=teleport (TRAS-01/02/03) oraz false-conflict touch_plan (SPRI-03). | Jeden cross-repo owner domknie decyzja→store→panel→apka: prawidlowa kolejnosc, fail-closed czas nogi, provenance/manual marker i CAS bez lost-update/resurrect. | L/XL | Po A360-H1; jeden lane PLAN; deploy readers-first/writer-second i restart za ACK | REOPENED - A360-P0 QUEUED |
+| Z-P0-05 | Retry/DLQ dla eventow failed | Historycznie 106 `NEW_ORDER` ma status failed; brak attempt count, error i automatycznego retry. | Blad przejsciowy nie zgubi obslugi zlecenia; poison event trafi do DLQ z diagnoza i limitem prob. | L | Decyzja o retry policy | SOURCE/PREP E0+E1 branch complete: E0 `5dd4c80`, E1 kod `c9d02b4`+`5044911`, final branch `66a2591`; envelope/outbox/receipts/journal/recovery gotowe i default OFF. Merge/worker/policy/migracja/live HOLD; retencja `order_state` czeka na checkpoint |
+| Z-P0-06 | Bezpieczenstwo courier API — auth + ownership | Rate-limit per-IP i wspolny ownership guard status/arrival/ground-truth/payment sa LIVE; BEZP-04 pozostaje osobna decyzja UX. | Foreign/missing/malformed dostaja identyczne 403 przed order-specific I/O; owner zachowuje kontrakt. | M | Wydane za ACK 11.07; rollback przywraca BEZP-02, preferowany fix-forward | DONE/LIVE `320aa0e`, API master `fa249e6`; 186/186 predeploy, 19/19 postrestart, PID 925329/NRestarts0/health PASS |
+| Z-P0-07 | R4-GOVERNANCE: podpisana karta execution authority i runtime gate | ODR-002 rozstrzyga owner-only promotion, zakaz samopromocji i fail-closed card check. Dzisiaj nie ma autorytatywnej podpisanej karty sprawdzanej przed każdym execution entry pointem. | Candidate może powstać izolowanie; docelowo każda egzekucja sprawdzi wersjonowaną kartę, a brak/błąd da `recommend-only`/`HOLD`; automatyczna degradacja nie umożliwi re-promocji. | XL | Każda zmiana karty/schema/parsera/gate/policy/ochrony = R4; evidence hash + niezależny review + owner-only approval/signature + deterministic apply; osobny ACK live | OWNER DECISION DONE 12.07 (`ODR-002`); implementacja/karta/runtime ZERO, HOLD. Aktywny lease `docs/chief-engineer/**` nietknięty i musi zrekoncyliować nowe źródło. |
+| M-P0-01 | Mailek: idempotentna wysyłka follow-up po granicy SQLite/SMTP | 13.07 SMTP i IMAP zakończyły się sukcesem, ale lock SQLite zostawił draft pending, więc automat mógł wysłać go drugi raz. | Schema v6 zapisuje trwały claim i Message-ID przed SMTP; niepewny skutek jest HOLD bez auto-retry, a legacy draft został zrekonsyliowany po zgodnym dowodzie SMTP+IMAP. | M + 2 runy obserwacji | LIVE `b4cdcbb`, rollback tag `mailek-pre-followup-idempotency-v6`; finalny read-only verifier at-215 15.07 09:25 UTC | LIVE; schema/integrity/cron smoke PASS, listener PID 2431013/NRestarts0; operacyjny DoD czeka na werdykt dwóch runów. |
+| D-P0-01 | Dareczek/Mailek: jeden centralny outbox, suppression i hot kill | Kod Dareczka ma wspólny fail-closed kontrakt, ale produkcyjne ścieżki cold/follow-up/reply/test Maileka nadal wysyłają poza nim. Realny pilot mógłby więc ominąć centralną rezygnację albo kill switch. | Każda ścieżka pocztowa przejdzie przez jeden claim/outbox i cztery bramy: permission, suppression, kill oraz quota; `send_uncertain` pozostanie bez auto-retry. | L; `model_tier=sol`, `effort=ultra` | Osobny sprint 5–7 dni, migracja/deploy/restart za ACK; przed pilotem 3–5 ręcznie wskazanych kontaktów i 5/dzień | PILOT P0 HOLD; source-only Dareczek `038d33b`, bez integracji live || ID | Zadanie | Dowod / problem | Co zmieni sie po wykonaniu | Effort | Bramka |
+|---|---|---|---|---:|---|
+| Z-P1-01 | Formalny FSM zlecen | `state_machine` zna statusy, ale nie ma jednej mapy dozwolonych przejsc; zly pickup timestamp jest zastepowany `now()`. | Nielegalne przejscie i uszkodzony czas beda kwarantannowane zamiast po cichu zmieniac prawde SLA. | L | SOURCE/PREP E0+E1 branch complete: formalny graf, kanoniczna koperta, failure journal, outbox i receipts per consumer sa gotowe na branchach. ON/merge nadal HOLD do policy, workera, checkpointu, migracji i osobnego ACK |
+| Z-P1-02 | Kanoniczny ground truth ETA i SLA | OD-01/OD-02 rozdzielily exit/possession i arrival/handoff; OD-03 wymaga fail-closed gate per event/source/cohort. Fizyczne source/event contracts i liczby nadal nie istnieja. | Faza A raportuje tylko nazwane eventy/proxy i lokalny support; żadna komórka bez bramy nie promuje KPI/modelu. | L | Semantyka OWNER_CONFIRMED; physical bindings + raport danych + późniejsze liczby, champion v2 i promotion nadal `HOLD/UNBOUND` |
+| Z-P1-03 | Stage-level tracing i backpressure | Latencja decyzji: p95 ok. 2,02 s, max 7,19 s; rekord nie rozbijal czasu na etapy. | Faza A mierzy queue/fleet/OSRM/solver/selection/write; nie wlacza limitu kolejki, budzetu ani backpressure. | M | **LIVE SHADOW CANARY ON od 2026-07-11 10:27 UTC**; at-214, werdykt po 48 h |
+| Z-P1-04 | Jawny `DecisionContext` i wiarygodny replay | Effects buffer obejmuje tylko czesc zapisow; Audyt 360 dodatkowo wykazal PARTIAL CORE-01, process-local rozjazdy CORE-02/03 i niekonsumowany gate TEST-03. | R0 rozdziela INPUT_MISS/OSRM_MISS/CRITICAL/SOFT/PARITY, waliduje frozen input i zuzywa OSRM najwyzej raz; pozniej context usunie ukryte kanaly procesu. | XL | R0 TECH ACCEPT `1b38447`, kod NOT MERGED do at-214; narrow/partial, surplus recorded OSRM nadal rezyduum |
+| Z-P1-05 | Kanoniczna tozsamosc kuriera — **DONE Faza A+B 2026-07-10** (pakiet `identity/`, walidator kolizji, onboarding 5-plikowy, backfill names 19→0, kanon pisowni z grafiku; delegacja 9× norm + scoring worker/panel_roster do registry — parity 177/177, golden 21417 par = 0 roznic; ODLOZONE: unifikacja profili ×10/×5 vs ×10/×10 [pomiar+ACK], Krok 4 czytelnicy plikow→registry, konsolidacja courier_api.db) | 121 aliasow mapuje sie do 65 CID; 54 CID maja wiele aliasow, 20 nie ma wpisu w `courier_names`. | Grafik, GPS, PIN, tier, plan i rozliczenia beda laczone przez CID z kontrolowanymi aliasami. | L | Migracja bez zmiany CID |
+| Z-P1-06 | Prywatnosc i retencja world records/logow | Rekordy zawieraja adresy, nazwiska i GPS, maja `0644` i rosna o setki MB dziennie. | Dane beda pseudonimizowane lub szyfrowane, `0600`, kompresowane i usuwane wedlug retencji. | M | SOURCE/PREP branch complete `a6ca337`; `compat` default, private/mirror/migracja/delete HOLD do reader matrix, outbox, at-214, B-05 i ACK |
+| Z-P1-07 | Rejestr i cykl zycia flag — **FUNDAMENT DONE; FOLLOW-UP A360-FLAG-01/04** | Rejestr 505/505 i checker sa gotowe, ale carry-chain jest kluczem-wabikiem, a czesc flag behawioralnych nadal zyje poza JSON. | Najpierw decyzja retire-vs-unify; pozostawiona flaga dostanie realny consumer, ON!=OFF, fingerprint i nadal pozostanie OFF do osobnego ACK. | M | Po R0/D1; bez laczenia z flipem |
+| Z-P1-08 | Reprodukowalne srodowisko zaleznosci | `requirements-dispatch-venv.txt` pinuje rdzen OR-Tools, ale API ma 4 niepinowane wymagania; CVE/EOL nie maja zatwierdzonego feedu. | DEP0 daje przenosny config i deterministyczna mape 6/6 procesow→venv→manifest→runtime; aktualizacje osobnymi sprintami. | M | DEP0 DONE `53730e9`; pip-check/import PASS, CVE/EOL UNKNOWN; zero zmian venv/manifestow |
+| Z-P1-09 | Jedna polityka czasu i testy DST | W kodzie pozostaja rozne zalozenia dla naive datetime; `sla_tracker` dokumentuje uspiony naive-Warsaw-as-UTC bug. | Wszystkie granice beda przyjmowac jawny typ czasu; testy pokryja DST, polnoc i rollover dnia. | L | Bez zmiany historycznych danych |
+| Z-P1-10 | Restore game day i RTO/RPO | Istnienie backupu nie dowodzi odtworzenia; real provenance/decrypt obu DB/app smoke i service RTO/RPO nadal nie sa udowodnione. | DR0 daje fail-closed source/fake: strict SQL, manifest, budgety, provenance i cleanup; DR1A przygotowuje carrier/app-smoke, DR1B wykona real game-day. | M | DR0 SOURCE ACCEPT `d873f0b`; DR1A SOURCE/FAKE IN MASTER w `a360-wave3-safe-source-integrated-20260711`, C32 fixed, NOT INSTALLED/NOT EXECUTED; real verify/artifact/drill/RTO = DR1B HOLD / NOT DONE |
+| Z-P1-11 | Triage i disposition Audytu 360 | Pakiet ma 110 wpisow: 49 CONFIRMED, 4 REFUTED, 4 PARTIAL, 1 PLAUSIBLE, 52 UNVERIFIED; severity 1 P1/47 P2/58 P3/4 NONE. | Potwierdzone naprawy sa zgrupowane bez duplikatow, PARTIAL/PLAUSIBLE maja verify-first, UNVERIFIED tylko reprodukcje. | M | DONE — pakiet, walidator i kolejka zintegrowane; decyzje HARD/SOFT, security i ops osobno |
+| Z-P1-12 | Flow-liveness panelu, API i decyzji | OPS-02: krytyczne uslugi moga restartowac sie, lecz nie maja bezposredniego, zweryfikowanego alert route; sam PID nie wykrywa ciszy przeplywu. | Health panel/API i brak decyzji w peak beda mialy watermark, prog, ownera, consumer i kontrolowany negative control. | M | Kod/prep bez live; instalacja/restart za osobnym ACK |
+| D-P1-01 | Dareczek: brama pilota sprzedażowo-obsługowego | ETAP 0 i lokalny ETAP 1 są domknięte source-only w panelu `3328b50` + hardening `f262c55` + potrzeby/ceny `038d33b`: RBAC/MFA/HMAC, sender authority, wersje/revoke ofert, trwały denied audit, hot kill, quota, fail-closed migracje oraz dokładny profil potrzeb. Selektor nie może zmienić całego katalogu: krajowe karty blokują palety/fracht/import/eksport; dry-run wymusza wagi +15%, usługi procentowe +20% i stałe bez zmian. Dowód: 184 testy + 1 skip, 19 PostgreSQL oraz pełny backend 1274 + 1 skip. | Po D-P0-01 i zatwierdzeniu realnych granic pilot użyje wyłącznie aktualnych ofert z epaka, osobnej skrzynki i exact `ACK SEND`; żadna ścieżka nie ominie eligibility ani wąskiego zakresu taryfy. | XL; `model_tier=sol`, `effort=ultra` | LOCAL ETAP 1 ACCEPT; ETAP 2/LIVE HOLD. Brakuje umowy+read-only mapy realnego katalogu/UI epaka, zatwierdzonych allowlist fingerprint/basis, okresu ważności potrzeb, testu code-only rollback po `dareczek03`, produkcyjnego importera ofert/zgód, mailbox/DNS, KMS/restore, audytu pełnych odczytów, DPO/legal i osobnych ACK na migrację, deploy/restart/login/pricing apply/send || ID | Zadanie | Dowod / problem | Co zmieni sie po wykonaniu | Effort | Bramka |
+|---|---|---|---|---:|---|
+| Z-P2-01 | Naprawa sygnalow mode layer S2/S3 | Observer nie dostarcza `s2_infeasible_rate`, ustawia defer count na 99; 1188/1188 obserwacji to S1. | Shadow rzeczywiscie sprawdzi trzy tryby i ich przejscia, bez aktywacji polityki. | M + 7 dni danych | Flip dopiero po osobnym ACK |
+| Z-P2-02 | Wersjonowanie i odchudzenie schematu decyzji | `best` ma do 296 pol; rekord medianowo ok. 60 KB, max 2,27 MB. | Konsumenci dostana wersjonowany kontrakt; log operacyjny i korpus ML zostana rozdzielone. | XL | Migracja czytelnikow |
+| Z-P2-03 | Stabilny adapter panelu / API integracyjne | Krytyczny odczyt i zapis korzysta z prywatnego HTML, regexow, CSRF i subprocessu. Papu exact-marker recovery jest LIVE, ale kontrakt exactly-once po zewnetrznym POST nadal nie istnieje. | Awaria lub zmiana panelu bedzie izolowana w adapterze z idempotency key, read-back i typed error. | XL | I1 DONE/LIVE `b2c65b2`; szerszy kierunek partner API i exactly-once otwarte |
+| Z-P2-04 | Konfiguracja miasta i tenanta | BBox, centrum, dzielnice, traffic i domyslne miasto sa bialostockie w wielu modulach. | Nowe miasto nie bedzie wymagalo kopiowania silnika ani ryzyka cross-city geocode. | XL | Decyzja B-04 |
+| Z-P2-05 | Ewolucja plikow stanu do repozytorium danych | Krytyczny stan jest rozproszony po wielu JSON/JSONL; czesc plikow jest multi-writer. | Najpierw rejestr ownership/schema, potem selektywna migracja tylko plikow z realnym problemem skali lub transakcji. | XL | Bez big-bang rewrite |
+| Z-P2-06 | Wiarygodny OSRM health i polityka cache | Health uznawal fallback za zdrowy OSRM; eviction nadal sortuje duzy cache pod globalnym lockiem. | Faza A rozdziela upstream/cache/fallback i mierzy contention/eviction; optymalizacja polityki cache pozostaje otwarta dla zachowania parytetu decyzji. | M | FAZA A health/telemetry DONE; optymalizacja eviction otwarta |
+| Z-P2-07 | Hermetyczne testy i fixture danych — **DONE/LIVE + N0 FOLLOW-UP 2026-07-12** (root `conftest.py`: sandbox+write/delete/subprocess guard; STRICT; N0 manifest v5 5183 nodeidy; prywatny writer historii utrzymuje 0600; systemd E2E 5155/24/8/0XPASS/0fail, contract OK) | Czesc testow czytala zywe logi, aliasy i exclusion state hosta; pierwszy zwykly N0 poprawnie zatrzymal 11 nowych testow SEC0 poza manifestem i ujawnil replace 0644. | Testy dzialaja deterministycznie bez zapisu do produkcji; nocny guard nie przyjmie zmiany denominatora ani hard-error jako zielonego baseline, a historia pozostaje prywatna. | L | DONE/LIVE `0891b06`; timer active, next 13.07 01:15 UTC; raport `AUDIT360_N0_LIVE_AND_NEXT_LANES_LAUNCH.md` |
+| Z-P2-08 | Least privilege dla uslug | Wiele demonow dziala jako root; hardening systemd jest nierowny. | Kompromitacja jednego procesu dostanie mniejszy zakres zapisu i odczytu sekretow. | XL | Migracja sciezek i ownership |- **Na czym polega:** zamkniecie scrapowania HTML/CSRF i subprocessow za jednym
+  interfejsem domenowym.
+- **Zakres pracy:** `PanelGateway`, typed errors, timeouty, retry, idempotency key,
+  read-back, contract tests i mozliwosc podmiany na partnerskie API.
+- **Co zmieni w Ziomku:** zmiana HTML nie rozsypie wielu modulow, a zapis bedzie
+  mial jeden kontrolowany wynik `confirmed/unknown/rejected`.
+- **Czego nie zmieni:** samego panelu w pierwszej fazie; adapter opakuje istniejacy tor.
+- **Koniec zadania:** wszystkie krytyczne call-site'y przez gateway, fault-injection
+  401/419/timeout oraz brak podwojnego przypisania po retry.
+- **Effort:** XL; kierunek zgodny z roadmapa API.
+
+
 > **SESSION CLOSE 2026-08-01 20:45 UTC — LICZNIK DOSTAW 16 VS 17 / ROOT-FIX CANDIDATE:**
 > jedna realnie wykonana dostawa została po pickupie oznaczona w panelu jako
 > status `9/cancelled`. `panel_watcher` zastosował `ORDER_RETURNED_TO_POOL`, a

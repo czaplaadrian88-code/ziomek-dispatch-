@@ -1,0 +1,133 @@
+RUTCOM COMMITTED PICKUP AUTHORITY v29 — DoD evidence
+Date: 2026-08-03 UTC
+Gate: engine.rutcom-committed-pickup-authority-491578
+Status at capture: candidate only; production code/processes unchanged; target flag effective OFF
+Base: 407d274f4426643a8fa498cd41977561a2c704f6 (rejected v28)
+Branch: fix/rutcom-committed-provenance-v20-20260802
+Worktree: /root/worktrees/dispatch_v2/active/20260802-rutcom-v17-integration-pkgroot/dispatch_v2
+Model selection: gpt-5.6-sol; effort=xhigh; durable authority, rollout concurrency and release safety have high error cost.
+regresja: 6782 passed, 0 failed, 74 skipped, 8 xfailed, 153 warnings; full canonical HERMETIC_STRICT suite vs v28 baseline.
+e2e: incident 491578 plus queue→authority→watcher→state→outbox/recovery cluster 381 passed; exact queue/operator/ratchet cluster 157 passed.
+pozytywny-wplyw: the same six v28 defect reproductions are green in v29, incident replay remains canonical 19:21, and crash/race paths now retain a writer-blocking fence instead of reopening the queue.
+rollback: sole behavior kill switch is hot target flag false; OFF abort and crash resume retain the exact UUID/12-file forward fence until bytes and writer quiescence match.
+N-D: feasibility_v2.py, route_simulator_v2.py, plan_recheck.py, core/candidates.py, dispatch_pipeline.py, core/selection.py, drive_min_calibration.py, auto_assign_gate.py, tools/reassignment_forward_shadow.py and panel/API/app serializers — no feasibility, HARD/SOFT, position, scoring, route or display behavior changed in v29.
+
+OUTCOME
+- Incident 491578 root cause remains fixed at the state/authority owner, not in UI:
+  Rutcom 19:21 becomes the coupled canonical pickup/CK tuple consumed by plan,
+  scoring after apply and the courier app. The app does not calculate 19:16.
+- v29 closes every independently reproduced v28 review finding and removes the
+  false generic executable-revert authority instead of adding a fallback.
+- Sole behavioral rollback owner: hot
+  ENABLE_CZASOWKA_RUTCOM_FORWARD_AUTHORITY=false.
+- No flag flip, deploy, restart, data migration or production mutation occurred.
+- dispatch-telegram remains intentionally disabled and untouched.
+
+REJECTED v28 REVIEW INPUT
+- Rejected candidate commit: 407d274f4426643a8fa498cd41977561a2c704f6.
+- Authority review verdict SHA-256:
+  570f1b59833f2e81f03cc341aac5582fa37173d265935e23caf3c8d3fbda7d77
+- Rollout review verdict SHA-256:
+  5fc601ca42644ed45e84c524df052923769c9880f3de60c28f330b4a8f85a070
+- Both exact-byte verdicts were CONFIRMED_DEFECT and passed driver check.
+- MAIN independently reproduced all six unique classes on the frozen v28 bytes:
+  1. forward-fence release did not require a green full post-ON handoff;
+  2. executable manifest omitted direct observation producer panel_client.py;
+  3. generic code-revert gate did not bind or measure a real legacy target;
+  4. blind-review manifest had no per-file or aggregate content digest;
+  5. code drift after fence unlink returned red but left the fence absent;
+  6. successor created after a 10:00 head could become eligible/authoritative at
+     09:01 after a host wall-clock rollback.
+
+SOURCE FIX / SINGLE OWNERS
+- coordinator_time_recheck owns one causal receipt clock. Successor promotion is
+  max(now, head eligible_at, successor eligible_at), so a causally later click
+  cannot authorize work before its claimed head.
+- The real forward fence is schema v2 and binds the exact queue snapshot, UUID
+  and canonical 12-file executable manifest. panel_client.py is included as the
+  direct producer of normalized Rutcom pickup/CK/prep observations.
+- Fence release is two-phase. The primary file is durably renamed to a
+  `.releasing` marker which every queue mutator treats as fenced. Code bytes and
+  writer quiescence are measured twice under the queue flock. Any detected
+  drift restores the primary marker; a process death leaves a valid, resumable,
+  writer-blocking release marker instead of opening the queue.
+- The operator release requires `forward_handoff_safe` after effective ON and
+  exact target-manifest equality for an OFF abort. It re-probes the two exact
+  writer units; caller assertions cannot substitute for systemd state.
+- Generic prepare/release code-revert APIs, rollback fence schema, CLI commands,
+  status booleans and queue projection policy were deleted. No silent fallback
+  remains. Pre-deploy backups are release recovery artifacts, not a second
+  behavioral authority.
+- Queue read helpers are named for their current owner
+  (`queue_records_snapshot`, `queue_record_is_unclaimed`), not the retired
+  generic rollback contract.
+- Blind-review manifest schema v2 contains exact path→SHA-256 plus aggregate
+  digest. `verify` checks exact path set and every byte; partial pins are HOLD,
+  and reviewer prompt requires verification before inspection.
+
+COMPLETENESS MAP
+place | role | writer/consumer | touched | reason/test
+coordinator_time_recheck._receipt_clock_pair + ACK promotion | causal queue clock | writer/consumer | YES | deep clock rollback oracle + mutation kill
+coordinator_time_recheck forward fence acquire/status/release | sole queue rollout transaction | writer/consumer | YES | 12-file receipt, UUID, two-phase crash recovery, code/quiescence TOCTOU oracles
+committed_pickup_authority._valid_coordinator_receipt | authority receipt oracle | consumer | N-D code | already strict; same promoted receipt is rejected before head and accepted at head
+panel_client.py | normalized Rutcom observation producer | producer | YES manifest | exact executable path ratchet; no source behavior changed
+panel_watcher claim/apply/recovery | durable runtime transport | consumer/writer | N-D code | existing exact claim/outbox/ACK; 381 sibling tests
+operator rollout gate | production target and post-ON gate | operator | YES | full handoff, canonical root, exact bytes, exact systemd target, hot-OFF-only status
+blind-review driver/selftest | exact-byte review transport | producer/verifier | YES | schema-v2 digests, exact set, full pin, mutated-byte and PII oracles
+queue/operator/ratchet tests | release gate | verifier | YES | negative oracles, seven live mutations, retired API ratchet
+twins registry | future completeness owner | procedure | YES | durable-time-authority-boundary 9/9
+feasibility/route/plan/scoring/selection | downstream decision logic | consumers | N-D | no HARD/SOFT, threshold, route or selection behavior changed
+panel/API/courier app serializers | display consumers | consumers | N-D | no render override; consume the same coupled canonical state
+equal-treatment position class (8 sites) | unrelated position policy | writers/consumers | N-D | no GPS/position field, bucket, calibration or reassignment behavior touched
+
+ORACLES / REGRESSION
+- Exact forward-fence/manifest/ratchet subset after two-phase hardening:
+  13 passed, 144 deselected in 3.07 s.
+- Direct queue/operator/ratchet cluster: 157 passed in 86.65 s before the
+  mutation wave; the final full suite reran the same exact tests after restore.
+- Sibling incident/watcher/state/outbox/recovery cluster:
+  381 passed in 26.58 s.
+- Full canonical HERMETIC_STRICT suite:
+  6782 passed, 74 skipped, 8 xfailed, 153 warnings, 0 failed in 459.47 s.
+- Delta vs v28 full suite: -9 passed solely because obsolete tests for removed
+  prepare/release code-revert APIs were deleted. skipped/xfailed/warnings are
+  identical. New two-phase crash and quiescence-race tests are included.
+- Blind-review selftest: PASS, including changed-byte HOLD and partial-pin HOLD.
+- Blind-review fixture eval: PASS; PII oracle and all eleven PII mutants: PASS.
+- Flag lifecycle repo-hermetic: 557/557 curated, 0 errors.
+- Flag lifecycle live: 557/557 curated, 0 errors.
+- ziomek-cto scope: durable-time-authority-boundary 9/9 present.
+- Imports, py_compile, JSON validation and git diff --check: PASS.
+- Entropy dashboard: sentinel-as-data remains 0; no new flag, threshold,
+  feasibility, scoring or serializer path was added.
+- ziomek-cto mechanical DoD: PASS on 41-file full feature diff;
+  final non-self-referential diff SHA-256
+  f24e892069e90788b4bd8a33ca940198184c7eaf24172091ae7c12c60eb26dc4.
+
+MUTATION PROBES / EXACT RESTORE
+- Remove head eligible_at from successor promotion: 1 failed.
+- Remove panel_client.py from exact executable manifest: 1 failed.
+- Bypass green post-ON handoff before release: 1 failed.
+- Bypass second in-transaction writer-quiescence check: 1 failed.
+- Ignore durable `.releasing` marker in queue writer fence: 1 failed.
+- Bypass blind-bundle exact-byte verify: selftest failed at mutation→HOLD.
+- Reintroduce prepare_legacy_rollback owner: static ratchet 1 failed.
+- Every mutation was restored with apply_patch. Exact restored SHA-256:
+  coordinator_time_recheck.py 39f564d633b6c79c402bbcf1da482eccdd980be016e9e4e73b2be4390f85351e
+  tools/rutcom_committed_authority_rollback.py c27fe1e92ea99ba541248ee18caa5ffc9a6c56520706a3e36beefb8050837880
+  .claude/skills/ziomek-blind-review/driver.py 2f22b734062b0005b60cd8968a1cb57dec5bf4da1f8c3f0e1fbcb76a764f6959
+
+LIVE / ROLLBACK
+- Read-only effective production decision flag probe: false.
+- Sole behavior kill switch: set the target decision flag false (hot reload).
+- Release sequence after two fresh CLEAN reviews: backup exact code/state,
+  py_compile/import/tests, stop only panel watcher + shadow, deploy exact files,
+  compile/import the target, acquire exact forward fence, prove status green
+  OFF, flip ON while both writers remain stopped, prove the full post-ON handoff,
+  release the same UUID, start those two writer units once, then verify effective
+  fingerprint, health, logs, smoke and incident replay.
+- An OFF abort keeps/restores the exact forward fence until deployed bytes and
+  writer quiescence match its receipt. A crash during release leaves the durable
+  `.releasing` marker and can resume with the same UUID.
+- Production release remains HOLD until frozen commit, DoD pass and two fresh
+  independent exact-byte CLEAN verdicts.

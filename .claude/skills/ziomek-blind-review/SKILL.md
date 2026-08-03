@@ -36,10 +36,28 @@ bramie, która sama o sobie meldowała „264/264, zero przeżyło": **oddaj art
 python3 .claude/skills/ziomek-blind-review/driver.py blind <katalog_kandydata> [--pin pin.json] [--out DIR] [--allow-sensitive ŚCIEŻKA]
 ```
 Skanuje CAŁY zakres bramką PII/sekretów (fail-closed — patrz niżej), weryfikuje
-SHA-256 wejścia (fail-closed przy mismatch), buduje **ślepy bundle** — kopiuje
+SHA-256 wejścia (fail-closed przy mismatch i przy częściowym pinie), buduje
+**ślepy bundle** — kopiuje
 artefakty kandydata, a **wycina** raport autora, handoffy, git-log i wszystko
 z nazwą niosącą werdykt (`report`, `audit`, `handoff`, `_plan`, …).
-Wypisuje ścieżkę bundla + gotowy prompt recenzenta.
+Filtr ocenia osobno nazwę pliku i każdy katalog. Dokładna kanoniczna ścieżka
+`.claude/skills/ziomek-blind-review/` jest recenzowalna, żeby skill nie wycinał
+własnego kodu; wyjątek nie obejmuje nazwy pliku ani dalszych katalogów, więc
+`AUTHOR_REPORT.md` i `author-review/x.py` nadal są bezwarunkowo wycinane.
+Źródła shell (`.sh`) są kopiowalne, ponieważ ta sama kanoniczna polityka skanuje
+ich pełną treść przed kopiowaniem; błąd UTF-8, NUL, limit lub błąd odczytu
+zatrzymuje cały bundle jako `unscannable`, zamiast cicho pominąć oracle.
+Obok zapisuje schema-v2 manifest z SHA-256 każdego pliku i agregatem całego
+bundla. Wypisuje ścieżkę bundla + gotowy prompt recenzenta.
+
+```
+python3 .claude/skills/ziomek-blind-review/driver.py verify <bundle.manifest.json>
+```
+To obowiązkowy pierwszy krok recenzenta. Weryfikuje dokładny zestaw ścieżek,
+każdy digest i agregat; dodatkowy/usunięty/zmieniony bajt daje `HOLD`.
+Driver ustawia `dont_write_bytecode` przed importem lokalnej polityki, a gotowy
+prompt używa dodatkowo `python3 -B`: verifier uruchomiony z wnętrza bundla nie
+może sam dopisać `__pycache__` i unieważnić obiektu, który właśnie sprawdza.
 
 **Krok 2 — człowiek/orkiestrator:** oddaj bundle i prompt **ŚWIEŻEMU subagentowi**
 (`Agent`, osobny kontekst), który NIE ma dostępu do twoich wniosków, raportu
@@ -59,8 +77,9 @@ Odrzuca werdykt bez `file`+`line`+`reproduction` i dyspozycję spoza zbioru —
 ```bash
 cd /root/.openclaw/workspace/scripts/dispatch_v2/.claude/skills/ziomek-blind-review
 python3 driver.py eval          # spójność korpusu: 3 fixtures OK
-python3 driver.py blind fixtures/case-critical-policy-inversion --out /tmp/b   # bundle=[SKILL.md], AUTHOR_REPORT.md WYCIĘTY
-python3 driver.py check /tmp/verdict.json                                       # OK / HOLD
+python3 driver.py blind fixtures/case-critical-policy-inversion --out /root/worktrees/blind-demo
+python3 driver.py verify /root/worktrees/blind-demo.manifest.json
+python3 driver.py check /root/worktrees/blind-demo-verdict.json
 ```
 
 ## 🔒 Bramka PII/sekretów — FAIL-CLOSED (od 2026-08-02)
@@ -72,7 +91,7 @@ tylko nazwy niosące **werdykt**, nie **dane osobowe**.
 
 Kanoniczna polityka: **`pii_denylist.py`** — jedyne miejsce, gdzie definiuje się
 wrażliwość oraz zbiór kopiowalnych rozszerzeń (`BUNDLE_COPYABLE_SUFFIXES`: `.md`,
-`.json`, `.yaml`, `.yml`, `.py`, `.schema.json`, `.txt`). Driver woła
+`.json`, `.yaml`, `.yml`, `.py`, `.sh`, `.schema.json`, `.txt`). Driver woła
 `screen_tree()` **raz, przed jakimkolwiek zapisem**, a potem używa predykatu
 `is_bundle_copyable()` z tego samego modułu; nie ma własnej listy rozszerzeń ani
 drugiej warstwy filtrów w manifeście.
@@ -131,26 +150,29 @@ patrz `fixtures/EVAL_RESULT.md`.
    werdyktem nazwany neutralnie (`x.md`) przejdzie do recenzenta. Trzymaj raporty
    autora pod nazwami z `report/audit/handoff/plan` albo poza katalogiem kandydata.
    (Bramka PII to osobna, mocniejsza warstwa: nazwa **oraz** treść — patrz wyżej.)
-2. **Bundle NIE zawiera manifestu** — leci obok (`<out>.manifest.json`), żeby
-   nawet nazwa wyciętego pliku nie sugerowała recenzentowi, czego szukać.
+2. **Bundle NIE zawiera manifestu** — leci obok (`<out>.manifest.json`). Manifest
+   zawiera exact path→SHA-256 i agregat, ale nie treść ani wnioski autora.
 3. **Recenzent MUSI być świeżym subagentem.** Jeśli „recenzent" to ta sama sesja,
    która czytała raport autora — to nie blind review, to teatr. Driver nie
    wymusi tego za ciebie; to twoja odpowiedzialność orkiestracyjna.
 4. **Driver nie jest recenzentem.** Nie ocenia treści — blinduje, pinuje i
    waliduje kształt werdyktu. Ocenę robi model bez twoich wniosków.
 5. **`--pin` jest opcjonalny, ale przy promocji obowiązkowy** — bez niego
-   recenzujesz bajty, których nikt nie przypiął (dokładnie luka HIGH-1 z audytu).
+   recenzujesz bajty, których nikt nie przypiął. Jeśli pin nie obejmuje każdego
+   kopiowanego pliku, driver odmawia i nie może wystawić `pin_verified=true`.
 
 ## Selftest (egzekwowany co noc)
 
 ```bash
-.claude/skills/ziomek-blind-review/selftest.sh   # 11/11 PASS
+.claude/skills/ziomek-blind-review/selftest.sh
 python3 .claude/skills/ziomek-blind-review/pii_oracle.py   # sam negatywny oracle + mutanty
 ```
 Sprawdza część mechaniczną oracle: blindowanie wycina werdykty, pin jest
 fail-closed, `check` odrzuca mętne werdykty, korpus spójny, a bramka PII odmawia
 na syntetycznych wabikach (`pii_oracle.py`: 17 przypadków odmowy + 3 jawne
-kontrole granic + sonda limitu JSONL + **mutation ratchet 11/11**). Ratchet osobno czerwieni duplikat
+kontrole granic + sonda limitu JSONL + **mutation ratchet 11/11**). Uruchamia też
+realny driver z wnętrza jego własnego bundla i wymaga PASS bez `__pycache__`.
+Ratchet osobno czerwieni duplikat
 ownera rozszerzeń w driverze, usunięcie reguł path/content/scope, fail-closed,
 odmowy `unscannable` (w tym cichą trunkację), dokładności allowlisty per plik,
 klasy `client_data` i parserów `csv/tsv/yaml`. **Wpięty w nocną
@@ -160,6 +182,7 @@ recenzent łapie wady) → `fixtures/EVAL_RESULT.md`, nie ten skrypt.
 
 ## Zakres
 
-Read-only. Zero sieci, zero prod-state, zapisy tylko do `--out` (tmp domyślnie).
+Read-only wobec projektu. Zero sieci, zero prod-state, zapisy tylko do `--out`;
+dla artefaktów pracy ustaw trwały katalog pod `/root/worktrees/`.
 Nie promuje, nie aktywuje, nie nadaje authority. Orzeczenie CONFIRMED_DEFECT/CLEAN
 to wejście dla właściciela/MAIN, nie zgoda na cokolwiek live.

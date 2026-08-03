@@ -1,0 +1,78 @@
+RUTCOM COMMITTED PICKUP AUTHORITY v30 — DoD evidence
+Date: 2026-08-03 UTC
+Gate: engine.rutcom-committed-pickup-authority-491578
+Status at capture: candidate only; production code/processes unchanged; target flag effective OFF
+Base: 04311b2451d8fbff0723d3cfd14813747921d1fa (rejected v29)
+Branch: fix/rutcom-committed-provenance-v20-20260802
+Worktree: /root/worktrees/dispatch_v2/active/20260802-rutcom-v17-integration-pkgroot/dispatch_v2
+Model selection: gpt-5.6-sol; effort=xhigh; review completeness is a release-authority boundary with high false-CLEAN cost.
+regresja: 6782 passed, 0 failed, 74 skipped, 8 xfailed, 153 warnings in 462.10 s; exact full HERMETIC_STRICT parity with v29.
+e2e: the queue/operator/ratchet cluster remains 157/157; self-review bundle oracle includes canonical skill code while excluding verdict-bearing files and nested directories.
+pozytywny-wplyw: v30 makes all changed blind-review skill bytes reviewable without weakening report/verdict exclusion; v29 was stopped before reviewers or live mutation.
+rollback: review tooling has no runtime effect; sole Rutcom behavior rollback remains hot target flag false. Production stays OFF until two fresh exact-byte CLEAN verdicts.
+N-D: queue, authority, watcher, state, feasibility, route, scoring, selection, serializers, panel and courier app code — no runtime/business behavior changed from v29.
+
+REJECTED v29 BUNDLE
+- Rejected candidate: 04311b2451d8fbff0723d3cfd14813747921d1fa.
+- Candidate path: /root/worktrees/blind-candidates/rutcom-v29-04311b245.
+- Pin SHA-256: 5540c2c99396cc102350c710cc3b35293fa5b7867365f30088273203d6c4a48a.
+- Rejected bundle aggregate:
+  db8e571bfd2be93d5ad5f1c2165ec3af17dbcf0bfd7fa2a1b2353b41b67a8ba8.
+- Mechanical exact-set inspection found that all ten changed files below
+  `.claude/skills/ziomek-blind-review/` were absent. `is_blinded_out` searched
+  the full relative path for `review`, so the tool could not review itself.
+- No reviewer was spawned for that incomplete bundle. No deploy, restart, flag
+  flip, state migration or production write occurred.
+
+SOURCE FIX / SINGLE OWNER
+- `is_blinded_out` now parses path components. A verdict-bearing basename is
+  always excluded. Every parent component is also denied unless it completes
+  the exact canonical tuple `.claude/skills/ziomek-blind-review`.
+- The exception cannot authorize a filename or a later directory. Therefore
+  canonical `driver.py` is copyable, while `AUTHOR_REPORT.md` and
+  `author-review/x.py` remain excluded fail-closed.
+- No alias directory, fallback bundler, second policy or render/runtime override
+  was added. PII screening remains independently owned by `pii_denylist`.
+
+COMPLETENESS MAP
+place | role | writer/consumer | touched | reason/test
+blind-review driver is_blinded_out | one path-filter owner | producer | YES | component oracle + exact canonical path only
+blind-review cmd_blind/manifest | bundle transport | producer | N-D code | consumes the fixed owner; new frozen bundle is next gate
+blind-review selftest | release oracle | verifier | YES | canonical code included; basename and nested-parent conclusions excluded
+PII denylist/oracle | security owner | verifier | N-D code | full oracle and 11 mutants PASS; no duplicated extension policy
+committed authority ratchet | anti-regression | verifier | YES | requires canonical path owner and behavioral selftest
+twins registry | future completeness | procedure | YES | self-review guarantee added to boundary 9/9
+queue/authority/watcher/state/operator | runtime time owner/consumers | N-D code | 157 focused and 6782 full parity
+feasibility/route/scoring/selection | business decisions | consumers | N-D | no HARD/SOFT, threshold, ranking or route change
+panel/API/courier app serializers | display | consumers | N-D | no UI override or serializer change
+equal-treatment position class (8 sites) | unrelated policy | writers/consumers | N-D | no position/GPS/bucket/reassignment behavior touched
+
+ORACLES / REGRESSION
+- `git diff --check`: PASS.
+- Driver `py_compile`: PASS.
+- Twins registry JSON parse: PASS.
+- Blind-review selftest: PASS, including self-review exact-path oracle, digest
+  mutation HOLD, partial-pin HOLD, PII refusal and PII mutation oracle.
+- Ratchet focused test: 1 passed.
+- Direct queue/operator/ratchet cluster: 157/157, exit 0.
+- Full canonical command with DISPATCH_UNDER_PYTEST=1 and HERMETIC_STRICT=1:
+  6782 passed, 74 skipped, 8 xfailed, 153 warnings, 0 failed in 462.10 s.
+- Profile is identical to v29; the v30 diff adds assertions inside an existing
+  test and therefore does not change the collected test count.
+
+MUTATION PROBE / EXACT RESTORE
+- Mutant: disable `_is_canonical_self_review_component` at the only exception.
+- Result: selftest rc=1; exact failure was the missing canonical skill code.
+- Restore: apply_patch restored exact driver SHA-256
+  8b9f23be6669791f0989860d3b0d45bc44f6851635fe3a083b0187a4d1bcab7e.
+- Restored selftest: PASS.
+
+LIVE / ROLLBACK
+- Production target flag was only read and remains effective false.
+- No production process, state, code or systemd unit changed in v30.
+- `dispatch-telegram` remains intentionally disabled and untouched.
+- Next gate: freeze v30 commit/tag; rebuild the 67-file candidate and complete
+  pin; prove the ten blind-review files are present; verify manifest exact bytes;
+  then obtain two fresh independent CLEAN verdicts before any live action.
+- Runtime release sequence and hot-OFF rollback remain exactly as specified in
+  RUTCOM_V29_DOD_EVIDENCE.txt; v30 changes only the proof transport.

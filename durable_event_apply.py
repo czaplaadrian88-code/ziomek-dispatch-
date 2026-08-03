@@ -17,6 +17,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable, Optional
 
 from dispatch_v2 import event_bus, state_machine
+from dispatch_v2.committed_pickup_authority import (
+    ASSIGNMENT_CK_FORWARD_SNAPSHOT_FIELD,
+    ASSIGNMENT_CK_PASSIVE_SNAPSHOT_FIELD,
+    RUTCOM_FORWARD_AUTHORITY_FLAG,
+)
 
 
 _log = logging.getLogger("durable_event_apply")
@@ -46,6 +51,30 @@ class DurableApplyOutcome:
     # ``downstream_fn=None`` nie wykonuje callbacku, ale nadal moze poprawnie
     # przeprowadzic pending -> applied i musi wejsc do metryki sweepa.
     downstream_transitioned: bool = False
+
+
+def is_terminal_outcome(outcome: object) -> bool:
+    """Czy dokładny durable receipt zakończył obie wymagane fazy.
+
+    Pola obiektu zwrotnego są diagnostyką pojedynczej próby i nie mogą być
+    autorytetem ACK kolejki wejściowej. Kanoniczna prawda jest w outboxie:
+    ``superseded`` kończy intencję bez callbacku, a ``applied`` wymaga także
+    trwałego downstream receipt. Brak/nieczytelny rekord zawsze failuje closed.
+    """
+    event_id = str(getattr(outcome, "event_id", "") or "")
+    if not event_id:
+        return False
+    try:
+        row = event_bus.get_state_apply_outbox(event_id)
+    except Exception as exc:
+        _log.error(
+            "DURABLE_APPLY terminal receipt read failed "
+            f"event_id={event_id}: {type(exc).__name__}: {exc}"
+        )
+        return False
+    if not isinstance(row, dict):
+        return False
+    return event_bus.state_apply_outbox_row_is_terminal(row)
 
 
 def _actual_event_id(
@@ -1117,6 +1146,7 @@ def _emit_and_apply_state_phase(
     effect_status_fn: Callable[[dict, Optional[dict]], str],
     get_order_fn: Callable[[str], Optional[dict]],
     state_event_metadata: Optional[dict] = None,
+    state_event_sealer: Optional[Callable[[dict], dict]] = None,
     retry_updated_before: Optional[str] = None,
 ) -> DurableApplyOutcome:
     """Faza pod lifecycle lockiem: utrwal event i domknij exact state."""
@@ -1206,6 +1236,29 @@ def _emit_and_apply_state_phase(
             except Exception:
                 pass
 
+            # Handler i terminal oracle muszą oceniać CK assignmentu według
+            # tej samej trwałej intencji. Dwa jawne booleany eliminują hot-flip
+            # pomiędzy state commit i postcondition. Błąd odczytu jest
+            # fail-closed dla równoległego CK writera, nie dla assignmentu.
+            requested_event[ASSIGNMENT_CK_FORWARD_SNAPSHOT_FIELD] = True
+            requested_event[ASSIGNMENT_CK_PASSIVE_SNAPSHOT_FIELD] = True
+            try:
+                from dispatch_v2.common import decision_flag
+
+                requested_event[
+                    ASSIGNMENT_CK_FORWARD_SNAPSHOT_FIELD
+                ] = bool(decision_flag(RUTCOM_FORWARD_AUTHORITY_FLAG))
+            except Exception:
+                pass
+            try:
+                from dispatch_v2.common import flag
+
+                requested_event[
+                    ASSIGNMENT_CK_PASSIVE_SNAPSHOT_FIELD
+                ] = bool(flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True))
+            except Exception:
+                pass
+
         if event_type in {
             "COURIER_ASSIGNED",
             "ORDER_RETURNED_TO_POOL",
@@ -1270,6 +1323,21 @@ def _emit_and_apply_state_phase(
                     # Brak wiarygodnego odczytu = brak rozszerzenia zachowania.
                     # Sam lifecycle event nadal musi zostac utrwalony i zastosowany.
                     pass
+
+    if state_event_sealer is not None:
+        # Sealer działa dopiero po zamrożeniu wszystkich markerów flagowych,
+        # lecz przed wyliczeniem event_id i atomowym zapisem outboxa. Może tylko
+        # dodać nowe pola — nigdy podmienić treść intencji ani marker transportu.
+        sealed_metadata = state_event_sealer(dict(requested_event))
+        if not isinstance(sealed_metadata, dict):
+            raise ValueError("state_event_sealer must return a dict")
+        collisions = set(requested_event).intersection(sealed_metadata)
+        if collisions or "event_id" in sealed_metadata:
+            raise ValueError(
+                "state_event_sealer overrides reserved fields: "
+                + ", ".join(sorted(collisions | ({"event_id"} & set(sealed_metadata))))
+            )
+        requested_event.update(sealed_metadata)
 
     with state_machine.lifecycle_apply_lock():
         predecessor_event_id: Optional[str] = None
@@ -1602,6 +1670,7 @@ def emit_and_apply(
     get_order_fn: Callable[[str], Optional[dict]],
     downstream_fn: Optional[Callable[[dict], object]],
     state_event_metadata: Optional[dict] = None,
+    state_event_sealer: Optional[Callable[[dict], dict]] = None,
     sweeper_enabled: Optional[bool] = None,
 ) -> DurableApplyOutcome:
     """Utrwal i zastosuj state, potem domknij downstream poza state lockiem."""
@@ -1637,6 +1706,7 @@ def emit_and_apply(
         effect_status_fn=effect_status_fn,
         get_order_fn=get_order_fn,
         state_event_metadata=state_event_metadata,
+        state_event_sealer=state_event_sealer,
         retry_updated_before=retry_updated_before,
     )
     # Gdy niezalezny sweeper jest ON, jego X-sekundowy cooldown musi
@@ -1667,6 +1737,96 @@ def emit_and_apply(
                 updated_before=retry_updated_before,
                 include_event_versions=include_versions,
                 defer_when_no_eligible_row=True,
+            )
+    return _finish_downstream(state_outcome, downstream_fn)
+
+
+def resume_exact(
+    event_id: str,
+    *,
+    state_update_fn: Callable[[dict], object],
+    effect_status_fn: Callable[[dict, Optional[dict]], str],
+    get_order_fn: Callable[[str], Optional[dict]],
+    downstream_fn: Optional[Callable[[dict], object]],
+) -> DurableApplyOutcome:
+    """Wznów dokładnie istniejący receipt bez ponownego tworzenia intencji.
+
+    Caller musi wcześniej związać żądanie z exact ``state_event`` rekordu.
+    Ten helper nie wyszukuje po OID ani semantic key i nie emituje successorów;
+    domyka tylko wskazany, trwały event. Jest potrzebny w crash-window
+    ``state applied -> coordinator ACK``: bieżąca rewizja jest już nowsza, więc
+    ponowne sprawdzanie polityki wejściowej przed deduplikacją byłoby błędem.
+    State/outbox oracle i FIFO downstream pozostają te same co dla foreground.
+    """
+    target_id = str(event_id or "")
+    if not target_id:
+        return DurableApplyOutcome(
+            event_id="",
+            event_key="",
+            event_created=False,
+            state_ready=False,
+            state_transitioned=False,
+            downstream_executed=False,
+            failure_stage="outbox_missing",
+        )
+
+    with state_machine.lifecycle_apply_lock():
+        row = event_bus.get_state_apply_outbox(target_id)
+        if row is None:
+            return DurableApplyOutcome(
+                event_id=target_id,
+                event_key="",
+                event_created=False,
+                state_ready=False,
+                state_transitioned=False,
+                downstream_executed=False,
+                failure_stage="outbox_missing",
+            )
+        invalid_reason = _invalid_state_event_reason(row)
+        if invalid_reason is not None:
+            event_bus.mark_state_apply_invalid(target_id, invalid_reason)
+            row = event_bus.get_state_apply_outbox(target_id) or row
+            state_outcome = _outcome_from_row(
+                row,
+                event_created=False,
+                state_ready=False,
+                state_transitioned=False,
+                downstream_executed=False,
+                superseded=True,
+            )
+        elif row.get("state_status") == "pending":
+            state_outcome = _process_state_row(
+                row,
+                event_created=False,
+                state_update_fn=state_update_fn,
+                effect_status_fn=effect_status_fn,
+                get_order_fn=get_order_fn,
+            )
+        elif row.get("state_status") == "applied":
+            state_outcome = _outcome_from_row(
+                row,
+                event_created=False,
+                state_ready=True,
+                state_transitioned=False,
+                downstream_executed=False,
+            )
+        elif row.get("state_status") == "superseded":
+            state_outcome = _outcome_from_row(
+                row,
+                event_created=False,
+                state_ready=False,
+                state_transitioned=False,
+                downstream_executed=False,
+                superseded=True,
+            )
+        else:
+            state_outcome = _outcome_from_row(
+                row,
+                event_created=False,
+                state_ready=False,
+                state_transitioned=False,
+                downstream_executed=False,
+                failure_stage="state",
             )
     return _finish_downstream(state_outcome, downstream_fn)
 
