@@ -94,6 +94,21 @@ ENABLE_NOTIFY_CHANNEL_SPLIT_SHADOW = False
 # Stala-fallback = literal OFF = default czytelnika; kanon po flipie = flags.json.
 ENABLE_GPS_MERGE_LOCK = False
 
+# UPSERT idempotent A-4 (2026-08-02, sesja a4-upsert-idempotent): flaga DECYZYJNA
+# (ETAP4 — patrz ETAP4_DECISION_FLAGS) idempotencji + propagacji bledu kanonicznego
+# writera pending_proposals (`pending_proposals_store.upsert_proposals`; czytelnik
+# `C.decision_flag("ENABLE_UPSERT_PROPOSALS_IDEMPOTENT")`). OFF (default) = LEGACY
+# bajt-parytet (kazdy upsert re-stemplowal sent_at/expires_at; blad zapisu polkniety
+# -> 0); ON = powtorny upsert TEJ SAMEJ propozycji (best.courier_id niezmieniony) =
+# NO-OP (sent_at/wiek claimu nietkniety), a blad zapisu PROPAGUJE do callera.
+# WHY ETAP4 (nie infra jak ENABLE_GPS_MERGE_LOCK): sent_at -> active_proposal_claims
+# `age_s` vs PROPOSAL_CLAIM_TTL_SEC -> _apply_persistent_proposal_claims tentative_assign
+# na FLOCIE -> ON≠OFF ZMIENIA dostepna flote = tresc decyzji, i to JEDNOWATKOWO (dedup
+# odpala bez wspolbieznosci -> replay ON vs OFF rozjezdza sie -> MUSI byc w fingerprincie).
+# Konsument LIVE = ENABLE_PROPOSAL_CLAIM_PERSISTENCE (sam ETAP4). Stala = fallback
+# module-OFF czytany przez decision_flag() globals(); kanon po flipie = flags.json (za ACK).
+ENABLE_UPSERT_PROPOSALS_IDEMPOTENT = False
+
 # Noc 2026-07-28 — drabina eskalacji S1→S2→S3. Wszystkie cztery przełączniki
 # startują OFF i są w ETAP4_DECISION_FLAGS, bo nawet shadow producer stanie się
 # wejściem decyzji po odczycie certyfikatu przez plan-recheck/selection.
@@ -687,6 +702,14 @@ ETAP4_DECISION_FLAGS = (
     # manual_overrides_daily_reset kasuje `excluded`/`working`. OFF = rekord
     # bezterminowy bajt-w-bajt jak dziś. Mapa: docs/R4_OPERATOR_ON_MAP.md.
     "ENABLE_OPERATOR_AVAILABILITY_EXPIRY",
+    # UPSERT idempotent A-4 (2026-08-02): DECYZYJNA. upsert_proposals ON zachowuje
+    # `sent_at` przy re-propozycji (OFF re-stemplował) → `active_proposal_claims`
+    # liczy `age_s` z sent_at vs PROPOSAL_CLAIM_TTL_SEC → `_apply_persistent_proposal_claims`
+    # robi `tentative_assign` (claim capacity) na FLOCIE selektora. Więc ON≠OFF ZMIENIA
+    # dostępną flotę → treść decyzji (kogo wybrać), i to JEDNOWĄTKOWO (nie wymaga
+    # współbieżności jak ENABLE_GPS_MERGE_LOCK). Konsument LIVE = ENABLE_PROPOSAL_CLAIM_PERSISTENCE
+    # (sam ETAP4). Musi być w decyzyjnym fingerprincie (replay ON vs OFF rozjeżdża się).
+    "ENABLE_UPSERT_PROPOSALS_IDEMPOTENT",
 )
 
 # Stałe-fallback (module-level OFF) dla flag dodanych do ETAP4_DECISION_FLAGS

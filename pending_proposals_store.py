@@ -37,6 +37,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Optional
 
+from dispatch_v2 import common as C
+
 PENDING_PATH = "/root/.openclaw/workspace/dispatch_state/pending_proposals.json"
 DEFAULT_TTL_SEC = 1800  # 30 min — bezpiecznik czyszczenia (liveness realny = status 'planned')
 
@@ -237,6 +239,29 @@ def locked_merge_missing(entries: Dict[str, Any], path: str = PENDING_PATH) -> D
     return locked_mutate(_m, path)
 
 
+def _proposal_identity(record: Any) -> Optional[str]:
+    """Deterministyczna TOŻSAMOŚĆ propozycji dla dedup/idempotencji (gate
+    `ENABLE_UPSERT_PROPOSALS_IDEMPOTENT`). Kanon claimu w pending = para
+    (order_id → proponowany kurier); order_id jest kluczem dicta, więc tożsamością
+    rozróżniającą „ta sama propozycja" od „propozycja zmieniona" jest
+    `best.courier_id`. Zwraca None gdy brak stabilnej tożsamości (best/courier_id
+    puste) → caller NIE dedupuje (buduje świeży wpis, zachowanie zachowawcze).
+
+    ŚWIADOMIE pomija pola ZMIENNE (sent_at, latency_ms, score/ETA float-jitter,
+    tick_ref/event_ref): ich włączenie fałszywie oznaczałoby KAŻDĄ re-propozycję jako
+    „zmienioną" i skasowałoby idempotencję. Kurier = jedyny sygnał, który realnie
+    definiuje claim czytany downstream (active_proposal_claims → best.courier_id)."""
+    if not isinstance(record, dict):
+        return None
+    best = record.get("best")
+    if not isinstance(best, dict):
+        return None
+    cid = best.get("courier_id")
+    if cid in (None, ""):
+        return None
+    return str(cid)
+
+
 def upsert_proposals(
     upserts: Iterable[tuple],
     now: datetime,
@@ -246,10 +271,48 @@ def upsert_proposals(
     """Jednorazowy (per tick) atomowy load→sweep→merge→save POD LOCK_EX (kanon L7.5).
 
     upserts: iterowalne (order_id, shadow_record) — TYLKO PROPOSE (caller filtruje).
-    Zwraca liczbę wpisanych propozycji. Fail-soft: błąd → 0 (NIE wywala tick'a)."""
+    Zwraca liczbę WPISANYCH propozycji.
+
+    Dwa tryby — gate `ENABLE_UPSERT_PROPOSALS_IDEMPOTENT` (default OFF = LEGACY,
+    shadow-first). Niedecyzyjny write-path kill-switch (zmienia KTÓRE wpisy pending
+    przeżywają zapis + propagację błędu, NIE treść decyzji dispatchu):
+
+    * OFF (LEGACY, bajt-parytet): każdy (oid, rec) NADPISUJE wpis świeżym
+      `build_entry` (nowy sent_at/expires_at nawet dla niezmienionej propozycji);
+      zwraca len(ups); wyjątek zapisu POŁKNIĘTY → 0 (fail-soft, NIE wywala tick'a).
+      Zachowane 1:1 z historycznym zachowaniem.
+
+    * ON (IDEMPOTENTNY, u źródła): powtórny upsert TEJ SAMEJ propozycji
+      (`best.courier_id` niezmieniony, wpis nadal żywy po sweep) = NO-OP —
+      istniejący wpis (w tym `sent_at`, czyli WIEK CLAIMU czytany przez
+      active_proposal_claims) NIETKNIĘTY. Zmiana kuriera / brak wpisu / wpis
+      wygasły = świeży `build_entry` (legalny reset zegara). Zwraca liczbę realnie
+      zapisanych (BEZ no-opów). Wyjątek zapisu PROPAGUJE do callera (widoczny ślad
+      w logu; caller shadow_dispatcher jest fail-soft) — NIE ginie po cichu.
+    """
     ups = [(str(o), r) for (o, r) in upserts if o is not None and r is not None]
     if not ups:
         return 0
+    if C.decision_flag("ENABLE_UPSERT_PROPOSALS_IDEMPOTENT"):
+        # ON: idempotentny no-op na niezmienionej propozycji; błąd PROPAGUJE.
+        with _locked(path):
+            pending = sweep_expired(load(path), now)
+            written = 0
+            for oid, rec in ups:
+                new_id = _proposal_identity(rec)
+                prev = pending.get(oid)
+                prev_id = (
+                    _proposal_identity(prev.get("decision_record"))
+                    if isinstance(prev, dict) else None
+                )
+                if prev is not None and new_id is not None and new_id == prev_id:
+                    # ta sama propozycja nadal żywa → NO-OP (nie re-stempluj sent_at)
+                    continue
+                pending[oid] = build_entry(rec, now, ttl_sec)
+                written += 1
+            save(pending, path)
+        return written
+    # OFF (LEGACY, default): re-stempluj zawsze + połknij błąd (fail-soft → 0).
     try:
         with _locked(path):
             pending = sweep_expired(load(path), now)

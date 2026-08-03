@@ -2,16 +2,16 @@
  "_meta": {
   "counts": {
    "apka": 29,
-   "engine": 440,
+   "engine": 441,
    "engine_1b_units": 13,
-   "etap4": 155,
+   "etap4": 156,
    "flags_json_keys": 271,
    "fp_extra": 37,
    "known_drift": 0,
    "numeric": 36,
    "panel": 88,
    "test_isolated": 11,
-   "total": 557,
+   "total": 558,
    "twins_concepts": 8
   },
   "generator": "tools/flag_lifecycle_seed.py",
@@ -13988,6 +13988,42 @@
    "removal_condition": "n/d dopóki live",
    "review_date": "2026-10-10",
    "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "source_of_truth": "common.py-const",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
+  "ENABLE_UPSERT_PROPOSALS_IDEMPOTENT": {
+   "carriers": [
+    "common.py:ETAP4_DECISION_FLAGS"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/pending_proposals_store.py"
+   ],
+   "curated_at": "2026-08-02",
+   "current_snapshot": {
+    "default": false
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_UPSERT_PROPOSALS_IDEMPOTENT",
+   "notes": "A-4 (2026-08-02) idempotencja + propagacja bledu writera pending_proposals (upsert_proposals). OFF=LEGACY bajt-parytet (re-stempel sent_at/expires_at; blad zapisu polkniety→0). ON=powtorny upsert TEJ SAMEJ propozycji (best.courier_id niezmieniony, wpis zywy po sweep)=NO-OP (sent_at nietkniety); zmiana kuriera/brak/wygasniecie=swiezy build_entry; blad zapisu PROPAGUJE. ETAP4 (DECYZYJNA, nie infra jak GPS-merge-lock): sent_at→active_proposal_claims age_s vs PROPOSAL_CLAIM_TTL_SEC→_apply_persistent_proposal_claims tentative_assign na flocie→ON≠OFF zmienia flote=tresc decyzji, JEDNOWATKOWO (replay ON/OFF rozjezdza sie→musi byc w fingerprincie). Konsument LIVE ENABLE_PROPOSAL_CLAIM_PERSISTENCE. Prerekwizyt flipu Etapu 1 (auto-assign czyta claim).",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-shadow.service"
+   },
+   "removal_condition": "flip ON (za ACK) + 2 dni shadow: sent_at stabilny w active_proposal_claims (wiek claimu nie zeruje sie przy re-propozycji) i decyzyjny fingerprint spojny ON/OFF; jesli nie wpieta do 2026-12 → retire (ACK Adrian)",
+   "review_date": "2026-08-12",
+   "rollback": "flaga OFF = brak w flags.json (default False w kodzie, ETAP4 const fallback) — zero live; ON tylko za ACK + restart dispatch-shadow.service",
    "source_of_truth": "common.py-const",
    "twin_of": [],
    "worlds": [
