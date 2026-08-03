@@ -1,4 +1,21 @@
 # ZIOMEK AI DISPATCHER - BACKLOG ROZWOJU
+> **KANDYDAT SOURCE-ONLY 2026-08-03 — A-2 REWORK PO BLIND CONFIRMED_DEFECT:**
+> commit kodu `4add120baa6acee654df3ffff6a4119a7ca0b041` ustanawia jeden
+> leaf-owner `state_persistence` dla strict/legacy JSON read, pochodnej `.prev`
+> i durable backup-on-write. `.prev` jest wyłącznie poprzednim poprawnym mainem;
+> brak/uszkodzenie maina nigdy go nie nadpisuje. Guard planu ON rezerwuje
+> globalny JSON-safe version-HWM przed mainem, recovery rebazuje ponad HWM,
+> a cache fingerprintuje main+HWM+`.prev`, więc stary CAS nie wraca (ABA).
+> OFF na świeżym store zachowuje legacy I/O i nie tworzy `.prev`/HWM; flaga
+> pozostaje default OFF. RED odrzuconego `aba32b0e`: 12F/1P; rework A-2: 23P,
+> rzeczywisty race dwóch procesów 10/10 i osiem fizycznych mutation probes RED.
+> Pełna hermetyczna regresja: `6996P/0F/74S/8X/159W` vs exact baseline
+> `6982P/0F/74S/8X/159W`; dokładne listy skip/xfail identyczne, delta = +14P
+> i zero innych zmian. Lifecycle 566/566, entropy bez pogorszenia, mechaniczny
+> DoD PASS. Gate `engine.a2-plan-corrupt-guard-rework` czeka na niezależny blind
+> CTO; zero merge/push/deploy/restart/flip/runtime-write. Raport:
+> `/root/artifacts/a2-rework-20260803/REPORT.md`.
+
 > **KANDYDAT SOURCE-ONLY 2026-08-03 — ROOT-FIX NEW-1 PO BLIND 491870 ITER2:**
 > commit kodu `5c8ffa2517740d3abc523922ab05093bec37ab34` usuwa przyczynę
 > kolizji adresów u źródła. Czysty `address_canon` jest jednym ownerem rejestru
