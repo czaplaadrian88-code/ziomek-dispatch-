@@ -27,6 +27,18 @@ if [ -f "$T/b1/SKILL.md" ] && [ ! -f "$T/b1/AUTHOR_REPORT.md" ]; then
   ok "blind: SKILL.md jest, AUTHOR_REPORT.md wyciety"
 else bad "blind: bundle niepoprawny [$(ls "$T/b1" 2>/dev/null | tr '\n' ' ')]"; fi
 
+# 2b. skill może recenzować własny kod, ale wyjątek nie przepuszcza wniosków
+mkdir -p "$T/self-review/.claude/skills/ziomek-blind-review/author-review"
+printf 'neutral driver\n' > "$T/self-review/.claude/skills/ziomek-blind-review/driver.py"
+printf 'cudzy wniosek\n' > "$T/self-review/.claude/skills/ziomek-blind-review/AUTHOR_REPORT.md"
+printf 'cudzy wniosek w katalogu\n' > "$T/self-review/.claude/skills/ziomek-blind-review/author-review/x.py"
+"$PY" "$HERE/driver.py" blind "$T/self-review" --out "$T/b-self-review" >/dev/null 2>&1
+if [ -f "$T/b-self-review/.claude/skills/ziomek-blind-review/driver.py" ] \
+   && [ ! -e "$T/b-self-review/.claude/skills/ziomek-blind-review/AUTHOR_REPORT.md" ] \
+   && [ ! -e "$T/b-self-review/.claude/skills/ziomek-blind-review/author-review" ]; then
+  ok "self-review: kod kanonicznego skilla jest, wnioski nadal wyciete"
+else bad "self-review: wyjatek sciezki rozszerzyl lub wycial zly zakres"; fi
+
 # 3. manifest NIE w bundlu (leci obok)
 [ ! -f "$T/b1/_BLIND_MANIFEST.json" ] && ok "manifest poza bundlem" || bad "manifest wyciekl do bundla"
 

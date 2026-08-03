@@ -45,6 +45,11 @@ BLIND_DENY_SUBSTRINGS = (
     "report", "remediation", "handoff", "handover", "verdict", "review",
     "conclusion", "audit", "_plan", "notes", ".git",
 )
+# The reviewed product can include this skill itself.  Only the exact canonical
+# path component is exempt from the parent-directory denylist; filenames and
+# every other parent keep the full fail-closed policy.  In particular,
+# AUTHOR_REPORT.md and author-review/x.py remain excluded even below this path.
+SELF_REVIEWABLE_CANONICAL_PATH = (".claude", "skills", "ziomek-blind-review")
 VERDICT_DISPOSITIONS = ("CONFIRMED_DEFECT", "CLEAN")
 MANIFEST_SCHEMA = "ziomek.blind_bundle_manifest.v2"
 
@@ -94,9 +99,30 @@ def atomic_write_json(path: Path, value: object) -> None:
         raise
 
 
+def _is_canonical_self_review_component(parts: tuple[str, ...], index: int) -> bool:
+    path_start = index + 1 - len(SELF_REVIEWABLE_CANONICAL_PATH)
+    return (
+        path_start >= 0
+        and parts[path_start:index + 1] == SELF_REVIEWABLE_CANONICAL_PATH
+    )
+
+
 def is_blinded_out(name: str) -> bool:
-    low = name.lower()
-    return any(s in low for s in BLIND_DENY_SUBSTRINGS)
+    """Exclude conclusions without making the canonical skill unreviewable."""
+    parts = tuple(part.lower() for part in Path(str(name)).parts)
+    if not parts:
+        return False
+
+    # A verdict-bearing filename is never exempt, including below the skill.
+    if any(marker in parts[-1] for marker in BLIND_DENY_SUBSTRINGS):
+        return True
+
+    for index, component in enumerate(parts[:-1]):
+        if _is_canonical_self_review_component(parts, index):
+            continue
+        if any(marker in component for marker in BLIND_DENY_SUBSTRINGS):
+            return True
+    return False
 
 
 def cmd_blind(args: argparse.Namespace) -> int:

@@ -1,4 +1,4 @@
-# RUTCOM committed pickup authority — raport kandydata v29, 2026-08-03
+# RUTCOM committed pickup authority — raport kandydata v30, 2026-08-03
 
 ## Wynik
 
@@ -12,6 +12,43 @@ Rutcom. Granica transportu przed zapisem outboxa zamienia legalny CK na jeden
 kanoniczny `PICKUP_TIME_UPDATED`. Jeden handler state atomowo zapisuje pickup,
 CK, HH:MM, monotoniczną rewizję oraz provenance. Plan, scoring po potwierdzonym
 apply i aplikacja dziedziczą tę samą prawdę.
+
+## Co domknięto w v30
+
+Po zamrożeniu V29 mechaniczna inspekcja jego digest-bound bundla wykryła
+false-HOLD w samym narzędziu review: filtr szukał słowa `review` w całej ścieżce,
+więc wyciął wszystkie dziesięć zmienionych plików spod kanonicznego katalogu
+`.claude/skills/ziomek-blind-review/`. Manifest był kryptograficznie spójny, ale
+nie obejmował całego reviewowanego kontraktu. V29 został zatrzymany przed
+uruchomieniem recenzentów; produkcja i flaga pozostały nietknięte/OFF.
+
+V30 naprawia właściciela filtra. Nazwa pliku i każdy katalog są oceniane osobno.
+Wyjątek obejmuje wyłącznie dokładny kanoniczny ciąg komponentów
+`.claude/skills/ziomek-blind-review`; nie obejmuje nazw plików ani dalszych
+katalogów. Dzięki temu `driver.py` trafia do bundla, ale `AUTHOR_REPORT.md` oraz
+`author-review/x.py` nadal są wycinane fail-closed. Selftest odtwarza oba kierunki.
+Kontrolowana mutacja wyłączająca wyjątek ponownie czerwieni dokładnie ten oracle
+(`rc=1`), a po odtworzeniu SHA-256 drivera wraca do
+`8b9f23be6669791f0989860d3b0d45bc44f6851635fe3a083b0187a4d1bcab7e`.
+
+Krytyczny klaster queue/operator/ratchet nadal ma 157/157. Pełna kanoniczna
+regresja V30 ma 6782 passed / 74 skipped / 8 xfailed / 153 warnings / 0 failed
+w 462,10 s, czyli dokładny parytet profilu z V29. Produkcja nadal nie została
+zmieniona. Następna bramka to nowy pełny pin i bundle V30 oraz dwa świeże
+exact-byte review; live pozostaje zabroniony przed dwoma werdyktami CLEAN.
+
+### Mapa kompletności v30
+
+| Miejsce | Rola | Dotknięte | Dowód |
+|---|---|---|---|
+| `driver.is_blinded_out` | jedyny owner blindowania nazw | TAK | osobna kontrola basename/parents + exact canonical path |
+| `driver.cmd_blind` | producer bundla/manifestu | N-D kod | konsumuje poprawiony owner; nowy realny bundle potwierdzi exact set |
+| `selftest.sh` | negatywny i pozytywny oracle | TAK | kod skilla included, dwa typy wniosków excluded |
+| ratchet committed authority | antyregresja wydania | TAK | wymaga ownera wyjątku i behavioral selftestu |
+| PII denylist/oracle | niezależna bramka bezpieczeństwa | N-D kod | pełny oracle + 11 mutantów PASS; brak drugiego ownera polityki |
+| twins registry | przyszła mapa kompletności | TAK | utrwala self-review jako część boundary 9/9 |
+| queue/authority/watcher/state/operator | zachowanie czasu | N-D kod | exact parytet; 157 focused + 6782 full |
+| feasibility/route/scoring/selection/panel/apka | downstream | N-D | brak zmiany decyzji, HARD/SOFT, renderu lub serializacji |
 
 ## Co domknięto w v29
 

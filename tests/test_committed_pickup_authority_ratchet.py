@@ -728,9 +728,15 @@ def test_blind_review_bundle_is_digest_bound_and_fail_closed():
     assert "if pins and not set(included).issubset(pins):" in driver
     assert "shutil.rmtree(out)" in driver
     assert 'sub.add_parser("verify"' in driver
+    assert 'SELF_REVIEWABLE_CANONICAL_PATH = (".claude", "skills", "ziomek-blind-review")' in driver
+    assert "def _is_canonical_self_review_component(" in driver
+    assert "if any(marker in parts[-1]" in driver
+    assert "for index, component in enumerate(parts[:-1]):" in driver
+    assert "if _is_canonical_self_review_component(parts, index):" in driver
     assert "digest manifest: exact bundle" in selftest
     assert "digest manifest: mutation" in selftest
     assert "częściowy pin" in selftest
+    assert "self-review: kod kanonicznego skilla jest" in selftest
 
 
 def test_new_order_intent_is_outbox_bound_and_recovers_before_panel_io():

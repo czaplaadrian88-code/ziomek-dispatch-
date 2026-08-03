@@ -40,6 +40,10 @@ SHA-256 wejścia (fail-closed przy mismatch i przy częściowym pinie), buduje
 **ślepy bundle** — kopiuje
 artefakty kandydata, a **wycina** raport autora, handoffy, git-log i wszystko
 z nazwą niosącą werdykt (`report`, `audit`, `handoff`, `_plan`, …).
+Filtr ocenia osobno nazwę pliku i każdy katalog. Dokładna kanoniczna ścieżka
+`.claude/skills/ziomek-blind-review/` jest recenzowalna, żeby skill nie wycinał
+własnego kodu; wyjątek nie obejmuje nazwy pliku ani dalszych katalogów, więc
+`AUTHOR_REPORT.md` i `author-review/x.py` nadal są bezwarunkowo wycinane.
 Obok zapisuje schema-v2 manifest z SHA-256 każdego pliku i agregatem całego
 bundla. Wypisuje ścieżkę bundla + gotowy prompt recenzenta.
 
