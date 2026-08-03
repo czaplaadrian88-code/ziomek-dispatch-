@@ -1,9 +1,20 @@
 # ZIOMEK AI DISPATCHER - BACKLOG ROZWOJU
 
-> **KANDYDAT v24 2026-08-02 — RUTCOM COMMITTED PICKUP AUTHORITY / OID 491578:**
+> **KANDYDAT v25 2026-08-02 — RUTCOM COMMITTED PICKUP AUTHORITY / OID 491578:**
 > root cause potwierdzony: guard pasywny 52 razy stłumił zmianę umówionego
 > czasu Rutcom 19:16→19:21, przez co aplikacja poprawnie pokazywała stary stan
 > 19:16. Jeden resolver autorytetu zastępuje rozproszoną politykę.
+> V25 po dwóch `CONFIRMED_DEFECT` v24 usuwa cztery kolejne przyczyny u
+> istniejących ownerów. Receipt koordynatora nie zmienia klasy biznesowej:
+> prawdziwy elastyk wraca do jedynego legacy writera przy `OFF` i `ON`. Jeden
+> transaction-policy helper wiąże oba pola, claim, apply i crash replay z exact
+> v6 click lease, więc późniejszy tick/hot flip nie zmienia CAS. Forward gate
+> akceptuje obie wartości forward poprawnego explicit-elastic v6, a wspólny
+> retention guard obu cleanupów zachowuje source `NEW_ORDER` aż exact applied
+> pickup skonsumuje ten sam initial intent ID. Review findings były 8F+1P
+> przed fixem; po fixie 13/13, mutacje 1F/4F/1F/1F, pełna regresja
+> `6761P/0F/74S/8X/153W` w 459,67 s, lifecycle 557/557. Produkcja nadal bez
+> zmian/OFF; dwa świeże `CLEAN` exact-byte v25 pozostają przed live.
 > V24 po dwóch `CONFIRMED_DEFECT` v23 wiąże queue click→claim→proof→outbox→
 > recovery jednym exact policy lease schema v6, klasyfikuje coordinator CK na
 > post-observation state i usuwa każdy live reread z durable recovery. Claim
@@ -12,10 +23,9 @@
 > preflight ignoruje tylko v6 dowodzący OFF, a code revert blokuje policy-bound
 > v6. V23 wcześniej dodał atomowy UUID+SHA fence na okno preflight→flip. Wszystkie
 > mutatory kolejki używają jednego flocka; release wymaga exact ID, quiesce i
-> zgodności efektywnego ON albo jawnego abortu OFF. Aktualne bramki: główny
-> klaster queue/apply/rollback 272/272, ratchet/mutation 28/28 i pełna regresja
-> `6752P/0F/74S/8X/153W` w 462,43 s. Produkcja nadal bez zmian/OFF; dwa świeże `CLEAN`
-> exact-byte v24 pozostają przed deployem i flipem.
+> zgodności efektywnego ON albo jawnego abortu OFF. Historyczne bramki v24:
+> główny klaster queue/apply/rollback 272/272, ratchet/mutation 28/28 i pełna
+> regresja `6752P/0F/74S/8X/153W` w 462,43 s.
 > Historyczny kontrakt poniżej pozostaje obowiązujący: jeden resolver akceptuje
 > wyłącznie bezpieczny forward aktywnej czasówki lub korektę z markerem/
 > queue-bound receiptem v6. Jedna granica kanonizuje raw CK przed durable

@@ -1,0 +1,111 @@
+RUTCOM COMMITTED PICKUP AUTHORITY v25 — DoD evidence
+Date: 2026-08-02 UTC
+Gate: engine.rutcom-committed-pickup-authority-491578
+Status at capture: candidate only; production unchanged; forward flag effective OFF
+regresja: 6761 passed, 0 failed, 74 skipped, 8 xfailed, 153 warnings; full canonical HERMETIC_STRICT suite.
+e2e: 13/13 new review oracles plus full queue/apply/state/rollback/retention paths in the canonical suite.
+pozytywny-wplyw: elastic coordinator refresh preserves its legacy class while the time-class 19:16->19:21 authority path and independent 19:26 case retain one canonical coupled state.
+rollback: hot forward flag false; code revert only after quiesce, exact queue/outbox preflight, no v6 policy-bound work, and verified backups.
+N-D: plan, scoring, feasibility, serializers and courier app only consume canonical state; no renderer, HARD/SOFT, selection, or route policy changed.
+model: gpt-5.6-sol; effort=xhigh; cross-layer authority, crash recovery, retention and rollout concurrency have high error cost.
+
+ROOT CAUSE / REVIEW INPUT
+- v24 authority verdict SHA-256:
+  babaa445730fe40293813c85d72ea17075f25a890371c57b50f78856c0f8e79c
+- v24 rollout verdict SHA-256:
+  49a279efbc4bf51b46f197f6478800f6609ccae7027bbcc1ca93557fd222e2ef
+- Both verdicts: CONFIRMED_DEFECT; both validated by the blind-review driver.
+- MAIN independently reproduced four unique classes:
+  1. Coordinator pickup forced is_czasowka=True for a projected elastic order.
+  2. CK and pickup elastic fallbacks derived CAS policy from the later panel tick,
+     not the immutable v6 click receipt; a hot flip changed retry semantics.
+  3. Forward rollout rejected a valid explicit-elastic v6 receipt when its exact
+     captured forward value was true.
+  4. Both outbox retention paths could delete the only source NEW_ORDER receipt
+     while its initial committed-time intent was still pending.
+- Pre-fix review oracles: 8 failed, 1 control passed.
+
+SOURCE FIX / SINGLE OWNERS
+- state_machine.resolve_czasowka_pickup_observation:
+  the projected business class is evaluated before coordinator policy/claim;
+  elastic observations return to the sole legacy pickup writer and there is no
+  hardcoded is_czasowka=True.
+- panel_watcher._time_event_transaction_policy:
+  normal panel observations own the pre-I/O snapshot; deliberate v6 transactions
+  own their exact click receipt policy through CK, pickup, claim, durable apply,
+  and crash replay. Pre-policy v4/v5 keep their dark legacy tick-time contract.
+- tools/rutcom_committed_authority_rollback.py:
+  a valid explicit-elastic v6 receipt is stable for both boolean forward values;
+  missing, malformed, and pre-policy receipts remain fail-closed.
+- event_bus._INITIAL_TIME_INTENT_RETENTION_RELEASE_SQL:
+  one shared release predicate is consumed by cleanup and cleanup_audit_log. A
+  source outbox carrying pending_committed_time_intent is retained until an
+  applied same-order PICKUP_TIME_UPDATED references the exact intent ID.
+- No renderer override, second state writer, fallback policy, schema migration,
+  new flag, or new threshold was introduced.
+
+COMPLETENESS MAP
+- Producers: panel CK, panel pickup, coordinator v6 click/claim, NEW_ORDER intent.
+- Policy/classifier: committed authority projector and state pickup resolver.
+- Durable boundary/recovery: time apply, state outbox, exact claim replay.
+- Retention writers: standard queue cleanup and audit cleanup.
+- Rollout/revert consumers: forward-status and explicit-elastic classifier.
+- Downstream state consumers: plan, scoring, serializers, and courier app are N-D;
+  they continue to consume the one canonical coupled pickup/CK state.
+- Tests/ratchets cover both twin paths, hot-flip directions, exact intent release,
+  malformed/wrong-intent controls, and the set of required call sites.
+
+ORACLES AFTER FIX
+- New/changed focused oracles: 13 passed in 1.17 s.
+- Broad touched cluster: first run 456 passed / 3 failed only because three old
+  monkeypatched test doubles did not accept the newly explicit policy_snapshot
+  keyword. The doubles were corrected to verify the contract; exact three: 3/3
+  passed. The canonical full suite below includes the corrected cluster.
+
+MUTATION PROBES AND EXACT RESTORE
+- Disable state elastic early return: 1 failed, 1 passed control.
+- Replace v6 transaction policy with panel-tick policy: 4 failed.
+- Restore old forward=false-only rollout predicate: 1 failed, 1 passed control.
+- Remove retention release guard: 1 failed.
+- SHA-256 before/after each exact restore matched:
+  state_machine.py 62c2e1324010936ae613b860799acfa0167df2943c8c0ca3f7f023a9ca2cd117
+  panel_watcher.py 52220cd13a008232c43ea8bba349b8c4f9a91e3020a94c2462ef0653968cc18f
+  event_bus.py b4cc336c549d17d7583f22338a50dbf0a9c53bacb9ed576e6e95b7792960e65a
+  rollback tool 42429ef69d2d73aa826b5c2f386dc545ba645f5ea37675515dd2b327e93287d9
+
+CANONICAL REGRESSION
+- Environment:
+  ZIOMEK_SCRIPTS_ROOT=/root/worktrees/dispatch_v2/active/20260802-rutcom-v17-integration-pkgroot
+  PYTHONPATH=/root/worktrees/dispatch_v2/active/20260802-rutcom-v17-integration-pkgroot
+  HERMETIC_STRICT=1
+- Command:
+  /root/.openclaw/venvs/dispatch/bin/python -m pytest tests/ -q
+- Result: 6761 passed, 74 skipped, 8 xfailed, 153 warnings, 0 failed
+  in 459.67 s. Delta versus frozen v24: +9 passed, identical skipped/xfail/
+  warning profile, zero new failures.
+- Second exact-byte command with `-q -ra`: 6761 passed, 74 skipped, 8 xfailed,
+  153 warnings, 0 failed in 460.70 s. The complete non-pass nodeid/reason list
+  is the unchanged v24 profile: environment/live-read quarantines plus the same
+  eight registered xfails. Mechanical diff from v24 changes only five focused
+  test files, none present in that list, and contains zero added/removed
+  skip/xfail/importorskip/quarantine markers.
+
+STATIC / TOOLING GATES
+- py_compile production modules/tool: PASS.
+- import dispatch_v2.event_bus/panel_watcher/state_machine and rollback tool: PASS.
+- git diff --check: PASS before evidence docs; rerun required before freeze.
+- flag lifecycle repo-hermetic: 557/557 curated, 0 errors.
+- run-dispatch-v2 flags driver: exit 0; target production flag remains OFF.
+- entropy dashboard: sentinel-as-data remains 0; no new flag/threshold family.
+
+ROLLBACK / LIVE
+- Candidate is not deployed and no service was restarted.
+- Target flag remains absent/effective OFF in production.
+- Primary kill switch: ENABLE_CZASOWKA_RUTCOM_FORWARD_AUTHORITY=false.
+- Code rollback remains the exact release commit/revert procedure after the
+  rollback tool confirms no policy-bound v6/unfinished authority transaction.
+- Production release still requires one frozen commit, two fresh independent
+  CLEAN exact-byte reviews, fresh writer quiesce/fence/preflight, backups,
+  compile/import, controlled restarts of panel watcher and shadow only, effective
+  OFF verification, explicit target flip ON, fingerprint/health/smoke checks.
+- dispatch-telegram is outside scope and must remain untouched.

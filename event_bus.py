@@ -1598,6 +1598,36 @@ def stats() -> dict:
         return result
 
 
+_INITIAL_TIME_INTENT_RETENTION_RELEASE_SQL = """
+    AND json_valid(state_apply_outbox.state_event) = 1
+    AND (
+        json_type(
+            state_apply_outbox.state_event,
+            '$.pending_committed_time_intent'
+        ) IS NULL
+        OR EXISTS (
+            SELECT 1
+            FROM state_apply_outbox AS intent_consumer
+            WHERE intent_consumer.order_id = state_apply_outbox.order_id
+              AND intent_consumer.event_id != state_apply_outbox.event_id
+              AND intent_consumer.state_status = 'applied'
+              AND json_valid(intent_consumer.state_event) = 1
+              AND json_extract(
+                    intent_consumer.state_event,
+                    '$.event_type'
+                  ) = 'PICKUP_TIME_UPDATED'
+              AND json_extract(
+                    intent_consumer.state_event,
+                    '$.payload.committed_new_order_time_intent_id'
+                  ) = json_extract(
+                    state_apply_outbox.state_event,
+                    '$.pending_committed_time_intent.intent_id'
+                  )
+        )
+    )
+"""
+
+
 def cleanup(retention_hours: int = 48) -> int:
     """Czysci stare processed events. Zwraca liczbe usunietych.
 
@@ -1620,7 +1650,7 @@ def cleanup(retention_hours: int = 48) -> int:
             # retencje calej trojki, aby cleanup nie utworzyl orphan/collision
             # window przy ponownej emisji tego samego deterministic event_id.
             outbox_cur = conn.execute(
-                """DELETE FROM state_apply_outbox
+                f"""DELETE FROM state_apply_outbox
                    WHERE event_id IN (
                        SELECT event_id FROM events
                        WHERE status = 'processed'
@@ -1636,7 +1666,8 @@ def cleanup(retention_hours: int = 48) -> int:
                                OR (child.state_status = 'applied'
                                    AND child.downstream_status = 'pending')
                            )
-                     )""",
+                     )
+                     {_INITIAL_TIME_INTENT_RETENTION_RELEASE_SQL}""",
                 (cutoff,),
             )
             cur = conn.execute(
@@ -1905,7 +1936,7 @@ def cleanup_audit_log(retention_days: int = 90) -> int:
             )
             deleted = cur.rowcount
             outbox_cur = conn.execute(
-                """DELETE FROM state_apply_outbox
+                f"""DELETE FROM state_apply_outbox
                    WHERE state_status IN ('applied', 'superseded')
                      AND downstream_status IN ('applied', 'skipped')
                      AND created_at < datetime('now', ?)
@@ -1922,7 +1953,8 @@ def cleanup_audit_log(retention_days: int = 90) -> int:
                                OR (child.state_status = 'applied'
                                    AND child.downstream_status = 'pending')
                            )
-                     )""",
+                     )
+                     {_INITIAL_TIME_INTENT_RETENTION_RELEASE_SQL}""",
                 (f"-{retention_days} days",),
             )
             conn.execute("COMMIT;")

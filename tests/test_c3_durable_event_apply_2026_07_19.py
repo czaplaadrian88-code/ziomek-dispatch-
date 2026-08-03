@@ -761,6 +761,128 @@ def test_queue_cleanup_is_atomic_with_closed_outbox_and_keeps_unresolved(
     assert unresolved_counts == (1, 1, 1)
 
 
+def test_cleanup_retains_new_order_receipt_until_initial_intent_is_consumed(
+    isolated_stores, monkeypatch
+):
+    """Retention cannot delete the authority receipt behind a pending shell."""
+    from dispatch_v2.committed_pickup_authority import (
+        build_new_order_time_intent,
+    )
+
+    events_db, _state_path = isolated_stores
+    monkeypatch.setattr(EB, "_is_peak_window", lambda: False)
+    oid = "new-order-intent-retention"
+    source_id = f"{oid}_NEW_ORDER_v1"
+    intent = build_new_order_time_intent(
+        oid,
+        {
+            "pickup_at_warsaw": "2026-08-02T20:00:00+02:00",
+            "czas_kuriera_warsaw": "2026-08-02T20:00:00+02:00",
+            "czas_kuriera_hhmm": "20:00",
+            "status_id": 2,
+            "prep_minutes": 60,
+            "decision_deadline": "2026-08-02T19:00:00+02:00",
+            "zmiana_czasu_odbioru": False,
+        },
+        observed_at="2026-08-02T18:00:00+00:00",
+    )
+    intent_id = intent["intent_id"]
+    source_event = {
+        "event_type": "NEW_ORDER",
+        "event_id": source_id,
+        "order_id": oid,
+        "courier_id": None,
+        "payload": {},
+        "pending_committed_time_intent": intent,
+        "committed_time_policy_snapshot": {
+            "schema": "committed_pickup.policy_snapshot.v1",
+            "producer": "panel_watcher",
+            "manual_passthrough_enabled": False,
+            "rutcom_forward_authority_enabled": True,
+            "passive_guard_enabled": True,
+        },
+        "czasowka_new_order_time_authority_enabled": True,
+    }
+    assert EB.emit(
+        "NEW_ORDER",
+        order_id=oid,
+        event_id=source_id,
+        state_event=source_event,
+        event_key=f"{oid}_NEW_ORDER_first",
+    ) == source_id
+    assert EB.mark_state_apply_applied(source_id) is True
+    assert EB.mark_state_apply_downstream(source_id) is True
+    assert EB.mark_processed(source_id) is True
+    with sqlite3.connect(events_db) as conn:
+        conn.execute(
+            "UPDATE events SET processed_at=datetime('now', '-3 days') "
+            "WHERE event_id=?",
+            (source_id,),
+        )
+        conn.execute(
+            "UPDATE processed_events "
+            "SET processed_at=datetime('now', '-3 days') WHERE event_id=?",
+            (source_id,),
+        )
+        conn.execute(
+            "UPDATE state_apply_outbox "
+            "SET created_at=datetime('now', '-3 days') WHERE event_id=?",
+            (source_id,),
+        )
+
+    assert EB.cleanup_audit_log(retention_days=1) == 0
+    assert EB.get_state_apply_outbox(source_id) is not None
+    assert EB.cleanup(retention_hours=48) == 0
+    assert EB.get_state_apply_outbox(source_id) is not None
+
+    wrong_consumer_id = f"{oid}_PICKUP_TIME_UPDATED_WRONG_INTENT"
+    wrong_consumer_event = {
+        "event_type": "PICKUP_TIME_UPDATED",
+        "event_id": wrong_consumer_id,
+        "order_id": oid,
+        "courier_id": None,
+        "payload": {
+            "committed_new_order_time_intent_id": f"{intent_id}-wrong",
+        },
+    }
+    assert EB.emit_audit(
+        "PICKUP_TIME_UPDATED",
+        order_id=oid,
+        event_id=wrong_consumer_id,
+        state_event=wrong_consumer_event,
+        event_key=f"{oid}_PICKUP_TIME_UPDATED_wrong_intent",
+        predecessor_event_id=source_id,
+    ) == wrong_consumer_id
+    assert EB.mark_state_apply_applied(wrong_consumer_id) is True
+    assert EB.mark_state_apply_downstream(wrong_consumer_id) is True
+    assert EB.cleanup(retention_hours=48) == 0
+    assert EB.get_state_apply_outbox(source_id) is not None
+
+    consumer_id = f"{oid}_PICKUP_TIME_UPDATED_COMMITTED"
+    consumer_event = {
+        "event_type": "PICKUP_TIME_UPDATED",
+        "event_id": consumer_id,
+        "order_id": oid,
+        "courier_id": None,
+        "payload": {
+            "committed_new_order_time_intent_id": intent_id,
+        },
+    }
+    assert EB.emit_audit(
+        "PICKUP_TIME_UPDATED",
+        order_id=oid,
+        event_id=consumer_id,
+        state_event=consumer_event,
+        event_key=f"{oid}_PICKUP_TIME_UPDATED_intent",
+        predecessor_event_id=wrong_consumer_id,
+    ) == consumer_id
+    assert EB.mark_state_apply_applied(consumer_id) is True
+    assert EB.mark_state_apply_downstream(consumer_id) is True
+
+    assert EB.cleanup(retention_hours=48) == 2
+    assert EB.get_state_apply_outbox(source_id) is None
+
+
 def test_equal_time_deltas_have_distinct_durable_transition_keys(
     isolated_stores, monkeypatch
 ):

@@ -1,4 +1,4 @@
-# RUTCOM committed pickup authority — raport kandydata v24, 2026-08-02
+# RUTCOM committed pickup authority — raport kandydata v25, 2026-08-02
 
 ## Wynik
 
@@ -12,6 +12,59 @@ Rutcom. Granica transportu przed zapisem outboxa zamienia legalny CK na jeden
 kanoniczny `PICKUP_TIME_UPDATED`. Jeden handler state atomowo zapisuje pickup,
 CK, HH:MM, monotoniczną rewizję oraz provenance. Plan, scoring po potwierdzonym
 apply i aplikacja dziedziczą tę samą prawdę.
+
+## Co domknięto w v25
+
+Dwa blind review exact-byte v24 ponownie prawidłowo zatrzymały live. Authority
+verdict ma SHA-256
+`babaa445730fe40293813c85d72ea17075f25a890371c57b50f78856c0f8e79c`, a
+rollout verdict
+`49a279efbc4bf51b46f197f6478800f6609ccae7027bbcc1ca93557fd222e2ef`;
+oba wydały `CONFIRMED_DEFECT`. MAIN niezależnie odtworzył wszystkie cztery
+unikalne findings. Coordinator pickup dla rzeczywistego elastyka miał
+hardcoded klasę czasówki, więc przy `OFF` legalne odświeżenie znikało, a przy
+`ON` dostawało obcy authority. Legacy fallback obu pól brał CAS/politykę z
+późniejszego panel ticku zamiast immutable v6 click receiptu, co po hot flipie
+zmieniało wersjonowanie i otwierało ABA na crash retry. Forward rollout
+odrzucał poprawny jawny receipt elastyka v6 z click-time forward `ON`, mimo że
+pełny snapshot czyni go flip-independent. Standardowy i audit cleanup mogły
+usunąć jedyny źródłowy outbox `NEW_ORDER` z pending initial intentem przed jego
+materializacją.
+
+V25 usuwa te przyczyny u czterech istniejących ownerów. State resolver najpierw
+projektuje klasę zlecenia; coordinator receipt nie może jej zmienić, a elastyka
+oddaje jedynemu legacy writerowi. W watcherze jeden
+`_time_event_transaction_policy` wybiera policy ownera całej transakcji: zwykły
+tick zachowuje snapshot sprzed I/O, deliberate v6 używa exact click lease przez
+CK, pickup, claim, apply i replay. Pre-policy v4/v5 zachowują historyczną
+semantykę i nadal muszą być zdrenowane przed flipem. Rollout akceptuje obie
+wartości forward poprawnego explicit-elastic v6, lecz nadal failuje closed dla
+braku lub korupcji snapshotu. Jeden wspólny SQL retention guard jest używany
+przez oba cleanup writery i zwalnia źródłowy initial-intent outbox dopiero po
+applied `PICKUP_TIME_UPDATED` z exact intent ID tego samego OID.
+
+Przed fixem zestaw review miał 8 czerwonych przypadków i jeden zielony control;
+po fixie 13/13 nowych/zmienionych oracles przechodzi. Cztery mutation probes
+ponownie czerwieniły odpowiednio 1, 4, 1 i 1 test po usunięciu klasyfikacji,
+receipt-owned CAS, poprawnego rollout classifiera i retention guarda; exact
+restore przywrócił identyczne SHA-256 wszystkich czterech modułów. Pełna
+kanoniczna regresja: 6761 passed, 74 skipped, 8 xfailed, 153 warnings i 0 failed
+w 459,67 s. `py_compile`, import, `git diff --check` i lifecycle 557/557 są
+zielone; sentinel entropy pozostaje 0 i nie doszła flaga ani próg. Produkcja,
+flagi i procesy pozostają nietknięte. Następna bramka to dwa świeże review v25
+na jednym zamrożonym exact-byte commicie.
+
+### Mapa kompletności v25
+
+| Miejsce | Rola | Dotknięte | Dowód |
+|---|---|---|---|
+| `state_machine.resolve_czasowka_pickup_observation` | classifier/policy owner consumer | TAK | projekcja realnej klasy przed receipt policy/claim; brak hardcoded `is_czasowka=True`; OFF i ON elastic oracles |
+| `panel_watcher` CK/pickup/claim/apply/replay | producer i durable transaction consumer | TAK | jeden helper wybiera tick snapshot albo exact v6 click lease; cztery hot-flip/CAS oracles i statyczny ratchet wszystkich callsite'ów |
+| rollback `forward-status` | rollout classifier | TAK | poprawny explicit-elastic v6 jest stabilny dla obu booleanów forward; malformed/pre-policy nadal blokują |
+| `event_bus.cleanup` / `cleanup_audit_log` | dwa writery retencji | TAK | wspólny exact-intent release oracle; wrong intent nie zwalnia, exact applied consumer zwalnia |
+| initial intent producer/state consumer | źródło i materializacja receiptu | N-D | istniejący schema/ID kontrakt wykorzystany bez drugiego writera i migracji danych |
+| plan/scoring/serializer/apka | konsumenci state | N-D | brak render override; dziedziczą ten sam kanoniczny state |
+| testy/ratchet/mutation | bramka antyregresji | TAK | 13/13 focused, 4 mutation kills, pełna suita 6761/6761 |
 
 ## Co domknięto w v24
 

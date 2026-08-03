@@ -1261,9 +1261,17 @@ def test_claimed_replay_acks_only_exact_terminal_outbox(monkeypatch):
         ack_receipts=lambda records: acked.append(records) or 1,
     )
     applied = SimpleNamespace(state_ready=True, superseded=False)
-    monkeypatch.setattr(pw, "_apply_time_update_event", lambda oid, event: (
-        applied if oid == "8" and event is exact_event else None
-    ))
+    monkeypatch.setattr(
+        pw,
+        "_apply_time_update_event",
+        lambda oid, event, *, policy_snapshot=None: (
+            applied
+            if oid == "8"
+            and event is exact_event
+            and policy_snapshot is None
+            else None
+        ),
+    )
     monkeypatch.setattr(
         pw.durable_event_apply,
         "is_terminal_outcome",
@@ -1299,7 +1307,9 @@ def test_claimed_replay_never_acks_pending_or_failed_state(monkeypatch):
     monkeypatch.setattr(
         pw,
         "_apply_time_update_event",
-        lambda _oid, _event: pending,
+        lambda _oid, _event, *, policy_snapshot=None: (
+            pending if policy_snapshot is None else None
+        ),
     )
     monkeypatch.setattr(
         pw.durable_event_apply,
@@ -1528,9 +1538,13 @@ def test_legacy_force_claim_survives_nonterminal_downstream(tmp_queue, monkeypat
     assert claimed is not None
 
     pending = SimpleNamespace(state_ready=True, superseded=False)
-    monkeypatch.setattr(
-        pw, "_apply_time_update_event", lambda _oid, _event: pending
-    )
+    applied_policies = []
+
+    def apply_pending(_oid, _event, *, policy_snapshot=None):
+        applied_policies.append(policy_snapshot)
+        return pending
+
+    monkeypatch.setattr(pw, "_apply_time_update_event", apply_pending)
     monkeypatch.setattr(
         pw.durable_event_apply,
         "is_terminal_outcome",
@@ -1544,6 +1558,7 @@ def test_legacy_force_claim_survives_nonterminal_downstream(tmp_queue, monkeypat
     assert outcome is pending
     assert did_ack is False
     assert ctr.current_receipt("8") == claimed
+    assert applied_policies == [ctr.receipt_policy_snapshot(claimed)]
 
 
 def test_one_receipt_cannot_authorize_ck_and_opposite_pickup(

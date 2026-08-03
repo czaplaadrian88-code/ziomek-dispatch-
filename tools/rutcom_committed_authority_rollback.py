@@ -309,7 +309,6 @@ def collect_status(
                 order_id=order_id,
             )
             and receipt_policy is not None
-            and receipt_policy.rutcom_forward_authority_enabled is False
             and isinstance(order, Mapping)
             and str(order.get("order_type") or "").strip().lower()
             == "elastic"

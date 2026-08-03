@@ -1559,10 +1559,11 @@ def test_prepare_reprobes_writers_after_queue_projection(monkeypatch, capsys):
     assert '"prepared": false' in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("receipt_forward_enabled", [False, True])
 def test_forward_deploy_ignores_valid_unclaimed_elastic_queue_receipt(
-    monkeypatch,
+    monkeypatch, receipt_forward_enabled
 ):
-    """A quiesced, explicit elastic click has identical ON/OFF semantics."""
+    """A bound explicit-elastic click has flag-independent semantics."""
     oid = "elastic-queue-stable"
     receipt = {
         "schema": "coordinator_time_recheck.v6",
@@ -1576,7 +1577,7 @@ def test_forward_deploy_ignores_valid_unclaimed_elastic_queue_receipt(
             "schema": "committed_pickup.policy_snapshot.v1",
             "producer": "coordinator_queue",
             "manual_passthrough_enabled": False,
-            "rutcom_forward_authority_enabled": False,
+            "rutcom_forward_authority_enabled": receipt_forward_enabled,
             "passive_guard_enabled": True,
         },
     }

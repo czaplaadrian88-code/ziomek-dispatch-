@@ -465,6 +465,18 @@ def resolve_czasowka_pickup_observation(
         project_time_observation_order(existing, payload)
     )
     if payload.get("source") == "coordinator_force":
+        # The receipt proves who requested this refresh; it does not change the
+        # business class of the observed order.  A projection that remains
+        # elastic belongs to the existing legacy pickup writer in
+        # panel_watcher, regardless of the receipt's rollout snapshot.  Return
+        # before policy/claim handling so ON cannot promote it to committed
+        # authority and OFF cannot swallow the legacy refresh.
+        if not is_czasowka:
+            return _resolve_pickup_observation(
+                existing,
+                payload,
+                is_czasowka=False,
+            )
         from dispatch_v2 import coordinator_time_recheck as receipt_store
 
         oid = str(payload.get("oid") or existing.get("order_id") or "")
@@ -528,30 +540,18 @@ def resolve_czasowka_pickup_observation(
         if not receipt_store.verify_pending_receipt(
             receipt, order_id=oid
         ):
-            if is_czasowka:
-                return CommittedPickupResolution(
-                    outcome=ResolutionOutcome.SUPPRESS,
-                    reason="receipt_not_pending",
-                )
-            return _resolve_pickup_observation(
-                existing,
-                payload,
-                is_czasowka=False,
+            return CommittedPickupResolution(
+                outcome=ResolutionOutcome.SUPPRESS,
+                reason="receipt_not_pending",
             )
         receipt_policy = receipt_store.receipt_policy_snapshot(receipt)
         if receipt_policy is None:
-            if is_czasowka:
-                return CommittedPickupResolution(
-                    outcome=ResolutionOutcome.SUPPRESS,
-                    reason="receipt_policy_missing",
-                )
-            forward_enabled = False
-            passive_enabled = False
-        else:
-            forward_enabled = (
-                receipt_policy.rutcom_forward_authority_enabled
+            return CommittedPickupResolution(
+                outcome=ResolutionOutcome.SUPPRESS,
+                reason="receipt_policy_missing",
             )
-            passive_enabled = receipt_policy.passive_guard_enabled
+        forward_enabled = receipt_policy.rutcom_forward_authority_enabled
+        passive_enabled = receipt_policy.passive_guard_enabled
         # coordinator_force jest źródłem zarezerwowanym: brak flagi nie może
         # zamienić go w NOT_APPLICABLE, bo watcher potraktowałby to jako zgodę
         # na legacy fallback bez receiptu. Claim już istniejący został obsłużony
@@ -570,7 +570,7 @@ def resolve_czasowka_pickup_observation(
         preliminary = _resolve_pickup_observation(
             existing,
             payload,
-            is_czasowka=True,
+            is_czasowka=is_czasowka,
             coordinator_receipt_verified=True,
         )
         if (

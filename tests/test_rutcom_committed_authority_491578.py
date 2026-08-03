@@ -5398,6 +5398,135 @@ def test_off_started_coordinator_refresh_remains_legacy_for_true_elastic(
     assert ctr.current_receipt(oid) == receipt
 
 
+@pytest.mark.parametrize("forward_enabled", [False, True])
+def test_coordinator_pickup_receipt_keeps_true_elastic_on_legacy_path(
+    tmp_path, monkeypatch, forward_enabled
+):
+    """A queue receipt cannot turn an elastic pickup refresh into authority."""
+    from dispatch_v2 import state_machine as sm
+
+    ctr = _isolate_coordinator_queue(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        ctr,
+        "_coordinator_policy_snapshot",
+        lambda: CommittedPickupPolicySnapshot(
+            producer="coordinator_queue",
+            manual_passthrough_enabled=False,
+            rutcom_forward_authority_enabled=forward_enabled,
+            passive_guard_enabled=True,
+        ),
+    )
+    oid = f"elastic-pickup-receipt-{int(forward_enabled)}"
+    assert ctr.enqueue([oid], source="coordinator_panel") == 1
+    receipt = ctr.pending_with_receipts()[oid]
+    existing = {
+        **_existing_491578(),
+        "order_id": oid,
+        "order_type": "elastic",
+        "prep_minutes": 20,
+    }
+    payload = _observation_491578(
+        oid=oid,
+        source="coordinator_force",
+        authority_receipt=receipt,
+        observed_prep_minutes=20,
+        observed_at=receipt["requested_at"],
+        new_pickup_at_warsaw="2026-08-01T19:21:00+02:00",
+    )
+    assert sm.project_time_observation_order(existing, payload)[
+        "order_type"
+    ] == "elastic"
+
+    resolution = sm.resolve_czasowka_pickup_observation(existing, payload)
+
+    assert resolution.outcome is ResolutionOutcome.NOT_APPLICABLE
+    assert resolution.reason == "not_czasowka"
+    assert resolution.event is None
+    assert ctr.current_receipt(oid) == receipt
+
+
+@pytest.mark.parametrize("detector", ["ck", "pickup"])
+@pytest.mark.parametrize(
+    ("receipt_forward_enabled", "tick_forward_enabled", "expects_cas"),
+    [(True, False, True), (False, True, False)],
+)
+def test_coordinator_elastic_fallback_cas_uses_click_policy(
+    tmp_path,
+    monkeypatch,
+    detector,
+    receipt_forward_enabled,
+    tick_forward_enabled,
+    expects_cas,
+):
+    """A hot flag flip cannot replace the immutable v6 click policy."""
+    from dispatch_v2 import panel_watcher as pw
+    from dispatch_v2.committed_pickup_authority import (
+        TIME_EVENT_CAS_SCHEMA_FIELD,
+    )
+
+    ctr = _isolate_coordinator_queue(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        ctr,
+        "_coordinator_policy_snapshot",
+        lambda: CommittedPickupPolicySnapshot(
+            producer="coordinator_queue",
+            manual_passthrough_enabled=False,
+            rutcom_forward_authority_enabled=receipt_forward_enabled,
+            passive_guard_enabled=True,
+        ),
+    )
+    oid = (
+        f"elastic-{detector}-click-{int(receipt_forward_enabled)}-"
+        f"tick-{int(tick_forward_enabled)}"
+    )
+    assert ctr.enqueue([oid], source="coordinator_panel") == 1
+    receipt = ctr.pending_with_receipts()[oid]
+    existing = {
+        **_existing_491578(),
+        "order_id": oid,
+        "order_type": "elastic",
+        "prep_minutes": 20,
+    }
+    fresh = {
+        "czas_kuriera_warsaw": "2026-08-01T19:21:00+02:00",
+        "czas_kuriera_hhmm": "19:21",
+        "pickup_at_warsaw": "2026-08-01T19:21:00+02:00",
+        "prep_minutes": 20,
+        "status_id": 2,
+        "observed_at": receipt["requested_at"],
+    }
+    tick_policy = CommittedPickupPolicySnapshot(
+        producer="panel_watcher",
+        manual_passthrough_enabled=False,
+        rutcom_forward_authority_enabled=tick_forward_enabled,
+        passive_guard_enabled=True,
+    )
+
+    if detector == "ck":
+        event = pw._diff_czas_kuriera(
+            existing,
+            fresh,
+            oid,
+            deliberate=True,
+            authority_receipt=receipt,
+            policy_snapshot=tick_policy,
+        )
+    else:
+        event = pw._diff_pickup_time(
+            existing,
+            fresh,
+            oid,
+            deliberate=True,
+            authority_receipt=receipt,
+            policy_snapshot=tick_policy,
+        )
+
+    assert event is not None
+    assert event["payload"]["source"] == "coordinator_force"
+    assert "committed_authority" not in event["payload"]
+    assert (TIME_EVENT_CAS_SCHEMA_FIELD in event["payload"]) is expects_cas
+
+
 def test_claim_cannot_override_coordinator_click_time_off_policy(
     tmp_path, monkeypatch
 ):

@@ -421,7 +421,11 @@ def test_v6_queue_and_durable_boundary_bind_one_policy_without_live_retry():
     assert "def coordinator_time_authority_enabled(" in authority
     assert "def deserialize_coordinator_event_policy(" in authority
     assert "receipt_policy_snapshot(record)" in rollback
-    assert "receipt_policy.rutcom_forward_authority_enabled is False" in rollback
+    assert "and receipt_policy is not None" in rollback
+    assert (
+        "receipt_policy.rutcom_forward_authority_enabled is False"
+        not in rollback
+    )
     assert "is_czasowka=is_czasowka" in state_functions[
         "resolve_czasowka_ck_observation"
     ]
@@ -658,7 +662,8 @@ def test_cold_start_and_null_pickup_cannot_bypass_canonical_time_owner():
         cold_start.index("if not _initialized.state_ready:") : assign_at
     ]
     assert "if new_iso:" in pickup
-    assert "policy_snapshot=policy_snapshot" in pickup
+    assert "policy_snapshot=transaction_policy" in pickup
+    assert "_time_event_transaction_policy(" in pickup
     assert "if old_iso and new_iso and C.is_czasowka_order(old_state):" not in pickup
     assert "def _initialize_new_order_time_contract(" in watcher
     assert watcher.count("_initialize_new_order_time_contract(") >= 3
@@ -1193,3 +1198,47 @@ def test_watcher_claims_both_force_event_paths_before_apply():
     second_claim = block.index(claim_token, first_claim + 1)
     second_apply = block.index(apply_token, first_apply + 1)
     assert first_claim < first_apply < second_claim < second_apply
+
+
+def test_coordinator_policy_and_initial_intent_retention_ratchet():
+    watcher_tree = ast.parse(_source("panel_watcher.py"))
+    watcher_parents = _parents(watcher_tree)
+    policy_calls = Counter(
+        _enclosing_function(node, watcher_parents)
+        for node in ast.walk(watcher_tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_time_event_transaction_policy"
+    )
+    assert policy_calls == Counter(
+        {
+            "_diff_czas_kuriera": 1,
+            "_diff_pickup_time": 1,
+            "_replay_claimed_time_event": 1,
+            "_diff_and_emit": 2,
+        }
+    )
+
+    state_source = _source("state_machine.py")
+    pickup_resolver = state_source.split(
+        "def resolve_czasowka_pickup_observation(", 1
+    )[1].split("\ndef build_czasowka_manual_ck_pickup_event(", 1)[0]
+    assert "if not is_czasowka:" in pickup_resolver
+    assert "is_czasowka=True" not in pickup_resolver
+
+    event_bus_tree = ast.parse(_source("event_bus.py"))
+    event_bus_parents = _parents(event_bus_tree)
+    retention_uses = Counter(
+        _enclosing_function(node, event_bus_parents)
+        for node in ast.walk(event_bus_tree)
+        if isinstance(node, ast.Name)
+        and isinstance(node.ctx, ast.Load)
+        and node.id == "_INITIAL_TIME_INTENT_RETENTION_RELEASE_SQL"
+    )
+    assert retention_uses == Counter({"cleanup": 1, "cleanup_audit_log": 1})
+
+    rollback = _source("tools/rutcom_committed_authority_rollback.py")
+    assert (
+        "receipt_policy.rutcom_forward_authority_enabled is False"
+        not in rollback
+    )

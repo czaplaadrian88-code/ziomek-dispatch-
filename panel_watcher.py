@@ -1978,6 +1978,37 @@ def _time_event_cas_enabled(
     )
 
 
+def _time_event_transaction_policy(
+    policy_snapshot: Optional[CommittedPickupPolicySnapshot],
+    *,
+    deliberate: bool,
+    authority_receipt: Optional[dict],
+) -> Optional[CommittedPickupPolicySnapshot]:
+    """Resolve the immutable policy owner for one time-event transaction.
+
+    A normal panel tick owns its pre-I/O snapshot.  A coordinator transaction
+    instead started when its v6 queue receipt was created, so that receipt owns
+    the policy through legacy-elastic fallback, claim, outbox and crash replay.
+    Pre-policy v4/v5 receipts retain their historical tick-time behavior and are
+    drained before forward rollout.
+    """
+    if policy_snapshot is not None and type(
+        policy_snapshot
+    ) is not CommittedPickupPolicySnapshot:
+        raise TypeError("policy_snapshot must be CommittedPickupPolicySnapshot")
+    if not deliberate or not isinstance(authority_receipt, dict):
+        return policy_snapshot
+
+    from dispatch_v2 import coordinator_time_recheck as receipt_store
+
+    if authority_receipt.get("schema") != receipt_store.RECEIPT_SCHEMA:
+        return policy_snapshot
+    receipt_policy = receipt_store.receipt_policy_snapshot(authority_receipt)
+    if receipt_policy is None:
+        raise ValueError("coordinator v6 receipt policy is invalid")
+    return receipt_policy
+
+
 def _diff_czas_kuriera(old_state: dict, fresh_response: dict,
                       oid: str, deliberate: bool = False,
                       authority_receipt: Optional[dict] = None,
@@ -2035,6 +2066,11 @@ def _diff_czas_kuriera(old_state: dict, fresh_response: dict,
         and abs(delta_min) < V319G_CK_DELTA_THRESHOLD_MIN
     ):
         return None
+    transaction_policy = _time_event_transaction_policy(
+        policy_snapshot,
+        deliberate=deliberate,
+        authority_receipt=authority_receipt,
+    )
 
     # Czasowka: jeden resolver rozroznia statusowy re-stamp od committed czasu
     # Rutcom i zawsze zwraca kanoniczny PICKUP_TIME_UPDATED. Panel watcher nie
@@ -2088,7 +2124,7 @@ def _diff_czas_kuriera(old_state: dict, fresh_response: dict,
     _authority = resolve_czasowka_ck_observation(
         old_state,
         _authority_payload,
-        policy_snapshot=policy_snapshot,
+        policy_snapshot=transaction_policy,
     )
     if _authority.outcome is ResolutionOutcome.APPLY:
         return _authority.event
@@ -2140,7 +2176,7 @@ def _diff_czas_kuriera(old_state: dict, fresh_response: dict,
             else "panel_re_check"
         ),
     }
-    if _time_event_cas_enabled(old_state, policy_snapshot):
+    if _time_event_cas_enabled(old_state, transaction_policy):
         payload.update(
             build_time_event_cas_snapshot(
                 old_state, "CZAS_KURIERA_UPDATED"
@@ -2218,6 +2254,11 @@ def _diff_pickup_time(old_state: dict, fresh_response: dict,
         delta_min = (new_dt - old_dt).total_seconds() / 60.0
         if abs(delta_min) < PICKUP_TIME_DELTA_THRESHOLD_MIN:
             return None  # noise floor
+    transaction_policy = _time_event_transaction_policy(
+        policy_snapshot,
+        deliberate=deliberate,
+        authority_receipt=authority_receipt,
+    )
 
     if new_iso:
         authority_payload = {
@@ -2254,7 +2295,7 @@ def _diff_pickup_time(old_state: dict, fresh_response: dict,
         authority = resolve_czasowka_pickup_observation(
             old_state,
             authority_payload,
-            policy_snapshot=policy_snapshot,
+            policy_snapshot=transaction_policy,
         )
         if authority.outcome is ResolutionOutcome.APPLY:
             return authority.event
@@ -2286,7 +2327,7 @@ def _diff_pickup_time(old_state: dict, fresh_response: dict,
             old_state.get("pickup_time_revision", 0)
         ),
     }
-    if _time_event_cas_enabled(old_state, policy_snapshot):
+    if _time_event_cas_enabled(old_state, transaction_policy):
         payload.update(
             build_time_event_cas_snapshot(
                 old_state, "PICKUP_TIME_UPDATED"
@@ -2443,7 +2484,16 @@ def _replay_claimed_time_event(order_id: str, receipt: dict, receipt_store):
     )
     if claimed_event is None:
         raise ValueError("invalid claimed coordinator time event")
-    outcome = _apply_time_update_event(str(order_id), claimed_event)
+    transaction_policy = _time_event_transaction_policy(
+        None,
+        deliberate=True,
+        authority_receipt=receipt,
+    )
+    outcome = _apply_time_update_event(
+        str(order_id),
+        claimed_event,
+        policy_snapshot=transaction_policy,
+    )
     terminal = durable_event_apply.is_terminal_outcome(outcome)
     if not terminal:
         return outcome, False
@@ -4296,7 +4346,14 @@ def _diff_and_emit(
                         time_outcome = _apply_time_update_event(
                             zid,
                             evt,
-                            policy_snapshot=_committed_time_policy,
+                            policy_snapshot=_time_event_transaction_policy(
+                                _committed_time_policy,
+                                deliberate=_force,
+                                authority_receipt=(
+                                    _force_receipts.get(zid)
+                                    if _force else None
+                                ),
+                            ),
                         )
                     except Exception as _e:  # noqa: BLE001 — receipt zostaje
                         _log.warning(
@@ -4387,7 +4444,14 @@ def _diff_and_emit(
                         pickup_outcome = _apply_time_update_event(
                             zid,
                             evt_p,
-                            policy_snapshot=_committed_time_policy,
+                            policy_snapshot=_time_event_transaction_policy(
+                                _committed_time_policy,
+                                deliberate=_force,
+                                authority_receipt=(
+                                    _force_receipts.get(zid)
+                                    if _force else None
+                                ),
+                            ),
                         )
                     except Exception as _e:  # noqa: BLE001 — receipt zostaje
                         _log.warning(
