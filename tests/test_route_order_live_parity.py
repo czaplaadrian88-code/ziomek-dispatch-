@@ -28,6 +28,7 @@ FLAGS = {
     "route_order_unified": True,
     "plan_aware_podjazdy": True,
     "build_view_trust_canon_order": True,
+    "eta_version_check": False,
 }
 
 
@@ -37,6 +38,7 @@ class FakeRouteConfig:
     route_order_unified: bool
     plan_aware_podjazdy: bool
     build_view_trust_canon_order: bool
+    eta_version_check: bool = False
 
     ENV_BY_FIELD = MON.ROUTE_CONFIG_ENV
 
@@ -350,7 +352,7 @@ def test_route_config_drift_is_separate_verdict_and_short_circuits_routes():
     assert "CONFIG_DRIFT" in result["open_gates_line"]
 
 
-def test_corpus_pins_all_four_courier_api_route_flags():
+def test_corpus_pins_all_courier_api_route_flags():
     corpus = json.loads(CORPUS.read_text(encoding="utf-8"))
     assert corpus["meta"]["courier_api_route_config"] == FLAGS
 

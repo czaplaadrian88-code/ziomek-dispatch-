@@ -7,7 +7,8 @@
    "app_route_from_console": true,
    "route_order_unified": true,
    "plan_aware_podjazdy": true,
-   "build_view_trust_canon_order": true
+   "build_view_trust_canon_order": true,
+   "eta_version_check": false
   },
   "flags": {
    "plan_aware": true,

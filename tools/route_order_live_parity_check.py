@@ -77,6 +77,7 @@ ROUTE_CONFIG_ENV = {
     "route_order_unified": "ENABLE_ROUTE_ORDER_UNIFIED",
     "plan_aware_podjazdy": "ENABLE_PLAN_AWARE_PODJAZDY",
     "build_view_trust_canon_order": "ENABLE_BUILD_VIEW_TRUST_CANON_ORDER",
+    "eta_version_check": "ENABLE_ROUTE_ETA_VERSION_CHECK",
 }
 
 
