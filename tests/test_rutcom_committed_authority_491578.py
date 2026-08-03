@@ -5977,3 +5977,29 @@ def test_versioned_coordinator_pickup_respects_active_lifecycle_fence(
     assert result is None
     assert after["pickup_at_warsaw"] == before["pickup_at_warsaw"]
     assert after["pickup_time_revision"] == before["pickup_time_revision"]
+
+
+@pytest.mark.parametrize(
+    "event_type", ["CZAS_KURIERA_UPDATED", "PICKUP_TIME_UPDATED"]
+)
+@pytest.mark.parametrize(
+    ("queue_state", "expected_effect"),
+    [("missing", "superseded"), ("unreadable", "pending")],
+)
+def test_missing_aggregate_raw_coordinator_event_uses_exact_claim_gate(
+    tmp_path, monkeypatch, event_type, queue_state, expected_effect
+):
+    """The missing-state early return cannot bypass transport authority."""
+    from dispatch_v2 import state_machine as sm
+
+    ctr = _isolate_coordinator_queue(tmp_path, monkeypatch)
+    event = {
+        "event_type": event_type,
+        "order_id": "missing-aggregate",
+        "payload": {"source": "coordinator_force"},
+    }
+    if queue_state == "unreadable":
+        Path(ctr.QUEUE_PATH).write_text("{", encoding="utf-8")
+
+    assert sm.event_effect_status(event, current=None) == expected_effect
+    assert sm.update_from_event(event) is None

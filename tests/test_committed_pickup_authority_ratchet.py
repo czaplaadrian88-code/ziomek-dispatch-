@@ -518,15 +518,19 @@ def test_coordinator_queue_has_immutable_head_successor_and_safe_legacy_drain():
     assert "preserved[SUCCESSOR_FIELD] = next_receipt" in queue
     assert '"requested_at": successor_base["request_id"]' not in queue
     assert '"requested_at": successor_base["requested_at"]' in queue
-    assert "ELIGIBLE_AT_FIELD: _utc_now().isoformat()" in queue
+    assert "promoted_at = max(_utc_now(), successor_clocks[1])" in queue
+    assert "ELIGIBLE_AT_FIELD: promoted_at.isoformat()" in queue
     assert "def prepare_legacy_rollback(" in queue
     assert "def release_legacy_rollback_fence(" in queue
     assert "coordinator time queue fenced for legacy code rollback" in queue
-    assert "drainable = {" in queue
-    assert "and receipt.get(\"claim\") is not None" in queue
+    assert "if receipt is None" in queue
+    assert "if not _queue_mutation_fence()" not in queue
+    assert queue.count("_queue_mutation_fence()") >= 6
     assert "def _receipt_ready(" in queue
     assert "def _fresh_receipt(" not in queue
-    assert "projection[oid] = projection_now.isoformat()" in queue
+    assert "eligible_at <= now" in queue
+    assert "projection[oid] = projection_now.isoformat()" not in queue
+    assert "pending_pre_policy_receipt" in queue
 
 
 def test_raw_coordinator_claim_gate_precedes_every_time_cas_and_writer():
@@ -541,7 +545,11 @@ def test_raw_coordinator_claim_gate_precedes_every_time_cas_and_writer():
     event_oracle = functions["event_effect_status"]
     state_writer = functions["update_from_event"]
 
-    assert state.count("_legacy_time_claim_gate(event)") == 4
+    assert state.count("_legacy_time_claim_gate(event)") == 5
+    missing_state = event_oracle.split("if not current:", 1)[1].split(
+        "etype = event.get", 1
+    )[0]
+    assert "_legacy_time_claim_gate(event)" in missing_state
     assert pickup_status.index("_legacy_time_claim_gate(event)") < (
         pickup_status.index("time_event_cas_status(")
     )
@@ -639,7 +647,9 @@ def test_code_rollback_is_mechanically_gated_across_queue_and_outbox():
     assert 'and forward_fence["forward_fence_valid"]' in tool
     assert "def _cmd_fence_forward(" in tool
     assert "def _cmd_release_forward_fence(" in tool
-    assert "projection[oid] = projection_now.isoformat()" in queue
+    assert "projection[oid] = projection_now.isoformat()" not in queue
+    assert "pending_pre_policy_receipt" in queue
+    assert "pending_legacy_timestamp" in queue
     assert '"safe_for_forward_deploy": safe_for_forward_deploy' in tool
     assert 'sub.add_parser(\n        "forward-status"' in tool
 

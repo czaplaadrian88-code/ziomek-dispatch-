@@ -1,0 +1,126 @@
+RUTCOM COMMITTED PICKUP AUTHORITY v27 — DoD evidence
+Date: 2026-08-03 UTC
+Gate: engine.rutcom-committed-pickup-authority-491578
+Status at capture: candidate only; production unchanged; forward flag effective OFF
+regresja: 6781 passed, 0 failed, 74 skipped, 8 xfailed, 153 warnings; full canonical HERMETIC_STRICT suite.
+e2e: 22/22 targeted review oracles and 265/265 broad queue/authority/state/rollback tests.
+pozytywny-wplyw: exact click authority cannot start before eligibility, disappear through oid-only drain, or be lost by rollback TTL projection; incident 491578 remains canonical 19:21 at ON.
+rollback: hot forward flag false; code revert only after quiesce, empty exact queue, terminal outbox, persistent backup and one verified rollback fence.
+N-D: watcher transport, outbox, plan, scoring, feasibility, serializers and courier app consume the same queue/state contracts; no renderer, HARD/SOFT, selection or route policy changed.
+model: gpt-5.6-sol; effort=xhigh; cross-layer authority, durable queue ownership, clock causality and rollback have high error cost.
+
+ROOT CAUSE / REVIEW INPUT
+- v26 authority verdict SHA-256:
+  e5bb7976a00f6d515cbfd35b7a5a47a3d0822e96ae33ece3aac07bf32fc47fdd
+- v26 rollout verdict SHA-256:
+  d0a0be2e7da40efef5efdf26ec7d2d2ccde6c82fb85fd3925a54ef2ee84b5472
+- Both verdicts: CONFIRMED_DEFECT; both validated by blind-review driver.
+- Rejected v26 commit: 7266686b29a5bcc0e6e3f9948574d55afef2c8dc.
+- MAIN independently reproduced every finding on the exact v26 bytes:
+  1. Missing aggregate bypassed the exact claim gate for raw coordinator time.
+  2. A canonical receipt up to 30 seconds in the future could become ready and
+     authority-valid before its own eligible_at.
+  3. Successor promotion under a backward wall clock could write
+     eligible_at earlier than requested_at and poison the durable queue.
+  4. Oid-only drain APIs ACKed unclaimed v4/v5/v6 without exact durable apply.
+  5. Code rollback projected durable work to a five-minute scalar whose
+     lifetime could expire before the old reader was activated.
+  6. Rollback fence did not own upgrade, pending cleanup/drain and ACK, so the
+     queue could mutate after its exact backup/fence snapshot.
+- Pre-fix V27 oracle baseline: 11 failed, 2 passed, 251 deselected.
+
+SOURCE FIX / SINGLE OWNERS
+- state_machine.event_effect_status:
+  missing aggregate now enters the same _legacy_time_claim_gate as every other
+  raw time CAS and writer. Missing claim is terminally superseded; queue read
+  error remains retryable pending without write permission.
+- coordinator_time_recheck._receipt_ready:
+  one strict local rule, eligible_at <= now; future canonical work remains
+  retained fail-closed and never enters the worklist early.
+- committed_pickup_authority._valid_coordinator_receipt:
+  one strict causal authority rule, observed_at >= eligible_at; no local
+  future-skew grant remains.
+- coordinator_time_recheck.ack_receipts:
+  successor promotion preserves requested_at audit and sets execution epoch to
+  max(now, prior eligible_at), so host clock rollback cannot create poison.
+- coordinator_time_recheck.drain/drain_with_receipts:
+  compatibility one-shot consumption is scalar-only. Every v4/v5/v6 requires
+  exact claim, durable apply and exact ACK by the canonical watcher.
+- coordinator_time_recheck._queue_mutation_fence:
+  one forward/rollback fence owner is consumed by enqueue, upgrade, claim,
+  pending cleanup/drain and ACK under the queue flock.
+- coordinator_time_recheck legacy rollback audit:
+  no durable receipt is translated into a second TTL owner. Any non-empty
+  scalar/v4/v5/v6 queue blocks code revert. Hot OFF remains immediate behavior
+  rollback; code revert waits for an empty exact snapshot and fence.
+- No fallback, second state writer, renderer override, migration, new flag or
+  new threshold was added.
+
+COMPLETENESS MAP
+- Producers: coordinator enqueue v4/v5/v6 and historical scalar.
+- Readiness/authority: strict eligible_at queue gate plus strict observation gate.
+- Transport: exact claim, verification, durable apply and exact ACK.
+- State oracle/writer: missing and present aggregate raw CK/pickup twins.
+- Rollout/revert: one shared mutation fence and empty-queue code-revert gate.
+- Downstream plan/scoring/serializer/app: N-D; consume canonical coupled state.
+- Tests cover both missing-state twins/read outcomes, future old-skew window,
+  backward clock, three destructive drains, scalar positive control, rollback
+  TTL loss, every fenced mutator and source ratchets.
+
+ORACLES AFTER FIX
+- Initial targeted review set: 22 passed, 242 deselected in 3.06 s.
+- Broad touched cluster: 265 passed in 91.40 s.
+- Exact-restored critical set after mutations: 14 passed, 251 deselected.
+- Scalar legacy compatibility positive control: PASS within the broad cluster.
+
+MUTATION PROBES AND EXACT RESTORE
+- Bypass missing-state exact claim gate: 2 failed / 2 passed.
+- Restore queue future-skew readiness: 1 failed.
+- Restore authority future-skew grant: 1 failed.
+- Restore non-monotonic successor promotion: 1 failed.
+- Let oid-only drain consume canonical receipts: 3 failed.
+- Restore durable-receipt TTL projection: 2 failed.
+- Make shared fence ignore rollback: 1 failed.
+- Exact restore SHA-256:
+  state_machine.py fecac35902ed955c63892f4380681df9ce024b23ab22ec1a4f5198ae9203421f
+  committed_pickup_authority.py 877c89df148c42d257d463c64986c5e5aae415ba880e408a15bd926cea257fa7
+  coordinator_time_recheck.py 2d64f475062abe8d46fd9e9fb1f23aa8f7f66998986678a1895d3a2027b65aba
+  tests/test_rutcom_committed_authority_491578.py 8fcfba06aad24e46eed6ee385c1a406befa4e31ae2a49390f1202db139c6ca8b
+  tests/test_coordinator_force_recheck_2026_06_30.py f5f98844e15600293ad3ffb5932f009b8c2dd442898d12716bbfc5eb476375bb
+  tests/test_committed_pickup_authority_ratchet.py e1b1313ef767dbaee3d2ff00521430d191a6ff867e44ea1ffdcb7e92933a9b0d
+
+CANONICAL REGRESSION
+- Environment:
+  ZIOMEK_SCRIPTS_ROOT=/root/worktrees/dispatch_v2/active/20260802-rutcom-v17-integration-pkgroot
+  PYTHONPATH=/root/worktrees/dispatch_v2/active/20260802-rutcom-v17-integration-pkgroot
+  HERMETIC_STRICT=1
+- Command:
+  /root/.openclaw/venvs/dispatch/bin/python -m pytest tests/ -q -ra
+- Result: 6781 passed, 74 skipped, 8 xfailed, 153 warnings, 0 failed
+  in 460.43 s. Delta versus rejected v26: +8 passed with identical skipped,
+  xfailed and warning profile.
+
+STATIC / TOOLING GATES
+- py_compile production modules: PASS.
+- import dispatch_v2.state_machine/committed_pickup_authority/
+  coordinator_time_recheck: PASS.
+- git diff --check: PASS before evidence docs; rerun before freeze.
+- flag lifecycle repo-hermetic: 557/557 curated, 0 errors.
+- flag lifecycle live: 557/557 curated, 0 errors.
+- entropy dashboard: sentinel-as-data remains 0; no new flag or threshold;
+  pre-existing dashboard totals did not increase from this diff.
+- ziomek-cto mechanical DoD on a tracked exact snapshot: PASS (35 files,
+  full regression/e2e/positive impact/rollback and all flag/twin gates PASS).
+
+ROLLBACK / LIVE
+- Candidate is not deployed and no service was restarted.
+- Target flag remains absent/effective OFF in production.
+- Primary kill switch: ENABLE_CZASOWKA_RUTCOM_FORWARD_AUTHORITY=false.
+- Hot OFF changes behavior immediately. Code rollback additionally requires
+  exact quiesce, terminal outbox, empty queue, persistent 0600 backup and one
+  verified fence; no TTL projection is allowed.
+- Production release still requires one frozen commit, two fresh independent
+  CLEAN exact-byte reviews, fresh production collision check, writer quiesce,
+  backups, compile/import, fenced preflight, controlled restarts of panel watcher
+  and shadow only, target flip ON, fingerprint/health/smoke verification.
+- dispatch-telegram is outside scope and must remain untouched.

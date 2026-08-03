@@ -72,7 +72,6 @@ _COORDINATOR_RECEIPT_SCHEMAS = frozenset(
 _COORDINATOR_RECEIPT_SOURCES = frozenset(
     {"coordinator_panel", "coordinator_console"}
 )
-_COORDINATOR_RECEIPT_FUTURE_SKEW = timedelta(seconds=30)
 _PICKUP_OBSERVATION_SOURCES = frozenset(
     {
         "panel_pickup_recheck",
@@ -822,10 +821,11 @@ def _valid_coordinator_receipt(
     # Exact live queue membership (``verified_origin``) is the durable lease.
     # Wall-clock age cannot revoke an unclaimed click after a watcher crash or
     # temporary board absence.  The clock remains an audit/causality fence: an
-    # observation cannot precede the receipt beyond the allowed skew.
+    # observation cannot precede eligibility. Both timestamps are produced on
+    # this host, so a tolerance would grant authority to not-yet-ready work.
     if eligible_at < requested_at:
         return False
-    return observed_at - eligible_at >= -_COORDINATOR_RECEIPT_FUTURE_SKEW
+    return observed_at >= eligible_at
 
 
 def resolve_czasowka_assignment_ck(

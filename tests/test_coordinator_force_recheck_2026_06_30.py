@@ -77,7 +77,7 @@ def _seed_pre_policy_v5(queue_path: str, *, oid: str = "8") -> dict:
     return receipt
 
 
-def test_enqueue_drain_roundtrip(tmp_queue):
+def test_canonical_enqueue_is_never_consumed_by_oid_only_drain(tmp_queue):
     assert ctr.enqueue(["111", "222"]) == 2
     queued = json.load(open(tmp_queue))
     assert queued.keys() >= {"111", "222"}
@@ -87,15 +87,20 @@ def test_enqueue_drain_roundtrip(tmp_queue):
     ] is False
     assert queued["111"]["request_id"]
     assert queued["111"]["eligible_at"] == queued["111"]["requested_at"]
-    assert ctr.drain() == {"111", "222"}
-    assert ctr.drain() == set()                 # wyczyszczone po drenażu
-    assert json.load(open(tmp_queue)) == {}
+    assert ctr.drain() == set()
+    assert ctr.drain_with_receipts() == {}
+    assert json.load(open(tmp_queue)) == queued
 
 
-def test_enqueue_dedup_refreshes_ttl(tmp_queue):
+def test_enqueue_dedup_replaces_unclaimed_head_without_legacy_drain(tmp_queue):
     ctr.enqueue(["333"])
-    ctr.enqueue(["333"])                          # ponowny klik = idempotentny
-    assert ctr.drain() == {"333"}
+    first = ctr.pending_with_receipts()["333"]
+    ctr.enqueue(["333"])
+    second = ctr.pending_with_receipts()["333"]
+
+    assert first["request_id"] != second["request_id"]
+    assert ctr.drain() == set()
+    assert ctr.current_receipt("333") == second
 
 
 def test_drain_drops_expired(tmp_queue):
@@ -105,14 +110,27 @@ def test_drain_drops_expired(tmp_queue):
     assert json.load(open(tmp_queue)) == {}
 
 
-def test_drain_with_receipts_preserves_durable_authority(tmp_queue):
+def test_oid_only_drain_keeps_scalar_legacy_compatibility(tmp_queue, monkeypatch):
+    now = datetime(2026, 8, 3, 1, 30, tzinfo=timezone.utc)
+    monkeypatch.setattr(ctr, "_utc_now", lambda: now)
+    Path(tmp_queue).write_text(
+        json.dumps({"legacy": now.isoformat()}), encoding="utf-8"
+    )
+
+    assert ctr.drain() == {"legacy"}
+    assert json.loads(Path(tmp_queue).read_text(encoding="utf-8")) == {}
+
+
+def test_drain_with_receipts_cannot_ack_durable_authority(tmp_queue):
     assert ctr.enqueue(["444"], source="coordinator_panel") == 1
+    receipt = ctr.pending_with_receipts()["444"]
     drained = ctr.drain_with_receipts()
 
-    assert set(drained) == {"444"}
-    assert drained["444"]["schema"] == "coordinator_time_recheck.v6"
-    assert drained["444"]["eligible_at"] == drained["444"]["requested_at"]
-    assert drained["444"]["source"] == "coordinator_panel"
+    assert drained == {}
+    assert ctr.current_receipt("444") == receipt
+    assert json.loads(Path(tmp_queue).read_text(encoding="utf-8")) == {
+        "444": receipt
+    }
 
 
 def test_receipt_is_order_bound_and_acknowledged_only_after_success(tmp_queue):
@@ -907,6 +925,39 @@ def test_delayed_unclaimed_v6_receipt_keeps_click_policy_and_authority(
     assert ctr.verify_claimed_event(resolution.event)
 
 
+def test_canonical_receipt_inside_old_skew_window_waits_until_eligible(
+    tmp_queue, monkeypatch
+):
+    """Canonical local eligibility is strict; clock skew cannot grant authority."""
+    from dispatch_v2.committed_pickup_authority import (
+        _valid_coordinator_receipt,
+    )
+
+    now = datetime(2026, 6, 30, 12, 0, tzinfo=timezone.utc)
+    eligible_at = now + timedelta(seconds=20)
+    monkeypatch.setattr(ctr, "_utc_now", lambda: eligible_at)
+    assert ctr.enqueue(["8"], source="coordinator_panel") == 1
+    receipt = json.loads(Path(tmp_queue).read_text(encoding="utf-8"))["8"]
+
+    monkeypatch.setattr(ctr, "_utc_now", lambda: now)
+    assert ctr.pending_with_receipts() == {}
+    assert ctr.current_receipt("8") is None
+    assert not ctr.verify_pending_receipt(receipt, order_id="8", now=now)
+    assert not _valid_coordinator_receipt(
+        receipt,
+        order_id="8",
+        observed_at=now,
+        verified_origin=True,
+    )
+    assert json.loads(Path(tmp_queue).read_text(encoding="utf-8")) == {
+        "8": receipt
+    }
+
+    monkeypatch.setattr(ctr, "_utc_now", lambda: eligible_at)
+    assert ctr.pending_with_receipts() == {"8": receipt}
+    assert ctr.verify_pending_receipt(receipt, order_id="8")
+
+
 def test_reclick_cannot_overwrite_claim_and_ack_promotes_successor(
     tmp_queue, monkeypatch
 ):
@@ -948,6 +999,46 @@ def test_reclick_cannot_overwrite_claim_and_ack_promotes_successor(
     assert promoted["eligible_at"] >= successor["eligible_at"]
     assert promoted.get("claim") is None
     assert ctr.verify_pending_receipt(promoted, order_id="8")
+
+
+def test_successor_promotion_remains_valid_when_wall_clock_moves_backward(
+    tmp_queue, monkeypatch
+):
+    """Promotion is monotonic in receipt time even across a host clock rollback."""
+    from dispatch_v2 import state_machine as sm
+
+    _enable_coordinator_authority(sm, monkeypatch)
+    t0 = datetime(2026, 6, 30, 10, 0, tzinfo=timezone.utc)
+    t1 = t0 + timedelta(minutes=1)
+    monkeypatch.setattr(ctr, "_utc_now", lambda: t0)
+    assert ctr.enqueue(["8"], source="coordinator_panel") == 1
+    first_pending = ctr.pending_with_receipts()["8"]
+    first = sm.resolve_czasowka_ck_observation(
+        _coordinator_existing(),
+        _coordinator_payload(first_pending, hhmm="15:40"),
+    )
+    first_claimed = ctr.current_receipt("8")
+    assert first.outcome.value == "apply"
+    assert first_claimed is not None and first_claimed.get("claim")
+
+    monkeypatch.setattr(ctr, "_utc_now", lambda: t1)
+    assert ctr.enqueue(["8"], source="coordinator_console") == 1
+    successor = ctr.current_receipt("8")["successor"]
+
+    monkeypatch.setattr(ctr, "_utc_now", lambda: t0)
+    assert ctr.ack_receipts({"8": first_claimed}) == 1
+    promoted = json.loads(Path(tmp_queue).read_text(encoding="utf-8"))["8"]
+
+    assert promoted["requested_at"] == successor["requested_at"]
+    assert promoted["eligible_at"] == successor["eligible_at"]
+    assert ctr.rollback_record_is_unclaimed(promoted, order_id="8")
+    assert ctr.pending_with_receipts() == {}
+    assert json.loads(Path(tmp_queue).read_text(encoding="utf-8")) == {
+        "8": promoted
+    }
+
+    monkeypatch.setattr(ctr, "_utc_now", lambda: t1)
+    assert ctr.pending_with_receipts() == {"8": promoted}
 
 
 def test_successor_ttl_starts_when_claimed_head_releases_without_rewriting_click(
@@ -1061,10 +1152,10 @@ def test_compatibility_drain_never_consumes_claimed_transaction(
     assert ctr.verify_claimed_event(resolution.event)
 
 
-def test_legacy_rollback_fences_writers_backs_up_and_projects_pending_v4(
+def test_legacy_rollback_fences_writers_and_backs_up_empty_queue(
     tmp_queue, persistent_tmpdir
 ):
-    _seed_pre_policy_v5(tmp_queue)
+    Path(tmp_queue).write_text("{}\n", encoding="utf-8")
     original = Path(tmp_queue).read_bytes()
     backup = persistent_tmpdir / "coordinator_time_recheck.pre-v4.json"
 
@@ -1072,15 +1163,13 @@ def test_legacy_rollback_fences_writers_backs_up_and_projects_pending_v4(
 
     assert backup.read_bytes() == original
     assert receipt["backup_path"] == str(backup)
-    assert receipt["converted_v4_records"] == 1
+    assert receipt["converted_v4_records"] == 0
     projected = json.loads(Path(tmp_queue).read_text(encoding="utf-8"))
-    assert set(projected) == {"8"}
-    assert isinstance(projected["8"], str)
-    datetime.fromisoformat(projected["8"])
+    assert projected == {}
     status = ctr.legacy_rollback_status()
     assert status["safe_queue_projection"] is True
     assert status["pending_v4_records"] == 0
-    assert status["legacy_records"] == 1
+    assert status["legacy_records"] == 0
     assert status["rollback_fence_present"] is True
     assert status["rollback_prepared"] is True
     assert status["rollback_backup_sha256"] == receipt["backup_sha256"]
@@ -1091,10 +1180,10 @@ def test_legacy_rollback_fences_writers_backs_up_and_projects_pending_v4(
     assert ctr.enqueue(["9"], source="coordinator_panel") == 1
 
 
-def test_legacy_rollback_rebases_durable_old_v5_work_to_migration_time(
+def test_legacy_rollback_blocks_durable_old_v5_work_until_drained(
     tmp_queue, persistent_tmpdir, monkeypatch
 ):
-    """Pre-v4 scalar TTL must not erase work that the new queue keeps durable."""
+    """Code revert waits for an empty queue instead of inventing a scalar TTL."""
     clicked_at = datetime(2026, 6, 30, 10, 0, tzinfo=timezone.utc)
     rollback_at = clicked_at + timedelta(minutes=30)
     receipt = {
@@ -1112,11 +1201,13 @@ def test_legacy_rollback_rebases_durable_old_v5_work_to_migration_time(
     monkeypatch.setattr(ctr, "_utc_now", lambda: rollback_at)
     backup = persistent_tmpdir / "old-durable-v5.pre-v4.json"
 
-    ctr.prepare_legacy_rollback(str(backup))
-    projected = json.loads(Path(tmp_queue).read_text(encoding="utf-8"))
+    before = Path(tmp_queue).read_bytes()
+    with pytest.raises(RuntimeError, match="pending_pre_policy_receipt"):
+        ctr.prepare_legacy_rollback(str(backup))
 
-    assert projected == {"8": rollback_at.isoformat()}
-    assert backup.read_text(encoding="utf-8") == json.dumps({"8": receipt})
+    assert Path(tmp_queue).read_bytes() == before
+    assert not backup.exists()
+    assert not Path(ctr._rollback_fence_path()).exists()
 
 
 def test_legacy_rollback_never_rebases_future_receipt_into_ready_work(
@@ -1152,10 +1243,33 @@ def test_legacy_rollback_never_rebases_future_receipt_into_ready_work(
     }
 
 
+def test_legacy_rollback_fence_blocks_every_queue_mutator(
+    tmp_queue, persistent_tmpdir
+):
+    """One rollback fence owns upgrade, cleanup/drain, claim, ACK and enqueue."""
+    Path(tmp_queue).write_text("{}\n", encoding="utf-8")
+    backup = persistent_tmpdir / "empty-queue.pre-v4.json"
+    ctr.prepare_legacy_rollback(str(backup))
+    timestamp = ctr._utc_now().isoformat()
+    # Simulate an out-of-contract external writer after the exact fence. Public
+    # queue mutators must still fail closed and preserve these exact bytes.
+    Path(tmp_queue).write_text(
+        json.dumps({"8": timestamp}), encoding="utf-8"
+    )
+    before = Path(tmp_queue).read_bytes()
+
+    assert ctr.upgrade_legacy_receipt("8") is None
+    assert ctr.pending_with_receipts() == {}
+    assert ctr.ack_receipts({"8": None}) == 0
+    assert ctr.drain_with_receipts() == {}
+    assert ctr.drain() == set()
+    assert Path(tmp_queue).read_bytes() == before
+
+
 def test_legacy_rollback_backup_failure_cannot_leave_prepared_fence(
     tmp_queue, persistent_tmpdir, monkeypatch
 ):
-    _seed_pre_policy_v5(tmp_queue)
+    Path(tmp_queue).write_text("{}\n", encoding="utf-8")
     backup = persistent_tmpdir / "injected-backup-failure.json"
     real_write_once = ctr._write_once
 
@@ -1178,7 +1292,7 @@ def test_legacy_rollback_backup_failure_cannot_leave_prepared_fence(
 def test_legacy_rollback_prepared_fence_revalidates_exact_backup(
     tmp_queue, persistent_tmpdir
 ):
-    _seed_pre_policy_v5(tmp_queue)
+    Path(tmp_queue).write_text("{}\n", encoding="utf-8")
     backup = persistent_tmpdir / "exact-backup.json"
     ctr.prepare_legacy_rollback(str(backup))
     assert ctr.legacy_rollback_status()["rollback_prepared"] is True
@@ -1292,7 +1406,7 @@ def test_legacy_rollback_restores_exact_queue_when_fence_write_fails(
     tmp_queue, persistent_tmpdir, monkeypatch
 ):
     """Projection+fence is one transaction; failed fence restores exact bytes."""
-    _seed_pre_policy_v5(tmp_queue)
+    Path(tmp_queue).write_text("{}\n", encoding="utf-8")
     original = Path(tmp_queue).read_bytes()
     backup = persistent_tmpdir / "queue-before-failed-fence.json"
     real_write_once = ctr._write_once
@@ -1316,7 +1430,7 @@ def test_legacy_rollback_does_not_delete_fence_created_by_racer(
     tmp_queue, persistent_tmpdir, monkeypatch
 ):
     """Nieudane O_EXCL usuwa tylko własny fence, nigdy cudzy artefakt."""
-    _seed_pre_policy_v5(tmp_queue)
+    Path(tmp_queue).write_text("{}\n", encoding="utf-8")
     original = Path(tmp_queue).read_bytes()
     backup = persistent_tmpdir / "queue-before-fence-race.json"
     fence = Path(ctr._rollback_fence_path())

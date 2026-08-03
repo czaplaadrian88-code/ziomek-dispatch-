@@ -1,4 +1,4 @@
-# RUTCOM committed pickup authority — raport kandydata v26, 2026-08-03
+# RUTCOM committed pickup authority — raport kandydata v27, 2026-08-03
 
 ## Wynik
 
@@ -12,6 +12,70 @@ Rutcom. Granica transportu przed zapisem outboxa zamienia legalny CK na jeden
 kanoniczny `PICKUP_TIME_UPDATED`. Jeden handler state atomowo zapisuje pickup,
 CK, HH:MM, monotoniczną rewizję oraz provenance. Plan, scoring po potwierdzonym
 apply i aplikacja dziedziczą tę samą prawdę.
+
+## Co domknięto w v27
+
+Dwa blind review exact-byte v26 ponownie poprawnie zatrzymały live. Authority
+verdict ma SHA-256
+`e5bb7976a00f6d515cbfd35b7a5a47a3d0822e96ae33ece3aac07bf32fc47fdd`,
+a rollout verdict
+`d0a0be2e7da40efef5efdf26ec7d2d2ccde6c82fb85fd3925a54ef2ee84b5472`;
+oba przeszły mechaniczny checker jako `CONFIRMED_DEFECT`. MAIN niezależnie
+odtworzył wszystkie findings na exact bajtach V26:
+
+1. early branch brakującego agregatu zwracał `pending` dla raw coordinator
+   eventu bez claimu, zamiast terminalnie wygasić nieautoryzowaną pracę;
+2. receipt z `eligible_at` do 30 sekund w przyszłości mógł trafić do worklisty,
+   zostać claimowany i uzyskać authority przed własną epoką;
+3. promocja successora przy cofnięciu zegara zapisywała
+   `eligible_at < requested_at`, tworząc trwały poison;
+4. oid-only `drain()` i `drain_with_receipts()` ACK-owały nieclaimowane
+   kanoniczne v4/v5/v6 przed exact durable consumerem;
+5. rollback projection zamieniał trwały receipt na scalar z nowym TTL, więc
+   opóźniona aktywacja starego kodu mogła skasować pracę mimo zielonego
+   preflightu;
+6. rollback fence nie był wspólną bramką upgrade, cleanup/drain i ACK, więc
+   kolejka mogła zmienić się po exact snapshotcie.
+
+V27 usuwa te przyczyny w istniejących ownerach. Missing-state używa tego samego
+`_legacy_time_claim_gate` co wszystkie pozostałe CAS-y i writery. Gotowość
+kolejki oraz policy authority wymagają ścisłego `eligible_at <= now` i
+`observed_at >= eligible_at`, bez lokalnego skew grantu. Successor zachowuje
+immutable click audit, a jego epoka wykonania jest `max(now, prior
+eligible_at)`. Kompatybilny oid-only drain konsumuje wyłącznie historyczny
+scalar; każdy v4/v5/v6 czeka na exact claim, durable apply i ACK. Jeden
+`_queue_mutation_fence` jest wywoływany przez enqueue, upgrade, claim,
+pending-cleanup/drain i ACK dla obu rodzajów fence. Rollback zachowania nadal
+jest natychmiastowym hot `OFF`, lecz rollback kodu do pre-v4 jest legalny tylko
+po opróżnieniu kolejki, exact backupie pustego snapshotu i założeniu fence —
+bez konkurencyjnego lifetime ownera i bez TTL rebase.
+
+Negatywny baseline przed fixem miał 11 failed / 2 passed. Po fixie targeted
+oracles mają 22/22, szeroki klaster trzech plików 265/265, a osobny positive
+control potwierdza scalar legacy drain. Siedem kontrolowanych mutacji ponownie
+czerwieniło właściwe bramki: 2F, 1F, 1F, 1F, 3F, 2F i 1F. Exact restore
+przywrócił SHA źródeł, ponowny targeted przebieg ma 14/14, a `py_compile`,
+import i `git diff --check` są zielone. Pełna hermetyczna regresja ma
+6781 passed / 74 skipped / 8 xfailed / 153 warnings / 0 failed w 460,43 s —
+dokładnie +8 PASS względem V26 przy identycznym profilu non-pass. DoD oraz dwa
+świeże review exact-byte V27 pozostają przed live. Produkcja, procesy i flaga nadal są
+nietknięte/OFF; V26 commit
+`7266686b29a5bcc0e6e3f9948574d55afef2c8dc` pozostaje odrzucony.
+
+### Mapa kompletności v27
+
+| Miejsce | Rola | Dotknięte | Dowód |
+|---|---|---|---|
+| `state_machine.event_effect_status` | terminal oracle brakującego agregatu | TAK | oba raw typy, missing claim=`superseded`, read-error=`pending`, writer nie zapisuje |
+| `committed_pickup_authority._valid_coordinator_receipt` | authority causal fence | TAK | `observed_at >= eligible_at`, future-in-old-skew oracle i mutation kill |
+| `coordinator_time_recheck._receipt_ready` | jedyny queue readiness owner | TAK | strict local eligibility, future retention, bez grantującej tolerancji |
+| `coordinator_time_recheck.ack_receipts` | successor promotion / exact ACK | TAK | monotoniczna epoka mimo backward clock; immutable click audit |
+| `coordinator_time_recheck.drain*` | compatibility consumer | TAK | scalar-only positive control; trzy negatywne canonical drain oracles |
+| `coordinator_time_recheck._queue_mutation_fence` | wspólny owner mutacji | TAK | enqueue/upgrade/claim/pending/ACK, forward i rollback parity |
+| `coordinator_time_recheck._legacy_rollback_projection` | code-revert gate | TAK | każdy niepusty scalar/v4/v5/v6 blokuje; zero TTL projection/rebase |
+| watcher/apply/outbox/state | exact durable konsumenci | N-D | istniejący claim/apply/ACK pozostaje jednym transportem; brak fallbacku |
+| plan/scoring/serializer/apka | konsumenci kanonicznego state | N-D | brak UI override, nowego writera lub zmiany HARD/SOFT |
+| testy/ratchet/mutation | antyregresja | TAK | 11F/2P baseline, 22/22 targeted, 265/265 broad, siedem skutecznych mutacji |
 
 ## Co domknięto w v26
 
@@ -56,8 +120,8 @@ identyczne SHA-256. Pełna hermetyczna regresja: 6773 passed, 74 skipped,
 8 xfailed, 153 warnings, 0 failed w 463,30 s; profil non-pass jest identyczny z
 v25, a delta to +12 testów. `py_compile`, import, `git diff --check`, lifecycle
 557/557 i automatyczne sentinele entropii są zielone. Produkcja, procesy i flaga
-pozostają nietknięte/OFF. Następna bramka to dwa świeże review v26 na jednym
-zamrożonym exact-byte commicie.
+pozostały nietknięte/OFF. Późniejsze dwa review v26 odrzuciły ten kandydat;
+ich findings i root fix opisuje sekcja V27 powyżej.
 
 ### Mapa kompletności v26
 
@@ -974,9 +1038,9 @@ ACK, post-pickup/stale-generation/revision i spójności pickup↔CK.
 
 ## Identyfikacja kandydata
 
-- Wersja: v26, po pełnej regresji, przed dwoma świeżymi review exact-byte
+- Wersja: v27, po pełnej regresji, przed dwoma świeżymi review exact-byte
 - Branch: `fix/rutcom-committed-provenance-v20-20260802`
 - Worktree: `/root/worktrees/dispatch_v2/active/20260802-rutcom-v17-integration-pkgroot/dispatch_v2`
-- Poprzedni odrzucony kandydat v25: `7e8e76b48b26605fb5ffdc902aefccd9bd06a12f`
+- Poprzedni odrzucony kandydat v26: `7266686b29a5bcc0e6e3f9948574d55afef2c8dc`
 - Zintegrowany produkcyjny master: `64f773ddc`
 - Produkcja: bez zmian; zero deployu, restartu, migracji i flipu.

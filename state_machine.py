@@ -1501,14 +1501,16 @@ def event_effect_status(
                 # capture time. Once it is pruned, neither handler can recreate
                 # it; retry is impossible work and must terminalize.
                 return "superseded"
-        legacy_claim = _legacy_time_claim_status(event)
+        legacy_claim, claim_effect = _legacy_time_claim_gate(event)
         if legacy_claim == "verified":
             # Exact claim może przeżyć terminalizację i prune rekordu. Każdy
             # claimowalny typ czasu kończymy tym samym oracle, nie tylko nową
-            # kopertę authority. Brak/odczyt błędny pozostaje pending.
+            # kopertę authority.
             return "superseded"
-        if legacy_claim == "read_error":
-            return "pending"
+        if claim_effect is not None:
+            # Brak exact claimu jest terminalnie stale również przed istnieniem
+            # agregatu. Tylko błąd odczytu kolejki pozostaje retryable pending.
+            return claim_effect
         return "pending"
 
     etype = event.get("event_type")

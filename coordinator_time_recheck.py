@@ -117,6 +117,15 @@ def _forward_fence_path() -> str:
     return QUEUE_PATH + ".forward-authority-fence"
 
 
+def _queue_mutation_fence() -> Optional[str]:
+    """One owner for every queue-writer fence decision; caller holds flock."""
+    if os.path.exists(_forward_fence_path()):
+        return "forward"
+    if os.path.exists(_rollback_fence_path()):
+        return "rollback"
+    return None
+
+
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -362,7 +371,7 @@ def _receipt_ready(
     order_id: str,
     now: datetime,
 ) -> bool:
-    """A structurally valid durable receipt is ready unless clocked in future."""
+    """A valid canonical receipt becomes ready exactly at local eligible_at."""
     base = receipt_base(receipt)
     if base is None or str(base["order_id"]) != str(order_id):
         return False
@@ -372,7 +381,7 @@ def _receipt_ready(
     if clocks is None:
         return False
     _requested_at, eligible_at = clocks
-    return eligible_at <= now + _FUTURE_SKEW
+    return eligible_at <= now
 
 
 def _event_sha256(event: Mapping[str, object]) -> str:
@@ -773,11 +782,12 @@ def enqueue(oids, *, source: str = "coordinator_panel") -> int:
         raise ValueError(f"unsupported coordinator receipt source: {source!r}")
     now = _utc_now().isoformat()
     with _lockfile():
-        if os.path.exists(_forward_fence_path()):
+        active_fence = _queue_mutation_fence()
+        if active_fence == "forward":
             raise RuntimeError(
                 "coordinator time queue fenced for forward authority rollout"
             )
-        if os.path.exists(_rollback_fence_path()):
+        if active_fence == "rollback":
             raise RuntimeError(
                 "coordinator time queue fenced for legacy code rollback"
             )
@@ -883,7 +893,7 @@ def upgrade_legacy_receipt(
     now = now or _utc_now()
     oid = str(order_id)
     with _lockfile():
-        if os.path.exists(_forward_fence_path()):
+        if _queue_mutation_fence():
             return None
         data = _load()
         current = data.get(oid)
@@ -948,9 +958,7 @@ def claim_receipt(
         event_copy, order_id=oid
     ) is not None
     with _lockfile():
-        if os.path.exists(_forward_fence_path()):
-            return None
-        if os.path.exists(_rollback_fence_path()):
+        if _queue_mutation_fence():
             return None
         data = _load()
         current = data.get(oid)
@@ -1101,7 +1109,7 @@ def pending_with_receipts(
     cutoff = now - timedelta(minutes=ttl_min)
     fresh: dict[str, dict | None] = {}
     with _lockfile():
-        if os.path.exists(_forward_fence_path()):
+        if _queue_mutation_fence():
             return fresh
         data = _load()
         if not data:
@@ -1164,7 +1172,7 @@ def ack_receipts(receipts: dict[str, dict | None]) -> int:
         return 0
     removed = 0
     with _lockfile():
-        if os.path.exists(_forward_fence_path()):
+        if _queue_mutation_fence():
             return 0
         data = _load()
         for oid, claimed in receipts.items():
@@ -1201,7 +1209,8 @@ def ack_receipts(receipts: dict[str, dict | None]) -> int:
                     continue
                 if successor is not None:
                     successor_base = receipt_base(successor)
-                    if successor_base is None:
+                    successor_clocks = _receipt_clock_pair(successor)
+                    if successor_base is None or successor_clocks is None:
                         continue
                     # Preserve the actual click time for audit, but start the
                     # execution TTL only when the non-expiring claimed head
@@ -1212,12 +1221,13 @@ def ack_receipts(receipts: dict[str, dict | None]) -> int:
                         # only its transport envelope to non-authorizing v5;
                         # the original click audit remains unchanged.
                         promoted_schema = PRE_POLICY_RECEIPT_SCHEMA
+                    promoted_at = max(_utc_now(), successor_clocks[1])
                     data[oid] = {
                         "schema": promoted_schema,
                         "request_id": successor_base["request_id"],
                         "order_id": successor_base["order_id"],
                         "requested_at": successor_base["requested_at"],
-                        ELIGIBLE_AT_FIELD: _utc_now().isoformat(),
+                        ELIGIBLE_AT_FIELD: promoted_at.isoformat(),
                         "source": successor_base["source"],
                         CONTINUATION_DEPTH_FIELD: successor_base[
                             CONTINUATION_DEPTH_FIELD
@@ -1274,19 +1284,17 @@ def ack_receipts(receipts: dict[str, dict | None]) -> int:
 def drain_with_receipts(
     ttl_min: float = DEFAULT_TTL_MIN,
 ) -> dict[str, dict | None]:
-    """Kompatybilny one-shot consumer tylko dla nieclaimowanych requestów.
+    """Kompatybilny one-shot consumer tylko dla surowego legacy scalara.
 
-    Claimed head niesie exact event, którego oid-only consumer nie zastosował.
-    Pomijamy go, więc tylko produkcyjny claim-aware watcher może wykonać ACK.
+    Każdy kanoniczny v4/v5/v6 receipt wymaga claimu i trwałego exact consumera;
+    oid-only API nie może skasować jego identity ani click-time policy. Jedynie
+    historyczny ``oid -> timestamp`` zachowuje dawną read+ACK semantykę.
     """
     fresh = pending_with_receipts(ttl_min=ttl_min)
     drainable = {
         oid: receipt
         for oid, receipt in fresh.items()
-        if not (
-            isinstance(receipt, dict)
-            and receipt.get("claim") is not None
-        )
+        if receipt is None
     }
     ack_receipts(drainable)
     return drainable
@@ -1302,7 +1310,13 @@ def _legacy_rollback_projection(
     *,
     projection_now: Optional[datetime] = None,
 ) -> tuple[dict, dict]:
-    """Pure v4/legacy queue audit and projection understood by pre-v4 code."""
+    """Pure audit: code rollback is legal only with an empty exact queue.
+
+    Translating durable receipts into five-minute scalars creates a second
+    lifetime owner and can lose work if activation is delayed. Hot OFF remains
+    immediate rollback; code revert waits until the current watcher drains every
+    request and then fences one exact empty snapshot.
+    """
     projection_now = projection_now or _utc_now()
     projection: dict[str, str] = {}
     blockers: list[str] = []
@@ -1330,7 +1344,7 @@ def _legacy_rollback_projection(
                 blockers.append(f"{oid}:invalid_legacy_timestamp")
                 continue
             counts["legacy_records"] += 1
-            projection[oid] = str(raw)
+            blockers.append(f"{oid}:pending_legacy_timestamp")
             continue
 
         if raw.get("claim") is not None:
@@ -1363,11 +1377,7 @@ def _legacy_rollback_projection(
             blockers.append(f"{oid}:receipt_not_yet_eligible")
             continue
         counts["pending_v4_records"] += 1
-        # Nowy receipt jest trwały niezależnie od wieku, a pre-v4 scalar ma TTL.
-        # Exact backup zachowuje click/eligibility audit; migracja rebazuje tylko
-        # legacy zegar wykonania, aby code rollback nie skasował oczekującej
-        # intencji natychmiast po przełączeniu czytnika.
-        projection[oid] = projection_now.isoformat()
+        blockers.append(f"{oid}:pending_pre_policy_receipt")
 
     status = {
         **counts,
