@@ -1,4 +1,20 @@
 # ZIOMEK AI DISPATCHER - BACKLOG ROZWOJU
+> **KANDYDAT SOURCE-ONLY 2026-08-03 — A-2 PLAN-CORRUPT ITERACJA 4:**
+> commit kodu `4add9c7e7819c5737cb24988ced6991c30afeac9` na dokładnej bazie
+> `05038f881` domyka trzy blokery blindu iter3 u kanonicznych ownerów.
+> `plan_manager` pod EX uzgadnia poprawny brakujący/stary HWM z legalnymi
+> zapisami okresu OFF, bez zmiany maina/`.prev`; malformed HWM pozostaje
+> fail-closed. `state_persistence` odzyskuje z `.prev` tylko po dowodzie braku
+> lub złej treści, a wyczerpany błąd I/O maina/`.prev` wychodzi bez zapisu.
+> Orders alert/`StateReadError` są uzbrojone wyłącznie przy własnej fladze ON;
+> OFF zachowuje też dokładny legacy root-shape planu. RED 14F/1P → GREEN,
+> literalne cofnięcie fixów 3F, ratchety A-2 56/56, broad 256/256, realne MP
+> 3/3, OFF 41/41. Pełna hermetyczna regresja: `7083P/0F/74S/8X/159W`
+> wobec baseline `7036P/0F/74S/8X/159W`; delta istniejących outcome 0.
+> Obie flagi pozostają efektywnie OFF. Zero merge/live/deploy/restart/flip/
+> migracji; następna bramka to świeży blind CTO. Raport:
+> `/root/artifacts/a2-rework-20260803/iter4/REPORT.md`.
+
 > **READ-ONLY DATA GATE 2026-08-03 — EKSTRAKTOR v2:** BUG-1 (rank na
 > `{best} ∪ alternatives`) i BUG-2 (join bieżącego `orders_state` + pełnej
 > znalezionej retencji snapshotów) zamknięte w artefakcie
