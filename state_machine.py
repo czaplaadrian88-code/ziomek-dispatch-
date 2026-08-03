@@ -110,6 +110,11 @@ _TERMINAL_ORDER_STATUSES = frozenset(
     {"delivered", "returned_to_pool", "cancelled"}
 )
 
+# Trwaly, fail-closed claim jedynej poczatkowej proby AUTO_KOORD. To pole
+# nalezy do agregatu zlecenia, bo procesowy set nie przetrwalby restartu, a
+# marker eventu NEW_ORDER jest zuzywany zanim kontrakt czasu moze sie domknac.
+AUTO_KOORD_INITIAL_ATTEMPT_FIELD = "auto_koord_initial_attempt"
+
 
 class CorruptedTimestampError(ValueError):
     """V3.19f: HH:MM string nie zgadza się z ISO datetime po parse.
@@ -1895,6 +1900,53 @@ def _merge_new_order_time_intent_backfill(
     merged = dict(existing)
     merged[NEW_ORDER_TIME_INTENT_FIELD] = dict(intent)
     return merged, True
+
+
+@_lifecycle_state_mutation
+def claim_initial_auto_koord_attempt(
+    order_id: str,
+    *,
+    trigger: str,
+    decision_reason: str,
+) -> bool:
+    """Atomically claim the one-life initial AUTO_KOORD attempt.
+
+    Claim jest zapisywany przed obcym panelem. Sama obecność pola (także
+    malformed/``None``) blokuje kolejną próbę, dzięki czemu ręczne oddanie
+    zlecenia przez Koordynatora nigdy nie uzbraja ponownego auto-przypisania.
+    Marker celowo nie zmienia historii ani ``updated_at``: nie jest eventem
+    biznesowym, tylko trwałym fence'em side-effectu.
+    """
+    oid = str(order_id)
+    with _locked_write() as path:
+        state = _read_state_strict()
+        old_count = len(state)
+        current = state.get(oid)
+        if not isinstance(current, dict):
+            return False
+        if AUTO_KOORD_INITIAL_ATTEMPT_FIELD in current:
+            return False
+        claimed = dict(current)
+        claimed[AUTO_KOORD_INITIAL_ATTEMPT_FIELD] = {
+            "schema": "auto_koord_initial_attempt.v1",
+            "claimed_at": now_iso(),
+            "trigger": str(trigger),
+            "decision_reason": str(decision_reason),
+        }
+        state[oid] = claimed
+        _guarded_write(
+            path,
+            state,
+            old_count,
+            op="auto_koord_initial_attempt",
+        )
+        _log.info(
+            "AUTO_KOORD initial attempt claimed oid=%s trigger=%s reason=%s",
+            oid,
+            trigger,
+            decision_reason,
+        )
+        return True
 
 
 @_lifecycle_state_mutation

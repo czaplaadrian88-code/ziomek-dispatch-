@@ -475,5 +475,7 @@ def apply(event: dict) -> None:
         return
 
     # NEW_ORDER nie ma ogolnego plan/recanon downstream. Gated AUTO_KOORD jest
-    # zewnetrznym poleceniem panelowym i zachowuje dotychczasowy event-created
-    # kontrakt w call-site (nie udajemy exactly-once dla obcej uslugi).
+    # zewnetrznym poleceniem panelowym. Jego jedyny caller pozostaje w
+    # panel_watcher, ale idempotencje immediate/recovered completion zapewnia
+    # teraz trwaly per-order claim proby, nie marker event_created. To jest
+    # at-most-once attempt; nie udajemy exactly-once dla obcej uslugi.

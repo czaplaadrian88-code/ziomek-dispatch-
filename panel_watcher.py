@@ -87,6 +87,7 @@ from dispatch_v2.panel_client import (
 from dispatch_v2.state_machine import (
     ORDER_DETAILS_ENRICHMENT_FIELDS,
     ORDER_DETAILS_ENRICHMENT_REQUIRED_FIELDS,
+    claim_initial_auto_koord_attempt,
     event_effect_status,
     get_all as state_get_all,
     get_order as state_get_order,
@@ -2438,6 +2439,95 @@ def _resume_new_order_time_contract(order_id: str, current: dict) -> bool:
     return committed_time_contract_is_complete(refreshed)
 
 
+def _trigger_initial_auto_koord_once(
+    order_id: str,
+    *,
+    trigger: str,
+    stats: dict,
+    fetch_details_fn,
+    decision_order: Optional[dict] = None,
+) -> None:
+    """Run the existing AUTO_KOORD decision behind one durable claim.
+
+    NEW_ORDER event identity cannot own this side-effect: under forward time
+    authority its receipt may be consumed one tick before the initial time
+    contract becomes actionable.  The per-order state claim is therefore the
+    one-life fence for both immediate and recovered completion paths.
+
+    Defensive by contract: no read, decision, claim, panel, audit or Telegram
+    failure may escape into the watcher tick.
+    """
+    oid = str(order_id)
+    try:
+        from dispatch_v2 import auto_koord
+
+        if not C.flag("AUTO_KOORD_ON_NEW_ORDER_ENABLED", default=False):
+            return
+        current = state_get_order_strict(oid)
+        if not isinstance(current, dict):
+            _log.warning(
+                "AUTO_KOORD initial trigger missing state oid=%s trigger=%s",
+                oid,
+                trigger,
+            )
+            return
+        candidate = decision_order if isinstance(decision_order, dict) else current
+        decision, reason = auto_koord.needs_auto_koord(
+            candidate,
+            flag_enabled=True,
+        )
+        if not decision:
+            _log.debug(
+                "AUTO_KOORD skip oid=%s trigger=%s reason=%s",
+                oid,
+                trigger,
+                reason,
+            )
+            return
+        if not claim_initial_auto_koord_attempt(
+            oid,
+            trigger=trigger,
+            decision_reason=reason,
+        ):
+            _log.debug(
+                "AUTO_KOORD initial attempt already claimed oid=%s trigger=%s",
+                oid,
+                trigger,
+            )
+            return
+
+        _log.info(
+            "AUTO_KOORD trigger oid=%s trigger=%s reason=%s",
+            oid,
+            trigger,
+            reason,
+        )
+        result = auto_koord.perform_auto_koord(
+            order_id=oid,
+            fetch_details_fn=fetch_details_fn,
+        )
+        auto_koord.emit_event_log(oid, current, result)
+        if C.flag("AUTO_KOORD_TELEGRAM_INFO_ENABLED", default=False):
+            message = auto_koord.make_telegram_info_message(current, result)
+            auto_koord.send_telegram_info(message)
+        if result.get("success") or result.get("skipped"):
+            stats["auto_koord_handled"] = (
+                stats.get("auto_koord_handled", 0) + 1
+            )
+        else:
+            stats["auto_koord_failed"] = (
+                stats.get("auto_koord_failed", 0) + 1
+            )
+    except Exception as exc:  # noqa: BLE001 — hook must never kill watcher
+        _log.warning(
+            "AUTO_KOORD hook fail oid=%s trigger=%s (non-blocking): %s: %s",
+            oid,
+            trigger,
+            type(exc).__name__,
+            exc,
+        )
+
+
 def _claim_forced_time_event(
     order_id: str,
     event: dict,
@@ -3213,6 +3303,12 @@ def _diff_and_emit(
             stats["initial_time_contract_recovered"] = (
                 stats.get("initial_time_contract_recovered", 0) + 1
             )
+            _trigger_initial_auto_koord_once(
+                str(_pending_oid),
+                trigger="initial_time_contract_recovered",
+                stats=stats,
+                fetch_details_fn=lambda z: fetch_order_details(z, csrf),
+            )
             continue
         _pending_initial_blocked_ids.add(str(_pending_oid))
         stats["errors"] += 1
@@ -3353,30 +3449,16 @@ def _diff_and_emit(
         if result.event_created and result.state_ready:
             _log.info(f"NEW {zid} {norm['order_type']} {norm['restaurant']} pickup={norm['pickup_at_warsaw']}")
 
-            # TASK 4 (2026-05-04): Auto-KOORD on NEW_ORDER dla czasówek.
-            # Defensive: try/except, NIGDY crash panel_watcher. Flag-gated default False.
-            try:
-                from dispatch_v2 import auto_koord, common as _C
-                if _C.flag("AUTO_KOORD_ON_NEW_ORDER_ENABLED", default=False):
-                    decision, reason = auto_koord.needs_auto_koord(raw, flag_enabled=True)
-                    if decision:
-                        _log.info(f"AUTO_KOORD trigger oid={zid} reason={reason}")
-                        ak_result = auto_koord.perform_auto_koord(
-                            order_id=zid,
-                            fetch_details_fn=lambda z: fetch_order_details(z, csrf),
-                        )
-                        auto_koord.emit_event_log(zid, norm, ak_result)
-                        if _C.flag("AUTO_KOORD_TELEGRAM_INFO_ENABLED", default=False):
-                            msg = auto_koord.make_telegram_info_message(norm, ak_result)
-                            auto_koord.send_telegram_info(msg)
-                        if ak_result.get("success") or ak_result.get("skipped"):
-                            stats["auto_koord_handled"] = stats.get("auto_koord_handled", 0) + 1
-                        else:
-                            stats["auto_koord_failed"] = stats.get("auto_koord_failed", 0) + 1
-                    else:
-                        _log.debug(f"AUTO_KOORD skip oid={zid} reason={reason}")
-            except Exception as _ake:
-                _log.warning(f"AUTO_KOORD hook fail oid={zid} (non-blocking): {type(_ake).__name__}: {_ake}")
+        # Jeden kanoniczny trigger dla immediate i recovered completion.
+        # Idempotencja nalezy do trwalego claimu zlecenia, nie do jednorazowego
+        # event_created, ktory przy FA=ON poprzedza domkniecie kontraktu czasu.
+        _trigger_initial_auto_koord_once(
+            zid,
+            trigger="new_order_time_contract_ready",
+            stats=stats,
+            fetch_details_fn=lambda z: fetch_order_details(z, csrf),
+            decision_order=raw,
+        )
 
         # Jesli nowe i juz przypisane do kuriera od razu - emit ASSIGNED
         if norm["id_kurier"] and not norm["is_koordynator"]:

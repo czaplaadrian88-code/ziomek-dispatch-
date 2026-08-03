@@ -1065,6 +1065,10 @@ def test_production_ast_has_one_provenance_writer_and_one_state_file_funnel():
         assert actual[field] == Counter(expected), field
     assert guarded_state_writers == Counter(
         {
+            (
+                Path("state_machine.py"),
+                "claim_initial_auto_koord_attempt",
+            ): 1,
                 (Path("state_machine.py"), "upsert_order"): 3,
             (Path("state_machine.py"), "touch_check_cursor"): 1,
             (Path("state_machine.py"), "delete_order"): 1,
