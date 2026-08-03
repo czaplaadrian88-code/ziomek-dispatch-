@@ -436,6 +436,7 @@ def test_v6_queue_and_durable_boundary_bind_one_policy_without_live_retry():
     assert "rutcom_forward_authority_enabled=forward_enabled" in boundary
     assert "or claim_authorized" not in boundary
     assert "claimed_receipt_policy_off" in state
+    assert "_COORDINATOR_RECEIPT_MAX_AGE" not in authority
     assert flag_reader.index("if durable_authorized:") < flag_reader.index(
         'flag("ENABLE_CZASOWKA_CK_PASSIVE_GUARD", True)'
     )
@@ -523,6 +524,45 @@ def test_coordinator_queue_has_immutable_head_successor_and_safe_legacy_drain():
     assert "coordinator time queue fenced for legacy code rollback" in queue
     assert "drainable = {" in queue
     assert "and receipt.get(\"claim\") is not None" in queue
+    assert "def _receipt_ready(" in queue
+    assert "def _fresh_receipt(" not in queue
+    assert "projection[oid] = projection_now.isoformat()" in queue
+
+
+def test_raw_coordinator_claim_gate_precedes_every_time_cas_and_writer():
+    state = _source("state_machine.py")
+    tree = ast.parse(state)
+    functions = {
+        node.name: ast.get_source_segment(state, node) or ""
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    }
+    pickup_status = functions["_pickup_time_event_status"]
+    event_oracle = functions["event_effect_status"]
+    state_writer = functions["update_from_event"]
+
+    assert state.count("_legacy_time_claim_gate(event)") == 4
+    assert pickup_status.index("_legacy_time_claim_gate(event)") < (
+        pickup_status.index("time_event_cas_status(")
+    )
+    ck_oracle = event_oracle.split(
+        'if etype == "CZAS_KURIERA_UPDATED":', 1
+    )[1].split('if etype == "PICKUP_TIME_UPDATED":', 1)[0]
+    assert ck_oracle.index("_legacy_time_claim_gate(event)") < (
+        ck_oracle.index("time_event_cas_status(")
+    )
+    ck_writer = state_writer.split(
+        'if etype == "CZAS_KURIERA_UPDATED":', 1
+    )[1].split('if etype == "PICKUP_TIME_UPDATED":', 1)[0]
+    pickup_writer = state_writer.split(
+        'if etype == "PICKUP_TIME_UPDATED":', 1
+    )[1]
+    assert ck_writer.index("_legacy_time_claim_gate(event)") < (
+        ck_writer.index("time_event_cas_status(")
+    )
+    assert pickup_writer.index("_legacy_time_claim_gate(event)") < (
+        pickup_writer.index("_pickup_time_event_status(event, existing)")
+    )
 
 
 def test_reserved_source_and_legacy_key_have_one_canonical_oracle():
@@ -599,7 +639,7 @@ def test_code_rollback_is_mechanically_gated_across_queue_and_outbox():
     assert 'and forward_fence["forward_fence_valid"]' in tool
     assert "def _cmd_fence_forward(" in tool
     assert "def _cmd_release_forward_fence(" in tool
-    assert "projection[oid] = str(base[ELIGIBLE_AT_FIELD])" in queue
+    assert "projection[oid] = projection_now.isoformat()" in queue
     assert '"safe_for_forward_deploy": safe_for_forward_deploy' in tool
     assert 'sub.add_parser(\n        "forward-status"' in tool
 

@@ -836,6 +836,77 @@ def test_claimed_receipt_survives_request_ttl_until_exact_ack(
     assert ctr.ack_receipts(replayable) == 1
 
 
+def test_unclaimed_receipt_survives_request_ttl_until_claim_and_exact_ack(
+    tmp_queue, monkeypatch
+):
+    """A valid click is durable work before claim too; age cannot delete it."""
+    t0 = datetime(2026, 6, 30, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(ctr, "_utc_now", lambda: t0)
+    assert ctr.enqueue(["8"], source="coordinator_panel") == 1
+    receipt = ctr.pending_with_receipts()["8"]
+
+    monkeypatch.setattr(
+        ctr,
+        "_utc_now",
+        lambda: t0 + timedelta(minutes=6),
+    )
+    pending = ctr.pending_with_receipts()
+
+    assert pending == {"8": receipt}
+    assert ctr.current_receipt("8") == receipt
+    assert ctr.verify_pending_receipt(receipt, order_id="8")
+    event = {
+        "event_type": "CZAS_KURIERA_UPDATED",
+        "order_id": "8",
+        "courier_id": "1",
+        "payload": {
+            "old_ck_iso": "2026-06-30T16:00:00+02:00",
+            "old_ck_hhmm": "16:00",
+            "new_ck_iso": "2026-06-30T15:40:00+02:00",
+            "new_ck_hhmm": "15:40",
+            "delta_min": -20.0,
+            "source": "coordinator_force",
+        },
+    }
+    claimed = ctr.claim_receipt(
+        receipt, order_id="8", event=event
+    )
+
+    assert claimed is not None
+    assert ctr.verify_claimed_event(event)
+    assert ctr.ack_receipts({"8": claimed}) == 1
+    assert ctr.current_receipt("8") is None
+
+
+def test_delayed_unclaimed_v6_receipt_keeps_click_policy_and_authority(
+    tmp_queue, monkeypatch
+):
+    """Queue membership, not wall-clock age, owns a still-unclaimed v6 click."""
+    from dispatch_v2 import state_machine as sm
+
+    _enable_coordinator_authority(sm, monkeypatch)
+    t0 = datetime(2026, 6, 30, 12, 0, tzinfo=timezone.utc)
+    monkeypatch.setattr(ctr, "_utc_now", lambda: t0)
+    assert ctr.enqueue(["8"], source="coordinator_panel") == 1
+    receipt = ctr.pending_with_receipts()["8"]
+
+    observed_at = t0 + timedelta(minutes=6)
+    monkeypatch.setattr(ctr, "_utc_now", lambda: observed_at)
+    assert ctr.pending_with_receipts() == {"8": receipt}
+    payload = _coordinator_payload(receipt, hhmm="15:40")
+    payload["observed_at"] = observed_at.isoformat()
+
+    resolution = sm.resolve_czasowka_ck_observation(
+        _coordinator_existing(), payload
+    )
+    claimed = ctr.current_receipt("8")
+
+    assert resolution.outcome.value == "apply"
+    assert resolution.reason == "coordinator_receipt"
+    assert claimed is not None and claimed.get("claim")
+    assert ctr.verify_claimed_event(resolution.event)
+
+
 def test_reclick_cannot_overwrite_claim_and_ack_promotes_successor(
     tmp_queue, monkeypatch
 ):
@@ -1018,6 +1089,67 @@ def test_legacy_rollback_fences_writers_backs_up_and_projects_pending_v4(
     assert ctr.release_legacy_rollback_fence() is True
     assert ctr.release_legacy_rollback_fence() is False
     assert ctr.enqueue(["9"], source="coordinator_panel") == 1
+
+
+def test_legacy_rollback_rebases_durable_old_v5_work_to_migration_time(
+    tmp_queue, persistent_tmpdir, monkeypatch
+):
+    """Pre-v4 scalar TTL must not erase work that the new queue keeps durable."""
+    clicked_at = datetime(2026, 6, 30, 10, 0, tzinfo=timezone.utc)
+    rollback_at = clicked_at + timedelta(minutes=30)
+    receipt = {
+        "schema": "coordinator_time_recheck.v5",
+        "request_id": "old-durable-v5",
+        "order_id": "8",
+        "requested_at": clicked_at.isoformat(),
+        "eligible_at": clicked_at.isoformat(),
+        "source": "coordinator_panel",
+        "continuation_depth": 0,
+    }
+    Path(tmp_queue).write_text(
+        json.dumps({"8": receipt}), encoding="utf-8"
+    )
+    monkeypatch.setattr(ctr, "_utc_now", lambda: rollback_at)
+    backup = persistent_tmpdir / "old-durable-v5.pre-v4.json"
+
+    ctr.prepare_legacy_rollback(str(backup))
+    projected = json.loads(Path(tmp_queue).read_text(encoding="utf-8"))
+
+    assert projected == {"8": rollback_at.isoformat()}
+    assert backup.read_text(encoding="utf-8") == json.dumps({"8": receipt})
+
+
+def test_legacy_rollback_never_rebases_future_receipt_into_ready_work(
+    tmp_queue, persistent_tmpdir, monkeypatch
+):
+    now = datetime(2026, 6, 30, 10, 0, tzinfo=timezone.utc)
+    eligible_at = now + timedelta(minutes=10)
+    receipt = {
+        "schema": "coordinator_time_recheck.v5",
+        "request_id": "future-v5",
+        "order_id": "8",
+        "requested_at": now.isoformat(),
+        "eligible_at": eligible_at.isoformat(),
+        "source": "coordinator_panel",
+        "continuation_depth": 0,
+    }
+    Path(tmp_queue).write_text(
+        json.dumps({"8": receipt}), encoding="utf-8"
+    )
+    monkeypatch.setattr(ctr, "_utc_now", lambda: now)
+    backup = persistent_tmpdir / "future-v5.pre-v4.json"
+
+    status = ctr.legacy_rollback_status()
+
+    assert status["safe_queue_projection"] is False
+    assert status["not_ready_records"] == 1
+    assert status["blockers"] == ["8:receipt_not_yet_eligible"]
+    with pytest.raises(RuntimeError, match="receipt_not_yet_eligible"):
+        ctr.prepare_legacy_rollback(str(backup))
+    assert not backup.exists()
+    assert json.loads(Path(tmp_queue).read_text(encoding="utf-8")) == {
+        "8": receipt
+    }
 
 
 def test_legacy_rollback_backup_failure_cannot_leave_prepared_fence(

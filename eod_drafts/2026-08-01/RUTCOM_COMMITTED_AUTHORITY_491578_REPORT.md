@@ -1,4 +1,4 @@
-# RUTCOM committed pickup authority — raport kandydata v25, 2026-08-02
+# RUTCOM committed pickup authority — raport kandydata v26, 2026-08-03
 
 ## Wynik
 
@@ -12,6 +12,65 @@ Rutcom. Granica transportu przed zapisem outboxa zamienia legalny CK na jeden
 kanoniczny `PICKUP_TIME_UPDATED`. Jeden handler state atomowo zapisuje pickup,
 CK, HH:MM, monotoniczną rewizję oraz provenance. Plan, scoring po potwierdzonym
 apply i aplikacja dziedziczą tę samą prawdę.
+
+## Co domknięto w v26
+
+Dwa blind review exact-byte v25 poprawnie zatrzymały live. Rollout verdict ma
+SHA-256 `2f49acc5bb02913a38ebeb95d480e3e4a035b9afac76f79c54cd8c6aade9e0d6`,
+a authority verdict
+`b577691081c584da284be93fac0c9e0ee7302c27e3d47efced1faf5cb46d6dd9`;
+oba zostały mechanicznie sprawdzone jako `CONFIRMED_DEFECT`. MAIN niezależnie
+odtworzył wszystkie findings i prześledził ich wspólnych konsumentów:
+
+1. pełna wersjonowana koperta raw `coordinator_force` CK/pickup mogła przejść
+   CAS bez dokładnego claimu kolejki;
+2. wersjonowany pickup CAS omijał lifecycle fence i przy `ON` mógł zmienić czas
+   elastyka już po odbiorze;
+3. poprawny, jeszcze nieclaimowany receipt znikał po pięciu minutach, gdy
+   watcher stał albo zamówienia chwilowo nie było na tablicy;
+4. niezależny pięciominutowy zegar authority tłumił starszy receipt nawet wtedy,
+   gdy kolejka nadal dowodziła ważnego kliknięcia;
+5. rollback do pre-v4 projektował stary `eligible_at` do scalara z TTL, więc
+   legalna trwała praca mogła zniknąć zaraz po zmianie czytnika;
+6. przyszły/not-ready receipt mógł być przy rollbacku przepisany jako gotowy.
+
+V26 naprawia te przyczyny w istniejących ownerach. Jeden
+`_legacy_time_claim_gate` jest wspólną bramką obu raw typów dla terminalnego
+oracle i bezpośrednio przed writerem state. Brak claimu daje `superseded`;
+nieczytelna kolejka daje retryable `pending`, ale handler nigdy nie zapisuje.
+`time_event_cas_status` ma jeden lifecycle fence niezależnie od wersji koperty.
+Exact live queue membership jest jedynym trwałym lease'em receiptu v4/v5/v6 od
+enqueue do claim/ACK, dlatego policy owner nie ma już konkurencyjnego limitu
+wieku. Czas nadal blokuje zdarzenia z przyszłości. `pending_with_receipts`
+usuwa przez TTL wyłącznie historyczny scalar bez `request_id`; poprawne stare,
+future i corrupt receipts pozostają fail-closed jako audyt. Rollback po exact
+backupie rebazuje gotową trwałą pracę na czas migracji do starego czytnika, a
+future receipt jawnie blokuje operację.
+
+Negatywne oracles odtworzyły sześć klas, po fixie focused ma 15/15, a szeroki
+klaster dotkniętych ścieżek 257/257. Sześć mutacji ponownie czerwieniło testy:
+4F po usunięciu claim gate, 1F/1P po przywróceniu lifecycle bypassu, 3F po
+przywróceniu TTL kolejki, 1F po przywróceniu TTL authority, 1F po cofnięciu
+rollback rebase i 1F po usunięciu future blockera. Exact restore przywrócił
+identyczne SHA-256. Pełna hermetyczna regresja: 6773 passed, 74 skipped,
+8 xfailed, 153 warnings, 0 failed w 463,30 s; profil non-pass jest identyczny z
+v25, a delta to +12 testów. `py_compile`, import, `git diff --check`, lifecycle
+557/557 i automatyczne sentinele entropii są zielone. Produkcja, procesy i flaga
+pozostają nietknięte/OFF. Następna bramka to dwa świeże review v26 na jednym
+zamrożonym exact-byte commicie.
+
+### Mapa kompletności v26
+
+| Miejsce | Rola | Dotknięte | Dowód |
+|---|---|---|---|
+| `state_machine._legacy_time_claim_gate` i oba handlery czasu | transport authority / state writer | TAK | jeden fail-closed exact-claim gate; missing/read-error dla CK i pickup; oracle oraz writer parity |
+| `committed_pickup_authority.time_event_cas_status` | policy/CAS owner | TAK | wspólny lifecycle fence dla versioned i unversioned pickup; OFF/ON post-pickup oracle |
+| `committed_pickup_authority._valid_coordinator_receipt` | authority lease consumer | TAK | queue membership jest lease'em; tylko causal future-skew fence, bez drugiego TTL |
+| `coordinator_time_recheck` enqueue/pending/verify/claim/ACK | trwały queue owner | TAK | v4/v5/v6 nie wygasa wiekiem; legacy scalar zachowuje TTL; stale/future/corrupt retention i exact ACK oracles |
+| `coordinator_time_recheck` code rollback projection | rollback writer/gate | TAK | exact backup + rebase starej gotowej pracy; future receipt blokuje zamiast nabyć gotowość |
+| watcher/apply/outbox/recovery | konsumenci exact claimu | N-D | używają wspólnej kolejki i state gate; brak drugiej polityki, schematu lub writera |
+| plan/scoring/serializer/apka | konsumenci state | N-D | brak render override; dziedziczą atomowy kanoniczny pickup/CK |
+| testy/ratchet/mutation | bramka antyregresji | TAK | 15 focused, 257 broad, sześć mutation kills, pełna suita 6773/6773 |
 
 ## Co domknięto w v25
 
@@ -915,9 +974,9 @@ ACK, post-pickup/stale-generation/revision i spójności pickup↔CK.
 
 ## Identyfikacja kandydata
 
-- Wersja: v24, po pełnej regresji, przed dwoma świeżymi review exact-byte
+- Wersja: v26, po pełnej regresji, przed dwoma świeżymi review exact-byte
 - Branch: `fix/rutcom-committed-provenance-v20-20260802`
 - Worktree: `/root/worktrees/dispatch_v2/active/20260802-rutcom-v17-integration-pkgroot/dispatch_v2`
-- Base przed v24: `a19af05b54adb15faa6fab8946e14955fcd4d2c7`
+- Poprzedni odrzucony kandydat v25: `7e8e76b48b26605fb5ffdc902aefccd9bd06a12f`
 - Zintegrowany produkcyjny master: `64f773ddc`
 - Produkcja: bez zmian; zero deployu, restartu, migracji i flipu.

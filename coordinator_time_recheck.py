@@ -10,12 +10,13 @@ osłabiania automatu. Kliknięcie = dyskryminator „to nie śmieć, to decyzja"
 
 Przepływ: panel (subprocess w venv Ziomka, jak courier_block) → `enqueue(oids)` →
 panel_watcher raz na tick → `pending_with_receipts()` → re-check z trwałym
-receiptem v5 → jednorazowy claim dokładnego eventu → `ack_receipts()` dopiero
+receiptem v6 → jednorazowy claim dokładnego eventu → `ack_receipts()` dopiero
 po udanym fetch/apply. Claim jest niezmiennym headem per OID. Ponowny klik
 podczas jego obsługi tworzy coalesced successor, który staje się headem dopiero
 po exact ACK poprzednika. Sam bool ``deliberate`` nie jest autorytetem dla
-czasówki. Atomic + flock + TTL; crash po odczycie nie gubi intencji. Z3: jedno
-źródło prawdy zapisu.
+czasówki. Kanoniczny receipt jest trwały aż do claim/exact ACK; TTL dotyczy
+wyłącznie przed-receiptowego legacy timestampu. Atomic + flock; crash po
+odczycie nie gubi intencji. Z3: jedno źródło prawdy zapisu.
 """
 from __future__ import annotations
 
@@ -42,7 +43,9 @@ from dispatch_v2.committed_pickup_authority import (
 
 QUEUE_PATH = "/root/.openclaw/workspace/dispatch_state/coordinator_time_recheck.json"
 LOCK_PATH = QUEUE_PATH + ".lock"
-DEFAULT_TTL_MIN = 5.0  # klik starszy niż to = „przeterminowany" (watcher mógł stać) → ignoruj
+# Tylko historyczny ``oid -> timestamp`` nie ma request_id ani exact ACK i
+# zachowuje dawny TTL. Kanoniczne v4/v5/v6 receipts nigdy nie wygasają wiekiem.
+DEFAULT_TTL_MIN = 5.0
 RECEIPT_SCHEMA = "coordinator_time_recheck.v6"
 PRE_POLICY_RECEIPT_SCHEMA = "coordinator_time_recheck.v5"
 LEGACY_RECEIPT_SCHEMA = "coordinator_time_recheck.v4"
@@ -353,13 +356,13 @@ def _successor_record(
     return True, _json_copy(dict(raw))
 
 
-def _fresh_receipt(
+def _receipt_ready(
     receipt: object,
     *,
     order_id: str,
     now: datetime,
-    ttl_min: float = DEFAULT_TTL_MIN,
 ) -> bool:
+    """A structurally valid durable receipt is ready unless clocked in future."""
     base = receipt_base(receipt)
     if base is None or str(base["order_id"]) != str(order_id):
         return False
@@ -369,8 +372,7 @@ def _fresh_receipt(
     if clocks is None:
         return False
     _requested_at, eligible_at = clocks
-    age = now - eligible_at
-    return -_FUTURE_SKEW <= age <= timedelta(minutes=ttl_min)
+    return eligible_at <= now + _FUTURE_SKEW
 
 
 def _event_sha256(event: Mapping[str, object]) -> str:
@@ -440,9 +442,8 @@ def _claimed_event(
 ) -> Optional[dict]:
     """Zweryfikuj pełne, nieprzeterminowujące się zobowiązanie claim→event.
 
-    TTL ogranicza czas na *utworzenie* claimu. Po atomowym związaniu kliknięcia
-    z dokładnym eventem rekord żyje aż do exact ACK; inaczej crash dłuższy niż
-    pięć minut bezpowrotnie kasowałby już autoryzowaną intencję.
+    Kanoniczny rekord żyje od enqueue aż do exact ACK. Claim atomowo wiąże go z
+    eventem, ale nie jest momentem, od którego dopiero zaczyna się trwałość.
     """
     if not isinstance(record, Mapping):
         return None
@@ -831,7 +832,7 @@ def verify_pending_receipt(
     order_id: str,
     now: Optional[datetime] = None,
 ) -> bool:
-    """Dowiedź, że receipt jest świeżym, niezużytym rekordem kanonicznej kolejki."""
+    """Dowiedź, że receipt jest gotowym, niezużytym rekordem kolejki."""
     if not isinstance(receipt, Mapping):
         return False
     now = now or _utc_now()
@@ -843,7 +844,7 @@ def verify_pending_receipt(
             and current.get("claim") is None
             and SUCCESSOR_FIELD not in current
             and _valid_unclaimed_receipt_shape(current, order_id=str(order_id))
-            and _fresh_receipt(current, order_id=str(order_id), now=now)
+            and _receipt_ready(current, order_id=str(order_id), now=now)
         )
 
 
@@ -852,7 +853,7 @@ def current_receipt(
     *,
     now: Optional[datetime] = None,
 ) -> Optional[dict]:
-    """Zwróć świeży bieżący rekord (unclaimed lub claimed) jednego OID."""
+    """Zwróć gotowy bieżący rekord (unclaimed lub claimed) jednego OID."""
     now = now or _utc_now()
     oid = str(order_id)
     with _lockfile():
@@ -861,7 +862,7 @@ def current_receipt(
             _claimed_event(current, order_id=oid) is not None
             or (
                 _valid_unclaimed_receipt_shape(current, order_id=oid)
-                and _fresh_receipt(current, order_id=oid, now=now)
+                and _receipt_ready(current, order_id=oid, now=now)
             )
         ):
             return _json_copy(current)
@@ -891,7 +892,7 @@ def upgrade_legacy_receipt(
                 _claimed_event(current, order_id=oid) is not None
                 or (
                     _valid_unclaimed_receipt_shape(current, order_id=oid)
-                    and _fresh_receipt(current, order_id=oid, now=now)
+                    and _receipt_ready(current, order_id=oid, now=now)
                 )
             ):
                 return _json_copy(current)
@@ -969,7 +970,7 @@ def claim_receipt(
             return None
         if not _valid_unclaimed_receipt_shape(current, order_id=oid):
             return None
-        if not _fresh_receipt(current, order_id=oid, now=now):
+        if not _receipt_ready(current, order_id=oid, now=now):
             return None
         if dict(current) != dict(receipt):
             return None
@@ -1088,12 +1089,13 @@ def verify_claimed_event(
 def pending_with_receipts(
     ttl_min: float = DEFAULT_TTL_MIN,
 ) -> dict[str, dict | None]:
-    """Zwróć świeże ``oid -> receipt`` bez kasowania intencji.
+    """Zwróć gotowe ``oid -> receipt`` bez kasowania kanonicznej intencji.
 
     Legacy wpis ``oid -> timestamp`` nadal wymusza kosztowny fetch i zachowuje
     kompatybilność elastyka, ale zwraca ``None``. Nie może więc udawać dowodu
-    jawnej zmiany committed czasu czasowki. Przeterminowane/uszkodzone wpisy sa
-    usuwane; świeże znikaja wyłącznie przez jawny CAS ``ack_receipts``.
+    jawnej zmiany committed czasu czasowki. Tylko ten legacy wpis wygasa przez
+    TTL. Poprawny v4/v5/v6 receipt zostaje do claim/exact ACK; uszkodzony lub
+    przyszły zostaje jako fail-closed dowód operatorski, nigdy cicho skasowany.
     """
     now = _utc_now()
     cutoff = now - timedelta(minutes=ttl_min)
@@ -1134,14 +1136,13 @@ def pending_with_receipts(
                     # request. Zachowaj ją dla operatora i rollback audit.
                     retained[str(oid)] = raw_receipt
                     continue
-                if _fresh_receipt(
+                retained[str(oid)] = raw_receipt
+                if _receipt_ready(
                     receipt,
                     order_id=str(oid),
                     now=now,
-                    ttl_min=ttl_min,
                 ) and SUCCESSOR_FIELD not in receipt:
                     fresh[str(oid)] = _json_copy(receipt)
-                    retained[str(oid)] = raw_receipt
                 continue
             try:
                 t = datetime.fromisoformat(str(ts))
@@ -1296,8 +1297,13 @@ def drain(ttl_min: float = DEFAULT_TTL_MIN) -> set:
     return set(drain_with_receipts(ttl_min=ttl_min))
 
 
-def _legacy_rollback_projection(data: dict) -> tuple[dict, dict]:
+def _legacy_rollback_projection(
+    data: dict,
+    *,
+    projection_now: Optional[datetime] = None,
+) -> tuple[dict, dict]:
     """Pure v4/legacy queue audit and projection understood by pre-v4 code."""
+    projection_now = projection_now or _utc_now()
     projection: dict[str, str] = {}
     blockers: list[str] = []
     counts = {
@@ -1307,6 +1313,7 @@ def _legacy_rollback_projection(data: dict) -> tuple[dict, dict]:
         "claimed_records": 0,
         "successor_records": 0,
         "invalid_records": 0,
+        "not_ready_records": 0,
         "policy_bound_records": 0,
     }
     for oid_raw, raw in data.items():
@@ -1351,13 +1358,16 @@ def _legacy_rollback_projection(data: dict) -> tuple[dict, dict]:
             counts["invalid_records"] += 1
             blockers.append(f"{oid}:invalid_v4_timestamp")
             continue
+        if not _receipt_ready(raw, order_id=oid, now=projection_now):
+            counts["not_ready_records"] += 1
+            blockers.append(f"{oid}:receipt_not_yet_eligible")
+            continue
         counts["pending_v4_records"] += 1
-        # Pre-v4 ma jeden zegar TTL. Dla v5 musi on zachować moment, od
-        # którego rekord faktycznie stał się wykonywalny. ``requested_at``
-        # pozostaje w exact backupie jako audit kliknięcia, ale projected
-        # scalar bierze ``eligible_at``; inaczej successor czekający za
-        # nieprzeterminowanym claimem znika natychmiast po code rollbacku.
-        projection[oid] = str(base[ELIGIBLE_AT_FIELD])
+        # Nowy receipt jest trwały niezależnie od wieku, a pre-v4 scalar ma TTL.
+        # Exact backup zachowuje click/eligibility audit; migracja rebazuje tylko
+        # legacy zegar wykonania, aby code rollback nie skasował oczekującej
+        # intencji natychmiast po przełączeniu czytnika.
+        projection[oid] = projection_now.isoformat()
 
     status = {
         **counts,
@@ -1491,7 +1501,10 @@ def prepare_legacy_rollback(backup_path: str) -> dict:
         if os.path.exists(_forward_fence_path()):
             raise RuntimeError("forward rollout fence is already active")
         data = _load()
-        projection, status = _legacy_rollback_projection(data)
+        projection_now = _utc_now()
+        projection, status = _legacy_rollback_projection(
+            data, projection_now=projection_now
+        )
         if not status["safe_queue_projection"]:
             raise RuntimeError(
                 "legacy rollback blocked by queue: "
@@ -1520,7 +1533,9 @@ def prepare_legacy_rollback(backup_path: str) -> dict:
             # queue bytes before the exception leaves this lock.
             projection_started = True
             _save(projection)
-            _projection, after = _legacy_rollback_projection(_load())
+            _projection, after = _legacy_rollback_projection(
+                _load(), projection_now=projection_now
+            )
             if not after["safe_queue_projection"] or after["pending_v4_records"]:
                 raise RuntimeError("legacy queue projection postcondition failed")
             projected_bytes = queue_path.read_bytes()

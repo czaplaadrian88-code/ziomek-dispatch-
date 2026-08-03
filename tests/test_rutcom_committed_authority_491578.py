@@ -10,6 +10,7 @@ import json
 import sqlite3
 import threading
 from datetime import datetime
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -3329,13 +3330,28 @@ def test_committed_durable_identity_cannot_degrade_after_payload_stripping():
     assert sm.event_effect_status(event, current) == "superseded"
 
 
-def test_valid_elastic_coordinator_pickup_keeps_legacy_apply_contract(
-    tmp_path, monkeypatch
+@pytest.mark.parametrize("receipt_forward_enabled", [False, True])
+def test_valid_claimed_elastic_coordinator_pickup_keeps_apply_contract(
+    tmp_path, monkeypatch, receipt_forward_enabled
 ):
-    """Reserved source is contextual: deliberate elastic pickup stays valid."""
+    """Reserved source stays valid for active elastic work after exact claim."""
     from dispatch_v2 import panel_watcher as pw
     from dispatch_v2 import state_machine as sm
+    from dispatch_v2.committed_pickup_authority import (
+        TIME_EVENT_CAS_SCHEMA_FIELD,
+    )
 
+    ctr = _isolate_coordinator_queue(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        ctr,
+        "_coordinator_policy_snapshot",
+        lambda: CommittedPickupPolicySnapshot(
+            producer="coordinator_queue",
+            manual_passthrough_enabled=True,
+            rutcom_forward_authority_enabled=receipt_forward_enabled,
+            passive_guard_enabled=True,
+        ),
+    )
     current = {
         "order_id": "elastic-491578",
         "status": "assigned",
@@ -3347,6 +3363,8 @@ def test_valid_elastic_coordinator_pickup_keeps_legacy_apply_contract(
         "czas_kuriera_hhmm": "19:16",
         "assignment_event_id": "elastic-assignment",
     }
+    assert ctr.enqueue(["elastic-491578"], source="coordinator_panel") == 1
+    receipt = ctr.pending_with_receipts()["elastic-491578"]
     event = pw._diff_pickup_time(
         current,
         {
@@ -3355,11 +3373,21 @@ def test_valid_elastic_coordinator_pickup_keeps_legacy_apply_contract(
         },
         oid="elastic-491578",
         deliberate=True,
+        authority_receipt=receipt,
+        policy_snapshot=_panel_policy(forward=not receipt_forward_enabled),
     )
 
     assert event is not None
     assert event["payload"]["source"] == "coordinator_force"
     assert "committed_authority" not in event["payload"]
+    assert (
+        TIME_EVENT_CAS_SCHEMA_FIELD in event["payload"]
+    ) is receipt_forward_enabled
+    claimed = ctr.claim_receipt(
+        receipt, order_id="elastic-491578", event=event
+    )
+    assert claimed is not None
+    assert ctr.verify_claimed_event(event)
     assert sm.event_effect_status(event, current) == "pending"
 
     state_path = tmp_path / "orders_state.json"
@@ -5796,3 +5824,156 @@ def test_raw_coordinator_claim_does_not_gain_unclaimed_policy_metadata(
 
     metadata = captured.get("state_event_metadata") or {}
     assert COMMITTED_TIME_POLICY_SNAPSHOT_FIELD not in metadata
+
+
+@pytest.mark.parametrize(
+    "event_type", ["CZAS_KURIERA_UPDATED", "PICKUP_TIME_UPDATED"]
+)
+@pytest.mark.parametrize(
+    ("queue_state", "expected_effect"),
+    [("missing", "superseded"), ("unreadable", "pending")],
+)
+def test_versioned_raw_coordinator_time_event_requires_exact_queue_claim(
+    tmp_path, monkeypatch, event_type, queue_state, expected_effect
+):
+    """A causal CAS envelope is not a substitute for the exact click claim."""
+    from dispatch_v2 import panel_watcher as pw
+    from dispatch_v2 import state_machine as sm
+    from dispatch_v2.committed_pickup_authority import (
+        TIME_EVENT_CAS_SCHEMA,
+        TIME_EVENT_CAS_SCHEMA_FIELD,
+    )
+
+    ctr = _isolate_coordinator_queue(tmp_path, monkeypatch)
+    _seed_state_491578(sm, tmp_path, monkeypatch)
+    sm.upsert_order(
+        "491578",
+        {
+            "order_type": "elastic",
+            "prep_minutes": 20,
+            "assignment_event_id": "assign-elastic-1",
+            "v319g_ck_change_count": 0,
+        },
+        event="TEST_ELASTIC",
+    )
+    before = sm.get_order("491578")
+    policy = _panel_policy(forward=True)
+    if event_type == "CZAS_KURIERA_UPDATED":
+        event = pw._diff_czas_kuriera(
+            before,
+            {
+                "czas_kuriera_warsaw": "2026-08-01T19:30:00+02:00",
+                "czas_kuriera_hhmm": "19:30",
+            },
+            oid="491578",
+            deliberate=True,
+            authority_receipt=None,
+            policy_snapshot=policy,
+        )
+        protected_fields = (
+            "czas_kuriera_warsaw",
+            "czas_kuriera_hhmm",
+            "v319g_ck_change_count",
+        )
+    else:
+        event = pw._diff_pickup_time(
+            before,
+            {
+                "pickup_at_warsaw": "2026-08-01T19:30:00+02:00",
+                "prep_minutes": 20,
+            },
+            oid="491578",
+            deliberate=True,
+            authority_receipt=None,
+            policy_snapshot=policy,
+        )
+        protected_fields = ("pickup_at_warsaw", "pickup_time_revision")
+
+    assert event is not None
+    assert event["payload"][TIME_EVENT_CAS_SCHEMA_FIELD] == TIME_EVENT_CAS_SCHEMA
+    if queue_state == "unreadable":
+        Path(ctr.QUEUE_PATH).write_text("{", encoding="utf-8")
+        with pytest.raises(RuntimeError, match="queue unreadable"):
+            ctr.verify_claimed_event(event)
+    else:
+        assert ctr.verify_claimed_event(event) is False
+    effect = sm.event_effect_status(event)
+    result = sm.update_from_event(event)
+    after = sm.get_order("491578")
+
+    assert effect == expected_effect
+    assert result is None
+    assert {field: after.get(field) for field in protected_fields} == {
+        field: before.get(field) for field in protected_fields
+    }
+
+
+@pytest.mark.parametrize("receipt_forward_enabled", [False, True])
+def test_versioned_coordinator_pickup_respects_active_lifecycle_fence(
+    tmp_path, monkeypatch, receipt_forward_enabled
+):
+    """Forward rollout cannot make an elastic pickup mutable after collection."""
+    from dispatch_v2 import panel_watcher as pw
+    from dispatch_v2 import state_machine as sm
+    from dispatch_v2.committed_pickup_authority import (
+        TIME_EVENT_CAS_SCHEMA_FIELD,
+    )
+
+    ctr = _isolate_coordinator_queue(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        ctr,
+        "_coordinator_policy_snapshot",
+        lambda: CommittedPickupPolicySnapshot(
+            producer="coordinator_queue",
+            manual_passthrough_enabled=True,
+            rutcom_forward_authority_enabled=receipt_forward_enabled,
+            passive_guard_enabled=True,
+        ),
+    )
+    _seed_state_491578(sm, tmp_path, monkeypatch)
+    sm.upsert_order(
+        "491578",
+        {
+            "status": "picked_up",
+            "picked_up_at": "2026-08-01T19:17:00+02:00",
+            "order_type": "elastic",
+            "prep_minutes": 20,
+            "assignment_event_id": "assign-elastic-1",
+        },
+        event="TEST_PICKED_UP_ELASTIC",
+    )
+    before = sm.get_order("491578")
+    assert ctr.enqueue(["491578"], source="coordinator_panel") == 1
+    receipt = ctr.pending_with_receipts()["491578"]
+    event = pw._diff_pickup_time(
+        before,
+        {
+            "pickup_at_warsaw": "2026-08-01T19:30:00+02:00",
+            "prep_minutes": 20,
+            "status_id": 5,
+            "observed_at": receipt["eligible_at"],
+        },
+        oid="491578",
+        deliberate=True,
+        authority_receipt=receipt,
+        # Deliberately opposite: a v6 click owns policy, not this later tick.
+        policy_snapshot=_panel_policy(forward=not receipt_forward_enabled),
+    )
+
+    assert event is not None
+    assert (
+        TIME_EVENT_CAS_SCHEMA_FIELD in event["payload"]
+    ) is receipt_forward_enabled
+    claimed = ctr.claim_receipt(
+        receipt, order_id="491578", event=event
+    )
+    assert claimed is not None
+    assert ctr.verify_claimed_event(event)
+    effect = sm.event_effect_status(event)
+    result = sm.update_from_event(event)
+    after = sm.get_order("491578")
+
+    assert effect == "superseded"
+    assert result is None
+    assert after["pickup_at_warsaw"] == before["pickup_at_warsaw"]
+    assert after["pickup_time_revision"] == before["pickup_time_revision"]

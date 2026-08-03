@@ -1,9 +1,19 @@
 # ZIOMEK AI DISPATCHER - BACKLOG ROZWOJU
 
-> **KANDYDAT v25 2026-08-02 — RUTCOM COMMITTED PICKUP AUTHORITY / OID 491578:**
+> **KANDYDAT v26 2026-08-03 — RUTCOM COMMITTED PICKUP AUTHORITY / OID 491578:**
 > root cause potwierdzony: guard pasywny 52 razy stłumił zmianę umówionego
 > czasu Rutcom 19:16→19:21, przez co aplikacja poprawnie pokazywała stary stan
 > 19:16. Jeden resolver autorytetu zastępuje rozproszoną politykę.
+> V26 po dwóch `CONFIRMED_DEFECT` v25 ustanawia dokładny claim kolejki jako
+> wspólną bramkę każdego raw coordinator CK/pickup przed CAS i zapisem. Pełna
+> wersjonowana koperta nie zastępuje claimu, a pickup ma ten sam lifecycle fence
+> przy `OFF` i `ON`. Exact queue membership jest jednym trwałym lease'em v4/v5/v6
+> od enqueue do claim/ACK; pięciominutowy TTL zostaje tylko dla starego scalara
+> bez `request_id`. Rollback robi exact backup, rebazuje starą gotową pracę na
+> czas migracji i blokuje future receipt. Sześć mutation kills, focused 15/15,
+> broad 257/257 i pełna regresja `6773P/0F/74S/8X/153W` w 463,30 s są zielone.
+> Produkcja nadal bez zmian/OFF; dwa świeże `CLEAN` exact-byte v26 pozostają
+> przed live.
 > V25 po dwóch `CONFIRMED_DEFECT` v24 usuwa cztery kolejne przyczyny u
 > istniejących ownerów. Receipt koordynatora nie zmienia klasy biznesowej:
 > prawdziwy elastyk wraca do jedynego legacy writera przy `OFF` i `ON`. Jeden

@@ -1251,6 +1251,22 @@ def _legacy_time_claim_status(event: dict) -> str:
         return "read_error"
 
 
+def _legacy_time_claim_gate(event: dict) -> tuple[str, Optional[str]]:
+    """One fail-closed gate before every non-authority coordinator time CAS.
+
+    The exact queue claim is transport authority for both historical time event
+    types.  A complete causal envelope cannot replace it.  A missing claim is
+    terminally stale; an unreadable queue remains retryable but must never be
+    interpreted by a state handler as permission to write.
+    """
+    claim_status = _legacy_time_claim_status(event)
+    if claim_status == "read_error":
+        return claim_status, "pending"
+    if claim_status == "unverified":
+        return claim_status, "superseded"
+    return claim_status, None
+
+
 def _pickup_time_event_status(event: dict, current: dict) -> str:
     """Jeden oracle apply/CAS/generacji dla kazdego PICKUP_TIME_UPDATED."""
     payload = event.get("payload") or {}
@@ -1291,12 +1307,16 @@ def _pickup_time_event_status(event: dict, current: dict) -> str:
             # czasówki. Ten sam source jest legalnym deliberate legacy eventem
             # elastyka i nie może być klasyfikowany bez kontekstu zamówienia.
             return "superseded"
-        cas_status = time_event_cas_status(current, event)
+        legacy_claim, claim_effect = _legacy_time_claim_gate(event)
+        if claim_effect is not None:
+            return claim_effect
+        cas_status = time_event_cas_status(
+            current,
+            event,
+            allow_unversioned_ck_claim=(legacy_claim == "verified"),
+        )
         if cas_status is not None:
             return cas_status
-        legacy_claim = _legacy_time_claim_status(event)
-        if legacy_claim == "read_error":
-            return "pending"
         if legacy_claim == "verified":
             expected_revision = normalize_pickup_revision(
                 payload.get("pickup_time_revision_at_observation")
@@ -1663,9 +1683,9 @@ def event_effect_status(
             )
         ):
             return "superseded"
-        legacy_claim = _legacy_time_claim_status(event)
-        if legacy_claim == "read_error":
-            return "pending"
+        legacy_claim, claim_effect = _legacy_time_claim_gate(event)
+        if claim_effect is not None:
+            return claim_effect
         cas_status = time_event_cas_status(
             current,
             event,
@@ -2485,8 +2505,8 @@ def update_from_event(
                 f"reason={_authority.reason} (skip persist)"
             )
             return None
-        legacy_claim = _legacy_time_claim_status(event)
-        if legacy_claim == "read_error":
+        legacy_claim, claim_effect = _legacy_time_claim_gate(event)
+        if claim_effect is not None:
             return None
         cas_status = time_event_cas_status(
             existing,
@@ -2582,6 +2602,13 @@ def update_from_event(
             )
             return None
         committed_authority = payload.get("committed_authority")
+        # ``pending`` is normally permission to apply, except when the exact
+        # coordinator claim cannot currently be read.  Run the same canonical
+        # gate immediately before the state writer; status/oracle alone cannot
+        # encode both retryability and write permission in three public states.
+        _legacy_claim, claim_effect = _legacy_time_claim_gate(event)
+        if claim_effect is not None:
+            return None
         pickup_effect = _pickup_time_event_status(event, existing)
         if pickup_effect == "applied":
             return existing

@@ -72,7 +72,6 @@ _COORDINATOR_RECEIPT_SCHEMAS = frozenset(
 _COORDINATOR_RECEIPT_SOURCES = frozenset(
     {"coordinator_panel", "coordinator_console"}
 )
-_COORDINATOR_RECEIPT_MAX_AGE = timedelta(minutes=5)
 _COORDINATOR_RECEIPT_FUTURE_SKEW = timedelta(seconds=30)
 _PICKUP_OBSERVATION_SOURCES = frozenset(
     {
@@ -820,16 +819,13 @@ def _valid_coordinator_receipt(
     eligible_at = _parse_aware(eligibility_raw)
     if requested_at is None or eligible_at is None or observed_at is None:
         return False
-    # requested_at remains the immutable click audit.  A successor parked
-    # behind a non-expiring claim receives a fresh eligibility epoch only when
-    # promoted, so queue wait does not consume its five-minute execution TTL.
+    # Exact live queue membership (``verified_origin``) is the durable lease.
+    # Wall-clock age cannot revoke an unclaimed click after a watcher crash or
+    # temporary board absence.  The clock remains an audit/causality fence: an
+    # observation cannot precede the receipt beyond the allowed skew.
     if eligible_at < requested_at:
         return False
-    age = observed_at - eligible_at
-    return (
-        age <= _COORDINATOR_RECEIPT_MAX_AGE
-        and age >= -_COORDINATOR_RECEIPT_FUTURE_SKEW
-    )
+    return observed_at - eligible_at >= -_COORDINATOR_RECEIPT_FUTURE_SKEW
 
 
 def resolve_czasowka_assignment_ck(
@@ -1047,12 +1043,9 @@ def time_event_cas_status(
                 else "superseded"
             )
         if (
-            not versioned
-            and (
-                current.get("status") not in {"planned", "assigned"}
-                or current.get("picked_up_at") is not None
-                or current.get("delivered_at") is not None
-            )
+            current.get("status") not in {"planned", "assigned"}
+            or current.get("picked_up_at") is not None
+            or current.get("delivered_at") is not None
         ):
             return "superseded"
         return (
