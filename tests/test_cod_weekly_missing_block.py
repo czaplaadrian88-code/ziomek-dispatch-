@@ -21,6 +21,7 @@ Run:
         tests/test_cod_weekly_missing_block.py -q
 """
 import importlib.util
+import logging
 import sys
 import types
 from datetime import date
@@ -406,6 +407,39 @@ PS_PAYDAY = "08-07-2026"
 PS_SEG1_RANGE = "29-30.06.2026"   # segment czerwcowy — OBECNY w arkuszu
 PS_SEG2_RANGE = "01-05.07.2026"   # segment lipcowy — BRAKUJĄCY
 
+# Incydent 2026-08-03: po utworzeniu brakujących bloków retry widział trzy
+# payday-match dla dwóch segmentów. DZ ma ten sam payday, ale obcy/błędny
+# zakres; ED/EH są dokładnymi blokami segmentów z planu auto-create.
+COLLISION_START = date(2026, 7, 27)
+COLLISION_END = date(2026, 8, 2)
+COLLISION_PAYDAY = "05-08-2026"
+COLLISION_SEG1_RANGE = "27-31.07.2026"
+COLLISION_SEG2_RANGE = "01-02.08.2026"
+
+
+def _put_week_block(row1, row2, anchor, payday, week_range):
+    row1[anchor:anchor + 4] = [
+        f"Tydzień {week_range}", "wypłata z dn.", payday, week_range,
+    ]
+    row2[anchor:anchor + 4] = [
+        "COD - Transport", "Korekty", "Wypłata", "Saldo do przen.",
+    ]
+
+
+def _grid_split_collision_after_autocreate(ws=None):
+    """Atomowy stan retry z logu 06:00: DZ payday-only + exact ED/EH."""
+    row1 = [""] * 165
+    row2 = [""] * 165
+    _put_week_block(row1, row2, 129, COLLISION_PAYDAY, "27-31.06.2026")  # DZ
+    _put_week_block(row1, row2, 133, COLLISION_PAYDAY, COLLISION_SEG1_RANGE)  # ED
+    _put_week_block(row1, row2, 137, COLLISION_PAYDAY, COLLISION_SEG2_RANGE)  # EH
+    return {
+        "ws": ws if ws is not None else MagicMock(),
+        "row1": row1,
+        "row2": row2,
+        "restaurants": [(3, "Arsenał Panteon"), (5, "Toriko")],
+    }
+
 
 def _grid_partial_split_seg1_only(ws=None):
     """Grid z blokiem TYLKO segmentu czerwcowego (29-30.06.2026, payday
@@ -574,9 +608,9 @@ def test_partial_split_mutation_flag_on_vs_off(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# PS7. TWIN find_target_column_auto — partial wykryty po ZAKRESIE (payday pusty)
-#      Bliźniacza ścieżka fallback (E5): istniejący blok bez ręcznej daty wypłaty,
-#      ale z zakresem → primary NoTargetColumnError → auto-detect → partial.
+# PS7. E5 w kanonie range-first — partial po ZAKRESIE mimo pustego payday.
+#      Obie publiczne nazwy muszą delegować do tej samej polityki i zwrócić
+#      identyczny PartialSplitBlockError (bez konkurencyjnego fallbacku).
 # ---------------------------------------------------------------------------
 def _grid_partial_split_seg1_range_no_payday(ws=None):
     n = 46
@@ -600,22 +634,14 @@ def _grid_partial_split_seg1_range_no_payday(ws=None):
 
 def test_partial_split_via_autodetect_range_match():
     grid = _grid_partial_split_seg1_range_no_payday()
-    # primary rzuca NoTargetColumnError (brak payday-match)...
-    try:
-        sw.find_target_cod_columns(grid["row1"], grid["row2"], PS_START, PS_END)
-        assert False, "primary powinien rzucić NoTargetColumnError (payday pusty)"
-    except PartialSplitBlockError:
-        assert False, "primary NIE powinien zaatrybuować (payday pusty)"
-    except NoTargetColumnError:
-        pass
-    # ...a auto-detect (po zakresie) wykrywa partial: seg1 obecny, seg2 brak
-    try:
-        sw.find_target_column_auto(grid["row1"], grid["row2"], PS_START, PS_END)
-        assert False, "auto-detect powinien rzucić PartialSplitBlockError"
-    except PartialSplitBlockError as e:
-        assert len(e.found) == 1 and e.found[0]["col_letter"] == "AQ"
-        assert len(e.missing_segments) == 1
-        assert e.missing_segments[0]["start"] == date(2026, 7, 1)
+    for selector in (sw.find_target_cod_columns, sw.find_target_column_auto):
+        try:
+            selector(grid["row1"], grid["row2"], PS_START, PS_END)
+            assert False, "range-first powinien rzucić PartialSplitBlockError"
+        except PartialSplitBlockError as e:
+            assert len(e.found) == 1 and e.found[0]["col_letter"] == "AQ"
+            assert len(e.missing_segments) == 1
+            assert e.missing_segments[0]["start"] == date(2026, 7, 1)
 
 
 def test_partial_split_via_autodetect_end_to_end_autocreate(monkeypatch):
@@ -634,6 +660,59 @@ def test_partial_split_via_autodetect_end_to_end_autocreate(monkeypatch):
     assert len(args[0]) == 1, "tylko brakujący blok (seg2) tworzony"
     cols = sorted(c for c, _ in writes)
     assert cols == ["AQ", "AU"], f"zapis do obu segmentów, got {cols}"
+
+
+# ---------------------------------------------------------------------------
+# SC-1. RED oracle 2026-08-03 — exact range wygrywa z nadmiarowym payday-only.
+# ---------------------------------------------------------------------------
+def test_split_collision_prefers_exact_ranges_and_logs_payday_only(caplog):
+    grid = _grid_split_collision_after_autocreate()
+
+    with caplog.at_level(logging.WARNING, logger="cod_weekly.sheet"):
+        targets = sw.find_target_cod_columns(
+            grid["row1"], grid["row2"], COLLISION_START, COLLISION_END,
+        )
+
+    assert [t["col_letter"] for t in targets] == ["ED", "EH"]
+    assert [(t["segment_start"], t["segment_end"]) for t in targets] == [
+        (date(2026, 7, 27), date(2026, 7, 31)),
+        (date(2026, 8, 1), date(2026, 8, 2)),
+    ]
+    assert "payday-only" in caplog.text and "DZ" in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# SC-2. Idempotencja rerunu — istniejące ED/EH są używane, zero auto-create.
+# ---------------------------------------------------------------------------
+def test_split_collision_rerun_reuses_existing_blocks_without_duplicate(monkeypatch):
+    monkeypatch.setenv("COD_WEEKLY_AUTOCREATE_BLOCK", "1")
+    monkeypatch.delenv("COD_WEEKLY_AUTOCREATE_DRY_RUN", raising=False)
+    ws = MagicMock()
+    ws.col_count = 165
+    grid = _grid_split_collision_after_autocreate(ws)
+    alerts, writes = _install_write_path(monkeypatch, grid)
+
+    rc = rw.cmd_write(COLLISION_START, COLLISION_END)
+
+    assert rc == 0
+    ws.batch_update.assert_not_called()
+    ws.add_cols.assert_not_called()
+    assert [col for col, _ in writes] == ["ED", "EH"]
+
+
+# ---------------------------------------------------------------------------
+# SC-3. Ratchet jednego ownera polityki — aliasy muszą delegować, nie kopiować.
+# ---------------------------------------------------------------------------
+def test_target_selection_aliases_delegate_to_one_policy_owner(monkeypatch):
+    sentinel = object()
+
+    monkeypatch.setattr(sw, "find_target_cod_columns", lambda *a, **k: sentinel)
+    assert sw.find_target_column_auto([], [], COLLISION_START, COLLISION_END) is sentinel
+
+    monkeypatch.setattr(rw, "find_target_cod_columns", lambda *a, **k: sentinel)
+    assert rw.find_target_cod_columns_resilient(
+        [], [], COLLISION_START, COLLISION_END,
+    ) is sentinel
 
 
 # ---------------------------------------------------------------------------

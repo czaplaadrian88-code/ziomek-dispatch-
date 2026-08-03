@@ -126,7 +126,7 @@ def test_find_target_cod_columns():
     assert at["segment_end"] == date(2026, 3, 31)
     assert ay["segment_start"] == date(2026, 4, 1) and ay["segment_end"] == date(2026, 4, 5)
     _ok("split week 30.03-05.04 → AT + AY")
-    # No payday match → NoTargetColumnError
+    # Brak exact-range → NoTargetColumnError (sam payday nie wystarcza)
     row1 = [""] * 65
     row2 = [""] * 65
     row2[54] = "COD - Transport"
@@ -136,29 +136,30 @@ def test_find_target_cod_columns():
         _fail("missing payday → expected NoTargetColumnError")
     except NoTargetColumnError:
         _ok("NoTargetColumnError raised when payday absent")
-    # Ambiguous: 2 kandydatów dla single-segment
+    # Ambiguous: 2 kandydatów z tym samym exact-range dla single-segment
     row1 = [""] * 65
     row2 = [""] * 65
     for col in (50, 54):
         row2[col] = "COD - Transport"
         row1[col + 2] = "15-04-2026"
+        row1[col + 3] = "06-12.04.2026"
     try:
         find_target_cod_columns(row1, row2, date(2026, 4, 6), date(2026, 4, 12))
-        _fail("2 kandydatów → expected AmbiguousTargetError")
+        _fail("2 exact-range → expected AmbiguousTargetError")
     except AmbiguousTargetError:
-        _ok("AmbiguousTargetError raised for 2 candidates single-segment")
+        _ok("AmbiguousTargetError raised for duplicate exact-range")
 
 
 # -------------------------------------------------------------------
-# TEST 2b: find_target_column_auto + find_target_cod_columns_resilient (E5)
+# TEST 2b: jeden kanoniczny range-first + aliasy zgodnościowe (E5)
 #
 # Reprodukcja porażki 2026-05-17/18 ("TARGET COLUMN FAIL" / NoTargetColumnError
 # "Brak bloku z payday=…") — człowiek nie zdążył dodać ręcznie daty wypłaty.
-# Auto-detect rozpoznaje kolumnę po ZAKRESIE tygodnia (row1 pos+3), który jest
-# wypełniany pewniej niż payday. Plus guardy fail-safe: NIGDY zła kolumna.
+# Kanoniczny selektor rozpoznaje kolumnę po ZAKRESIE tygodnia (row1 pos+3),
+# a dotychczasowe nazwy auto/resilient delegują do tej samej polityki.
 # -------------------------------------------------------------------
 def test_find_target_column_auto():
-    _hdr("TEST 2b: find_target_column_auto + resilient (E5 auto-detect)")
+    _hdr("TEST 2b: canonical range-first + zgodnościowe aliasy (E5)")
     # Venv-agnostic guard (jak w test_cod_weekly_preflight.py): pod pytest
     # (dispatch venv, bez gspread) → skip; pod custom runner (sheets venv,
     # bez pytest, z gspread) → leć dalej i odpal logikę.
@@ -192,37 +193,37 @@ def test_find_target_column_auto():
 
     # --- Scenariusz 1: PORAŻKA 2026-05-17/18 — payday-cell PUSTY, zakres OBECNY.
     # Tydzień 11-17.05.2026, payday 20-05-2026 (środa). Sheet ma zakres '11-17.05.2026'
-    # w pos+3 ale pos+2 (Wypłata) jest pusty → primary NoTargetColumnError, auto OK.
+    # w pos+3, ale pos+2 (Wypłata) jest pusty → range-first nadal wybiera blok.
     row1 = [""] * 90
     row2 = [""] * 90
     _block(row1, row2, 79, "Tydzień 3", "", "11-17.05.2026")  # CB idx 79, payday BLANK
-    # primary musi failować (brak payday)
-    try:
-        find_target_cod_columns(row1, row2, date(2026, 5, 11), date(2026, 5, 17))
-        _fail("primary should fail when payday blank")
-    except NoTargetColumnError:
-        _ok("primary NoTargetColumnError gdy payday-cell pusty (repro 05-17/18)")
-    # auto-detect po zakresie → CB
-    targets = find_target_column_auto(row1, row2, date(2026, 5, 11), date(2026, 5, 17))
-    if len(targets) == 1 and targets[0]["col_letter"] == "CB":
-        _ok("auto-detect rozwiązuje 11-17.05 → CB (po zakresie)")
+    primary = find_target_cod_columns(
+        row1, row2, date(2026, 5, 11), date(2026, 5, 17)
+    )
+    if len(primary) == 1 and primary[0]["col_letter"] == "CB":
+        _ok("kanoniczny range-first rozwiązuje pusty payday → CB")
     else:
-        _fail("auto-detect 11-17.05 → CB", targets)
+        _fail("kanoniczny range-first pusty payday → CB", primary)
+    # Zgodnościowy alias auto zwraca dokładnie ten sam wynik.
+    targets = find_target_column_auto(row1, row2, date(2026, 5, 11), date(2026, 5, 17))
+    if targets == primary:
+        _ok("find_target_column_auto == kanoniczny selector")
+    else:
+        _fail("find_target_column_auto parity", f"primary={primary} auto={targets}")
     assert targets[0]["segment_start"] == date(2026, 5, 11)
     assert targets[0]["segment_end"] == date(2026, 5, 17)
     assert targets[0]["payday"] == date(2026, 5, 20), targets[0]["payday"]
     _ok("auto-detect payday policzony 20-05-2026 (środa po niedzieli)")
-    # resilient łapie to samo (fallback po porażce primary)
+    # Zgodnościowy entry point resilient także ma parytet.
     rtargets = find_target_cod_columns_resilient(
         row1, row2, date(2026, 5, 11), date(2026, 5, 17)
     )
-    if len(rtargets) == 1 and rtargets[0]["col_letter"] == "CB":
-        _ok("resilient fallback → CB (primary fail → auto)")
+    if rtargets == primary:
+        _ok("resilient == kanoniczny selector")
     else:
-        _fail("resilient fallback → CB", rtargets)
+        _fail("resilient parity", f"primary={primary} resilient={rtargets}")
 
-    # --- Scenariusz 2: BEHAVIOR-PRESERVING — gdy payday OBECNY, resilient ==
-    # primary (identyczny wynik, auto-detect NIE odpala).
+    # --- Scenariusz 2: gdy payday OBECNY, resilient == canonical.
     row1 = [""] * 90
     row2 = [""] * 90
     _block(row1, row2, 79, "Tydzień 3", "20-05-2026", "11-17.05.2026")
@@ -296,21 +297,21 @@ def test_find_target_column_auto():
     except AmbiguousTargetError:
         _ok("FAIL-SAFE: 2 kolumny z tym samym zakresem → AmbiguousTargetError")
 
-    # --- Scenariusz 7 (FAIL-SAFE): payday obecny ale BŁĘDNY + zakres też nie ma
-    # w arkuszu → ambiguous z primary NIE jest tłumiony (resilient nie łapie
-    # AmbiguousTargetError, tylko NoTargetColumnError).
+    # --- Scenariusz 7 (FAIL-SAFE): dwa payday-only bez exact-range NIE tworzą
+    # ambiguity i nie są wybierane. Kanon zwraca brak bloku; logowanie nadmiaru
+    # jest pokryte osobnym oracle kolizji DZ/ED/EH.
     row1 = [""] * 90
     row2 = [""] * 90
-    # 2 bloki z tym samym payday (single-segment week) → primary AmbiguousTargetError
+    # 2 bloki z tym samym payday, ale oba bez zakresu docelowego.
     for anchor in (75, 79):
         _block(row1, row2, anchor, "T", "20-05-2026", "")
     try:
         find_target_cod_columns_resilient(
             row1, row2, date(2026, 5, 11), date(2026, 5, 17)
         )
-        _fail("resilient should NOT swallow AmbiguousTargetError")
-    except AmbiguousTargetError:
-        _ok("FAIL-SAFE: resilient NIE tłumi AmbiguousTargetError z primary")
+        _fail("payday-only bez zakresu → expected NoTargetColumnError")
+    except NoTargetColumnError:
+        _ok("FAIL-SAFE: payday-only bez exact-range → NoTargetColumnError")
 
 
 # -------------------------------------------------------------------

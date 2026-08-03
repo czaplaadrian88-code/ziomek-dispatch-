@@ -21,6 +21,18 @@
 > restartu i migracji. Raport:
 > `/root/artifacts/jakub-491870-20260802/REPORT_FIX_491870_ITER2.md`.
 
+> **KANDYDAT OFFLINE 2026-08-03 — COD-WEEKLY SPLIT TARGET COLLISION:**
+> commit kodu `8a46c3a9646b922c0d7968bd63c02eecb71a1aef` ustanawia jeden
+> selektor range-first: exact-range row1 jest ownerem segmentu, payday tylko
+> filtrem wtórnym; payday-only jest logowany i ignorowany. RED 2F→GREEN, rerun
+> fixture używa ED/EH bez duplikacji, mutation range gate zabita, cod_weekly
+> 65P/0F i pełna regresja 6912P/0F/74S/8X vs 6909P/0F/74S/8X baseline.
+> Zero live/deploy/restart/flip/mappingu. Read-only snapshot 09:27Z pokazał
+> równoległy drift danych: DZ=`27-31.06`, ED=`01-02.08`, brak exact
+> `27-31.07`; selektor poprawnie zwraca PARTIAL. Przed rerunem potrzebne są:
+> review+merge, stabilny snapshot z pełną parą zakresów oraz osobny ACK na
+> korektę danych/rerun. Raport: `/root/artifacts/codweekly-split-collision-20260803/REPORT.md`.
+
 > **KANDYDAT OFFLINE 2026-08-02 — TIME-C FAZA 1, ITERACJA 2:** blind review
 > `3×HIGH + 3×MEDIUM` domknięte u źródła. Producent izoluje zły stop/kuriera i
 > publikuje zdrową część cyklu; trzy repo dowodzą, że ta sama `plan_version` z
