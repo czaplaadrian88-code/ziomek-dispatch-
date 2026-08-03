@@ -36,6 +36,7 @@ carried-first.
 from __future__ import annotations
 import hashlib
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Iterable
 from zoneinfo import ZoneInfo
@@ -45,6 +46,15 @@ PICKUP_MERGE_MIN = 10          # jedyny próg sklejania odbiorów w jeden podjaz
 _SENTINEL = datetime.max.replace(tzinfo=WARSAW)
 _BIG = 1 << 30
 ROUTE_SEQUENCE_HASH_DOMAIN = "ziomek.route_sequence.v1"
+PHYSICAL_PICKUP_CONTRACT_VERSION = "route_order.physical_pickup.v1"
+PHYSICAL_PICKUP_FLAG = "ENABLE_NONCARRIED_COMMITTED_PICKUP_REORDER"
+
+# Alias jest częścią ownera fizycznego stopu, nie geokodera. Oba zapisy są
+# spotykane dla tego samego oficjalnego adresu; działa wyłącznie przy nowej
+# fladze. OFF nie dotyka globalnego cache/geokodu ani istniejących aliasów.
+_PHYSICAL_STREET_ALIASES = {
+    "kilińskiego": "jana kilińskiego",
+}
 
 
 def _iso(s):
@@ -67,6 +77,126 @@ def _attr(o, name):
 
 def _pickup_dt(o):
     return _iso(_attr(o, "czas_kuriera_warsaw"))
+
+
+def _normalized_pickup_address(order) -> str:
+    """Kanoniczny klucz budynku bez lokalu, koordynatów i nazwy biznesu."""
+    raw = _attr(order, "pickup_address")
+    if not raw:
+        candidate = _attr(order, "restaurant_address")
+        raw = candidate if candidate and any(ch.isdigit() for ch in str(candidate)) else None
+    if not raw:
+        return ""
+    text = " ".join(str(raw).strip().casefold().split())
+    text = re.sub(r"\b\d{2}-\d{3}\b", "", text)
+    text = re.sub(r"^(?:ul(?:ica)?\.?\s+)", "", text)
+    # Lokal/piętro nie tworzą osobnego podjazdu pod budynek. Usuwamy zarówno
+    # wariant po slashu, jak i tekstowy `lok. 1U`; numer domu zostaje.
+    text = re.sub(
+        r"(?:[/,]\s*|\s+)(?:lok(?:al)?|m(?:ieszkanie)?|pi[eę]tro)\.?\s*[0-9a-z-]+.*$",
+        "",
+        text,
+    )
+    text = re.sub(r"/[^\s]+$", "", text)
+    text = " ".join(text.strip(" ,./").split())
+    match = re.match(r"^(.*?)(\d+[a-z]?)$", text)
+    if match:
+        street = match.group(1).strip(" ,.")
+        house = match.group(2)
+        street = _PHYSICAL_STREET_ALIASES.get(street, street)
+        text = f"{street} {house}".strip()
+    city = " ".join(str(_attr(order, "pickup_city") or "").strip().casefold().split())
+    return f"{text}|{city}" if city else text
+
+
+def _normalized_pickup_merchant(order) -> str:
+    raw = (
+        _attr(order, "restaurant")
+        or _attr(order, "restaurant_name")
+        or _attr(order, "restaurant_address")
+        or ""
+    )
+    return " ".join(str(raw).strip().casefold().split())
+
+
+def pickup_physical_key(order):
+    """Jeden klucz fizycznego stopu; adres, a przy braku adresu exact merchant."""
+    address = _normalized_pickup_address(order)
+    if address:
+        return (PHYSICAL_PICKUP_CONTRACT_VERSION, "address", address)
+    merchant = _normalized_pickup_merchant(order)
+    if merchant:
+        return (PHYSICAL_PICKUP_CONTRACT_VERSION, "merchant", merchant)
+    return None
+
+
+def same_physical_pickup_point(first, second) -> bool:
+    """Czy dwa zlecenia mają ten sam adresowy punkt odbioru (bez GPS)."""
+    first_key = pickup_physical_key(first)
+    second_key = pickup_physical_key(second)
+    return bool(first_key is not None and first_key == second_key)
+
+
+def same_physical_pickup_stop(first, second) -> bool:
+    """Czy dwa zlecenia należą do jednego stopu TIME-B.
+
+    Tożsamość punktu = jeden klucz adresowy. Membership stopu wymaga dodatkowo
+    pełnego committed spreadu ``<= PICKUP_MERGE_MIN``. Współrzędne nie
+    uczestniczą w odpowiedzi; 180 m zostaje wyłącznie tolerancją pozycji kuriera.
+    """
+    return same_physical_pickup_point(first, second) and _pickup_spread_ok(
+        [first, second]
+    )
+
+
+def group_physical_pickup_points(orders):
+    """Stabilne complete-link grupy jednego adresowego punktu."""
+    groups = []
+    for order in orders:
+        target = next(
+            (
+                group
+                for group in groups
+                if all(same_physical_pickup_point(order, member) for member in group)
+            ),
+            None,
+        )
+        if target is None:
+            groups.append([order])
+        else:
+            target.append(order)
+    return groups
+
+
+def group_physical_pickup_stops(orders):
+    """Stabilne complete-link grupy kanonicznego stopu TIME-B."""
+    groups = []
+    for order in orders:
+        target = next(
+            (
+                group
+                for group in groups
+                if all(same_physical_pickup_stop(order, member) for member in group)
+            ),
+            None,
+        )
+        if target is None:
+            groups.append([order])
+        else:
+            target.append(order)
+    return groups
+
+
+def _same_pickup_membership(
+    first,
+    second,
+    *,
+    physical_contract=False,
+) -> bool:
+    """Nowy kontrakt pod flagą; OFF = dokładnie legacy merchant equality."""
+    if physical_contract:
+        return same_physical_pickup_stop(first, second)
+    return (_attr(first, "restaurant") or "") == (_attr(second, "restaurant") or "")
 
 
 def _plan_pickup_clusters(plan_doc) -> dict:
@@ -168,7 +298,13 @@ def _split_by_pickup_spread(ordered):
     return runs
 
 
-def pickup_runs(to_pick, plan_doc=None, plan_aware=False):
+def pickup_runs(
+    to_pick,
+    plan_doc=None,
+    plan_aware=False,
+    *,
+    physical_contract=False,
+):
     """Podziel odbiory na PODJAZDY (kursy) + grupuj po restauracji wewnątrz kursu.
     Wejście/wyjście: listy zleceń (obiekty BagOrder-podobne albo dict-y).
 
@@ -198,6 +334,20 @@ def pickup_runs(to_pick, plan_doc=None, plan_aware=False):
     runs = _split_by_pickup_spread(ordered)
     out = []
     for run in runs:
+        if physical_contract:
+            groups = group_physical_pickup_stops(run)
+            out.append([
+                order
+                for group in groups
+                for order in sorted(
+                    group,
+                    key=lambda o: (
+                        _pickup_dt(o) or _SENTINEL,
+                        str(_attr(o, "order_id")),
+                    ),
+                )
+            ])
+            continue
         first_seen = {}
         for i, o in enumerate(run):
             first_seen.setdefault(_attr(o, "restaurant") or "", i)
@@ -221,7 +371,7 @@ def plan_drop_rank(plan_doc) -> dict:
     return rank
 
 
-def _canon_order_from_plan(bag, plan_doc):
+def _canon_order_from_plan(bag, plan_doc, *, physical_contract=False):
     """Kolejność stopów WPROST z kanonu Ziomka (courier_plans) — LUSTRO konsoli
     `fleet_state` (który deleguje do tego modułu). Renderuje porządek planu:
     niesione (picked_up) = tylko dostawa (pomiń węzeł odbioru), kolejne odbiory tej
@@ -250,7 +400,11 @@ def _canon_order_from_plan(bag, plan_doc):
             if _attr(o, "status") == "picked_up":      # carried = brak odbioru
                 continue
             if out and out[-1][0] == "pickup" and \
-                    _attr(by_oid[out[-1][1][-1]], "restaurant") == _attr(o, "restaurant") and \
+                    _same_pickup_membership(
+                        by_oid[out[-1][1][-1]],
+                        o,
+                        physical_contract=physical_contract,
+                    ) and \
                     _pickup_spread_ok([by_oid[item] for item in out[-1][1]] + [o]):
                 out[-1][1].append(oid)                  # scal odbiory tej samej restauracji
             else:
@@ -272,7 +426,8 @@ def _canon_order_from_plan(bag, plan_doc):
 
 
 def order_podjazdy(bag, plan_doc=None, plan_aware=False,
-                   trust_canon=False) -> list[tuple[str, list[str]]]:
+                   trust_canon=False, *,
+                   physical_contract=False) -> list[tuple[str, list[str]]]:
     """JEDYNE źródło kolejności. Zwraca listę stopów [(typ, [order_ids]), ...]
     gdzie typ ∈ {'pickup','dropoff'} a order_ids to zgrupowane zlecenia
     (odbiory tej samej restauracji w jednym podjeździe = jeden stop).
@@ -288,7 +443,11 @@ def order_podjazdy(bag, plan_doc=None, plan_aware=False,
     if not bag:
         return []
     if trust_canon:
-        canon = _canon_order_from_plan(bag, plan_doc)
+        canon = _canon_order_from_plan(
+            bag,
+            plan_doc,
+            physical_contract=physical_contract,
+        )
         if canon is not None:
             return canon
     rank = plan_drop_rank(plan_doc)
@@ -301,13 +460,22 @@ def order_podjazdy(bag, plan_doc=None, plan_aware=False,
     to_pick = [o for o in bag if _attr(o, "status") != "picked_up"]
 
     order: list[tuple[str, list[str]]] = [("dropoff", [str(_attr(o, "order_id"))]) for o in carried]
-    for run in pickup_runs(to_pick, plan_doc, plan_aware):
+    for run in pickup_runs(
+        to_pick,
+        plan_doc,
+        plan_aware,
+        physical_contract=physical_contract,
+    ):
         i = 0
         while i < len(run):
-            rest = _attr(run[i], "restaurant")
+            anchor = run[i]
             grp = [str(_attr(run[i], "order_id"))]
             i += 1
-            while i < len(run) and _attr(run[i], "restaurant") == rest:
+            while i < len(run) and _same_pickup_membership(
+                run[i],
+                anchor,
+                physical_contract=physical_contract,
+            ):
                 grp.append(str(_attr(run[i], "order_id")))
                 i += 1
             order.append(("pickup", grp))
@@ -323,7 +491,8 @@ order_route = order_podjazdy
 
 
 def build_route_stops(bag, plan_doc=None, *, plan_aware=False,
-                      trust_canon=False) -> list[dict]:
+                      trust_canon=False,
+                      physical_contract=False) -> list[dict]:
     """Kanoniczne stopy z tożsamością, membershipem i committed per zlecenie.
 
     Nie istnieje ``committed_at`` stopu. Dla pickupów jedynym kontraktem
@@ -337,6 +506,7 @@ def build_route_stops(bag, plan_doc=None, *, plan_aware=False,
         plan_doc,
         plan_aware=plan_aware,
         trust_canon=trust_canon,
+        physical_contract=physical_contract,
     ):
         order_ids = [str(order_id) for order_id in raw_order_ids]
         stop = {
@@ -353,7 +523,12 @@ def build_route_stops(bag, plan_doc=None, *, plan_aware=False,
     return stops
 
 
-def build_eta_binding_sequence(bag, plan_doc=None) -> list[dict]:
+def build_eta_binding_sequence(
+    bag,
+    plan_doc=None,
+    *,
+    physical_contract=False,
+) -> list[dict]:
     """Jedyna sekwencja wejściowa kontraktu wersjonowanego ETA.
 
     Producent oraz każda powierzchnia konsumencka muszą hashować dokładnie ten
@@ -365,6 +540,7 @@ def build_eta_binding_sequence(bag, plan_doc=None) -> list[dict]:
         plan_doc,
         plan_aware=True,
         trust_canon=True,
+        physical_contract=physical_contract,
     )
 
 
@@ -403,7 +579,8 @@ def repair_dropoffs_after_pickups(seq, *, kind_key="kind", id_key="order_id"):
 
 
 def build_stop_sequence(bag, plan_doc=None, *, plan_aware=False,
-                        trust_canon=False) -> list[dict]:
+                        trust_canon=False,
+                        physical_contract=False) -> list[dict]:
     """Zunifikowana kolejność jako lista kroków `[{"order_id": str, "kind": typ}, ...]`
     — forma konsumowana wprost przez apkę (`courier_orders.build_view`) i konsolę.
     Rozwija zgrupowane odbiory (jeden stop = kilka order_ids) na kroki per-zlecenie,
@@ -415,6 +592,7 @@ def build_stop_sequence(bag, plan_doc=None, *, plan_aware=False,
         plan_doc,
         plan_aware=plan_aware,
         trust_canon=trust_canon,
+        physical_contract=physical_contract,
     ):
         for order_id in stop["order_ids"]:
             step = {

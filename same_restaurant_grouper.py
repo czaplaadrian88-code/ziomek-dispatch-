@@ -22,6 +22,9 @@ from datetime import datetime, timezone
 from typing import Any, List, Optional, Sequence, Tuple
 import logging
 
+from dispatch_v2 import common as C
+from dispatch_v2 import route_order as _route_order
+
 log = logging.getLogger("same_restaurant_grouper")
 
 # Default time tolerance + driver default
@@ -184,18 +187,22 @@ def group_orders_by_restaurant(
     if not bag_orders:
         return []
 
-    # Bucket by restaurant
-    by_restaurant: dict = {}
-    for o in bag_orders:
-        r = (
-            getattr(o, "restaurant", None)
-            or getattr(o, "restaurant_address", None)
-            or "<UNKNOWN>"
-        )
-        by_restaurant.setdefault(r, []).append(o)
+    if C.decision_flag("ENABLE_NONCARRIED_COMMITTED_PICKUP_REORDER"):
+        buckets = _route_order.group_physical_pickup_stops(bag_orders)
+    else:
+        # OFF = legacy bajt-w-bajt: exact merchant bucket.
+        by_restaurant: dict = {}
+        for o in bag_orders:
+            r = (
+                getattr(o, "restaurant", None)
+                or getattr(o, "restaurant_address", None)
+                or "<UNKNOWN>"
+            )
+            by_restaurant.setdefault(r, []).append(o)
+        buckets = list(by_restaurant.values())
 
     result: List[Any] = []
-    for restaurant, ords in by_restaurant.items():
+    for ords in buckets:
         if len(ords) == 1:
             result.append(SingletonOrder(order=ords[0]))
             continue

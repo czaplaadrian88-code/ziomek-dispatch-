@@ -1,0 +1,76 @@
+{
+  "schema": "case_491870_iter2_replay.v1",
+  "cases": [
+    {
+      "id": "foodcourt_far_soft_fallback",
+      "same_physical": true,
+      "far_dropoffs": true,
+      "committed_offset_min": 4.0,
+      "soft_mode": "reject_all",
+      "exercise_plan": true,
+      "expect_same_point": true,
+      "expect_same_stop": true
+    },
+    {
+      "id": "foodcourt_far_normal_guards",
+      "same_physical": true,
+      "far_dropoffs": true,
+      "committed_offset_min": 4.0,
+      "soft_mode": "real",
+      "exercise_plan": true,
+      "expect_same_point": true,
+      "expect_same_stop": true
+    },
+    {
+      "id": "foodcourt_near_normal_guards",
+      "same_physical": true,
+      "far_dropoffs": false,
+      "committed_offset_min": 4.0,
+      "soft_mode": "real",
+      "exercise_plan": true,
+      "expect_same_point": true,
+      "expect_same_stop": true
+    },
+    {
+      "id": "pickup_merge_exact_limit",
+      "same_physical": true,
+      "far_dropoffs": false,
+      "committed_offset_min": 10.0,
+      "soft_mode": "real",
+      "exercise_plan": false,
+      "expect_same_point": true,
+      "expect_same_stop": true
+    },
+    {
+      "id": "pickup_merge_above_limit",
+      "same_physical": true,
+      "far_dropoffs": false,
+      "committed_offset_min": 10.0166666667,
+      "soft_mode": "real",
+      "exercise_plan": false,
+      "expect_same_point": true,
+      "expect_same_stop": false
+    },
+    {
+      "id": "near_gps_but_distinct_address",
+      "same_physical": false,
+      "far_dropoffs": true,
+      "committed_offset_min": 4.0,
+      "soft_mode": "real",
+      "exercise_plan": false,
+      "expect_same_point": false,
+      "expect_same_stop": false
+    },
+    {
+      "id": "same_address_despite_gps_over_180m",
+      "same_physical": true,
+      "far_dropoffs": true,
+      "committed_offset_min": 4.0,
+      "c_pickup_coords": [52.002, 20.0],
+      "soft_mode": "real",
+      "exercise_plan": false,
+      "expect_same_point": true,
+      "expect_same_stop": true
+    }
+  ]
+}

@@ -18,6 +18,7 @@ from typing import List, Tuple, Dict, Optional
 
 from dispatch_v2 import osrm_client
 from dispatch_v2 import common as C
+from dispatch_v2 import route_order as _route_order
 from dispatch_v2 import prep_bias_anchor
 from dispatch_v2 import effects_buffer as _EB  # K08 refaktoru: zapis shadow PO decyzji
 from dispatch_v2.position_model import OriginTravelEstimate
@@ -160,12 +161,18 @@ def detect_return_to_restaurant(bag, new_order, plan,
     t_np = _parse_dt_utc((plan.pickup_at or {}).get(new_order.order_id))
     if t_np is None:
         return None
+    _physical_contract = C.decision_flag(
+        "ENABLE_NONCARRIED_COMMITTED_PICKUP_REORDER"
+    )
     for b in bag:
         bp = getattr(b, "pickup_coords", None)
         if not _valid(bp):
             continue
-        if osrm_client.haversine(bp, np_coords) >= same_rest_km:
-            continue  # inna restauracja
+        if _physical_contract:
+            if not _route_order.same_physical_pickup_point(b, new_order):
+                continue
+        elif osrm_client.haversine(bp, np_coords) >= same_rest_km:
+            continue  # legacy OFF: inna restauracja wg 80 m
         t_bp = (_parse_dt_utc(getattr(b, "picked_up_at", None))
                 or _parse_dt_utc(getattr(b, "czas_kuriera_warsaw", None))
                 or _parse_dt_utc((plan.pickup_at or {}).get(b.order_id)))

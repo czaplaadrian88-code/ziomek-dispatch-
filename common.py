@@ -616,6 +616,9 @@ ETAP4_DECISION_FLAGS = (
     "ENABLE_LEX_WINDOW_GUARDS_V2",
     "ENABLE_RELAX_COLOC_PICKUP",
     "ENABLE_NONCARRIED_DROPOFF_REORDER",
+    # Case 491870 Iter2: fizyczny stop TIME-B + pickup-forward dla worka bez
+    # niesionych. Default OFF; jeden kill-switch obejmuje wszystkie 4 zmiany.
+    "ENABLE_NONCARRIED_COMMITTED_PICKUP_REORDER",
     # === D.3 fala B (2026-07-02): para atomowa V326 (common.py, oba env-default
     # "1" jednolicie ON, żaden drop-in nie nadpisuje → migracja neutralna).
     # Konsument route_simulator_v2:299/438 czyta atrybut modułu (NIE zmieniany).
@@ -970,6 +973,7 @@ ENABLE_LEX_COMMITTED_WINDOW = True
 ENABLE_LEX_WINDOW_GUARDS_V2 = False
 ENABLE_RELAX_COLOC_PICKUP = True
 ENABLE_NONCARRIED_DROPOFF_REORDER = True
+ENABLE_NONCARRIED_COMMITTED_PICKUP_REORDER = False
 # Sprint 1 NO-GPS-EQUAL (Adrian 2026-06-29 „bez kary przed zmianą"): gdy ON → zeruje
 # karę score pre_shift (`bonus_v325_pre_shift_soft`, oba źródła: stała V325 + gradient
 # _pre_shift_gradient_penalty). „Kurier dotrze później" obsługuje LEGALNA ścieżka:
