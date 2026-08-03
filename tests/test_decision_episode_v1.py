@@ -252,6 +252,63 @@ def test_pre_a8_reassign_outside_pool_is_hold_without_imputation():
     assert episode["learning_at"] == learning_post_cutoff
 
 
+def test_a3_escalation_resolution_is_analyzable_with_exact_dual_ids():
+    shadow = _shadow(event_id="A3-O1_NEW_ORDER_1")
+    shadow["verdict"] = "KOORD"
+    shadow["reason"] = "no_solo_candidates (fleet_n=2)"
+    shadow["proposal_output_type"] = "COORDINATOR_ESCALATION"
+    shadow["best"] = None
+    shadow["proposal_best_of_worst"] = {
+        "candidate": {
+                "courier_id": "C1",
+                "score": 10.0,
+                "hard_safe": False,
+                "feasibility_verdict": "NO",
+                "pickup_dist_km": 1.0,
+                "has_plan": False,
+        }
+    }
+    # Ten sam CID w legacy alternatives nie może przesłonić jawnej semantyki
+    # nested A-3 (first-wins po CID ma najpierw best-of-worst).
+    shadow["alternatives"].append(_candidate("C1", "Legacy wariant", 999.0))
+    learning = _learning(
+        action="COORDINATOR_ESCALATION_RESOLVED",
+        actual="C2",
+        lifecycle_event_id="A3-O1_NEW_ORDER_1",
+        decision=None,
+    )
+    learning.update({
+        "learning_event_id": "a3_learning_sha256:fixture",
+        "assignment_lifecycle_event_id": "assign-O1-C2",
+        "engine_decision_event_id": "A3-O1_NEW_ORDER_1",
+        "proposal_output_type": "COORDINATOR_ESCALATION",
+        "reason": "no_solo_candidates (fleet_n=2)",
+        "assigned_by": {
+            "status": "ATTESTED",
+            "actor_id": "actor_sha256:fixture",
+            "audit_schema": "legacy_gastro_assign_signature",
+        },
+    })
+
+    episodes, _ = _extract(
+        [learning], [shadow], assignments=[_assignment()]
+    )
+    episode = episodes[0]
+    assert episode["action"] == "ESCALATION_RESOLUTION"
+    assert episode["proposal_output_type"] == "COORDINATOR_ESCALATION"
+    assert episode["decision_key"] == "assign-O1-C2"
+    assert episode["learning_event_id"] == "a3_learning_sha256:fixture"
+    assert episode["actor_audit_schema"] == "legacy_gastro_assign_signature"
+    assert episode["joins"]["assignment"]["method"] == (
+        "assignment_lifecycle_event_id"
+    )
+    assert episode["joins"]["shadow"]["method"] == "engine_decision_event_id"
+    assert episode["proposed_candidate"]["courier_id"] == "C1"
+    assert episode["proposed_candidate"]["feasibility_verdict"] == "NO"
+    assert episode["proposed_candidate"]["hard_safe"] is False
+    assert episode["actual_courier_id"] == "C2"
+
+
 def test_fallback_never_searches_past_ambiguous_latest_shadow():
     learning = _learning(
         action="PANEL_AGREE",

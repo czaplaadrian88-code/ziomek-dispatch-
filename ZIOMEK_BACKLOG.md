@@ -1,4 +1,24 @@
 # ZIOMEK AI DISPATCHER - BACKLOG ROZWOJU
+> **KANDYDAT SOURCE-ONLY 2026-08-03 — A-3 D-A3-1/2/3:** jeden kontrakt
+> `proposal_output_type` klasyfikuje operacyjne KOORD jako
+> `COORDINATOR_ESCALATION`; istniejący `learning_log.jsonl` jest jedynym
+> trwałym strumieniem par decyzja→późniejszy ręczny assignment. Exact receipt
+> zapisuje finalny CID, czas/source i pseudonimowanego operatora również z
+> bieżącego legacy audytu `gastro_assign.py`; `KOORDYNATOR_ID` pozostaje holdem,
+> a stale `pending_proposals` nie może wygrać z nowszym kontekstem. D3 zapisuje
+> automatyczny `OWNER_EXCEPTION`, `reason=nieokreślony` i stabilny ID późniejszego
+> wyjaśnienia. D2 dodaje wyłącznie nested shadow best-of-worst: HARD-safe przed
+> SOFT, kompletna odległość→score→CID, a przy niepełnym dowodzie SOFT neutralny
+> CID; all-HARD daje recommend-only eskalację, nigdy wykonywalny best. Flaga
+> `ENABLE_ALWAYS_PROPOSE` nadal default OFF; verdict/best/auto-route bez zmian.
+> RED utrwalony, focused 69/69, broad 267/267, mutacja HARD czerwieni, lifecycle
+> 566/566. Pełna hermetyczna regresja `7008P/0F/74S/8X/159W` vs baseline
+> `6982P/0F/74S/8X/159W`, delta nowych failów/skipów/xfaili/warnings = 0.
+> Branch `wt/a3-always-propose-d123-codex-20260803`; commit/gate jeszcze przed
+> zapisem. Zero live/deploy/restart/flip/migracji. Reguła najmniej-złego jest
+> wyraźnie wydzielona do akceptacji ownera w
+> `/root/artifacts/a3-always-propose-20260803/REPORT.md`.
+
 > **KANDYDAT SOURCE-ONLY 2026-08-03 — ROOT-FIX NEW-1 PO BLIND 491870 ITER2:**
 > commit kodu `5c8ffa2517740d3abc523922ab05093bec37ab34` usuwa przyczynę
 > kolizji adresów u źródła. Czysty `address_canon` jest jednym ownerem rejestru

@@ -3,9 +3,10 @@
 ## Cel i granica prawdy
 
 `tools/decision_episode_v1.py` jest deterministycznym ekstraktorem read-only.
-Populacja wejściowa to zapisane rekordy `PANEL_OVERRIDE` i `PANEL_AGREE` z
-`learning_log`; narzędzie nie tworzy epizodów dla decyzji, których nie ma w
-logu. Nie imputuje kandydatów, cech, aktora, czasu zmiany ani outcome.
+Populacja wejściowa to zapisane rekordy `PANEL_OVERRIDE`, `PANEL_AGREE` oraz
+`COORDINATOR_ESCALATION_RESOLVED` z `learning_log`; narzędzie nie tworzy
+epizodów dla decyzji, których nie ma w logu. Nie imputuje kandydatów, cech,
+aktora, czasu zmiany ani outcome.
 
 Epizod opisuje obserwowaną decyzję/lifecycle, a nie parę treningową z
 udowodnionym kontrfaktycznym wynikiem. `REASSIGN` jest osobną kategorią i nie
@@ -40,9 +41,10 @@ wejścia i z tymi samymi argumentami dają identyczny JSON.
 
 `decision_key` wybierany jest bez zgadywania, w kolejności:
 
-1. `learning.lifecycle_event_id`;
-2. `shadow.event_id` z jednoznacznie połączonego snapshotu;
-3. `fallback_sha256` z `order_id|proposal_at|actual_courier_id`.
+1. `learning.assignment_lifecycle_event_id` dla nowych par A-3;
+2. `learning.lifecycle_event_id` dla rekordów E1;
+3. `shadow.event_id` z jednoznacznie połączonego snapshotu;
+4. `fallback_sha256` z `order_id|proposal_at|actual_courier_id`.
 
 `decision_key_source` zapisuje użyty wariant. Historyczne dane bez
 `lifecycle_event_id` mogą dać ten sam `shadow.event_id` kilku obserwacjom. Taka
@@ -70,23 +72,28 @@ emitowany jest wynik unikalności hierarchicznego `lifecycle_key`.
 
 ### Przypisanie
 
-1. Exact po `lifecycle_event_id`, z kontrolą `order_id` i `courier_id`.
-2. Fallback po tej samej parze `order_id` + H, wyłącznie w oknie ±30 s od
+1. Exact po `assignment_lifecycle_event_id`, z kontrolą `order_id` i
+   `courier_id`.
+2. Dla starszych rekordów exact po `lifecycle_event_id`.
+3. Fallback po tej samej parze `order_id` + H, wyłącznie w oknie ±30 s od
    rekordu learning.
 
 ### Snapshot wyboru
 
-1. Osadzony `learning.decision`, tylko gdy zgadzają się `order_id`,
+1. Exact po `engine_decision_event_id` dla nowych par A-3.
+2. Osadzony `learning.decision`, tylko gdy zgadzają się `order_id`,
    `event_id` i najlepszy kandydat Z.
-2. Exact po `shadow.event_id`.
-3. Fallback: najnowszy snapshot dla tego samego zamówienia i Z, nie późniejszy
+3. Exact po `shadow.event_id` z osadzonego legacy decision.
+4. Fallback: najnowszy snapshot dla tego samego zamówienia i Z, nie późniejszy
    niż decyzja oraz nie starszy niż 15 minut. Remis najnowszego czasu jest
    `AMBIGUOUS`; ekstraktor nie cofa się do wygodniejszego rekordu.
 
 ### Atestacja aktora konsoli
 
-Join używa `order_id` + zapisanej nazwy H + czasu przypisania (exact, potem
-±30 s). Nazwa służy tylko do joinu i nie jest emitowana. Do joinu trafiają
+Nowa para A-3 najpierw konsumuje receipt-bound, pseudonimowane
+`learning.assigned_by`. Starsze rekordy używają `order_id` + zapisanej nazwy H
++ czasu przypisania (exact, potem ±30 s). Nazwa służy tylko do joinu i nie jest
+emitowana. Do joinu trafiają
 wyłącznie wykonane `mode=live`, `kind=assign`; `shadow`, `edit`, `cancel` i
 `parcel_assign` są wykluczone.
 
@@ -113,10 +120,12 @@ Najważniejsze pola top-level:
 |---|---|
 | `schema_version` | zawsze `decision_episode_v1` |
 | `episode_id`, `decision_key`, `decision_key_source` | stabilna tożsamość i provenance |
-| `lifecycle_event_id`, `shadow_event_id`, `order_id` | bezpośrednie klucze źródłowe lub `null` |
+| `lifecycle_event_id`, `assignment_lifecycle_event_id`, `engine_decision_event_id`, `learning_event_id`, `shadow_event_id`, `order_id` | bezpośrednie klucze źródłowe lub `null`; learning ID wiąże późniejsze wyjaśnienie D3 |
 | `category`, `first_choice_eligible` | pierwsze przypisanie kontra reassign |
-| `action` | `OVERRIDE` albo `AGREE` |
+| `action` | `OVERRIDE`, `AGREE` albo `ESCALATION_RESOLUTION` |
+| `proposal_output_type`, `learning_event_type`, `reason`, `explanation` | addytywny kontrakt D1/D3 lub `null` dla legacy |
 | `panel_source` | techniczna droga zapisu, nigdy dowód osoby |
+| `actor`, `actor_id`, `actor_provenance`, `actor_audit_schema` | pseudonimowana atestacja i dokładny wariant schematu audytu albo jawny brak |
 | `cohort` | `POST_A8` albo `PRE_A8` |
 | `proposal_at`, `assignment_at`, `learning_at` | UTC ISO-8601 albo `null` |
 | `proposed_courier_id`, `actual_courier_id` | Z i H zapisane w learning |
@@ -133,8 +142,9 @@ Najważniejsze pola top-level:
 | `analysis_state` | `ELIGIBLE` albo fail-closed `HOLD` |
 | `missing_reasons` | wyłącznie kanoniczne enumy braków |
 
-`recorded_pool.candidate_count` liczy unikalne `courier_id` z `best` i
-`alternatives`; pierwszy zapis wygrywa przy historycznym duplikacie best.
+`recorded_pool.candidate_count` liczy unikalne `courier_id` z `best`,
+`alternatives` i nested `proposal_best_of_worst.candidate`; pierwszy zapis
+wygrywa przy historycznym duplikacie best.
 `world_complete=false`: top-16 (w praktyce zwykle mniej alternatyw) nie jest
 pełnym zapisem świata wyboru. H nieobecny w jednoznacznie połączonej puli daje
 `human_candidate=null`, `OUT_OF_RECORDED_POOL` i `HOLD`. Nie powstaje
@@ -217,7 +227,7 @@ censusem i zawsze niosą `PRE_A8_CONTAMINATED`.
 
 Raport liczy osobno `POST_A8` i `PRE_A8`:
 
-- wszystkie `OVERRIDE`/`AGREE` z learning oraz osobno populację pierwszego
+- wszystkie `OVERRIDE`/`AGREE`/`ESCALATION_RESOLUTION` z learning oraz osobno populację pierwszego
   wyboru po wyłączeniu `REASSIGN`;
 - `unique_join_rate`: unikalny join assignment, shadow **i lifecycle key** /
   wszystkie rekordy pierwszego wyboru; raport podaje też osobne stopy

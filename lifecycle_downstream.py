@@ -396,6 +396,39 @@ def apply(event: dict) -> None:
                 _raise_on_error=True,
                 _context_by_receipt=panel_learning_context,
             )
+            # Zużyj A-3 causal index także po PANEL_AGREE/NONE. Bez tego stary
+            # kontekst mógłby przeżyć zgodne przypisanie i zostać błędnie
+            # połączony z późniejszym reassignem tego samego order_id. Exact
+            # CAS chroni nowszą decyzję; cleanup nie jest prawdą learningu i
+            # dlatego pozostaje fail-soft wobec canonical lifecycle.
+            if (
+                isinstance(panel_learning_context, dict)
+                and panel_learning_context.get("always_propose_enabled") is True
+                and str(courier_id) != str(pw.KOORDYNATOR_ID)
+                and isinstance(
+                    panel_learning_context.get(
+                        "always_propose_decision_context"
+                    ),
+                    dict,
+                )
+            ):
+                try:
+                    from dispatch_v2.core import (
+                        always_propose_learning as _a3_learning,
+                    )
+                    _a3_context = panel_learning_context[
+                        "always_propose_decision_context"
+                    ]
+                    _a3_learning.acknowledge_decision(
+                        oid,
+                        _a3_context.get("decision_event_id"),
+                    )
+                except Exception as exc:  # cleanup TTL/CAS, nie lifecycle truth
+                    _log.warning(
+                        "A3 context cleanup fail-safe oid=%s: %s",
+                        oid,
+                        type(exc).__name__,
+                    )
         pw._save_plan_on_assign_signal(
             oid,
             courier_id,

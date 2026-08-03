@@ -12,8 +12,10 @@ ZAWSZE emituje wynik — nigdy cicho „nic". Trzy kanoniczne typy owner-facing:
                         Kanon = istniejący marker `hard35_least_damage_alert`
                         (verdict KOORD + best nazwany + best_effort; noc 28.07,
                         core/selection.py + telegram_approver._is_hard35_owner_alert).
-  OWNER_EXCEPTION     — ścieżka nadpisania przez właściciela (owner ACK +
-                        reason-code). PRODUCENT poza zakresem A-3 (extension point).
+  OWNER_EXCEPTION     — późniejszy ręczny wybór inny niż wynik silnika.
+                        Rejestrowany automatycznie, bez blokującego pytania;
+                        początkowo reason="nieokreślony", z trwałym ID do
+                        późniejszego wyjaśnienia i analizy wzorców.
 
 Poza tą trójką istnieją OPERACYJNE eskalacje do koordynatora (pusta pula/no_solo,
 stale-state, geometry-blind, commit-divergence, difficult-geometry) — świadomie
@@ -54,8 +56,8 @@ ALL_LABELS = OWNER_TYPES + (COORDINATOR_ESCALATION,)
 
 # Marker istniejącej tier-3 least-damage (parytet z telegram._is_hard35_owner_alert).
 LEAST_DAMAGE_REASON_PREFIX = "hard35_least_damage_alert"
-# Reason-code / atrybut ścieżki nadpisania właściciela (extension point; producent
-# poza A-3 — np. manual_overrides / owner-ACK card).
+# Legacy marker/atrybut nadpisania widoczny już w samym PipelineResult. Główny
+# producent D-A3-3 żyje później na granicy assignmentu i nie mutuje decyzji.
 OWNER_EXCEPTION_REASON_PREFIX = "owner_exception"
 # Verdykty poza kontraktem always-propose (nie „zlecenie wymagające decyzji TERAZ").
 _NON_DECISION_VERDICTS = frozenset({"SKIP", "OBSERVE"})
@@ -80,7 +82,7 @@ def is_least_damage_alert(result: Any) -> bool:
 
 
 def is_owner_exception(result: Any) -> bool:
-    """Jawne nadpisanie właściciela (owner ACK + reason-code). Extension point A-3."""
+    """Jawne nadpisanie zakodowane już w wyniku (legacy/extension point)."""
     if bool(getattr(result, "owner_exception", False)):
         return True
     return _reason(result).startswith(OWNER_EXCEPTION_REASON_PREFIX)

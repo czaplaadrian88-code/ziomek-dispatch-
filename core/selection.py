@@ -1360,6 +1360,11 @@ def select_and_emit(ctx: SelectionContext, candidates: list):
         return _result_be
 
     # R29 SOLO fallback: zamiast SKIP — spróbuj przydzielić SOLO (pusty bag, ignoruje R1/R5/R8)
+    # A-3 jest wyłącznie bocznym instrumentem. OFF nie tworzy nawet dodatkowej
+    # listy; ON zachowuje wynik KAŻDEJ próby floty, także HARD-NO/brak pozycji/
+    # błąd, aby końcowy no_solo nie zgubił diagnostycznego CID.
+    _a3_always_propose_on = C.decision_flag("ENABLE_ALWAYS_PROPOSE")
+    _a3_solo_observations = [] if _a3_always_propose_on else None
     solo_best = None
     solo_best_score = -999
     for cid, cs in fleet_snapshot.items():
@@ -1377,6 +1382,20 @@ def select_and_emit(ctx: SelectionContext, candidates: list):
             else _sanitize_courier_pos(getattr(cs, "pos", None))
         )
         if courier_pos is None and _origin is None:
+            if _a3_solo_observations is not None:
+                _a3_solo_observations.append(Candidate(
+                    courier_id=cid,
+                    name=getattr(cs, "name", cid),
+                    score=-1_000_000_000.0,
+                    feasibility_verdict="NO",
+                    feasibility_reason="solo_fallback (NO_POSITION)",
+                    plan=None,
+                    metrics={
+                        "solo_fallback": True,
+                        "a3_observation_status": "NO_POSITION",
+                        "pickup_dist_km": None,
+                    },
+                ))
             continue
         try:
             sv, sr, sm, sp = check_feasibility_v2(
@@ -1396,31 +1415,100 @@ def select_and_emit(ctx: SelectionContext, candidates: list):
                 origin_travel=_origin,
             )
             if sv in ("YES", "MAYBE") and sp is not None:
-                sc = sm.get("pickup_dist_km", 999)
-                # Prostszy scoring: bliższy = lepszy
-                solo_score = 100 - sc * 10
+                try:
+                    sc = sm.get("pickup_dist_km", 999)
+                    # Prostszy scoring: bliższy = lepszy
+                    solo_score = 100 - sc * 10
+                except (AttributeError, TypeError, ValueError):
+                    # Brak/zepsuty dowód SOFT nie może przepisać poprawnego
+                    # verdictu HARD na EVALUATION_ERROR. Legacy nadal nie ma
+                    # solo_best; A-3 zachowuje legalność i neutralizuje ranking.
+                    if _a3_solo_observations is not None:
+                        _solo_metrics = dict(sm) if isinstance(sm, dict) else {}
+                        _solo_metrics["pickup_dist_km"] = None
+                        _a3_solo_observations.append(Candidate(
+                            courier_id=cid,
+                            name=getattr(cs, "name", cid),
+                            score=-1_000_000_000.0,
+                            feasibility_verdict=sv,
+                            feasibility_reason=f"solo_fallback ({sr})",
+                            plan=sp,
+                            metrics={
+                                **_solo_metrics,
+                                "solo_fallback": True,
+                                "a3_observation_status": (
+                                    "SOFT_EVIDENCE_MISSING"
+                                ),
+                                "r29_solo_score": None,
+                                "pos_source": getattr(
+                                    cs, "pos_source", "no_gps"
+                                ),
+                            },
+                        ))
+                    continue
+                _solo_candidate = Candidate(
+                    courier_id=cid,
+                    name=getattr(cs, "name", cid),
+                    score=round(solo_score, 2),
+                    feasibility_verdict=sv,
+                    feasibility_reason=f"solo_fallback ({sr})",
+                    plan=sp,
+                    metrics={
+                        **sm,
+                        "solo_fallback": True,
+                        "r29_solo_score": round(solo_score, 2),
+                        "pos_source": getattr(cs, "pos_source", "no_gps"),
+                        "plan_expected_version": (
+                            _plan_versions.get(str(cid), 0)
+                            if _plan_versions is not None else None
+                        ),
+                    },
+                )
+                if _a3_solo_observations is not None:
+                    _a3_solo_observations.append(_solo_candidate)
                 if solo_score > solo_best_score:
                     solo_best_score = solo_score
-                    solo_best = Candidate(
-                        courier_id=cid,
-                        name=getattr(cs, "name", cid),
-                        score=round(solo_score, 2),
-                        feasibility_verdict=sv,
-                        feasibility_reason=f"solo_fallback ({sr})",
-                        plan=sp,
-                        metrics={
-                            **sm,
-                            "solo_fallback": True,
-                            "r29_solo_score": round(solo_score, 2),
-                            "pos_source": getattr(cs, "pos_source", "no_gps"),
-                            "plan_expected_version": (
-                                _plan_versions.get(str(cid), 0)
-                                if _plan_versions is not None else None
-                            ),
-                        },
-                    )
-        except Exception:
-            pass
+                    solo_best = _solo_candidate
+            elif _a3_solo_observations is not None:
+                _solo_metrics = dict(sm) if isinstance(sm, dict) else {}
+                _solo_dist = _solo_metrics.get("pickup_dist_km")
+                try:
+                    _solo_score = 100 - float(_solo_dist) * 10
+                except (TypeError, ValueError):
+                    _solo_score = -1_000_000_000.0
+                _a3_solo_observations.append(Candidate(
+                    courier_id=cid,
+                    name=getattr(cs, "name", cid),
+                    score=round(_solo_score, 2),
+                    feasibility_verdict=sv,
+                    feasibility_reason=f"solo_fallback ({sr})",
+                    plan=sp,
+                    metrics={
+                        **_solo_metrics,
+                        "solo_fallback": True,
+                        "r29_solo_score": round(_solo_score, 2),
+                        "pos_source": getattr(cs, "pos_source", "no_gps"),
+                        "a3_observation_status": "EVALUATED",
+                    },
+                ))
+        except Exception as _solo_exc:
+            if _a3_solo_observations is not None:
+                _a3_solo_observations.append(Candidate(
+                    courier_id=cid,
+                    name=getattr(cs, "name", cid),
+                    score=-1_000_000_000.0,
+                    feasibility_verdict="NO",
+                    feasibility_reason=(
+                        "solo_fallback (EVALUATION_ERROR:"
+                        f"{type(_solo_exc).__name__})"
+                    ),
+                    plan=None,
+                    metrics={
+                        "solo_fallback": True,
+                        "a3_observation_status": "EVALUATION_ERROR",
+                        "pickup_dist_km": None,
+                    },
+                ))
 
     if solo_best is not None:
         _result_solo = PipelineResult(
@@ -1444,8 +1532,10 @@ def select_and_emit(ctx: SelectionContext, candidates: list):
         _classify_and_set_auto_route(_result_solo, fleet_snapshot, order_event, now=now, v328_fail_causes=_v328_fail_causes)
         return _result_solo
 
-    # R29 absolutny fallback: nikt nie przechodzi nawet solo — KOORD
-    return PipelineResult(
+    # R29 absolutny fallback: nikt nie przechodzi nawet solo — KOORD.
+    # A-3 dołącza nested recommend-only telemetry; legacy verdict/best pozostają
+    # dokładnie KOORD/None, więc HARD i każdy konsument wykonawczy są nietknięte.
+    _result_no_solo = PipelineResult(
         order_id=order_id,
         verdict="KOORD",
         reason=f"no_solo_candidates (fleet_n={len(candidates)}) — wszyscy odrzuceni nawet solo",
@@ -1458,3 +1548,10 @@ def select_and_emit(ctx: SelectionContext, candidates: list):
         pool_total_count=len(candidates),
         pool_feasible_count=0,
     )
+    if _a3_solo_observations is not None:
+        from dispatch_v2.core.always_propose import build_best_of_worst
+        _result_no_solo.always_propose_best_of_worst = build_best_of_worst(
+            _a3_solo_observations,
+            fleet_count=len(fleet_snapshot),
+        )
+    return _result_no_solo
