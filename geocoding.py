@@ -27,6 +27,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Callable, Optional
 
+from dispatch_v2 import address_canon as _address_canon
 from dispatch_v2 import common as C
 from dispatch_v2.common import setup_logger
 from dispatch_v2.geocoding_audit import log_geocode as _audit_log
@@ -361,7 +362,7 @@ def _normalize_key_text(address: str, city: str) -> str:
     # ulicy na „M" — „m"+„agazynowa" = całe słowo → „Magazynowa 3"/„Malachitowa 3"
     # kolidowały w kluczu „3, białystok" (113 zatrutych wpisów, same ulice M).
     # Wymóg `\d+` po markerze: „magazynowa" (m+a…) NIE pasuje, „m 3"/„m3"/„m.3" tak.
-    s = re.sub(r"\b(?:mieszkanie|lokal|lok|piętro|pietro|m)\.?\s*\d+[a-z]?\b", "", s)
+    s = _address_canon.strip_unit_suffix(s)
     s = re.sub(r"/[^\s]+", "", s)  # wszystko po pierwszym / (numery lokali)
     s = s.strip(" ,/")
     c = (city or "").strip().lower()

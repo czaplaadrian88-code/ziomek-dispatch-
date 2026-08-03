@@ -1,4 +1,19 @@
 # ZIOMEK AI DISPATCHER - BACKLOG ROZWOJU
+> **KANDYDAT SOURCE-ONLY 2026-08-03 — ROOT-FIX NEW-1 PO BLIND 491870 ITER2:**
+> commit kodu `5c8ffa2517740d3abc523922ab05093bec37ab34` usuwa przyczynę
+> kolizji adresów u źródła. Czysty `address_canon` jest jednym ownerem rejestru
+> aliasów oraz cyfrowo zakotwiczonego markera lokalu; `common` i `route_order`
+> delegują bez drugich słowników/regexów. Realny, read-only snapshot żywego
+> `orders_state` wnosi 37 unikalnych par pickup bez ID/dostaw/GPS/nazw/kurierów,
+> z property oracle „inny numer/inna ulica ⇒ inny klucz”. Hot-path `8!`
+> memoizuje klucz raz per rekord: licznik 4 zamiast 23524 po kontrolowanej
+> mutacji. NEW-1 RED `16F` → GREEN; mutacja kotwicy zabita `20F`, mutacja cache
+> zabita `1F`; oryginalny AST ratchet nieosłabiony. Pełna hermetyczna suita
+> `6970P/0F/74S/8X/159W` vs baseline `6939P/0F/74S/8X/159W`, delta nowych
+> faili/skipów/xfaili/warnings = 0. Zero live/deploy/restart/flipa/migracji;
+> flaga pozostaje OFF. Następna bramka: świeży blind, potem osobny ACK ownera
+> przed flipem. Raport: `/root/artifacts/new1-address-normalizer-20260803/REPORT.md`.
+
 > **KANDYDAT SOURCE-ONLY 2026-08-03 — FIX 491870 ITERACJA 2 PO BLOCKERZE:**
 > HARD NO-RETURN pozostaje nienaruszalny także dla `n_carried=0`; pierwotny
 > oracle zachowano bez odwracania, a siedem klas mutacji dowodzi jego działania.
