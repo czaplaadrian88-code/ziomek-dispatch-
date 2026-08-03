@@ -1,27 +1,28 @@
 # ZIOMEK AI DISPATCHER - BACKLOG ROZWOJU
-> **KANDYDAT SOURCE-ONLY 2026-08-03 — A-3 D-A3-1/2/3:** jeden kontrakt
-> `proposal_output_type` klasyfikuje operacyjne KOORD jako
-> `COORDINATOR_ESCALATION`; istniejący `learning_log.jsonl` jest jedynym
-> trwałym strumieniem par decyzja→późniejszy ręczny assignment. Exact receipt
-> zapisuje finalny CID, czas/source i pseudonimowanego operatora również z
-> bieżącego legacy audytu `gastro_assign.py`; `KOORDYNATOR_ID` pozostaje holdem,
-> a stale `pending_proposals` nie może wygrać z nowszym kontekstem. D3 zapisuje
-> automatyczny `OWNER_EXCEPTION`, `reason=nieokreślony` i stabilny ID późniejszego
-> wyjaśnienia. D2 dodaje wyłącznie nested shadow best-of-worst: HARD-safe przed
-> SOFT, kompletna odległość→score→CID, a przy niepełnym dowodzie SOFT neutralny
-> CID; all-HARD daje recommend-only eskalację, nigdy wykonywalny best. Flaga
-> `ENABLE_ALWAYS_PROPOSE` nadal default OFF; verdict/best/auto-route bez zmian.
-> RED utrwalony, focused 69/69, broad 267/267, mutacja HARD czerwieni, lifecycle
-> 566/566. Pełna hermetyczna regresja `7008P/0F/74S/8X/159W` vs baseline
-> `6982P/0F/74S/8X/159W`, delta nowych failów/skipów/xfaili/warnings = 0.
-> Branch `wt/a3-always-propose-d123-codex-20260803`; commit implementacji
-> `2741900fed4c3abb2f7f06c698cf5cf40c397da4`. Drugi pełny bieg generatora
-> także ma `7008P/0F/74S/8X/159W`; manifest v39 zawiera dokładnie +26 nodeidów,
-> zachowuje outcome contracts v38 (50 pkgroot-only skipów nie promowano) i ma
-> collect parity 7086/7086. Gate jeszcze przed transition.
-> Zero live/deploy/restart/flip/migracji. Reguła najmniej-złego jest
-> wyraźnie wydzielona do akceptacji ownera w
-> `/root/artifacts/a3-always-propose-20260803/REPORT.md`.
+> **KANDYDAT SOURCE-ONLY 2026-08-03 — A-3 PO BLIND
+> `ACCEPT_WITH_CHANGES`:** commit poprawki
+> `aa4555b56139cd9750ba5b35d922c6cfc4c53b3c` domyka F3/F4/F1/F5 u
+> kanonicznych ownerów. `select_and_emit` zawsze zachowuje jawną decyzję KOORD:
+> każdy wyjątek 10 seamów best-of-worst, publicznego adaptera i loggera daje
+> deterministyczną diagnostyczną eskalację bez exception text/PII. Diagnostyka
+> ma `a3_solo_score` i marker, nigdy ogólny `score`; `decision_episode_v1`
+> buduje wiersz z bogatego legacy best/alternatives i dopiero nakłada pola
+> `a3_*`. Jeden enum/mapa reasonów rozróżnia `STALE`, `GEOMETRY`, `COMMIT`,
+> `DIFFICULT`, a każde inne źródło jest jawnie `UNKNOWN`. Hold
+> `KOORDYNATOR_ID` omija cały opcjonalny tor A-3 i nadal zapisuje istniejący
+> legacy `PANEL_OVERRIDE`; późniejszy realny assignment zapisuje osobne D1.
+> Flaga `ENABLE_ALWAYS_PROPOSE` pozostaje default OFF; verdict/best/auto-route
+> bez zmian. Blind oracle na `79ff801af`: 30F/60P; po fixie focused 97/97,
+> mutation/fault/OFF 16/16, broad 289/289, lifecycle 566/566. Finalna pełna
+> hermetyczna regresja: `7036P/0F/74S/8X/159W` vs baseline `79ff801af`
+> `7008P/0F/74S/8X/159W`; delta outcome = +28P i zero zmian F/S/X/W.
+> Manifest v40 ma 7114 nodeidów, SHA
+> `f556f9da1ce3f62c8f7c252b15454b356a9d222c77ad8410b652f0cb4c8076d2`
+> oraz dokładnie zachowane 37 outcome contracts v39; 50 pkgroot-only skipów
+> ponownie nie zostało wypromowanych. Branch
+> `wt/a3-always-propose-d123-codex-20260803`. Zero merge/live/deploy/restart/
+> flip/migracji; następny krok to szybki delta re-blind dokładnego finalnego
+> HEAD. Raport: `/root/artifacts/a3-always-propose-20260803/REPORT.md`.
 
 > **KANDYDAT SOURCE-ONLY 2026-08-03 — ROOT-FIX NEW-1 PO BLIND 491870 ITER2:**
 > commit kodu `5c8ffa2517740d3abc523922ab05093bec37ab34` usuwa przyczynę
