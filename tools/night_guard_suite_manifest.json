@@ -1,6 +1,6 @@
 {
-  "base_sha": "8d132118876e519ea2834758b4a7536884bf98b4",
-  "manifest_version": 38,
+  "base_sha": "2741900fed4c3abb2f7f06c698cf5cf40c397da4",
+  "manifest_version": 39,
   "nodeids": [
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix1_kurier_ids_load_fail_logs_error_and_dedups",
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix2_bag_not_stale_dedup_same_input",
@@ -118,6 +118,31 @@
     "tests/test_a3_geocode_cache_ttl.py::test_is_fresh_missing_cached_at_returns_true_defensive",
     "tests/test_a3_geocode_cache_ttl.py::test_is_fresh_negative_age_clock_skew_returns_true",
     "tests/test_a3_geocode_cache_ttl.py::test_is_fresh_within_ttl_returns_true",
+    "tests/test_a3_owner_decisions_2026_08_03.py::test_a3_durable_projection_is_idempotent_for_escalation_resolution",
+    "tests/test_a3_owner_decisions_2026_08_03.py::test_actor_attestation_is_pseudonymous_and_never_stores_raw_identity",
+    "tests/test_a3_owner_decisions_2026_08_03.py::test_all_operational_escalation_twins_use_the_same_learning_builder[commit_divergence_gate (delta=16min)]",
+    "tests/test_a3_owner_decisions_2026_08_03.py::test_all_operational_escalation_twins_use_the_same_learning_builder[difficult_geometry_redirect (score=-40)]",
+    "tests/test_a3_owner_decisions_2026_08_03.py::test_all_operational_escalation_twins_use_the_same_learning_builder[geometry_blind_fallback (pool=2)]",
+    "tests/test_a3_owner_decisions_2026_08_03.py::test_all_operational_escalation_twins_use_the_same_learning_builder[no_solo_candidates (fleet_n=2)]",
+    "tests/test_a3_owner_decisions_2026_08_03.py::test_all_operational_escalation_twins_use_the_same_learning_builder[state_likely_stale (age=90s)]",
+    "tests/test_a3_owner_decisions_2026_08_03.py::test_best_of_worst_policy_is_hard_first_and_tie_is_canonical_cid",
+    "tests/test_a3_owner_decisions_2026_08_03.py::test_context_index_is_first_wins_idempotent_and_ack_is_exact_cas",
+    "tests/test_a3_owner_decisions_2026_08_03.py::test_coordinator_hold_is_not_mistaken_for_final_human_assignment",
+    "tests/test_a3_owner_decisions_2026_08_03.py::test_exact_a3_context_wins_over_conflicting_stale_pending[COORDINATOR_ESCALATION-None-20-COORDINATOR_ESCALATION_RESOLVED]",
+    "tests/test_a3_owner_decisions_2026_08_03.py::test_exact_a3_context_wins_over_conflicting_stale_pending[EXECUTABLE_PROPOSAL-10-20-PANEL_OVERRIDE]",
+    "tests/test_a3_owner_decisions_2026_08_03.py::test_exact_a3_context_wins_over_conflicting_stale_pending[EXECUTABLE_PROPOSAL-20-10-None]",
+    "tests/test_a3_owner_decisions_2026_08_03.py::test_flag_off_preserves_legacy_panel_receipt_shape",
+    "tests/test_a3_owner_decisions_2026_08_03.py::test_lifecycle_consumes_context_only_after_final_courier_assignment[20-expected_acknowledgements0]",
+    "tests/test_a3_owner_decisions_2026_08_03.py::test_lifecycle_consumes_context_only_after_final_courier_assignment[26-expected_acknowledgements1]",
+    "tests/test_a3_owner_decisions_2026_08_03.py::test_missing_gps_soft_evidence_is_neutral_not_a_hidden_penalty",
+    "tests/test_a3_owner_decisions_2026_08_03.py::test_missing_soft_metric_never_rewrites_a_hard_safe_verdict",
+    "tests/test_a3_owner_decisions_2026_08_03.py::test_mutation_removing_hard_filter_changes_winner",
+    "tests/test_a3_owner_decisions_2026_08_03.py::test_nonempty_fleet_can_never_degrade_to_candidate_null",
+    "tests/test_a3_owner_decisions_2026_08_03.py::test_off_is_byte_shape_parity_for_no_solo",
+    "tests/test_a3_owner_decisions_2026_08_03.py::test_ratchet_single_learning_stream_and_exact_context_wiring",
+    "tests/test_a3_owner_decisions_2026_08_03.py::test_red_escalation_resolution_is_written_to_existing_learning_stream",
+    "tests/test_a3_owner_decisions_2026_08_03.py::test_red_manual_override_is_owner_exception_without_reason_prompt",
+    "tests/test_a3_owner_decisions_2026_08_03.py::test_red_no_solo_on_emits_deterministic_candidate_without_changing_decision",
     "tests/test_a41_broadcast_handlers.py::script_run",
     "tests/test_a4_config_reload_pubsub.py::test_emit_config_reload_defensive_db_fail_returns_none",
     "tests/test_a4_config_reload_pubsub.py::test_emit_config_reload_happy_path",
@@ -1969,6 +1994,7 @@
     "tests/test_decision_engine_f21.py::test_r8_hard_bundle2_pass",
     "tests/test_decision_engine_f21.py::test_r8_hard_bundle2_reject",
     "tests/test_decision_engine_f21.py::test_r8_hard_bundle3_reject",
+    "tests/test_decision_episode_v1.py::test_a3_escalation_resolution_is_analyzable_with_exact_dual_ids",
     "tests/test_decision_episode_v1.py::test_audit_legacy_normalization_is_narrow_and_test_actor_is_filtered",
     "tests/test_decision_episode_v1.py::test_cli_is_rotation_aware_deterministic_and_writes_only_with_out",
     "tests/test_decision_episode_v1.py::test_colliding_shadow_key_is_explicitly_ambiguous_not_synthetic_lifecycle",
@@ -7063,7 +7089,7 @@
     "tests/test_zombie01_pickup_guard.py::test_picked_up_recent_kept",
     "tests/test_zombie01_pickup_guard.py::test_zombie_assigned_with_stale_pickup_filtered"
   ],
-  "nodeids_sha256": "fe0bdfa644e995f608e591e987e7ee17fd34b765d3fe8ecee862ce058493a727",
+  "nodeids_sha256": "71c6e0981195ca8ee08e124cc8e8503700c4427e855573bad8fdfb36c34014f8",
   "outcome_contracts": {
     "tests/test_canon_static_check_a1.py::test_defer_completion_guard_armed_when_defer_exists": [
       "skipped"
@@ -7186,8 +7212,8 @@
       "skipped"
     ]
   },
-  "owner": "Adrian",
-  "reason": "re-seed po fali at-gate v4 (+32 nodeidy process-debt) + dzisiejszych merge'ach 03.08 (autokoord i1+i2, NEW-1, 491870-OFF, codweekly, parity); korekta kontraktu xfail->passed external_daily_reset po kanonicznym cutoverze; werdykt Q5 CLEAN 03.08 = W2",
+  "owner": "Codex A3 D-A3-1/2/3",
+  "reason": "A3 owner-decision oracle: +26 nodeids; v38 live-root outcome contracts preserved (50 pkgroot-only skips not promoted)",
   "schema_version": 1,
-  "updated_at_utc": "2026-08-03T12:28:46+00:00"
+  "updated_at_utc": "2026-08-03T14:07:26+00:00"
 }

@@ -14,8 +14,12 @@
 > RED utrwalony, focused 69/69, broad 267/267, mutacja HARD czerwieni, lifecycle
 > 566/566. Pełna hermetyczna regresja `7008P/0F/74S/8X/159W` vs baseline
 > `6982P/0F/74S/8X/159W`, delta nowych failów/skipów/xfaili/warnings = 0.
-> Branch `wt/a3-always-propose-d123-codex-20260803`; commit/gate jeszcze przed
-> zapisem. Zero live/deploy/restart/flip/migracji. Reguła najmniej-złego jest
+> Branch `wt/a3-always-propose-d123-codex-20260803`; commit implementacji
+> `2741900fed4c3abb2f7f06c698cf5cf40c397da4`. Drugi pełny bieg generatora
+> także ma `7008P/0F/74S/8X/159W`; manifest v39 zawiera dokładnie +26 nodeidów,
+> zachowuje outcome contracts v38 (50 pkgroot-only skipów nie promowano) i ma
+> collect parity 7086/7086. Gate jeszcze przed transition.
+> Zero live/deploy/restart/flip/migracji. Reguła najmniej-złego jest
 > wyraźnie wydzielona do akceptacji ownera w
 > `/root/artifacts/a3-always-propose-20260803/REPORT.md`.
 
