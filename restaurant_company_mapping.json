@@ -63,14 +63,14 @@
     "Trufla i Wino": 223,
     "Trzy po trzy MIC": 177,
     "Trzy po trzy SIEN": 190,
-    "Upalna Pizza": 122,
     "Uwędzony Beef & Chicken": 229,
     "Zapiecek": 170,
-    "Ziemniaczek": 218,
     "350 stopni": 114,
     "500 stopni 500 stopni": 28
   },
-  "unmatched_sheet": [],
+  "unmatched_sheet": [
+    "Upalna Pizza"
+  ],
   "unused_panel": [
     "3Giga",
     "Bar Eljot",
@@ -81,7 +81,8 @@
     "Orthdruk",
     "Pruszynka NIEAKTYWNE",
     "Test",
-    "tst"
+    "tst",
+    "Ziemniaczek"
   ],
   "method_per_entry": {
     "Arsenał Panteon": "strict",
@@ -143,23 +144,21 @@
     "Trufla i Wino": "strict",
     "Trzy po trzy MIC": "alias",
     "Trzy po trzy SIEN": "alias",
-    "Upalna Pizza": "strict",
     "Uwędzony Beef & Chicken": "strict",
     "Zapiecek": "strict",
-    "Ziemniaczek": "strict",
     "350 stopni": "alias",
     "500 stopni 500 stopni": "alias"
   },
-  "generated_at": "2026-07-03T00:58:49.591078+02:00",
+  "generated_at": "2026-08-03T11:47:36.547316+02:00",
   "source": "panel_dropdown_scrape_v2",
   "counts": {
-    "sheet_total": 65,
-    "panel_total": 77,
-    "matched": 65,
-    "unmatched_sheet": 0,
-    "unused_panel": 10,
+    "sheet_total": 64,
+    "panel_total": 76,
+    "matched": 63,
+    "unmatched_sheet": 1,
+    "unused_panel": 11,
     "by_method": {
-      "strict": 54,
+      "strict": 52,
       "token": 5,
       "alias": 6
     }
