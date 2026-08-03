@@ -186,7 +186,21 @@ def test_mutation_probe_zero_work_to_ok_is_rejected():
     assert result["heartbeat"]["coverage"]["coverage_ratio"] is None
 
 
-def test_mutation_probe_bypassed_kotlin_projection_is_broken():
+def test_mutation_probe_bypassed_kotlin_projection_is_broken(monkeypatch):
+    # De-flake (root cause, proven by 3000x isolation stress = ~0.5% fail):
+    # evaluate() stamps heartbeat.run_id with a random uuid4 whose hex
+    # (chars 0-9a-f) occasionally contains the substring "501" (~0.47%/run),
+    # which tripped `assert "501" not in serialized`. This is NOT order
+    # dependence -- the collision reproduces standalone. run_id is incidental
+    # to this oracle: its intent is that raw courier/order identifiers are
+    # hashed (redacted) and never leak into the artifact. Pin run_id to a
+    # deterministic, collision-free value so the whole-result redaction scan is
+    # hermetic without weakening the assertion or the mutation probe.
+    monkeypatch.setattr(
+        MON.uuid,
+        "uuid4",
+        lambda: MON.uuid.UUID("00000000-0000-4000-8000-000000000000"),
+    )
     order_id = "900001"
     canonical = MON.project_kotlin_build_steps(_dto((order_id,)))
     divergent = _dto(
