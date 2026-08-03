@@ -373,6 +373,44 @@ def test_pipeline_propagates_physical_key_inputs_only_when_flag_on(monkeypatch):
     assert on.restaurant == "Punkt A"
 
 
+def test_pipeline_to_physical_owner_to_plan_repair_e2e(monkeypatch):
+    from dispatch_v2 import dispatch_pipeline as DP
+
+    _set_new_path(monkeypatch, True)
+    records = _orders()
+    # Przesunięcie całej syntetycznej geometrii do produkcyjnego bboxu wejścia
+    # nie zmienia relacji odległości ani oczekiwanej kolejności.
+    lat_delta, lon_delta = 1.13, 3.16
+    simulations = []
+    for oid, source in records.items():
+        record = dict(source, order_id=oid)
+        record["pickup_coords"] = [
+            source["pickup_coords"][0] + lat_delta,
+            source["pickup_coords"][1] + lon_delta,
+        ]
+        record["delivery_coords"] = [
+            source["delivery_coords"][0] + lat_delta,
+            source["delivery_coords"][1] + lon_delta,
+        ]
+        simulations.append(DP._bag_dict_to_ordersim(record))
+
+    by_oid = {sim.order_id: vars(sim) for sim in simulations}
+    assert route_order.same_physical_pickup_point(
+        simulations[0], simulations[2]
+    )
+    before = _late_slot_sequence()
+    assert _physical_no_return(before, by_oid)
+
+    after = P._apply_canon_order_invariants(
+        before,
+        by_oid,
+        (START[0] + lat_delta, START[1] + lon_delta),
+        NOW,
+    )
+    assert _ids(after) != _ids(before)
+    assert _physical_no_return(after, by_oid) == []
+
+
 def test_f5_fourth_change_is_gated_and_never_uses_180m_identity(monkeypatch):
     base = SimpleNamespace(
         order_id="B",
