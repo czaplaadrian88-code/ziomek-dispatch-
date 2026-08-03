@@ -50,17 +50,6 @@ def tmp_queue(monkeypatch):
     return qp
 
 
-@pytest.fixture
-def persistent_tmpdir():
-    root = Path("/root/worktrees")
-    root.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(
-        prefix="rutcom-rollback-test-",
-        dir=str(root),
-    ) as directory:
-        yield Path(directory)
-
-
 def _seed_pre_policy_v5(queue_path: str, *, oid: str = "8") -> dict:
     """Persist one exact pre-v6 envelope for code-rollback compatibility."""
     requested_at = ctr._utc_now().isoformat()
@@ -97,6 +86,24 @@ def _rollforward_code_manifest(*, salt: str = "v28") -> dict:
         ).encode("utf-8")
     ).hexdigest()
     return {**body, "manifest_sha256": manifest_sha256}
+
+
+def test_queue_compatibility_audit_is_diagnostic_not_code_revert_authority(
+    tmp_queue,
+):
+    empty = ctr.queue_compatibility_status()
+    assert empty["safe_empty_queue"] is True
+    assert empty["records"] == 0
+    assert not hasattr(ctr, "prepare_legacy_rollback")
+    assert not hasattr(ctr, "release_legacy_rollback_fence")
+
+    receipt = _seed_pre_policy_v5(tmp_queue)
+    blocked = ctr.queue_compatibility_status()
+    assert blocked["safe_empty_queue"] is False
+    assert blocked["pending_pre_policy_records"] == 1
+    assert blocked["blockers"] == [
+        f"{receipt['order_id']}:pending_pre_policy_receipt"
+    ]
 
 
 def test_canonical_enqueue_is_never_consumed_by_oid_only_drain(tmp_queue):
@@ -189,7 +196,7 @@ def test_unclaimed_orphan_successor_is_retained_as_poison_evidence(tmp_queue):
         "446": orphan
     }
     assert ctr.current_receipt("446") is None
-    status = ctr.legacy_rollback_status()
+    status = ctr.queue_compatibility_status()
     assert status["safe_empty_queue"] is False
     assert status["blockers"] == ["446:orphan_successor"]
 
@@ -212,7 +219,7 @@ def test_malformed_unclaimed_receipt_is_retained_as_poison_evidence(tmp_queue):
     assert not ctr.verify_pending_receipt(malformed, order_id="446")
     with pytest.raises(RuntimeError, match="poison record"):
         ctr.enqueue(["446"], source="coordinator_console")
-    status = ctr.legacy_rollback_status()
+    status = ctr.queue_compatibility_status()
     assert status["safe_empty_queue"] is False
     assert status["blockers"] == ["446:invalid_receipt"]
 
@@ -241,7 +248,7 @@ def test_v6_policy_snapshot_mutations_are_poison_evidence(
 
     assert ctr.pending_with_receipts() == {}
     assert ctr.current_receipt("447") is None
-    status = ctr.legacy_rollback_status()
+    status = ctr.queue_compatibility_status()
     assert status["safe_empty_queue"] is False
     assert status["blockers"] == ["447:invalid_receipt"]
 
@@ -358,7 +365,7 @@ def test_legacy_v2_receipt_is_not_a_v4_authority(tmp_queue):
     assert ctr.pending_with_receipts() == {}
     assert json.load(open(tmp_queue)) == {"445": legacy_v2}
     assert ctr.current_receipt("445") is None
-    status = ctr.legacy_rollback_status()
+    status = ctr.queue_compatibility_status()
     assert status["safe_empty_queue"] is False
     assert status["blockers"] == ["445:invalid_receipt"]
 
@@ -789,7 +796,8 @@ def test_elastic_coordinator_event_never_enters_czasowka_receipt_policy(
 
 def test_forward_rollout_fence_atomically_blocks_new_enqueue(tmp_queue):
     """A coordinator click cannot appear between green preflight and flip."""
-    receipt = ctr.acquire_forward_rollout_fence()
+    manifest = _rollforward_code_manifest()
+    receipt = ctr.acquire_forward_rollout_fence(manifest)
 
     assert receipt["acquired"] is True
     assert receipt["forward_fence_valid"] is True
@@ -797,13 +805,18 @@ def test_forward_rollout_fence_atomically_blocks_new_enqueue(tmp_queue):
         ctr.enqueue(["8"], source="coordinator_panel")
     status = ctr.forward_rollout_fence_status()
     assert status["forward_fence_valid"] is True
+    assert status["forward_fence_code_manifest"] == manifest
     with pytest.raises(RuntimeError, match="id mismatch"):
         ctr.release_forward_rollout_fence(
-            "00000000-0000-4000-8000-000000000001"
+            "00000000-0000-4000-8000-000000000001",
+            lambda: manifest,
+            lambda: True,
         )
 
     assert ctr.release_forward_rollout_fence(
-        receipt["forward_fence_id"]
+        receipt["forward_fence_id"],
+        lambda: manifest,
+        lambda: True,
     ) is True
     assert ctr.forward_rollout_fence_status()[
         "forward_fence_present"
@@ -813,7 +826,9 @@ def test_forward_rollout_fence_atomically_blocks_new_enqueue(tmp_queue):
 
 def test_forward_rollout_fence_detects_queue_mutation(tmp_queue):
     """Any non-cooperating queue writer invalidates the rollout receipt."""
-    receipt = ctr.acquire_forward_rollout_fence()
+    receipt = ctr.acquire_forward_rollout_fence(
+        _rollforward_code_manifest()
+    )
     Path(tmp_queue).write_text(
         json.dumps({"unexpected": "mutation"}),
         encoding="utf-8",
@@ -848,7 +863,8 @@ def test_forward_rollout_fence_blocks_every_queue_mutator(tmp_queue):
             "source": "coordinator_force",
         },
     }
-    fence = ctr.acquire_forward_rollout_fence()
+    manifest = _rollforward_code_manifest()
+    fence = ctr.acquire_forward_rollout_fence(manifest)
     before = Path(tmp_queue).read_bytes()
 
     assert ctr.pending_with_receipts() == {}
@@ -858,8 +874,86 @@ def test_forward_rollout_fence_blocks_every_queue_mutator(tmp_queue):
     assert Path(tmp_queue).read_bytes() == before
     assert ctr.forward_rollout_fence_status()["forward_fence_valid"] is True
     assert ctr.release_forward_rollout_fence(
-        fence["forward_fence_id"]
+        fence["forward_fence_id"],
+        lambda: manifest,
+        lambda: True,
     ) is True
+
+
+def test_forward_fence_release_restores_exact_fence_on_code_toctou(tmp_queue):
+    """Byte drift during unlink never opens queue writers, even on error."""
+    expected = _rollforward_code_manifest(salt="expected")
+    drifted = _rollforward_code_manifest(salt="drifted")
+    fence = ctr.acquire_forward_rollout_fence(expected)
+    observed = iter([expected, drifted])
+
+    with pytest.raises(RuntimeError, match="changed during release"):
+        ctr.release_forward_rollout_fence(
+            fence["forward_fence_id"],
+            lambda: next(observed),
+            lambda: True,
+        )
+
+    status = ctr.forward_rollout_fence_status()
+    assert status["forward_fence_present"] is True
+    assert status["forward_fence_release_pending"] is False
+    assert status["forward_fence_valid"] is True
+    assert status["forward_fence_code_manifest"] == expected
+    with pytest.raises(RuntimeError, match="forward authority rollout"):
+        ctr.enqueue(["9"], source="coordinator_panel")
+
+
+def test_forward_fence_release_restores_on_writer_quiescence_race(tmp_queue):
+    """Writer activation inside release restores the same durable fence."""
+    manifest = _rollforward_code_manifest()
+    fence = ctr.acquire_forward_rollout_fence(manifest)
+    quiescence = iter([True, False])
+
+    with pytest.raises(RuntimeError, match="quiescence changed"):
+        ctr.release_forward_rollout_fence(
+            fence["forward_fence_id"],
+            lambda: manifest,
+            lambda: next(quiescence),
+        )
+
+    status = ctr.forward_rollout_fence_status()
+    assert status["forward_fence_present"] is True
+    assert status["forward_fence_release_pending"] is False
+    assert status["forward_fence_valid"] is True
+    with pytest.raises(RuntimeError, match="forward authority rollout"):
+        ctr.enqueue(["10"], source="coordinator_panel")
+
+
+def test_forward_fence_release_marker_survives_crash_and_resumes(tmp_queue):
+    """A crash after phase one leaves a valid writer-blocking marker."""
+    manifest = _rollforward_code_manifest()
+    fence = ctr.acquire_forward_rollout_fence(manifest)
+
+    def crash_during_release():
+        raise KeyboardInterrupt("synthetic process death")
+
+    with pytest.raises(KeyboardInterrupt, match="synthetic process death"):
+        ctr.release_forward_rollout_fence(
+            fence["forward_fence_id"],
+            crash_during_release,
+            lambda: True,
+        )
+
+    pending = ctr.forward_rollout_fence_status()
+    assert pending["forward_fence_present"] is True
+    assert pending["forward_fence_release_pending"] is True
+    assert pending["forward_fence_valid"] is True
+    with pytest.raises(RuntimeError, match="forward authority rollout"):
+        ctr.enqueue(["11"], source="coordinator_panel")
+
+    assert ctr.release_forward_rollout_fence(
+        fence["forward_fence_id"],
+        lambda: manifest,
+        lambda: True,
+    ) is True
+    assert ctr.forward_rollout_fence_status()[
+        "forward_fence_present"
+    ] is False
 
 
 def test_receipt_claim_is_exact_one_shot_and_crash_retry_is_identical(
@@ -1108,7 +1202,7 @@ def test_successor_promotion_remains_valid_when_wall_clock_moves_backward(
 
     assert promoted["requested_at"] == successor["requested_at"]
     assert promoted["eligible_at"] == successor["eligible_at"]
-    assert ctr.rollback_record_is_unclaimed(promoted, order_id="8")
+    assert ctr.queue_record_is_unclaimed(promoted, order_id="8")
     assert ctr.pending_with_receipts() == {}
     assert json.loads(Path(tmp_queue).read_text(encoding="utf-8")) == {
         "8": promoted
@@ -1116,6 +1210,50 @@ def test_successor_promotion_remains_valid_when_wall_clock_moves_backward(
 
     monkeypatch.setattr(ctr, "_utc_now", lambda: t1)
     assert ctr.pending_with_receipts() == {"8": promoted}
+
+
+def test_successor_cannot_precede_claimed_head_after_deeper_clock_rollback(
+    tmp_queue, monkeypatch
+):
+    """A causally later click cannot become authoritative before its head."""
+    from dispatch_v2 import state_machine as sm
+
+    _enable_coordinator_authority(sm, monkeypatch)
+    head_time = datetime(2026, 6, 30, 10, 0, tzinfo=timezone.utc)
+    successor_time = head_time - timedelta(hours=1)
+    ack_time = successor_time + timedelta(minutes=1)
+    monkeypatch.setattr(ctr, "_utc_now", lambda: head_time)
+    assert ctr.enqueue(["8"], source="coordinator_panel") == 1
+    head = ctr.pending_with_receipts()["8"]
+    first = sm.resolve_czasowka_ck_observation(
+        _coordinator_existing(),
+        _coordinator_payload(head, hhmm="15:40"),
+    )
+    claimed = ctr.current_receipt("8")
+    assert first.outcome.value == "apply"
+    assert claimed is not None and claimed.get("claim")
+
+    monkeypatch.setattr(ctr, "_utc_now", lambda: successor_time)
+    assert ctr.enqueue(["8"], source="coordinator_console") == 1
+    monkeypatch.setattr(ctr, "_utc_now", lambda: ack_time)
+    assert ctr.ack_receipts({"8": claimed}) == 1
+    promoted = json.loads(Path(tmp_queue).read_text(encoding="utf-8"))["8"]
+
+    assert datetime.fromisoformat(promoted["eligible_at"]) >= (
+        datetime.fromisoformat(head["eligible_at"])
+    )
+    assert not ctr.verify_pending_receipt(
+        promoted, order_id="8", now=ack_time
+    )
+    assert authority._valid_coordinator_receipt(
+        promoted,
+        order_id="8",
+        observed_at=ack_time,
+        verified_origin=True,
+    ) is False
+    assert ctr.verify_pending_receipt(
+        promoted, order_id="8", now=head_time
+    )
 
 
 def test_successor_ttl_starts_when_claimed_head_releases_without_rewriting_click(
@@ -1161,51 +1299,6 @@ def test_successor_ttl_starts_when_claimed_head_releases_without_rewriting_click
     assert resolution.outcome.value == "apply"
 
 
-def test_legacy_rollback_blocks_policy_bound_promoted_successor(
-    tmp_queue, persistent_tmpdir, monkeypatch
-):
-    """Code rollback cannot erase the click-time policy of a v6 successor."""
-    from dispatch_v2 import state_machine as sm
-
-    _enable_coordinator_authority(sm, monkeypatch)
-    t0 = datetime(2026, 6, 30, 10, 0, tzinfo=timezone.utc)
-    monkeypatch.setattr(ctr, "_utc_now", lambda: t0)
-    assert ctr.enqueue(["8"], source="coordinator_panel") == 1
-    first_pending = ctr.pending_with_receipts()["8"]
-    first = sm.resolve_czasowka_ck_observation(
-        _coordinator_existing(),
-        _coordinator_payload(first_pending, hhmm="15:40"),
-    )
-    first_claimed = ctr.current_receipt("8")
-    assert first.outcome.value == "apply"
-    assert first_claimed is not None and first_claimed.get("claim")
-
-    monkeypatch.setattr(
-        ctr, "_utc_now", lambda: t0 + timedelta(minutes=1)
-    )
-    assert ctr.enqueue(["8"], source="coordinator_console") == 1
-
-    release_at = t0 + timedelta(minutes=7)
-    monkeypatch.setattr(ctr, "_utc_now", lambda: release_at)
-    assert ctr.ack_receipts({"8": first_claimed}) == 1
-    promoted = ctr.current_receipt("8")
-    assert promoted is not None
-    assert promoted["requested_at"] == (
-        t0 + timedelta(minutes=1)
-    ).isoformat()
-    assert promoted["eligible_at"] == release_at.isoformat()
-
-    backup = persistent_tmpdir / "promoted-successor.pre-v4.json"
-    with pytest.raises(RuntimeError, match="policy_bound_receipt"):
-        ctr.prepare_legacy_rollback(
-            str(backup), _rollforward_code_manifest()
-        )
-    assert not backup.exists()
-    assert json.loads(Path(tmp_queue).read_text(encoding="utf-8")) == {
-        "8": promoted
-    }
-
-
 def test_compatibility_drain_never_consumes_claimed_transaction(
     tmp_queue, monkeypatch
 ):
@@ -1229,242 +1322,6 @@ def test_compatibility_drain_never_consumes_claimed_transaction(
         claimed, order_id="8"
     ) == resolution.event
     assert ctr.verify_claimed_event(resolution.event)
-
-
-def test_legacy_rollback_fences_writers_and_backs_up_empty_queue(
-    tmp_queue, persistent_tmpdir
-):
-    Path(tmp_queue).write_text("{}\n", encoding="utf-8")
-    original = Path(tmp_queue).read_bytes()
-    backup = persistent_tmpdir / "coordinator_time_recheck.pre-v4.json"
-
-    manifest = _rollforward_code_manifest()
-    receipt = ctr.prepare_legacy_rollback(str(backup), manifest)
-
-    assert backup.read_bytes() == original
-    assert receipt["backup_path"] == str(backup)
-    assert receipt["fenced_queue_records"] == 0
-    fenced_queue = json.loads(Path(tmp_queue).read_text(encoding="utf-8"))
-    assert fenced_queue == {}
-    status = ctr.legacy_rollback_status()
-    assert status["safe_empty_queue"] is True
-    assert status["pending_pre_policy_records"] == 0
-    assert status["legacy_records"] == 0
-    assert status["rollback_fence_present"] is True
-    assert status["rollback_prepared"] is True
-    assert status["rollback_backup_sha256"] == receipt["backup_sha256"]
-    with pytest.raises(RuntimeError, match="fenced"):
-        ctr.enqueue(["9"], source="coordinator_panel")
-    assert ctr.release_legacy_rollback_fence(
-        receipt["rollback_fence_id"], manifest
-    ) is True
-    assert ctr.release_legacy_rollback_fence(
-        receipt["rollback_fence_id"], manifest
-    ) is False
-    assert ctr.enqueue(["9"], source="coordinator_panel") == 1
-
-
-def test_legacy_rollback_release_is_exact_id_transaction_and_aba_safe(
-    tmp_queue, persistent_tmpdir
-):
-    """A delayed release for transaction A must never remove fence B."""
-    Path(tmp_queue).write_text("{}\n", encoding="utf-8")
-    manifest = _rollforward_code_manifest()
-    backup_a = persistent_tmpdir / "empty-a.pre-v4.json"
-    backup_b = persistent_tmpdir / "empty-b.pre-v4.json"
-
-    receipt_a = ctr.prepare_legacy_rollback(str(backup_a), manifest)
-    fence_a = receipt_a["rollback_fence_id"]
-    assert ctr.release_legacy_rollback_fence(fence_a, manifest) is True
-
-    receipt_b = ctr.prepare_legacy_rollback(str(backup_b), manifest)
-    fence_b = receipt_b["rollback_fence_id"]
-    assert fence_b != fence_a
-    with pytest.raises(RuntimeError, match="id mismatch"):
-        ctr.release_legacy_rollback_fence(fence_a, manifest)
-    status = ctr.legacy_rollback_status()
-    assert status["rollback_prepared"] is True
-    assert status["rollback_fence_id"] == fence_b
-
-    assert ctr.release_legacy_rollback_fence(fence_b, manifest) is True
-
-
-def test_legacy_rollback_release_requires_exact_bound_code_manifest(
-    tmp_queue, persistent_tmpdir
-):
-    Path(tmp_queue).write_text("{}\n", encoding="utf-8")
-    expected = _rollforward_code_manifest(salt="expected")
-    observed = _rollforward_code_manifest(salt="different")
-    backup = persistent_tmpdir / "empty-manifest.pre-v4.json"
-    receipt = ctr.prepare_legacy_rollback(str(backup), expected)
-
-    with pytest.raises(RuntimeError, match="code manifest mismatch"):
-        ctr.release_legacy_rollback_fence(
-            receipt["rollback_fence_id"], observed
-        )
-    assert ctr.legacy_rollback_status()["rollback_prepared"] is True
-
-
-def test_legacy_rollback_blocks_durable_old_v5_work_until_drained(
-    tmp_queue, persistent_tmpdir, monkeypatch
-):
-    """Code revert waits for an empty queue instead of inventing a scalar TTL."""
-    clicked_at = datetime(2026, 6, 30, 10, 0, tzinfo=timezone.utc)
-    rollback_at = clicked_at + timedelta(minutes=30)
-    receipt = {
-        "schema": "coordinator_time_recheck.v5",
-        "request_id": "old-durable-v5",
-        "order_id": "8",
-        "requested_at": clicked_at.isoformat(),
-        "eligible_at": clicked_at.isoformat(),
-        "source": "coordinator_panel",
-        "continuation_depth": 0,
-    }
-    Path(tmp_queue).write_text(
-        json.dumps({"8": receipt}), encoding="utf-8"
-    )
-    monkeypatch.setattr(ctr, "_utc_now", lambda: rollback_at)
-    backup = persistent_tmpdir / "old-durable-v5.pre-v4.json"
-
-    before = Path(tmp_queue).read_bytes()
-    with pytest.raises(RuntimeError, match="pending_pre_policy_receipt"):
-        ctr.prepare_legacy_rollback(
-            str(backup), _rollforward_code_manifest()
-        )
-
-    assert Path(tmp_queue).read_bytes() == before
-    assert not backup.exists()
-    assert not Path(ctr._rollback_fence_path()).exists()
-
-
-def test_legacy_rollback_never_rebases_future_receipt_into_ready_work(
-    tmp_queue, persistent_tmpdir, monkeypatch
-):
-    now = datetime(2026, 6, 30, 10, 0, tzinfo=timezone.utc)
-    eligible_at = now + timedelta(minutes=10)
-    receipt = {
-        "schema": "coordinator_time_recheck.v5",
-        "request_id": "future-v5",
-        "order_id": "8",
-        "requested_at": now.isoformat(),
-        "eligible_at": eligible_at.isoformat(),
-        "source": "coordinator_panel",
-        "continuation_depth": 0,
-    }
-    Path(tmp_queue).write_text(
-        json.dumps({"8": receipt}), encoding="utf-8"
-    )
-    monkeypatch.setattr(ctr, "_utc_now", lambda: now)
-    backup = persistent_tmpdir / "future-v5.pre-v4.json"
-
-    status = ctr.legacy_rollback_status()
-
-    assert status["safe_empty_queue"] is False
-    assert status["pending_pre_policy_records"] == 1
-    assert status["blockers"] == ["8:pending_pre_policy_receipt"]
-    with pytest.raises(RuntimeError, match="pending_pre_policy_receipt"):
-        ctr.prepare_legacy_rollback(
-            str(backup), _rollforward_code_manifest()
-        )
-    assert not backup.exists()
-    assert json.loads(Path(tmp_queue).read_text(encoding="utf-8")) == {
-        "8": receipt
-    }
-
-
-def test_legacy_rollback_fence_blocks_every_queue_mutator(
-    tmp_queue, persistent_tmpdir
-):
-    """One rollback fence owns upgrade, cleanup/drain, claim, ACK and enqueue."""
-    Path(tmp_queue).write_text("{}\n", encoding="utf-8")
-    backup = persistent_tmpdir / "empty-queue.pre-v4.json"
-    ctr.prepare_legacy_rollback(str(backup), _rollforward_code_manifest())
-    timestamp = ctr._utc_now().isoformat()
-    # Simulate an out-of-contract external writer after the exact fence. Public
-    # queue mutators must still fail closed and preserve these exact bytes.
-    Path(tmp_queue).write_text(
-        json.dumps({"8": timestamp}), encoding="utf-8"
-    )
-    before = Path(tmp_queue).read_bytes()
-
-    assert ctr.upgrade_legacy_receipt("8") is None
-    assert ctr.pending_with_receipts() == {}
-    assert ctr.ack_receipts({"8": None}) == 0
-    assert ctr.drain_with_receipts() == {}
-    assert ctr.drain() == set()
-    assert Path(tmp_queue).read_bytes() == before
-
-
-def test_legacy_rollback_backup_failure_cannot_leave_prepared_fence(
-    tmp_queue, persistent_tmpdir, monkeypatch
-):
-    Path(tmp_queue).write_text("{}\n", encoding="utf-8")
-    backup = persistent_tmpdir / "injected-backup-failure.json"
-    real_write_once = ctr._write_once
-
-    def fail_backup(path, payload):
-        if Path(path) == backup:
-            raise OSError("injected backup failure")
-        return real_write_once(path, payload)
-
-    monkeypatch.setattr(ctr, "_write_once", fail_backup)
-    with pytest.raises(OSError, match="injected backup failure"):
-        ctr.prepare_legacy_rollback(
-            str(backup), _rollforward_code_manifest()
-        )
-
-    status = ctr.legacy_rollback_status()
-    assert status["rollback_fence_present"] is False
-    assert status["rollback_prepared"] is False
-    assert not backup.exists()
-    assert ctr.enqueue(["9"], source="coordinator_panel") == 1
-
-
-def test_legacy_rollback_prepared_fence_revalidates_exact_backup(
-    tmp_queue, persistent_tmpdir
-):
-    Path(tmp_queue).write_text("{}\n", encoding="utf-8")
-    backup = persistent_tmpdir / "exact-backup.json"
-    ctr.prepare_legacy_rollback(str(backup), _rollforward_code_manifest())
-    assert ctr.legacy_rollback_status()["rollback_prepared"] is True
-
-    backup.write_bytes(b"corrupt")
-    status = ctr.legacy_rollback_status()
-
-    assert status["rollback_fence_present"] is True
-    assert status["rollback_prepared"] is False
-    assert status["rollback_fence_error"] == "backup_sha256_mismatch"
-
-
-def test_legacy_rollback_refuses_claim_and_successor_without_mutation(
-    tmp_queue, persistent_tmpdir, monkeypatch
-):
-    from dispatch_v2 import state_machine as sm
-
-    _enable_coordinator_authority(sm, monkeypatch)
-    ctr.enqueue(["8"], source="coordinator_panel")
-    pending = ctr.pending_with_receipts()["8"]
-    resolution = sm.resolve_czasowka_ck_observation(
-        _coordinator_existing(),
-        _coordinator_payload(pending, hhmm="15:40"),
-    )
-    assert resolution.outcome.value == "apply"
-    ctr.enqueue(["8"], source="coordinator_console")
-    before = Path(tmp_queue).read_bytes()
-    backup = persistent_tmpdir / "must-not-exist.json"
-
-    with pytest.raises(RuntimeError, match="claimed_transaction"):
-        ctr.prepare_legacy_rollback(
-            str(backup), _rollforward_code_manifest()
-        )
-
-    assert Path(tmp_queue).read_bytes() == before
-    assert not backup.exists()
-    assert not Path(tmp_queue + ".legacy-rollback-fence").exists()
-    status = ctr.legacy_rollback_status()
-    assert status["safe_empty_queue"] is False
-    assert status["claimed_records"] == 1
-    assert status["successor_records"] == 1
 
 
 def test_corrupt_queue_fails_closed_and_enqueue_cannot_overwrite_it(tmp_queue):
@@ -1533,62 +1390,6 @@ def test_enqueue_cannot_extend_corrupt_claim(tmp_queue, monkeypatch):
         ctr.enqueue(["8"], source="coordinator_console")
 
     assert Path(tmp_queue).read_bytes() == before
-
-
-def test_legacy_rollback_restores_exact_queue_when_fence_write_fails(
-    tmp_queue, persistent_tmpdir, monkeypatch
-):
-    """Projection+fence is one transaction; failed fence restores exact bytes."""
-    Path(tmp_queue).write_text("{}\n", encoding="utf-8")
-    original = Path(tmp_queue).read_bytes()
-    backup = persistent_tmpdir / "queue-before-failed-fence.json"
-    real_write_once = ctr._write_once
-
-    def fail_only_fence(path, payload):
-        if Path(path) == Path(ctr._rollback_fence_path()):
-            raise OSError("injected fence write failure")
-        return real_write_once(path, payload)
-
-    monkeypatch.setattr(ctr, "_write_once", fail_only_fence)
-
-    with pytest.raises(OSError, match="injected fence write failure"):
-        ctr.prepare_legacy_rollback(
-            str(backup), _rollforward_code_manifest()
-        )
-
-    assert Path(tmp_queue).read_bytes() == original
-    assert backup.read_bytes() == original
-    assert not Path(ctr._rollback_fence_path()).exists()
-
-
-def test_legacy_rollback_does_not_delete_fence_created_by_racer(
-    tmp_queue, persistent_tmpdir, monkeypatch
-):
-    """Nieudane O_EXCL usuwa tylko własny fence, nigdy cudzy artefakt."""
-    Path(tmp_queue).write_text("{}\n", encoding="utf-8")
-    original = Path(tmp_queue).read_bytes()
-    backup = persistent_tmpdir / "queue-before-fence-race.json"
-    fence = Path(ctr._rollback_fence_path())
-    foreign = b"foreign-fence\n"
-    real_write_once = ctr._write_once
-
-    def race_on_fence(path, payload):
-        if Path(path) == fence:
-            fence.parent.mkdir(parents=True, exist_ok=True)
-            fence.write_bytes(foreign)
-            raise FileExistsError(str(fence))
-        return real_write_once(path, payload)
-
-    monkeypatch.setattr(ctr, "_write_once", race_on_fence)
-
-    with pytest.raises(FileExistsError):
-        ctr.prepare_legacy_rollback(
-            str(backup), _rollforward_code_manifest()
-        )
-
-    assert Path(tmp_queue).read_bytes() == original
-    assert backup.read_bytes() == original
-    assert fence.read_bytes() == foreign
 
 
 def test_exact_claim_replays_after_flags_turn_off_before_outbox(

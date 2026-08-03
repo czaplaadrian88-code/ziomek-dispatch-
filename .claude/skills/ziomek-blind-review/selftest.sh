@@ -30,6 +30,13 @@ else bad "blind: bundle niepoprawny [$(ls "$T/b1" 2>/dev/null | tr '\n' ' ')]"; 
 # 3. manifest NIE w bundlu (leci obok)
 [ ! -f "$T/b1/_BLIND_MANIFEST.json" ] && ok "manifest poza bundlem" || bad "manifest wyciekl do bundla"
 
+# 3b. manifest wiąże każdy plik i mutation exact bytes czerwienieje
+"$PY" "$HERE/driver.py" verify "$T/b1.manifest.json" >/dev/null 2>&1
+want "digest manifest: exact bundle → PASS" 0 $?
+printf '\nmutation\n' >> "$T/b1/SKILL.md"
+"$PY" "$HERE/driver.py" verify "$T/b1.manifest.json" >/dev/null 2>&1
+want "digest manifest: mutation → HOLD" 1 $?
+
 # 4. pin fail-closed: podmiana bajtu → HOLD (rc 1)
 cp -r "$HERE/fixtures/case-clean-baseline" "$T/pin"
 "$PY" - "$T/pin/SKILL.md" "$T/pin.json" <<'PYEOF'
@@ -39,6 +46,17 @@ json.dump({"SKILL.md": hashlib.sha256(open(p, "rb").read()).hexdigest()}, open(s
 PYEOF
 printf "\nmutacja\n" >> "$T/pin/SKILL.md"
 "$PY" "$HERE/driver.py" blind "$T/pin" --pin "$T/pin.json" --out "$T/b2" >/dev/null 2>&1; want "pin mismatch → HOLD" 1 $?
+
+# 4b. częściowy pin nie może otrzymać pin_verified=true
+cp -r "$HERE/fixtures/case-clean-baseline" "$T/partial"
+"$PY" - "$T/partial/SKILL.md" "$T/partial.json" <<'PYEOF'
+import hashlib, json, sys
+p = sys.argv[1]
+json.dump({"SKILL.md": hashlib.sha256(open(p, "rb").read()).hexdigest()}, open(sys.argv[2], "w"))
+PYEOF
+printf 'neutral\n' > "$T/partial/EXTRA.md"
+"$PY" "$HERE/driver.py" blind "$T/partial" --pin "$T/partial.json" --out "$T/b-partial" >/dev/null 2>&1
+want "częściowy pin → HOLD" 1 $?
 
 # 5. check: dobry werdykt → 0
 echo '{"disposition":"CONFIRMED_DEFECT","findings":[{"file":"SKILL.md","line":20,"claim":"x","reproduction":"y"}]}' > "$T/good.json"

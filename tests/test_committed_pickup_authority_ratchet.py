@@ -521,11 +521,14 @@ def test_coordinator_queue_has_immutable_head_successor_and_safe_legacy_drain():
     assert "preserved[SUCCESSOR_FIELD] = next_receipt" in queue
     assert '"requested_at": successor_base["request_id"]' not in queue
     assert '"requested_at": successor_base["requested_at"]' in queue
-    assert "promoted_at = max(_utc_now(), successor_clocks[1])" in queue
+    assert "promoted_at = max(" in queue
+    assert "head_clocks[1]," in queue
+    assert "successor_clocks[1]," in queue
     assert "ELIGIBLE_AT_FIELD: promoted_at.isoformat()" in queue
-    assert "def prepare_legacy_rollback(" in queue
-    assert "def release_legacy_rollback_fence(" in queue
-    assert "coordinator time queue fenced for legacy code rollback" in queue
+    assert "def prepare_legacy_rollback(" not in queue
+    assert "def release_legacy_rollback_fence(" not in queue
+    assert "coordinator time queue fenced for legacy code rollback" not in queue
+    assert "def queue_compatibility_status(" in queue
     assert "if receipt is None" in queue
     assert "if not _queue_mutation_fence()" not in queue
     assert queue.count("_queue_mutation_fence()") >= 6
@@ -611,7 +614,7 @@ def test_reserved_source_and_legacy_key_have_one_canonical_oracle():
     assert '"pickup_time_revision_at_observation"' in key_block
 
 
-def test_code_rollback_is_mechanically_gated_across_queue_and_outbox():
+def test_forward_rollout_is_exactly_gated_and_hot_off_owns_rollback():
     tool = _source("tools/rutcom_committed_authority_rollback.py")
     bus = _source("event_bus.py")
     queue = _source("coordinator_time_recheck.py")
@@ -623,70 +626,111 @@ def test_code_rollback_is_mechanically_gated_across_queue_and_outbox():
     assert "AUTHORITY_FLAGS != COMMITTED_PICKUP_AUTHORITY_FLAGS" in tool
     assert "state_machine.get_all_strict()" in tool
     assert "state_has_committed_pickup_artifact(order)" in tool
-    assert "not enabled_authority_flags" in tool
-    assert 'before["enabled_authority_flags"]' in tool
-    assert "queue.prepare_legacy_rollback(" in tool
-    assert "rollforward_code_manifest," in tool
-    assert "not args.apply or not args.quiesced" in tool
+    assert "queue.queue_compatibility_status()" in tool
+    assert "queue.queue_records_snapshot()" in tool
+    assert "queue.queue_record_is_unclaimed(" in tool
     assert "def _pre_v4_coordinator_time_row_blocks_forward(" in tool
     assert "def _pre_v16_assignment_ck_row_blocks_forward(" in tool
     assert "def _active_time_contract_incomplete(" in tool
     assert "committed_time_contract_is_complete(order)" in tool
     assert "is_forward_authority_outbox_artifact(" in tool
     assert "def _unbound_new_order_time_row_blocks_forward(" in tool
+    assert "and forward_blocking_queue_records == 0" in tool
     assert "and not forward_authority_rows" in tool
     assert "and not unbound_new_order_time_rows" in tool
     assert "and not pre_v16_assignment_ck_rows" in tool
     assert "and active_incomplete_time_contract_count == 0" in tool
+    assert "and forward_target_code_verified" in tool
+    assert '"forward_handoff_safe": forward_handoff_safe' in tool
+    assert '"behavioral_rollback": "hot_flag_off_only"' in tool
+
     assert "FORWARD_WRITER_UNITS = (" in tool
     assert "FORWARD_WRITER_UNIT_MODULES = {" in tool
     assert "DEPLOYED_SCRIPTS_ROOT = DEPLOYED_DISPATCH_ROOT.parent" in tool
     assert '"--property=WorkingDirectory"' in tool
     assert '"--property=ExecStart"' in tool
     assert 'state["target_mode_verified"] = bool(' in tool
-    assert "and state.get(\"target_mode_verified\") is True" in tool
+    assert 'and state.get("target_mode_verified") is True' in tool
     assert "def _probe_forward_writer_quiescence(" in tool
-    assert "and writer_quiescence_verified" in tool
-    assert tool.count("_probe_forward_writer_quiescence()") >= 4
-    assert 'forward_status.add_argument("--quiesced"' in tool
-    assert 'status.add_argument("--quiesced"' in tool
-    assert "queue.rollback_records_snapshot()" in tool
-    assert "queue.rollback_record_is_unclaimed(" in tool
-    assert "and forward_blocking_queue_records == 0" in tool
-    assert "queue_record_count_matches_status" in tool
-    assert "def rollback_records_snapshot(" in queue
-    assert "def rollback_record_is_unclaimed(" in queue
+    assert tool.count("_probe_forward_writer_quiescence()") >= 5
+
+    assert "def queue_records_snapshot(" in queue
+    assert "def queue_record_is_unclaimed(" in queue
     assert "def acquire_forward_rollout_fence(" in queue
+    assert "deployed_code_manifest: Mapping[str, object]" in queue
     assert "def release_forward_rollout_fence(" in queue
+    assert "active_code_manifest_supplier: Callable" in queue
+    assert queue.count("active_code_manifest_supplier()") == 2
+    assert "writer_quiescence_supplier: Callable" in queue
+    assert queue.count("writer_quiescence_supplier()") == 2
+    assert "def _forward_release_marker_path(" in queue
+    assert "_rename_durable(fence, release_marker)" in queue
+    assert "_rename_durable(release_marker, fence)" in queue
+    assert "_unlink_durable(release_marker)" in queue
     assert "def forward_rollout_fence_status(" in queue
-    assert "coordinator time queue fenced for forward authority rollout" in queue
-    assert 'and forward_fence["forward_fence_valid"]' in tool
-    assert "def _cmd_fence_forward(" in tool
-    assert "def _cmd_release_forward_fence(" in tool
-    assert "ROLLFORWARD_CODE_PATHS = (" in queue
-    assert "def build_rollforward_code_manifest(" in queue
-    assert "rollforward_code_manifest" in queue
-    assert '"fence_id": fence_id' in queue
-    assert "rollback fence id mismatch" in queue
-    assert "roll-forward code manifest mismatch" in queue
-    assert "queue.release_legacy_rollback_fence(" in tool
-    assert "args.fence_id," in tool
-    assert "_deployed_rollforward_code_manifest()" in tool
     assert (
-        'DEPLOYED_DISPATCH_ROOT = Path(\n'
-        '    "/root/.openclaw/workspace/scripts/dispatch_v2"'
+        '_FORWARD_FENCE_SCHEMA = "coordinator_time_recheck.forward_fence.v2"'
+        in queue
+    )
+    assert '"rollforward_code_manifest": normalized_code_manifest' in queue
+    assert '"panel_client.py",' in queue
+    assert "coordinator time queue fenced for forward authority rollout" in queue
+
+    assert "queue.acquire_forward_rollout_fence(" in tool
+    assert "before_code_manifest" in tool
+    assert "code_manifest_stable" in tool
+    assert "queue.release_forward_rollout_fence(" in tool
+    assert "_deployed_rollforward_code_manifest," in tool
+    assert (
+        'if args.authority_active and not before["forward_handoff_safe"]'
         in tool
     )
-    assert 'release.add_argument("--fence-id", required=True)' in tool
-    assert 'release.add_argument("--quiesced", action="store_true")' in tool
+    assert (
+        'if args.abort_off and not before["forward_target_code_verified"]'
+        in tool
+    )
+    assert 'release_forward.add_argument("--fence-id", required=True)' in tool
+    assert 'release_forward.add_argument("--authority-active", action="store_true")' in tool
+    assert 'release_forward.add_argument("--abort-off", action="store_true")' in tool
+    assert 'sub.add_parser(\n        "forward-status"' in tool
+
+    assert "def prepare_legacy_rollback(" not in queue
+    assert "def release_legacy_rollback_fence(" not in queue
+    assert "def rollback_records_snapshot(" not in queue
+    assert "def rollback_record_is_unclaimed(" not in queue
+    assert "queue.prepare_legacy_rollback(" not in tool
+    assert "queue.release_legacy_rollback_fence(" not in tool
+    assert '"safe_for_code_revert"' not in tool
+    assert '"safe_to_prepare"' not in tool
+    assert 'sub.add_parser("status"' not in tool
+    assert 'sub.add_parser(\n        "prepare"' not in tool
+    assert 'sub.add_parser(\n        "release-fence"' not in tool
     assert "--v4-code-active" not in tool
     assert "queue_conversion_receipt" not in tool
     assert "safe_queue_projection" not in tool
     assert "pending_v4_records" not in tool
     assert "pending_pre_policy_receipt" in queue
     assert "pending_legacy_timestamp" in queue
-    assert '"safe_for_forward_deploy": safe_for_forward_deploy' in tool
-    assert 'sub.add_parser(\n        "forward-status"' in tool
+
+
+def test_blind_review_bundle_is_digest_bound_and_fail_closed():
+    driver = _source(".claude/skills/ziomek-blind-review/driver.py")
+    selftest = _source(".claude/skills/ziomek-blind-review/selftest.sh")
+
+    assert 'MANIFEST_SCHEMA = "ziomek.blind_bundle_manifest.v2"' in driver
+    assert "def bundle_sha256(" in driver
+    assert '"files_sha256": files_sha256' in driver
+    assert '"bundle_sha256": bundle_sha256(files_sha256)' in driver
+    assert "def cmd_verify(" in driver
+    assert "if actual_paths != sorted(expected):" in driver
+    assert "if actual != expected:" in driver
+    assert 'if manifest.get("bundle_sha256") != calculated:' in driver
+    assert "if pins and not set(included).issubset(pins):" in driver
+    assert "shutil.rmtree(out)" in driver
+    assert 'sub.add_parser("verify"' in driver
+    assert "digest manifest: exact bundle" in selftest
+    assert "digest manifest: mutation" in selftest
+    assert "częściowy pin" in selftest
 
 
 def test_new_order_intent_is_outbox_bound_and_recovers_before_panel_io():
@@ -788,7 +832,9 @@ def test_v13_review_findings_remain_closed_by_single_contract_owners():
     assert "def state_apply_outbox_row_is_terminal(" in bus
     assert "not state_apply_outbox_row_is_terminal(decoded)" in bus
     assert "event_bus.state_apply_outbox_row_is_terminal(row)" in durable
-    assert "active_committed_state_count == 0" in rollback
+    assert '"active_committed_state_count": active_committed_state_count' in rollback
+    assert "active_committed_state_count == 0" not in rollback
+    assert '"behavioral_rollback": "hot_flag_off_only"' in rollback
 
 
 def test_symbolic_flag_consumer_scan_is_a_required_seed_gate():

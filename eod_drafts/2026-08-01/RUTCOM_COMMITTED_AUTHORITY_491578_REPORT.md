@@ -1,9 +1,9 @@
-# RUTCOM committed pickup authority — raport kandydata v28, 2026-08-03
+# RUTCOM committed pickup authority — raport kandydata v29, 2026-08-03
 
 ## Wynik
 
 Przyczyna incydentu 491578 została usunięta u źródła w kandydacie kodu.
-Aplikacja Jakuba nie obliczyła 19:16: wyświetliła stary kanoniczny
+Aplikacja kuriera nie obliczyła 19:16: wyświetliła stary kanoniczny
 `czas_kuriera`, ponieważ watcher i pre-proposal potraktowały nowy, umówiony w
 Rutcom czas 19:21 jak pasywny re-stamp i stłumiły go 52 razy.
 
@@ -12,6 +12,54 @@ Rutcom. Granica transportu przed zapisem outboxa zamienia legalny CK na jeden
 kanoniczny `PICKUP_TIME_UPDATED`. Jeden handler state atomowo zapisuje pickup,
 CK, HH:MM, monotoniczną rewizję oraz provenance. Plan, scoring po potwierdzonym
 apply i aplikacja dziedziczą tę samą prawdę.
+
+## Co domknięto w v29
+
+Dwa blind review exact-byte V28 ponownie poprawnie zatrzymały live. Authority
+verdict ma SHA-256
+`570f1b59833f2e81f03cc341aac5582fa37173d265935e23caf3c8d3fbda7d77`,
+a rollout verdict
+`5fc601ca42644ed45e84c524df052923769c9880f3de60c28f330b4a8f85a070`;
+oba przeszły checker jako `CONFIRMED_DEFECT`. MAIN niezależnie odtworzył sześć
+klas: brak pełnego post-ON preflightu przed release, brak `panel_client.py` w
+manifeście, nieudowadnialny generic code-revert target, niedigestowany blind
+bundle, fence znikający przy TOCTOU oraz successora 09:01 po headzie 10:00.
+
+V29 scala ownerów zamiast dokładać warunki. Jedyny rollback zachowania to hot
+OFF targetowej flagi; generic `prepare/release-fence` i ich statusy zostały
+usunięte. Rzeczywisty forward fence wiąże snapshot kolejki, UUID i dokładny
+manifest 12 plików z `panel_client.py`. Release używa trwałego markera
+`.releasing`, który nadal blokuje wszystkie mutatory, przeżywa crash i może być
+wznowiony tym samym UUID. Bajty kodu i quiescence writerów są sprawdzane dwa
+razy pod flockiem, a drift odtwarza primary fence. Po ON operator wymaga pełnego
+`forward_handoff_safe`, nie samej flagi. Successor dziedziczy kauzalny floor
+headu, więc cofnięcie zegara hosta nie może uczynić go authority wcześniej.
+
+Blind-review ma teraz schema-v2 path→SHA-256, aggregate digest, exact-set
+`verify` i obowiązkowy pełny pin. Mutacja jednego bajtu oraz partial pin dają
+HOLD. Mapa skilla znajduje 9/9 powierzchni kontraktu. Siedem mutation probes
+ponownie czerwieni właściwe oracle. Direct cluster ma 157/157, szeroki klaster
+incydent/watcher/state/outbox/recovery 381/381, a pełna hermetyczna regresja
+6782 passed / 74 skipped / 8 xfailed / 153 warnings / 0 failed w 459,47 s.
+Różnica -9 PASS względem V28 to wyłącznie usunięte testy skasowanego generic
+code-revert API; profil non-pass jest identyczny, a doszły crash/race oracle.
+Produkcja nadal jest nietknięta, a efektywna targetowa flaga pozostaje OFF.
+
+### Mapa kompletności v29
+
+| Miejsce | Rola | Dotknięte | Dowód |
+|---|---|---|---|
+| queue clock + ACK promotion | causal receipt owner | TAK | head/successor deep-clock oracle + mutation RED |
+| forward fence acquire/status/release | rollout transaction owner | TAK | 12 plików, UUID, durable release marker, code/quiescence TOCTOU |
+| committed authority receipt oracle | authority consumer | N-D kod | istniejący strict oracle; receipt nie jest authority przed headem |
+| `panel_client.py` | producer normalizowanej obserwacji | TAK manifest | exact path ratchet, bez zmiany zachowania źródła |
+| watcher/outbox/state | durable transport i jedyny writer | N-D kod | 381/381 sibling cluster |
+| operator rollout gate | target/post-ON owner | TAK | full handoff, exact root/bytes/systemd i hot-OFF-only |
+| blind-review driver/selftest | review transport | TAK | digest per plik+aggregate, exact set, pełny pin, mutation HOLD |
+| tests/ratchet | antyregresja | TAK | siedem mutation kills i zakaz powrotu code-revert API |
+| twins registry | future completeness | TAK | `durable-time-authority-boundary` 9/9 |
+| feasibility/route/plan/scoring/selection | downstream | N-D | brak zmiany HARD/SOFT, progów i decyzji trasy |
+| panel/API/apka | display | N-D | brak override; nadal czyta sprzężony kanoniczny state |
 
 ## Co domknięto w v28
 

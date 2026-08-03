@@ -1,15 +1,14 @@
 #!/usr/bin/env python3
-"""Mechanical preflight for reverting the committed-pickup code contract.
+"""Mechanical forward-rollout and hot-OFF gate for committed pickup authority.
 
-Hot rollback is the decision flag set to OFF and needs no data conversion.
-A code revert to pre-v4 readers is a separate, guarded operation: all exact
-authority transactions must be terminal and the exact empty queue must be
-fenced after a durable backup. The fence binds one roll-forward code manifest;
-it can be released only by the same transaction ID after those exact deployed
-bytes are measured again with every writer mechanically quiesced.
+The exact deployed executable manifest, queue snapshot, writer quiescence and
+state/outbox preflight form one forward fence transaction. The only behavioral
+rollback owner is the decision flag set to OFF; durable work keeps its captured
+policy until exact terminal ACK. This tool deliberately does not authorize a
+generic executable downgrade, because an arbitrary legacy target cannot be
+proved compatible by relabelling or projecting the durable queue.
 
-This tool never drains or mutates the durable event outbox. Any unfinished
-authority row is a hard blocker to code rollback.
+The tool never drains or mutates the durable event outbox.
 """
 from __future__ import annotations
 
@@ -80,7 +79,7 @@ def _deployed_rollforward_code_manifest() -> dict:
     runtime_root = Path(_PACKAGE_ROOT).resolve(strict=True)
     if runtime_root != root:
         raise RuntimeError(
-            "mutating rollback tool must execute from canonical deployed root"
+            "mutating rollout tool must execute from canonical deployed root"
         )
     files = {}
     for relative_path in queue.ROLLFORWARD_CODE_PATHS:
@@ -324,16 +323,19 @@ def collect_status(
         for row in unfinished
         if is_committed_pickup_outbox_artifact(row)
     ]
-    queue_status = queue.legacy_rollback_status()
+    queue_status = queue.queue_compatibility_status()
     try:
         forward_fence = queue.forward_rollout_fence_status()
     except Exception:
         forward_fence = {
             "forward_fence_present": False,
+            "forward_fence_release_pending": False,
             "forward_fence_valid": False,
             "forward_fence_error": "fence_status_unreadable",
             "forward_fence_id": None,
             "forward_fence_queue_sha256": None,
+            "forward_fence_code_manifest": None,
+            "forward_fence_code_manifest_sha256": None,
         }
     authority_flag_states = {
         MANUAL_CK_AUTHORITY_FLAG: C.decision_flag(
@@ -361,7 +363,7 @@ def collect_status(
         orders_state = {}
         state_scan_ok = False
     try:
-        queue_records = queue.rollback_records_snapshot()
+        queue_records = queue.queue_records_snapshot()
         queue_records_scan_ok = isinstance(queue_records, dict)
         if not queue_records_scan_ok:
             queue_records = {}
@@ -375,7 +377,7 @@ def collect_status(
         order = orders_state.get(order_id)
         receipt_policy = queue.receipt_policy_snapshot(record)
         stable_unclaimed_elastic = bool(
-            queue.rollback_record_is_unclaimed(
+            queue.queue_record_is_unclaimed(
                 record,
                 order_id=order_id,
             )
@@ -447,10 +449,16 @@ def collect_status(
         for row in unfinished
         if _pre_v16_assignment_ck_row_blocks_forward(row, orders_state)
     ]
-    safe_for_forward_deploy = bool(
-        not flag_enabled
-        and writer_quiescence_verified
+    forward_target_code_verified = bool(
+        forward_fence["forward_fence_valid"]
+        and isinstance(deployed_code_manifest, Mapping)
+        and forward_fence.get("forward_fence_code_manifest")
+        == dict(deployed_code_manifest)
+    )
+    forward_handoff_safe = bool(
+        writer_quiescence_verified
         and forward_fence["forward_fence_valid"]
+        and forward_target_code_verified
         and state_scan_ok
         and queue_records_scan_ok
         and queue_record_count_matches_status
@@ -466,37 +474,11 @@ def collect_status(
         and not pre_v16_assignment_ck_rows
         and active_incomplete_time_contract_count == 0
     )
-    common_safe = bool(
-        not enabled_authority_flags
-        and not authority_rows
-        and writer_quiescence_verified
-        and not forward_fence["forward_fence_present"]
-        and queue_status["safe_empty_queue"]
-        and state_scan_ok
-        and active_committed_state_count == 0
-        and not unbound_new_order_time_rows
-    )
-    safe_to_prepare = bool(
-        common_safe and not queue_status["rollback_fence_present"]
-    )
-    rollback_target_code_verified = bool(
-        queue_status["rollback_fence_present"]
-        and queue_status["rollback_prepared"]
-        and isinstance(deployed_code_manifest, Mapping)
-        and queue_status.get("rollback_rollforward_code_manifest")
-        == dict(deployed_code_manifest)
-    )
-    safe_for_code_revert = bool(
-        common_safe
-        and queue_status["rollback_fence_present"]
-        and queue_status["rollback_prepared"]
-        and rollback_target_code_verified
-        and queue_status["pending_pre_policy_records"] == 0
-        and queue_status["claimed_records"] == 0
-        and queue_status["successor_records"] == 0
+    safe_for_forward_deploy = bool(
+        not flag_enabled and forward_handoff_safe
     )
     return {
-        "schema": "rutcom_committed_authority.rollback_preflight.v5",
+        "schema": "rutcom_committed_authority.rollout_preflight.v6",
         "flag": FLAG,
         "flag_enabled": flag_enabled,
         "authority_flags": list(AUTHORITY_FLAGS),
@@ -554,38 +536,15 @@ def collect_status(
         ),
         "writer_quiescence_verified": bool(writer_quiescence_verified),
         "writer_states": dict(writer_states or {}),
-        "rollback_target_code_verified": rollback_target_code_verified,
+        "forward_target_code_verified": forward_target_code_verified,
+        "forward_handoff_safe": forward_handoff_safe,
         "safe_for_forward_deploy": safe_for_forward_deploy,
-        "safe_to_prepare": safe_to_prepare,
-        "safe_for_code_revert": safe_for_code_revert,
+        "behavioral_rollback": "hot_flag_off_only",
     }
 
 
 def _print(value: dict) -> None:
     print(json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2))
-
-
-def _cmd_status(args: argparse.Namespace) -> int:
-    quiesced = False
-    writer_states = None
-    if args.quiesced:
-        quiesced, writer_states = _probe_forward_writer_quiescence()
-    status = collect_status(
-        writer_quiescence_verified=quiesced,
-        writer_states=writer_states,
-    )
-    if (
-        quiesced
-        and status["queue"]["rollback_fence_present"]
-    ):
-        deployed_code_manifest = _deployed_rollforward_code_manifest()
-        status = collect_status(
-            writer_quiescence_verified=quiesced,
-            writer_states=writer_states,
-            deployed_code_manifest=deployed_code_manifest,
-        )
-    _print(status)
-    return 0 if status["safe_for_code_revert"] else 1
 
 
 def _cmd_forward_status(args: argparse.Namespace) -> int:
@@ -595,9 +554,11 @@ def _cmd_forward_status(args: argparse.Namespace) -> int:
             "writer units; the tool also verifies systemd mechanically"
         )
     quiesced, writer_states = _probe_forward_writer_quiescence()
+    deployed_code_manifest = _deployed_rollforward_code_manifest()
     status = collect_status(
         writer_quiescence_verified=quiesced,
         writer_states=writer_states,
+        deployed_code_manifest=deployed_code_manifest,
     )
     _print(status)
     return 0 if status["safe_for_forward_deploy"] else 1
@@ -617,15 +578,24 @@ def _cmd_fence_forward(args: argparse.Namespace) -> int:
         )
         _print({"fenced": False, "status": status})
         return 2
-    fence_receipt = queue.acquire_forward_rollout_fence()
+    before_code_manifest = _deployed_rollforward_code_manifest()
+    fence_receipt = queue.acquire_forward_rollout_fence(
+        before_code_manifest
+    )
+    after_code_manifest = _deployed_rollforward_code_manifest()
+    code_manifest_stable = after_code_manifest == before_code_manifest
     after_quiesced, after_states = _probe_forward_writer_quiescence()
     status = collect_status(
         writer_quiescence_verified=after_quiesced,
         writer_states=after_states,
+        deployed_code_manifest=after_code_manifest,
     )
     result = {
         "fenced": bool(status["forward_fence"]["forward_fence_valid"]),
-        "ready": bool(status["safe_for_forward_deploy"]),
+        "ready": bool(
+            code_manifest_stable and status["safe_for_forward_deploy"]
+        ),
+        "code_manifest_stable": code_manifest_stable,
         "fence_receipt": fence_receipt,
         "status": status,
     }
@@ -658,140 +628,38 @@ def _cmd_release_forward_fence(args: argparse.Namespace) -> int:
         raise RuntimeError("authority-active acknowledgement mismatches OFF flag")
     if args.abort_off and flag_enabled:
         raise RuntimeError("abort-off acknowledgement mismatches ON flag")
-    released = queue.release_forward_rollout_fence(args.fence_id)
-    after = queue.forward_rollout_fence_status()
-    result = {
-        "released": bool(released and not after["forward_fence_present"]),
-        "flag_enabled": flag_enabled,
-        "after": after,
-    }
-    _print(result)
-    return 0 if result["released"] else 3
-
-
-def _cmd_prepare(args: argparse.Namespace) -> int:
-    if not args.apply or not args.quiesced:
-        raise RuntimeError(
-            "prepare requires both --apply and --quiesced; quiesce all code "
-            "writers and verify the effective OFF fingerprint first"
-        )
-    before_quiesced, before_writer_states = (
-        _probe_forward_writer_quiescence()
-    )
-    before = collect_status(
-        writer_quiescence_verified=before_quiesced,
-        writer_states=before_writer_states,
-    )
-    if not before["safe_to_prepare"]:
-        _print({"prepared": False, "before": before})
-        return 2
-    rollforward_code_manifest = _deployed_rollforward_code_manifest()
-    receipt = queue.prepare_legacy_rollback(
-        args.queue_backup,
-        rollforward_code_manifest,
-    )
-    after_code_manifest = _deployed_rollforward_code_manifest()
-    code_manifest_stable = after_code_manifest == rollforward_code_manifest
-    after_quiesced, after_writer_states = (
-        _probe_forward_writer_quiescence()
-    )
-    after = collect_status(
-        writer_quiescence_verified=after_quiesced,
-        writer_states=after_writer_states,
-        deployed_code_manifest=after_code_manifest,
-    )
-    result = {
-        "prepared": bool(
-            after["safe_for_code_revert"]
-            and code_manifest_stable
-            and receipt.get("rollforward_code_manifest_sha256")
-            == rollforward_code_manifest["manifest_sha256"]
-        ),
-        "queue_fence_receipt": receipt,
-        "rollforward_code_manifest_stable": code_manifest_stable,
-        "rollforward_code_manifest_sha256": rollforward_code_manifest[
-            "manifest_sha256"
-        ],
-        "before": before,
-        "after": after,
-    }
-    _print(result)
-    return 0 if result["prepared"] else 3
-
-
-def _cmd_release_fence(args: argparse.Namespace) -> int:
-    if not args.apply or not args.quiesced:
-        raise RuntimeError(
-            "release-fence requires --apply and --quiesced"
-        )
-    quiesced, writer_states = _probe_forward_writer_quiescence()
-    if not quiesced:
-        _print(
-            {
-                "released": False,
-                "writer_quiescence_verified": False,
-                "writer_states": writer_states,
-            }
-        )
-        return 2
-    before = collect_status(
-        writer_quiescence_verified=quiesced,
-        writer_states=writer_states,
-    )
-    if (
-        before["enabled_authority_flags"]
-        or before["unfinished_authority_outbox"]
-        or not before["queue"]["safe_empty_queue"]
-    ):
-        _print({"released": False, "before": before})
-        return 2
     active_code_manifest = _deployed_rollforward_code_manifest()
     before = collect_status(
         writer_quiescence_verified=quiesced,
         writer_states=writer_states,
         deployed_code_manifest=active_code_manifest,
     )
-    if (
-        before["enabled_authority_flags"]
-        or before["unfinished_authority_outbox"]
-        or not before["queue"]["safe_empty_queue"]
-        or not before["rollback_target_code_verified"]
-    ):
+    if args.authority_active and not before["forward_handoff_safe"]:
         _print({"released": False, "before": before})
         return 2
-    pre_release_manifest = _deployed_rollforward_code_manifest()
-    if pre_release_manifest != active_code_manifest:
-        _print(
-            {
-                "released": False,
-                "code_manifest_stable": False,
-                "before": before,
-            }
-        )
+    if args.abort_off and not before["forward_target_code_verified"]:
+        _print({"released": False, "before": before})
         return 2
-    released = queue.release_legacy_rollback_fence(
+    released = queue.release_forward_rollout_fence(
         args.fence_id,
-        active_code_manifest,
+        _deployed_rollforward_code_manifest,
+        lambda: _probe_forward_writer_quiescence()[0],
     )
     after_code_manifest = _deployed_rollforward_code_manifest()
     code_manifest_stable = after_code_manifest == active_code_manifest
-    after_quiesced, after_writer_states = _probe_forward_writer_quiescence()
-    after = collect_status(
-        writer_quiescence_verified=after_quiesced,
-        writer_states=after_writer_states,
-        deployed_code_manifest=after_code_manifest,
-    )
+    after_quiesced, after_states = _probe_forward_writer_quiescence()
+    after = queue.forward_rollout_fence_status()
     result = {
         "released": bool(
             released
             and after_quiesced
             and code_manifest_stable
-            and not after["queue"]["rollback_fence_present"]
+            and not after["forward_fence_present"]
         ),
+        "flag_enabled": flag_enabled,
         "code_manifest_stable": code_manifest_stable,
-        "active_code_manifest_sha256": active_code_manifest[
-            "manifest_sha256"
-        ],
+        "writer_quiescence_verified": after_quiesced,
+        "writer_states": after_states,
         "before": before,
         "after": after,
     }
@@ -802,10 +670,6 @@ def _cmd_release_fence(args: argparse.Namespace) -> int:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
-    status = sub.add_parser("status", help="read-only rollback preflight")
-    status.add_argument("--quiesced", action="store_true")
-    status.set_defaults(func=_cmd_status)
-
     forward_status = sub.add_parser(
         "forward-status",
         help="read-only dark-deploy compatibility preflight",
@@ -832,23 +696,6 @@ def _parser() -> argparse.ArgumentParser:
     release_forward.add_argument("--apply", action="store_true")
     release_forward.set_defaults(func=_cmd_release_forward_fence)
 
-    prepare = sub.add_parser(
-        "prepare",
-        help="fence one exact empty queue and bind deployed roll-forward code",
-    )
-    prepare.add_argument("--queue-backup", required=True)
-    prepare.add_argument("--quiesced", action="store_true")
-    prepare.add_argument("--apply", action="store_true")
-    prepare.set_defaults(func=_cmd_prepare)
-
-    release = sub.add_parser(
-        "release-fence",
-        help="release exact fence after measured roll-forward and quiescence",
-    )
-    release.add_argument("--fence-id", required=True)
-    release.add_argument("--quiesced", action="store_true")
-    release.add_argument("--apply", action="store_true")
-    release.set_defaults(func=_cmd_release_fence)
     return parser
 
 

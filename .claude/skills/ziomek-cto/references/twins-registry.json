@@ -199,18 +199,19 @@
     },
     "durable-time-authority-boundary": {
       "typ": "procedura",
-      "opis": "Trwały kontrakt czasu Rutcom/koordynatora na granicy queue → authority → exact apply oraz jego forward/rollback fence. Jeden receipt nie może mieć innej semantyki zegara, lifetime ani transaction identity w sąsiednich warstwach.",
-      "keywords": ["rutcom", "committed pickup", "committed time", "authority receipt", "coordinator receipt", "rollback fence", "forward fence", "eligible_at", "requested_at", "coordinator_time_recheck", "czas z restauracja", "czas z restauracją", "odswiez czas", "odśwież czas"],
-      "przypomnienie": "Zmiana receiptu/czasu/fence'a wymaga wspólnego oracle queue i committed-authority, mapy wszystkich mutatorów, exact ACK/UUID, pustej kolejki dla code revert, mechanicznego target-mode unitów oraz manifestu kanonicznych bajtów deployu. UI/apka są tylko konsumentem stanu; zakaz render override i projekcji trwałego receiptu do krótszego TTL.",
+      "opis": "Trwały kontrakt czasu Rutcom/koordynatora na granicy queue → authority → exact apply oraz jego exact-byte forward fence. Jeden receipt nie może mieć innej semantyki zegara, lifetime ani transaction identity w sąsiednich warstwach; jedynym ownerem rollbacku zachowania jest hot flag OFF.",
+      "keywords": ["rutcom", "committed pickup", "committed time", "authority receipt", "coordinator receipt", "code rollback", "hot off", "forward fence", "blind bundle", "eligible_at", "requested_at", "coordinator_time_recheck", "czas z restauracja", "czas z restauracją", "odswiez czas", "odśwież czas"],
+      "przypomnienie": "Zmiana receiptu/czasu/fence'a wymaga wspólnego oracle queue i committed-authority, mapy wszystkich mutatorów, kauzalnego zegara successora, exact ACK/UUID, mechanicznego target-mode unitów, manifestu wszystkich kanonicznych bajtów deployu (w tym producerów wejścia) i digest-bound blind review. Generic code revert nie jest autoryzowany; rollback zachowania = hot OFF. UI/apka są tylko konsumentem stanu; zakaz render override i projekcji trwałego receiptu do krótszego TTL.",
       "miejsca": [
         {"nazwa": "kanoniczny zegar i lifecycle kolejki", "plik": "coordinator_time_recheck.py", "symbol": "def _receipt_clock_pair", "uwaga": "wspólny validator v4/v5/v6; enqueue/ready/claim/ACK/successor muszą zachować tę samą semantykę"},
-        {"nazwa": "rollback/forward queue transaction owner", "plik": "coordinator_time_recheck.py", "symbol": "def prepare_legacy_rollback", "uwaga": "empty-queue audit, exact backup, UUID fence, roll-forward manifest i release CAS"},
+        {"nazwa": "forward queue transaction owner", "plik": "coordinator_time_recheck.py", "symbol": "def acquire_forward_rollout_fence", "uwaga": "exact queue snapshot + 12-file deploy manifest + UUID; release mierzy bajty przed i po unlinku oraz odtwarza fence przy TOCTOU"},
         {"nazwa": "committed authority receipt oracle", "plik": "committed_pickup_authority.py", "symbol": "def _valid_coordinator_receipt", "uwaga": "musi odrzucać dokładnie te same niejawne/niekauzalne zegary co queue"},
         {"nazwa": "watcher claim/apply/recovery", "plik": "panel_watcher.py", "symbol": "pending_with_receipts", "uwaga": "claim przed side effectem, exact ACK dopiero po terminalnym durable apply"},
-        {"nazwa": "operator gate i target-mode proof", "plik": "tools/rutcom_committed_authority_rollback.py", "symbol": "def _deployed_rollforward_code_manifest", "uwaga": "kanoniczny deploy root, exact pliki, unit WorkingDirectory/ExecStart, quiesce i effective flags"},
-        {"nazwa": "oracle queue/ABA/poison", "plik": "tests/test_coordinator_force_recheck_2026_06_30.py", "symbol": null, "uwaga": "naive clocks, exact ID, manifest mismatch, corrupt retention i mutation probes"},
-        {"nazwa": "oracle operator/rollout", "plik": "tests/test_rutcom_committed_authority_rollback.py", "symbol": null, "uwaga": "target bytes, canonical tool root, unit target mode, status/release fail-closed"},
-        {"nazwa": "ratchet anty-duplikat", "plik": "tests/test_committed_pickup_authority_ratchet.py", "symbol": null, "uwaga": "blokuje powrót projection contract, ręcznego booleanu i niepełnego manifestu"}
+        {"nazwa": "operator gate i target-mode proof", "plik": "tools/rutcom_committed_authority_rollback.py", "symbol": "def _deployed_rollforward_code_manifest", "uwaga": "kanoniczny deploy root, exact 12 plików, unit WorkingDirectory/ExecStart, quiesce, effective flags i post-ON handoff-safe przed release"},
+        {"nazwa": "oracle queue/ABA/poison", "plik": "tests/test_coordinator_force_recheck_2026_06_30.py", "symbol": null, "uwaga": "naive clocks, kauzalność successor/head, exact ID, manifest mismatch, restore-on-TOCTOU, corrupt retention i mutation probes"},
+        {"nazwa": "oracle operator/rollout", "plik": "tests/test_rutcom_committed_authority_rollback.py", "symbol": null, "uwaga": "12-file target bytes, canonical tool root, unit target mode, post-ON status/release fail-closed i brak generic code-revert API"},
+        {"nazwa": "ratchet anty-duplikat", "plik": "tests/test_committed_pickup_authority_ratchet.py", "symbol": null, "uwaga": "blokuje powrót projection/code-revert ownera, ręcznego booleanu, niepełnego manifestu i niedigestowanego review"},
+        {"nazwa": "digest-bound blind review", "plik": ".claude/skills/ziomek-blind-review/driver.py", "symbol": "def cmd_verify", "uwaga": "schema-v2 path→SHA-256 + aggregate, pełny pin, exact set i mutation selftest w selftest.sh"}
       ]
     }
   }
