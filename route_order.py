@@ -523,12 +523,7 @@ def build_route_stops(bag, plan_doc=None, *, plan_aware=False,
     return stops
 
 
-def build_eta_binding_sequence(
-    bag,
-    plan_doc=None,
-    *,
-    physical_contract=False,
-) -> list[dict]:
+def build_eta_binding_sequence(bag, plan_doc=None) -> list[dict]:
     """Jedyna sekwencja wejściowa kontraktu wersjonowanego ETA.
 
     Producent oraz każda powierzchnia konsumencka muszą hashować dokładnie ten
@@ -540,7 +535,6 @@ def build_eta_binding_sequence(
         plan_doc,
         plan_aware=True,
         trust_canon=True,
-        physical_contract=physical_contract,
     )
 
 
