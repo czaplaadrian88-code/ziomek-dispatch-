@@ -28,7 +28,6 @@ from dispatch_v2.cod_weekly.panel_scraper import scrape_restaurant_cod
 from dispatch_v2.cod_weekly.sheet_writer import (
     fetch_sheet_grid,
     find_target_cod_columns,
-    find_target_column_auto,
     validate_column_empty_ratio,
     write_cod_column_skip_filled,
     ensure_week_block,
@@ -49,58 +48,14 @@ def load_mapping() -> dict:
 
 
 def find_target_cod_columns_resilient(row1, row2, week_start, week_end):
-    """E5 — primary (payday-match) → przy NoTargetColumnError fallback do
-    auto-detect (range-match).
+    """Kompatybilny punkt wejścia do jednego selektora exact-range.
 
-    ADDITIVE / behavior-preserving: gdy primary znajdzie kolumnę, zwracamy
-    JEJ wynik bez zmian (auto-detect NIE odpala). Auto-detect uruchamia się
-    WYŁĄCZNIE gdy primary rzuci NoTargetColumnError — czyli gdy człowiek nie
-    zdążył ręcznie dodać daty wypłaty (pos+2), a blok tygodnia jest już w
-    arkuszu (rozpoznany po zakresie pos+3). To naprawia cotygodniowe
-    "TARGET COLUMN FAIL" z 2026-05-17/18.
-
-    Świadomie woła `find_target_cod_columns` i `find_target_column_auto` przez
-    globalsy modułu (NIE lokalne aliasy) — testy monkey-patchują
-    `rw.find_target_cod_columns`, więc patch musi mieć efekt.
-
-    AmbiguousTargetError / ValueError z primary NIE są przechwytywane — to
-    realne problemy struktury arkusza, nie 'zapomniana ręczna kolumna'.
+    E5 (blok z pustym payday, ale poprawnym zakresem) jest teraz częścią
+    kanonicznej polityki w ``find_target_cod_columns`` zamiast osobnego
+    fallbacku. Wywołanie pozostaje przez global modułu, aby istniejące testy
+    fail-closed mogły monkey-patchować selektor.
     """
-    try:
-        return find_target_cod_columns(row1, row2, week_start, week_end)
-    except PartialSplitBlockError as partial_err:
-        # Partial-split wg PAYDAY (primary): część segmentów ma blok, część nie.
-        # Zanim uznamy to za realny brak, spróbuj auto-detect po ZAKRESIE —
-        # istniejący blok BEZ ręcznej daty wypłaty (payday pusty) matchuje się
-        # zakresem, więc auto-detect potrafi w pełni rozwiązać to, co primary
-        # (payday-only) widzi jako brak. Kluczowe dla retry po auto-create, gdzie
-        # świeży blok ma payday, a istniejący (sprzed) — tylko zakres.
-        try:
-            targets = find_target_column_auto(row1, row2, week_start, week_end)
-            log.info(
-                "AUTO-DETECT (zakres) rozwiązał to, co primary widział jako "
-                "partial-split — oba segmenty odnalezione."
-            )
-            return targets
-        except (PartialSplitBlockError, NoTargetColumnError):
-            # Auto-detect też widzi brak → to REALNY partial-split. Propaguj
-            # oryginalny (payday-atrybuowany) błąd do cmd_write/preflight, które
-            # utworzą TYLKO brakujący segment / dadzą precyzyjny actionable.
-            raise partial_err
-    except NoTargetColumnError as primary_err:
-        log.warning(
-            f"Primary find_target (payday-match) nie znalazł kolumny "
-            f"({primary_err}); próba AUTO-DETECT po zakresie tygodnia."
-        )
-        targets = find_target_column_auto(row1, row2, week_start, week_end)
-        log.info(
-            "AUTO-DETECT sukces: "
-            + ", ".join(
-                f"{t['col_letter']} ({t['segment_start']}..{t['segment_end']})"
-                for t in targets
-            )
-        )
-        return targets
+    return find_target_cod_columns(row1, row2, week_start, week_end)
 
 
 def _refresh_mapping() -> dict:
