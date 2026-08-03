@@ -2665,13 +2665,13 @@
    "lifecycle": "live",
    "lifecycle_seeded": false,
    "name": "DEADMAN_DRY_RUN",
-   "notes": "Zweryfikowane 2026-08-02: shadow-first jest aktywny; realna wysyłka wymaga osobnego ACK ownera.",
+   "notes": "DRIFT-RECONCILE 2026-08-02: dodana przy re-seedzie A-1 (pre-existing master<->kod drift, NIE A-1)",
    "owner": {
     "business": "Adrian",
     "service": "dispatch-deadman-watchdog.service"
    },
-   "removal_condition": "n/d dopóki live",
-   "review_date": "2026-08-10",
+   "removal_condition": "DRIFT-RECONCILE 2026-08-02 (nie A-1): flaga zywego dispatch-deadman-watchdog.service nieobecna w rejestrze mastera przy re-seedzie; kuracja heurystyczna do przegladu sesji-wlasciciela (dead-man alert (Z0-3))",
+   "review_date": "2026-09-10",
    "rollback": "rm drop-in dispatch-deadman-watchdog.service + restart dispatch-deadman-watchdog.service ZA ACK",
    "source_of_truth": "drop-in:dispatch-deadman-watchdog.service",
    "twin_of": [],
@@ -2700,13 +2700,13 @@
    "lifecycle": "planned",
    "lifecycle_seeded": false,
    "name": "DEADMAN_ENABLED",
-   "notes": "Zweryfikowane 2026-08-02: realna wysyłka jest OFF; aktywacja pozostaje osobną bramką ACK.",
+   "notes": "DRIFT-RECONCILE 2026-08-02: dodana przy re-seedzie A-1 (pre-existing master<->kod drift, NIE A-1)",
    "owner": {
     "business": "Adrian",
     "service": "dispatch-deadman-watchdog.service"
    },
-   "removal_condition": "aktywacja lub retire wg roadmapy (ACK Adrian)",
-   "review_date": "2026-08-10",
+   "removal_condition": "DRIFT-RECONCILE 2026-08-02 (nie A-1): flaga zywego dispatch-deadman-watchdog.service nieobecna w rejestrze mastera przy re-seedzie; kuracja heurystyczna do przegladu sesji-wlasciciela (dead-man alert (Z0-3))",
+   "review_date": "2026-09-10",
    "rollback": "rm drop-in dispatch-deadman-watchdog.service + restart dispatch-deadman-watchdog.service ZA ACK",
    "source_of_truth": "drop-in:dispatch-deadman-watchdog.service",
    "twin_of": [],
@@ -4818,6 +4818,7 @@
     "explicit-dynamic-source-scan"
    ],
    "consumers": [
+    "dispatch_v2/dispatch_pipeline.py",
     "dispatch_v2/durable_event_apply.py",
     "dispatch_v2/panel_watcher.py"
    ],
@@ -4987,13 +4988,13 @@
    "lifecycle": "planned",
    "lifecycle_seeded": false,
    "name": "ENABLE_COURIER_DELIVERY_LEDGER_ENFORCE",
-   "notes": "Zweryfikowane 2026-08-02: ENFORCE jest OFF; promocja wymaga osobnego ACK i restartu courier-api.",
+   "notes": "DRIFT-RECONCILE 2026-08-02: dodana przy re-seedzie A-1 (pre-existing master<->kod drift, NIE A-1)",
    "owner": {
     "business": "Adrian",
     "service": "courier-api.service"
    },
-   "removal_condition": "aktywacja lub retire wg roadmapy (ACK Adrian)",
-   "review_date": "2026-08-10",
+   "removal_condition": "DRIFT-RECONCILE 2026-08-02 (nie A-1): flaga zywego courier-api.service nieobecna w rejestrze mastera przy re-seedzie; kuracja heurystyczna do przegladu sesji-wlasciciela (delivery-ledger)",
+   "review_date": "2026-09-10",
    "rollback": "env ENABLE_COURIER_DELIVERY_LEDGER_ENFORCE OFF + restart courier-api.service ZA ACK",
    "source_of_truth": "courier_api/config.py",
    "twin_of": [],
@@ -5023,13 +5024,13 @@
    "lifecycle": "shadow",
    "lifecycle_seeded": false,
    "name": "ENABLE_COURIER_DELIVERY_LEDGER_SHADOW",
-   "notes": "Zweryfikowane 2026-08-02: SHADOW jest efektywnie ON i zachowuje legacy DTO/authority.",
+   "notes": "DRIFT-RECONCILE 2026-08-02: dodana przy re-seedzie A-1 (pre-existing master<->kod drift, NIE A-1)",
    "owner": {
     "business": "Adrian",
     "service": "courier-api.service"
    },
-   "removal_condition": "po walidacji shadow: flip lub retire (ACK Adrian)",
-   "review_date": "2026-08-10",
+   "removal_condition": "DRIFT-RECONCILE 2026-08-02 (nie A-1): flaga zywego courier-api.service nieobecna w rejestrze mastera przy re-seedzie; kuracja heurystyczna do przegladu sesji-wlasciciela (delivery-ledger)",
+   "review_date": "2026-09-10",
    "rollback": "rm drop-in delivery-ledger-shadow.conf + restart courier-api.service ZA ACK",
    "source_of_truth": "drop-in:courier-api.service.d/delivery-ledger-shadow.conf",
    "twin_of": [],
@@ -5332,46 +5333,6 @@
    "twin_of": [
     "ENABLE_CZASOWKA_RECLAIM_LIVE"
    ],
-   "worlds": [
-    "engine"
-   ]
-  },
-  "ENABLE_CZASOWKA_RUTCOM_FORWARD_AUTHORITY": {
-   "carriers": [
-    "common.py:ETAP4_DECISION_FLAGS"
-   ],
-   "consumers": [
-    "dispatch_v2/coordinator_time_recheck.py",
-    "dispatch_v2/dispatch_pipeline.py",
-    "dispatch_v2/durable_event_apply.py",
-    "dispatch_v2/panel_watcher.py",
-    "dispatch_v2/state_machine.py",
-    "dispatch_v2/tools/rutcom_committed_authority_rollback.py"
-   ],
-   "curated_at": "2026-08-01",
-   "current_snapshot": {
-    "default": false
-   },
-   "default": false,
-   "intentional_per_process": {
-    "reason": "",
-    "value": false
-   },
-   "known_drift": false,
-   "known_drift_note": "",
-   "lifecycle": "planned",
-   "lifecycle_seeded": false,
-   "name": "ENABLE_CZASOWKA_RUTCOM_FORWARD_AUTHORITY",
-   "notes": "Incydent #491578: aktywna czasowka + Rutcom status 2 + przyszly ruch CK do przodu, nie przed pickup_at, przechodzi przez jeden resolver do PICKUP_TIME_UPDATED. #483023 (ruch wstecz/przed gotowoscia) i post-pickup pozostaja blokowane. Owner 2026-08-01 jawnie polecil docelowy flip ON po zielonych bramkach i wdrozeniu.",
-   "owner": {
-    "business": "Adrian",
-    "service": "dispatch-shadow.service + dispatch-panel-watcher.service"
-   },
-   "removal_condition": "po minimum 2 dniach poprawnej obserwacji i utrwaleniu kontraktu jako bezwarunkowego kanonu albo retire za decyzja ownera",
-   "review_date": "2026-08-08",
-   "rollback": "flags.json OFF hot-reload (bez restartu)",
-   "source_of_truth": "common.py-const",
-   "twin_of": [],
    "worlds": [
     "engine"
    ]
@@ -6768,7 +6729,7 @@
    "lifecycle": "dead",
    "lifecycle_seeded": false,
    "name": "ENABLE_FALLBACK_HONEST_OSRM_ETA",
-   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
+   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
    "owner": {
     "business": "Adrian",
     "service": "courier-api.service"
@@ -7215,7 +7176,7 @@
    "lifecycle": "dead",
    "lifecycle_seeded": false,
    "name": "ENABLE_FROZEN_PICKUP_ETA",
-   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
+   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
    "owner": {
     "business": "Adrian",
     "service": "courier-api.service"
@@ -8967,7 +8928,7 @@
    "lifecycle": "dead",
    "lifecycle_seeded": false,
    "name": "ENABLE_LIVE_ETA_FRESH_OVERRIDE_ONLY",
-   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
+   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
    "owner": {
     "business": "Adrian",
     "service": "courier-api.service"
@@ -11394,6 +11355,42 @@
     "engine"
    ]
   },
+  "ENABLE_PLAN_CORRUPT_RAISE": {
+   "carriers": [
+    "common.py:ETAP4_DECISION_FLAGS"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/plan_manager.py"
+   ],
+   "curated_at": "2026-08-02",
+   "current_snapshot": {
+    "default": false
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_PLAN_CORRUPT_RAISE",
+   "notes": "A-2 shadow-first: recovery z .prev / RAISE zamiast cichego {} przy korupcji courier_plans.json; flip za ACK ownera po >=2d SHADOW.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-shadow.service"
+   },
+   "removal_condition": "aktywacja lub retire wg roadmapy (ACK Adrian)",
+   "review_date": "2026-08-10",
+   "rollback": "env OFF w common.py-const + restart dispatch-shadow.service ZA ACK",
+   "source_of_truth": "common.py-const",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
   "ENABLE_PLAN_FOR_ACTUAL_BAG": {
    "carriers": [
     "dispatch_v2/plan_recheck.py-const"
@@ -13350,7 +13347,7 @@
    "lifecycle": "dead",
    "lifecycle_seeded": false,
    "name": "ENABLE_SAME_DEST_DROPOFF_ONE_ETA",
-   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
+   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
    "owner": {
     "business": "Adrian",
     "service": "courier-api.service"
@@ -13406,6 +13403,7 @@
    "consumers": [
     "dispatch_v2/common.py",
     "dispatch_v2/common.py:ENABLE_SAVED_PLANS",
+    "dispatch_v2/dispatch_pipeline.py",
     "dispatch_v2/durable_event_apply.py",
     "dispatch_v2/lifecycle_downstream.py",
     "dispatch_v2/panel_watcher.py"
@@ -16995,7 +16993,7 @@
    "lifecycle": "dead",
    "lifecycle_seeded": false,
    "name": "LIVE_ETA_FRESH_OVERRIDE_ONLY",
-   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
+   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
    "owner": {
     "business": "Adrian",
     "service": "nadajesz-panel.service"
@@ -17029,7 +17027,7 @@
    "lifecycle": "dead",
    "lifecycle_seeded": false,
    "name": "LIVE_ETA_MAX_AGE_MIN",
-   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
+   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
    "owner": {
     "business": "Adrian",
     "service": "courier-api.service"
@@ -17384,7 +17382,7 @@
    "lifecycle": "dead",
    "lifecycle_seeded": false,
    "name": "MONOTONIC_ROUTE_TIMES",
-   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
+   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
    "owner": {
     "business": "Adrian",
     "service": "nadajesz-panel.service"
@@ -18690,7 +18688,7 @@
    "lifecycle": "dead",
    "lifecycle_seeded": false,
    "name": "PIN_AGREED_PICKUP_TIME",
-   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
+   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
    "owner": {
     "business": "Adrian",
     "service": "nadajesz-panel.service"
@@ -19601,7 +19599,7 @@
    "lifecycle": "dead",
    "lifecycle_seeded": false,
    "name": "SEED_PICKUP_TIME_FROM_AGREED",
-   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
+   "notes": "RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone. | RECONCILED 2026-07-30: źródło nieobecne; dawny LIVE snapshot zastąpiony audytowalnym tombstone.",
    "owner": {
     "business": "Adrian",
     "service": "nadajesz-panel.service"
@@ -20469,6 +20467,46 @@
    "review_date": "2026-10-10",
    "rollback": "env OFF w flags.json + restart dispatch-shadow.service ZA ACK",
    "source_of_truth": "flags.json",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
+  "ENABLE_CZASOWKA_RUTCOM_FORWARD_AUTHORITY": {
+   "carriers": [
+    "common.py:ETAP4_DECISION_FLAGS"
+   ],
+   "consumers": [
+    "dispatch_v2/coordinator_time_recheck.py",
+    "dispatch_v2/dispatch_pipeline.py",
+    "dispatch_v2/durable_event_apply.py",
+    "dispatch_v2/panel_watcher.py",
+    "dispatch_v2/state_machine.py",
+    "dispatch_v2/tools/rutcom_committed_authority_rollback.py"
+   ],
+   "curated_at": "2026-08-01",
+   "current_snapshot": {
+    "default": false
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_CZASOWKA_RUTCOM_FORWARD_AUTHORITY",
+   "notes": "Incydent #491578: aktywna czasowka + Rutcom status 2 + przyszly ruch CK do przodu, nie przed pickup_at, przechodzi przez jeden resolver do PICKUP_TIME_UPDATED. #483023 (ruch wstecz/przed gotowoscia) i post-pickup pozostaja blokowane. Owner 2026-08-01 jawnie polecil docelowy flip ON po zielonych bramkach i wdrozeniu.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-shadow.service + dispatch-panel-watcher.service"
+   },
+   "removal_condition": "po minimum 2 dniach poprawnej obserwacji i utrwaleniu kontraktu jako bezwarunkowego kanonu albo retire za decyzja ownera",
+   "review_date": "2026-08-08",
+   "rollback": "flags.json OFF hot-reload (bez restartu)",
+   "source_of_truth": "common.py-const",
    "twin_of": [],
    "worlds": [
     "engine"
