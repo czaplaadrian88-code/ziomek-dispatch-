@@ -921,7 +921,13 @@ def _isolate_durable_bus(tmp_path, monkeypatch):
     return events_db
 
 
-def _seed_pending_initial_time_contract(tmp_path, monkeypatch, *, oid):
+def _seed_pending_initial_time_contract(
+    tmp_path,
+    monkeypatch,
+    *,
+    oid,
+    payload_overrides=None,
+):
     """Create the exact crash state: NEW_ORDER shell plus durable raw intent."""
     from dispatch_v2 import panel_watcher as pw
     from dispatch_v2 import state_machine as sm
@@ -951,6 +957,7 @@ def _seed_pending_initial_time_contract(tmp_path, monkeypatch, *, oid):
         "pickup_address": "fixture",
         "delivery_address": "fixture",
     }
+    payload.update(payload_overrides or {})
     initialized = pw._emit_and_apply_state(
         "NEW_ORDER",
         order_id=oid,
@@ -960,6 +967,153 @@ def _seed_pending_initial_time_contract(tmp_path, monkeypatch, *, oid):
     )
     assert initialized.state_ready is True
     return pw, sm, payload
+
+
+def test_i2_post_deadline_initial_intent_fails_closed_to_declared(
+    tmp_path, monkeypatch, caplog
+):
+    """RED B: an inactive Rutcom status cannot outlive its sealed deadline."""
+    from dispatch_v2.committed_pickup_authority import (
+        resolve_czasowka_initial_time_intent,
+        validate_new_order_time_intent_event,
+    )
+
+    oid = "i2-deadline-declared"
+    deadline = "2099-08-02T18:51:00+02:00"
+    pw, sm, original = _seed_pending_initial_time_contract(
+        tmp_path,
+        monkeypatch,
+        oid=oid,
+        payload_overrides={
+            "prep_minutes": 431,
+            "status_id": 1,
+            "decision_deadline": deadline,
+        },
+    )
+    before = sm.get_order_strict(oid)
+    assert before["pending_committed_time_intent"] is not None
+    monkeypatch.setattr(pw, "now_iso", lambda: deadline)
+
+    resolution = resolve_czasowka_initial_time_intent(
+        before,
+        before["pending_committed_time_intent"],
+        as_of=deadline,
+    )
+    assert resolution.outcome is ResolutionOutcome.APPLY
+    assert resolution.reason == "decision_deadline_declared"
+    assert validate_new_order_time_intent_event(before, resolution.event)
+
+    assert pw._resume_new_order_time_contract(oid, before) is True
+
+    stored = sm.get_order_strict(oid)
+    declared = original["pickup_at_warsaw"]
+    assert stored["pending_committed_time_intent"] is None
+    assert stored["pickup_at_warsaw"] == declared
+    assert stored["czas_kuriera_warsaw"] == declared
+    assert stored["czas_kuriera_hhmm"] == "19:16"
+    assert stored["committed_pickup_authority"] == "rutcom_pickup_field"
+    assert stored["committed_pickup_observed_source"] == (
+        "new_order_declared_deadline"
+    )
+
+    # A terminalized aggregate has no pending work on the next watcher tick,
+    # so the ~20 s suppression loop disappears instead of merely changing text.
+    caplog.clear()
+    assert pw._resume_new_order_time_contract(oid, stored) is True
+    assert "initial time intent suppressed" not in caplog.text
+
+
+def test_i2_deadline_boundary_and_mutation_are_load_bearing(
+    tmp_path, monkeypatch
+):
+    """Before deadline stays pending; neutralizing >= recreates the defect."""
+    from dispatch_v2 import committed_pickup_authority as authority
+
+    oid = "i2-deadline-boundary"
+    deadline = "2099-08-02T18:51:00+02:00"
+    _pw, sm, _original = _seed_pending_initial_time_contract(
+        tmp_path,
+        monkeypatch,
+        oid=oid,
+        payload_overrides={
+            "prep_minutes": 431,
+            "status_id": 1,
+            "decision_deadline": deadline,
+        },
+    )
+    current = sm.get_order_strict(oid)
+    intent = current["pending_committed_time_intent"]
+
+    before_deadline = authority.resolve_czasowka_initial_time_intent(
+        current,
+        intent,
+        as_of="2099-08-02T18:50:59.999999+02:00",
+    )
+    assert before_deadline.outcome is ResolutionOutcome.SUPPRESS
+    assert before_deadline.reason == "rutcom_status_not_active"
+
+    at_deadline = authority.resolve_czasowka_initial_time_intent(
+        current,
+        intent,
+        as_of=deadline,
+    )
+    assert at_deadline.outcome is ResolutionOutcome.APPLY
+    assert at_deadline.reason == "decision_deadline_declared"
+
+    monkeypatch.setattr(
+        authority,
+        "_initial_time_decision_deadline_reached",
+        lambda *_args, **_kwargs: False,
+    )
+    mutant = authority.resolve_czasowka_initial_time_intent(
+        current,
+        intent,
+        as_of=deadline,
+    )
+    assert mutant.outcome is ResolutionOutcome.SUPPRESS
+    assert mutant.reason == "rutcom_status_not_active"
+
+
+def test_i2_deadline_source_label_cannot_bypass_pending_intent_receipt(
+    tmp_path, monkeypatch
+):
+    """The new observed source is not authority without the exact sealed intent."""
+    from dispatch_v2 import committed_pickup_authority as authority
+
+    oid = "i2-deadline-source-forgery"
+    deadline = "2099-08-02T18:51:00+02:00"
+    _pw, sm, _original = _seed_pending_initial_time_contract(
+        tmp_path,
+        monkeypatch,
+        oid=oid,
+        payload_overrides={
+            "prep_minutes": 431,
+            "status_id": 1,
+            "decision_deadline": deadline,
+        },
+    )
+    current = sm.get_order_strict(oid)
+    event = authority.resolve_czasowka_initial_time_intent(
+        current,
+        current["pending_committed_time_intent"],
+        as_of=deadline,
+    ).event
+    without_receipt = {
+        **current,
+        "pending_committed_time_intent": None,
+    }
+
+    validation = authority.validate_committed_pickup_event(
+        without_receipt,
+        event,
+        is_czasowka=True,
+        passive_guard_enabled=True,
+        manual_passthrough_enabled=False,
+        rutcom_forward_authority_enabled=True,
+    )
+
+    assert validation.outcome is ResolutionOutcome.SUPPRESS
+    assert validation.reason == "deadline_intent_not_pending"
 
 
 def _isolate_coordinator_queue(tmp_path, monkeypatch):
@@ -2419,6 +2573,174 @@ def test_fa_off_new_order_keeps_immediate_auto_koord_path(
     assert stored[sm.AUTO_KOORD_INITIAL_ATTEMPT_FIELD]["trigger"] == (
         "new_order_time_contract_ready"
     )
+
+
+def test_i2_pending_time_contract_triggers_auto_koord_on_first_sighting(
+    tmp_path, monkeypatch
+):
+    """RED A: assignment is orthogonal to an unresolved initial-time intent."""
+    from dispatch_v2 import auto_koord
+    from dispatch_v2 import panel_detail_prefetch
+    from dispatch_v2 import panel_watcher as pw
+    from dispatch_v2 import parse_continuity_guard
+    from dispatch_v2 import state_machine as sm
+
+    _isolate_durable_bus(tmp_path, monkeypatch)
+    state_path = tmp_path / "orders_state.json"
+    state_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(sm, "_state_path", lambda: str(state_path))
+    monkeypatch.setattr(
+        pw,
+        "_panel_committed_time_policy_snapshot",
+        lambda: _panel_policy(manual=False, forward=True),
+    )
+    monkeypatch.setattr(sm, "flag", _authority_runtime_flag)
+
+    def runtime_flag(name, default=None):
+        if name == "AUTO_KOORD_ON_NEW_ORDER_ENABLED":
+            return True
+        if name in {
+            "AUTO_KOORD_TELEGRAM_INFO_ENABLED",
+            "ENABLE_COORDINATOR_FORCE_TIME_RECHECK",
+        }:
+            return False
+        return _authority_runtime_flag(name, default)
+
+    monkeypatch.setattr(pw.C, "flag", runtime_flag)
+    monkeypatch.setattr(pw, "flag", runtime_flag)
+    monkeypatch.setattr(pw.C, "ENABLE_V319G_CK_DETECTION", False)
+    monkeypatch.setattr(pw.C, "ENABLE_PICKUP_TIME_DETECTION", False)
+    monkeypatch.setattr(
+        panel_detail_prefetch,
+        "prefetch_details",
+        lambda *_args, **_kwargs: ({}, {"prefetch_enabled": False}),
+    )
+    monkeypatch.setattr(
+        parse_continuity_guard,
+        "evaluate",
+        lambda *_args, **_kwargs: {
+            "freeze_new": False,
+            "suspicious": False,
+        },
+    )
+    monkeypatch.setattr(
+        pw,
+        "_heal_missing_order_details",
+        lambda *_args, **_kwargs: None,
+    )
+
+    oid = "i2-first-sighting-pending"
+    raw = {
+        "id_kurier": None,
+        "id_status_zamowienia": 1,
+        "czas_odbioru": 431,
+    }
+    normalized = {
+        "order_type": "czasowka",
+        "prep_minutes": 431,
+        "pickup_at_warsaw": "2099-08-02T19:16:00+02:00",
+        "czas_kuriera_warsaw": "2099-08-02T19:21:00+02:00",
+        "czas_kuriera_hhmm": "19:21",
+        "status_id": 1,
+        "decision_deadline": "2099-08-02T18:51:00+02:00",
+        "zmiana_czasu_odbioru": False,
+        "restaurant": "fixture",
+        "pickup_address": "fixture",
+        "delivery_address": "fixture",
+        "id_kurier": None,
+        "is_koordynator": False,
+    }
+    payload = {
+        key: normalized[key]
+        for key in (
+            "order_type",
+            "prep_minutes",
+            "pickup_at_warsaw",
+            "czas_kuriera_warsaw",
+            "czas_kuriera_hhmm",
+            "status_id",
+            "decision_deadline",
+            "zmiana_czasu_odbioru",
+            "restaurant",
+            "pickup_address",
+            "delivery_address",
+        )
+    }
+    monkeypatch.setattr(
+        pw,
+        "fetch_order_details",
+        lambda *_args, **_kwargs: dict(raw),
+    )
+    monkeypatch.setattr(
+        pw,
+        "_build_order_details_payload",
+        lambda *_args, **_kwargs: (dict(normalized), dict(payload)),
+    )
+    monkeypatch.setattr(
+        pw,
+        "now_iso",
+        lambda: "2099-08-02T18:50:59+02:00",
+    )
+    attempts = []
+
+    def perform(*, order_id, fetch_details_fn):
+        attempts.append(str(order_id))
+        return {
+            "success": True,
+            "attempts": 1,
+            "skipped": False,
+            "reason": "ok",
+            "panel_response": "fixture",
+        }
+
+    monkeypatch.setattr(auto_koord, "perform_auto_koord", perform)
+    monkeypatch.setattr(
+        auto_koord,
+        "emit_event_log",
+        lambda *_args, **_kwargs: None,
+    )
+
+    stats = pw._diff_and_emit(
+        {
+            "order_ids": [oid],
+            "assigned_ids": set(),
+            "unassigned_ids": [oid],
+            "rest_names": {},
+            "courier_packs": {},
+            "courier_load": {},
+            "html_times": {},
+            "closed_ids": set(),
+            "pickup_addresses": {},
+            "delivery_addresses": {},
+        },
+        csrf="test",
+        _state_outbox_sweeper_on=True,
+    )
+
+    stored = sm.get_order_strict(oid)
+    assert stats["new"] == 1
+    assert stored["pending_committed_time_intent"] is not None
+    assert attempts == [oid]
+    marker = stored[sm.AUTO_KOORD_INITIAL_ATTEMPT_FIELD]
+    assert marker["trigger"] == "new_order_time_contract_pending"
+
+    # Both completion edges may arrive later, but all three routes share the
+    # same durable one-life claim and cannot repeat the external assignment.
+    for later_trigger in (
+        "new_order_time_contract_ready",
+        "initial_time_contract_recovered",
+    ):
+        pw._trigger_initial_auto_koord_once(
+            oid,
+            trigger=later_trigger,
+            stats=stats,
+            fetch_details_fn=lambda _z: dict(raw),
+            decision_order=raw,
+        )
+    assert attempts == [oid]
+    assert sm.get_order_strict(oid)[
+        sm.AUTO_KOORD_INITIAL_ATTEMPT_FIELD
+    ] == marker
 
 
 def test_restart_tick_recovers_initial_intent_before_assignment_writer(

@@ -56,6 +56,7 @@ CK_DERIVED_AUTHORITIES = frozenset(
     }
 )
 ALL_COMMITTED_AUTHORITIES = CK_DERIVED_AUTHORITIES | {"rutcom_pickup_field"}
+NEW_ORDER_DECLARED_DEADLINE_SOURCE = "new_order_declared_deadline"
 
 _ACTIVE_ORDER_STATES = frozenset({"planned", "assigned"})
 _ACTIVE_RUTCOM_STATUS_IDS = frozenset({2, 3, 4, 6})
@@ -77,6 +78,7 @@ _PICKUP_OBSERVATION_SOURCES = frozenset(
         "panel_pickup_recheck",
         "coordinator_force",
         "new_order_initial_intent",
+        NEW_ORDER_DECLARED_DEADLINE_SOURCE,
     }
 )
 _SEMANTIC_EVENT_KEYS = frozenset(
@@ -192,6 +194,7 @@ _COMMITTED_TIME_POLICY_SOURCES = {
         {
             "first_acceptance",
             "new_order_initial_intent",
+            NEW_ORDER_DECLARED_DEADLINE_SOURCE,
             "panel_pickup_recheck",
             "panel_re_check",
         }
@@ -1680,14 +1683,15 @@ def resolve_czasowka_committed_observation(
     )
 
 
-def resolve_czasowka_pickup_observation(
+def _resolve_czasowka_pickup_observation(
     existing: Mapping[str, object] | None,
     observation: Mapping[str, object] | None,
     *,
     is_czasowka: bool,
     coordinator_receipt_verified: bool = False,
+    enforce_active_rutcom_status: bool,
 ) -> CommittedPickupResolution:
-    """Rozstrzygnij rownolegle pole Rutcom ``pickup_at`` dla czasowki."""
+    """Shared pickup resolver; caller owns whether Rutcom status is a gate."""
     existing = existing or {}
     observation = observation or {}
     if not is_czasowka:
@@ -1747,7 +1751,7 @@ def resolve_czasowka_pickup_observation(
         )
 
     observed_status = observation.get("observed_status_id")
-    if observed_status not in (None, ""):
+    if enforce_active_rutcom_status and observed_status not in (None, ""):
         try:
             status_id = int(observed_status)
         except (TypeError, ValueError):
@@ -1774,16 +1778,50 @@ def resolve_czasowka_pickup_observation(
     )
 
 
+def resolve_czasowka_pickup_observation(
+    existing: Mapping[str, object] | None,
+    observation: Mapping[str, object] | None,
+    *,
+    is_czasowka: bool,
+    coordinator_receipt_verified: bool = False,
+) -> CommittedPickupResolution:
+    """Rozstrzygnij rownolegle pole Rutcom ``pickup_at`` dla czasowki."""
+    return _resolve_czasowka_pickup_observation(
+        existing,
+        observation,
+        is_czasowka=is_czasowka,
+        coordinator_receipt_verified=coordinator_receipt_verified,
+        enforce_active_rutcom_status=True,
+    )
+
+
+def _initial_time_decision_deadline_reached(
+    intent: Mapping[str, object],
+    *,
+    as_of: object,
+) -> bool:
+    """Compare two supplied aware instants without introducing a second clock."""
+    deadline = _parse_aware(intent.get("decision_deadline"))
+    decision_time = _parse_aware(as_of)
+    return bool(
+        deadline is not None
+        and decision_time is not None
+        and decision_time >= deadline
+    )
+
+
 def resolve_czasowka_initial_time_intent(
     existing: Mapping[str, object] | None,
     intent: Mapping[str, object] | None,
+    *,
+    as_of: object = None,
 ) -> CommittedPickupResolution:
     """Resolve one durable NEW_ORDER tuple into exactly one canonical event.
 
-    The intent itself is the receipt-bound ON policy.  This function is pure
-    and never re-reads runtime flags: an ON-to-OFF flip after NEW_ORDER cannot
-    revive the raw CK writer or replace the original tuple with a later panel
-    restamp.
+    The intent itself is the receipt-bound ON policy.  This function is pure:
+    the watcher supplies ``as_of`` and no clock or runtime flag is re-read.
+    An ON-to-OFF flip after NEW_ORDER cannot revive the raw CK writer or replace
+    the original tuple with a later panel restamp.
     """
     existing = existing or {}
     oid = _clean_id(existing.get("order_id"))
@@ -1845,11 +1883,38 @@ def resolve_czasowka_initial_time_intent(
         "new_ck_hhmm": intent.get("czas_kuriera_hhmm"),
         "new_pickup_at_warsaw": intent.get("pickup_at_warsaw"),
     }
-    return resolve_czasowka_pickup_observation(
+    pickup_resolution = resolve_czasowka_pickup_observation(
         existing,
         pickup_observation,
         is_czasowka=True,
     )
+    if pickup_resolution.outcome is ResolutionOutcome.APPLY:
+        return pickup_resolution
+    if not _initial_time_decision_deadline_reached(intent, as_of=as_of):
+        return pickup_resolution
+
+    # ``decision_deadline`` is the terminal policy edge for this one sealed
+    # NEW_ORDER tuple.  After it, an inactive Rutcom workflow status no longer
+    # owns the decision: the restaurant-declared pickup is chosen fail-closed.
+    # All lifecycle, generation, revision, value and proof checks still run in
+    # the shared pickup resolver; only its mutable Rutcom-status gate is lifted.
+    deadline_observation = {
+        **pickup_observation,
+        "source": NEW_ORDER_DECLARED_DEADLINE_SOURCE,
+    }
+    deadline_resolution = _resolve_czasowka_pickup_observation(
+        existing,
+        deadline_observation,
+        is_czasowka=True,
+        enforce_active_rutcom_status=False,
+    )
+    if deadline_resolution.outcome is ResolutionOutcome.APPLY:
+        return _resolution(
+            ResolutionOutcome.APPLY,
+            "decision_deadline_declared",
+            deadline_resolution.event,
+        )
+    return deadline_resolution
 
 
 def validate_new_order_time_intent_event(
@@ -1865,7 +1930,17 @@ def validate_new_order_time_intent_event(
         return False
     if payload.get(NEW_ORDER_TIME_INTENT_ID_FIELD) != intent.get("intent_id"):
         return False
-    resolution = resolve_czasowka_initial_time_intent(current, intent)
+    replay_as_of = (
+        intent.get("decision_deadline")
+        if payload.get("observed_source")
+        == NEW_ORDER_DECLARED_DEADLINE_SOURCE
+        else None
+    )
+    resolution = resolve_czasowka_initial_time_intent(
+        current,
+        intent,
+        as_of=replay_as_of,
+    )
     return bool(
         resolution.outcome is ResolutionOutcome.APPLY
         and isinstance(resolution.event, Mapping)
@@ -1963,12 +2038,44 @@ def validate_committed_pickup_event(
         return _resolution(ResolutionOutcome.SUPPRESS, "missing_proof_observation")
 
     if authority == "rutcom_pickup_field":
-        resolved = resolve_czasowka_pickup_observation(
-            existing,
-            observation,
-            is_czasowka=is_czasowka,
-            coordinator_receipt_verified=coordinator_receipt_verified,
-        )
+        if observation.get("source") == NEW_ORDER_DECLARED_DEADLINE_SOURCE:
+            # The deadline source is reserved for the exact sealed NEW_ORDER
+            # intent.  Replaying its owner at the immutable boundary prevents a
+            # caller from using the source label alone to bypass Rutcom status.
+            intent = existing.get(NEW_ORDER_TIME_INTENT_FIELD)
+            if (
+                not new_order_time_intent_is_valid(
+                    intent,
+                    order_id=existing.get("order_id"),
+                )
+                or payload.get(NEW_ORDER_TIME_INTENT_ID_FIELD)
+                != intent.get("intent_id")
+            ):
+                return _resolution(
+                    ResolutionOutcome.SUPPRESS,
+                    "deadline_intent_not_pending",
+                )
+            deadline_replay = resolve_czasowka_initial_time_intent(
+                existing,
+                intent,
+                as_of=intent.get("decision_deadline"),
+            )
+            resolved = _resolution(
+                deadline_replay.outcome,
+                (
+                    str(authority)
+                    if deadline_replay.outcome is ResolutionOutcome.APPLY
+                    else deadline_replay.reason
+                ),
+                deadline_replay.event,
+            )
+        else:
+            resolved = resolve_czasowka_pickup_observation(
+                existing,
+                observation,
+                is_czasowka=is_czasowka,
+                coordinator_receipt_verified=coordinator_receipt_verified,
+            )
     else:
         resolved = resolve_czasowka_committed_observation(
             existing,
@@ -2091,6 +2198,7 @@ __all__ = [
     "COMMITTED_TIME_POLICY_SNAPSHOT_SCHEMA",
     "CommittedPickupPolicySnapshot",
     "CommittedPickupResolution",
+    "NEW_ORDER_DECLARED_DEADLINE_SOURCE",
     "NEW_ORDER_TIME_INTENT_FIELD",
     "NEW_ORDER_TIME_INTENT_ID_FIELD",
     "NEW_ORDER_TIME_INTENT_SCHEMA",

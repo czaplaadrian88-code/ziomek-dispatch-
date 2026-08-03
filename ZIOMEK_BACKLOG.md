@@ -14,6 +14,20 @@
 > flaga pozostaje OFF. Następna bramka: świeży blind, potem osobny ACK ownera
 > przed flipem. Raport: `/root/artifacts/new1-address-normalizer-20260803/REPORT.md`.
 
+> **KANDYDAT SOURCE-ONLY 2026-08-03 — AUTOKOORD ITERACJA 2:** commit kodu
+> `0b9751b9eac43b525504bab7c1be302f48169669` dodaje trzeci lifecycle edge
+> first-sighting przed `continue` pending kontraktu czasu, ale zachowuje jedyny
+> policy owner i durable `claim_initial_auto_koord_attempt`. Jedyny resolver
+> initial-time egzekwuje teraz sealed `decision_deadline`: po granicy wybiera
+> fail-closed declared przez istniejący `PICKUP_TIME_UPDATED`, który atomowo
+> czyści intent, więc kolejne ticki nie suppressują go ponownie. RED obu luk,
+> fizyczne mutation obu warunków, idempotencja triggerów, authority/lifecycle
+> E2E i ratchet są zielone. Pełna hermetyczna regresja: `6951P/0F/74S/8X`
+> wobec baseline `6945P/0F/74S/8X`, delta nowych faili 0. Gate
+> `engine.autokoord-bypassed-by-time-contract-pending` pozostaje
+> `READY_FOR_REVIEW` v4 z exact evidence; zero merge/deploy/restart/flip/live.
+> Raport: `/root/artifacts/autokoord-fa-bypass-20260803/iter2/REPORT.md`.
+
 > **KANDYDAT SOURCE-ONLY 2026-08-03 — FIX 491870 ITERACJA 2 PO BLOCKERZE:**
 > HARD NO-RETURN pozostaje nienaruszalny także dla `n_carried=0`; pierwotny
 > oracle zachowano bez odwracania, a siedem klas mutacji dowodzi jego działania.

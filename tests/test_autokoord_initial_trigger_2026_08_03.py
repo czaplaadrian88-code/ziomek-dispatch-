@@ -115,15 +115,76 @@ def test_trigger_is_defensive_when_state_read_fails(monkeypatch):
     )
 
 
+def test_pending_trigger_cannot_repeat_ready_or_recovered_claim(
+    tmp_path, monkeypatch
+):
+    """Trigger 3 is idempotent when either iteration-1 edge claimed first."""
+    _enable_auto_koord(monkeypatch)
+    attempts = []
+
+    def perform(**kwargs):
+        attempts.append(kwargs["order_id"])
+        return {
+            "success": True,
+            "attempts": 1,
+            "skipped": False,
+            "reason": "ok",
+            "panel_response": "fixture",
+        }
+
+    monkeypatch.setattr(auto_koord, "perform_auto_koord", perform)
+    monkeypatch.setattr(
+        auto_koord,
+        "emit_event_log",
+        lambda *_args, **_kwargs: None,
+    )
+
+    for initial_trigger in (
+        "new_order_time_contract_ready",
+        "initial_time_contract_recovered",
+    ):
+        oid = f"autokoord-claimed-{initial_trigger}"
+        _seed_order(tmp_path, monkeypatch, oid, prep_minutes=431)
+        pw._trigger_initial_auto_koord_once(
+            oid,
+            trigger=initial_trigger,
+            stats={},
+            fetch_details_fn=lambda _z: None,
+        )
+        marker = sm.get_order_strict(oid)[
+            sm.AUTO_KOORD_INITIAL_ATTEMPT_FIELD
+        ]
+
+        pw._trigger_initial_auto_koord_once(
+            oid,
+            trigger="new_order_time_contract_pending",
+            stats={},
+            fetch_details_fn=lambda _z: None,
+        )
+
+        assert attempts.count(oid) == 1
+        assert marker["trigger"] == initial_trigger
+        assert sm.get_order_strict(oid)[
+            sm.AUTO_KOORD_INITIAL_ATTEMPT_FIELD
+        ] == marker
+
+
 def test_single_trigger_and_cold_start_ratchet():
     diff_source = inspect.getsource(pw._diff_and_emit)
     helper_source = inspect.getsource(pw._trigger_initial_auto_koord_once)
     cold_start_source = inspect.getsource(pw._post_restart_cold_start_scan)
 
-    # Dwa lifecycle edges, ale jeden policy/execution helper.
-    assert diff_source.count("_trigger_initial_auto_koord_once(") == 2
+    # Trzy lifecycle edges, ale jeden policy/execution helper.
+    assert diff_source.count("_trigger_initial_auto_koord_once(") == 3
     assert "perform_auto_koord(" not in diff_source
     assert helper_source.count("perform_auto_koord(") == 1
+
+    pending_branch = diff_source.split(
+        "if not _initialize_new_order_time_contract(zid, norm, result):",
+        1,
+    )[1].split("continue", 1)[0]
+    assert "_trigger_initial_auto_koord_once(" in pending_branch
+    assert 'trigger="new_order_time_contract_pending"' in pending_branch
 
     # Cold-start odtwarza realny assignment i celowo nigdy nie parkuje do 26.
     assert "_trigger_initial_auto_koord_once(" not in cold_start_source

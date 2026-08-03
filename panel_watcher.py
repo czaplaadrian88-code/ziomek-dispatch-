@@ -2421,7 +2421,11 @@ def _resume_new_order_time_contract(order_id: str, current: dict) -> bool:
     intent = current.get(NEW_ORDER_TIME_INTENT_FIELD)
     if intent is None:
         return committed_time_contract_is_complete(current)
-    resolution = resolve_czasowka_initial_time_intent(current, intent)
+    resolution = resolve_czasowka_initial_time_intent(
+        current,
+        intent,
+        as_of=now_iso(),
+    )
     if (
         resolution.outcome is not ResolutionOutcome.APPLY
         or not isinstance(resolution.event, dict)
@@ -2449,10 +2453,10 @@ def _trigger_initial_auto_koord_once(
 ) -> None:
     """Run the existing AUTO_KOORD decision behind one durable claim.
 
-    NEW_ORDER event identity cannot own this side-effect: under forward time
-    authority its receipt may be consumed one tick before the initial time
-    contract becomes actionable.  The per-order state claim is therefore the
-    one-life fence for both immediate and recovered completion paths.
+    NEW_ORDER event identity cannot own this side-effect: assignment is
+    orthogonal to resolving the initial time contract, which may remain pending
+    across ticks.  The per-order state claim is therefore the one-life fence for
+    first sighting and both immediate/recovered completion paths.
 
     Defensive by contract: no read, decision, claim, panel, audit or Telegram
     failure may escape into the watcher tick.
@@ -3440,6 +3444,17 @@ def _diff_and_emit(
         if not result.state_ready:
             continue
         if not _initialize_new_order_time_contract(zid, norm, result):
+            # Adrian's NEW_ORDER contract: parking a czasowka at Koordynator is
+            # orthogonal to resolving its committed time.  This third lifecycle
+            # edge still enters the one canonical helper and durable claim; it
+            # never writes the assignment decision or state by itself.
+            _trigger_initial_auto_koord_once(
+                zid,
+                trigger="new_order_time_contract_pending",
+                stats=stats,
+                fetch_details_fn=lambda z: fetch_order_details(z, csrf),
+                decision_order=raw,
+            )
             stats["errors"] += 1
             _log.warning(
                 "NEW_ORDER initial time contract pending oid=%s",
@@ -3449,7 +3464,7 @@ def _diff_and_emit(
         if result.event_created and result.state_ready:
             _log.info(f"NEW {zid} {norm['order_type']} {norm['restaurant']} pickup={norm['pickup_at_warsaw']}")
 
-        # Jeden kanoniczny trigger dla immediate i recovered completion.
+        # Ready edge korzysta z tego samego helpera co pending i recovery.
         # Idempotencja nalezy do trwalego claimu zlecenia, nie do jednorazowego
         # event_created, ktory przy FA=ON poprzedza domkniecie kontraktu czasu.
         _trigger_initial_auto_koord_once(
