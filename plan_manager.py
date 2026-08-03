@@ -29,7 +29,10 @@ from typing import Any, Dict, List, Optional, Tuple
 
 _log = logging.getLogger("plan_manager")
 
-PLANS_FILE = Path("/root/.openclaw/workspace/dispatch_state/courier_plans.json")
+CANONICAL_PLANS_FILE = Path(
+    "/root/.openclaw/workspace/dispatch_state/courier_plans.json"
+)
+PLANS_FILE = CANONICAL_PLANS_FILE
 LOCK_FILE = Path("/root/.openclaw/workspace/dispatch_state/courier_plans.lock")
 SCHEMA_VERSION = 1
 
@@ -433,7 +436,13 @@ def save_plan(
     # apparent plan failure or lengthen the critical section.
     try:
         from dispatch_v2 import decision_eta_log as _dtlog
-        _dtlog.record_plan_commit(cid, saved)
+        _dtlog.record_plan_commit(
+            cid,
+            saved,
+            writer_role=(
+                "authoritative" if PLANS_FILE == CANONICAL_PLANS_FILE else "observer"
+            ),
+        )
     except Exception as exc:  # defense-in-depth: log-only path
         _log.warning("decision ETA plan hook fail-safe cid=%s: %s", cid, exc)
     return saved

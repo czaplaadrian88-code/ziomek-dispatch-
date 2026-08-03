@@ -15,12 +15,16 @@ from __future__ import annotations
 import fcntl
 import hashlib
 import json
+import logging
 import os
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Callable, Iterable, Mapping, Sequence
 from zoneinfo import ZoneInfo
+
+from dispatch_v2 import common as C
+from dispatch_v2 import route_order
 
 SCHEMA_VERSION = 1
 CYCLE_SECONDS = 10
@@ -34,6 +38,7 @@ SOURCE_LIVE = "live"
 SOURCE_WARM = "warm"
 SOURCE_PLANNED = "planned"
 ETA_SOURCES = frozenset({SOURCE_LIVE, SOURCE_WARM, SOURCE_PLANNED})
+_log = logging.getLogger("live_eta")
 
 
 def classify_position_contract(source: object, age_seconds: object) -> str:
@@ -182,16 +187,23 @@ def calculate_live_eta(
     cycle_id: int,
     start_source: object = None,
     source_contract: bool = False,
+    plan_version: object = None,
+    sequence_hash: str | None = None,
 ) -> dict:
     """JEDYNY kalkulator ETA: jeden snapshot całej trasy, jeden duration-provider."""
     start_coord = _coord(start)
-    normalized = _normalize_stops(stops, source_contract=source_contract)
+    normalized = _normalize_stops(list(stops), source_contract=source_contract)
+    rendered_hash = route_order.route_sequence_hash(normalized)
+    if sequence_hash is not None and sequence_hash != rendered_hash:
+        raise ValueError("route sequence hash does not match rendered stops")
     generated_at = _iso_utc(now)
     base = {
         "schema_version": SCHEMA_VERSION,
         "courier_id": str(courier_id),
         "cycle_id": int(cycle_id),
         "generated_at": generated_at,
+        "plan_version": plan_version,
+        "sequence_hash": rendered_hash,
         "stops": [],
         "orders": {},
     }
@@ -448,16 +460,26 @@ def write_cycle(
             courier_id = str(route.get("courier_id"))
             if not courier_id or courier_id == "None":
                 continue
-            snapshot = calculate_live_eta(
-                courier_id=courier_id,
-                start=route.get("start"),
-                start_source=route.get("start_source"),
-                stops=route.get("stops") or [],
-                now=current,
-                duration_provider=duration_provider,
-                cycle_id=cycle_id,
-                source_contract=bool(route.get("source_contract")),
-            )
+            try:
+                snapshot = calculate_live_eta(
+                    courier_id=courier_id,
+                    start=route.get("start"),
+                    start_source=route.get("start_source"),
+                    stops=route.get("stops") or [],
+                    now=current,
+                    duration_provider=duration_provider,
+                    cycle_id=cycle_id,
+                    source_contract=bool(route.get("source_contract")),
+                    plan_version=route.get("plan_version"),
+                    sequence_hash=route.get("sequence_hash"),
+                )
+            except Exception as exc:  # one malformed courier cannot poison a cycle
+                _log.warning(
+                    "LIVE_ETA route fail-soft courier_id=%s error=%s",
+                    courier_id,
+                    type(exc).__name__,
+                )
+                continue
             entries[courier_id] = {"snapshot": snapshot}
         store = {
             "schema_version": SCHEMA_VERSION,
@@ -467,10 +489,18 @@ def write_cycle(
             "entries": entries,
         }
         _atomic_write_store(store)
-        return {
+        snapshots = {
             courier_id: entry["snapshot"]
             for courier_id, entry in entries.items()
         }
+        try:
+            if C.decision_flag("ENABLE_LIVE_ETA_HISTORY_LOG"):
+                from dispatch_v2 import live_eta_history
+
+                live_eta_history.record_live_eta_cycle(snapshots)
+        except Exception as exc:  # telemetry cannot invalidate a published cycle
+            _log.warning("live ETA history hook fail-safe: %s", type(exc).__name__)
+        return snapshots
 
 
 def read_latest(courier_id: object) -> dict | None:
@@ -501,3 +531,68 @@ def eta_for(snapshot: Mapping[str, object] | None, order_id: object, kind: str) 
     field = "pickup_at" if kind == "pickup" else "delivery_at"
     value = row.get(field)
     return str(value) if value else None
+
+
+def bind_snapshot_to_route(
+    snapshot: Mapping[str, object] | None,
+    rendered_stops: Iterable[object],
+    *,
+    current_plan_version: object,
+    enforce: bool,
+) -> tuple[Mapping[str, object] | None, dict[str, object]]:
+    """Zwiąż snapshot ETA z dokładnie tą trasą i generacją, którą renderuje reader.
+
+    OFF jest czystym legacy pass-through. ON jest fail-closed: snapshot bez
+    kontraktu, z inną sekwencją albo z inną wersją planu nie może dostarczyć ETA.
+    Konsumenci dostają status do DTO/telemetrii, ale nie implementują porównania.
+    """
+    snapshot_hash = (
+        snapshot.get("sequence_hash") if isinstance(snapshot, Mapping) else None
+    )
+    snapshot_plan_version = (
+        snapshot.get("plan_version") if isinstance(snapshot, Mapping) else None
+    )
+    if not enforce:
+        return (
+            snapshot if isinstance(snapshot, Mapping) else None,
+            {
+                "status": "unchecked",
+                "current_plan_version": current_plan_version,
+                "current_sequence_hash": None,
+                "snapshot_plan_version": snapshot_plan_version,
+                "snapshot_sequence_hash": snapshot_hash,
+            },
+        )
+
+    try:
+        current_hash = route_order.route_sequence_hash(rendered_stops)
+        route_error = None
+    except (TypeError, ValueError) as exc:
+        current_hash = None
+        route_error = type(exc).__name__
+    contract: dict[str, object] = {
+        "status": "unchecked",
+        "current_plan_version": current_plan_version,
+        "current_sequence_hash": current_hash,
+        "snapshot_plan_version": snapshot_plan_version,
+        "snapshot_sequence_hash": snapshot_hash,
+    }
+    if route_error is not None:
+        contract["route_error"] = route_error
+    if not isinstance(snapshot, Mapping):
+        contract["status"] = "missing_snapshot"
+        return None, contract
+    if current_hash is None:
+        contract["status"] = "invalid_rendered_sequence"
+        return None, contract
+    if not isinstance(snapshot_hash, str) or not snapshot_hash:
+        contract["status"] = "unversioned_snapshot"
+        return None, contract
+    if snapshot_hash != current_hash:
+        contract["status"] = "sequence_hash_mismatch"
+        return None, contract
+    if snapshot_plan_version != current_plan_version:
+        contract["status"] = "plan_version_mismatch"
+        return None, contract
+    contract["status"] = "matched"
+    return snapshot, contract

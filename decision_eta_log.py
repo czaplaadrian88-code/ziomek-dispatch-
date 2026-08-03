@@ -347,6 +347,8 @@ def record_pipeline_decision(
 def record_plan_commit(
     courier_id: str,
     saved_plan: Mapping[str, Any],
+    *,
+    writer_role: str = "unattributed",
 ) -> bool:
     """Record every order leg after a plan CAS/write has actually committed."""
     def build() -> list[dict]:
@@ -396,7 +398,11 @@ def record_plan_commit(
                 "decision_ts": decision_ts,
                 "decision_kind": "plan_commit",
                 "source": "plan_manager",
+                "writer": "plan_manager",
+                "writer_role": str(writer_role),
                 "order_id": oid,
+                "plan_version": version,
+                "sequence_hash": None,
                 "selected_cid": cid,
                 "outcome": "PLAN_COMMITTED",
                 "candidate_pool_scope": "selected_only",

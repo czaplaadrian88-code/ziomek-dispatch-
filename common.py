@@ -350,6 +350,9 @@ ETAP4_DECISION_FLAGS = (
     # wybranego kuriera i puli w chwili decyzji/commitu planu. Log-only,
     # wszystkie wyjątki fail-safe; brak klucza flags.json = OFF.
     "ENABLE_DECISION_ETA_LOG",
+    # TIME-C F1: osobna, rotowana historia cykli live ETA. Obserwacyjna i
+    # fail-soft, lecz rejestracja tutaj zapewnia fingerprint oraz hermetyczne OFF.
+    "ENABLE_LIVE_ETA_HISTORY_LOG",
     # Drabina S1→S2→S3 (noc 28.07): jeden carry, kontrfaktyczny Alarm,
     # pełnoflotowa sonda slotów i ostatni hak egzekucji. Default OFF; flippy
     # wyłącznie sekwencyjnie po danych i ACK ownera.
@@ -819,6 +822,7 @@ ENABLE_MODE_LAYER_SHADOW = False
 # flipie = flags.json przez decision_flag(); brak module-level odczytu env.
 ENABLE_FULL_CHOICE_SET_LOG = False
 ENABLE_DECISION_ETA_LOG = False
+ENABLE_LIVE_ETA_HISTORY_LOG = False
 ENABLE_LIVE_ETA_WARM_SOURCE = False
 ENABLE_LEARNING_LOG_DECISION_JOIN = False
 ENABLE_C7_NORMAL_PATH_LOG = False

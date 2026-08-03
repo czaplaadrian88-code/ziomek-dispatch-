@@ -34,13 +34,17 @@ rozrzutu committed. Inaczej (flaga OFF / plan niepełny) → lokalne podjazdy
 carried-first.
 """
 from __future__ import annotations
+import hashlib
+import json
 from datetime import datetime, timedelta, timezone
+from typing import Iterable
 from zoneinfo import ZoneInfo
 
 WARSAW = ZoneInfo("Europe/Warsaw")
 PICKUP_MERGE_MIN = 10          # jedyny próg sklejania odbiorów w jeden podjazd
 _SENTINEL = datetime.max.replace(tzinfo=WARSAW)
 _BIG = 1 << 30
+ROUTE_SEQUENCE_HASH_DOMAIN = "ziomek.route_sequence.v1"
 
 
 def _iso(s):
@@ -98,6 +102,51 @@ def stop_id_for(kind, order_ids) -> str:
     """Deterministyczna tożsamość stopu z typu i membershipu, nigdy z koordynatów."""
     normalized = sorted(dict.fromkeys(str(oid) for oid in order_ids))
     return f"{kind}:{','.join(normalized)}"
+
+
+def route_sequence_contract(stops: Iterable[object]) -> dict:
+    """Znormalizuj renderowaną trasę do jednego kontraktu fizycznych stopów.
+
+    Hash nie obejmuje ETA, współrzędnych ani kolejności zleceń *wewnątrz* jednego
+    fizycznego stopu. Obejmuje kolejność fizycznych stopów, ich typ i pełny
+    membership. Kroki per-zlecenie z ``build_stop_sequence`` są zwijane, gdy
+    kolejne elementy opisują ten sam fizyczny stop. To sprawia, że snapshot
+    producenta i DTO konsumenta mają identyczną reprezentację bez kopii reguły.
+    """
+    normalized: list[dict] = []
+    for raw in stops:
+        kind = _attr(raw, "kind") or _attr(raw, "type")
+        if kind not in {"pickup", "dropoff"}:
+            raise ValueError("route sequence stop has invalid kind")
+        raw_order_ids = _attr(raw, "order_ids")
+        if isinstance(raw_order_ids, (list, tuple, set, frozenset)):
+            order_ids = sorted({
+                str(value) for value in raw_order_ids if value is not None
+            })
+        else:
+            order_id = _attr(raw, "order_id")
+            order_ids = [str(order_id)] if order_id is not None else []
+        if not order_ids:
+            raise ValueError("route sequence stop has no order membership")
+        stop = {
+            "kind": kind,
+            "order_ids": order_ids,
+            "stop_id": stop_id_for(kind, order_ids),
+        }
+        if not normalized or normalized[-1] != stop:
+            normalized.append(stop)
+    return {"domain": ROUTE_SEQUENCE_HASH_DOMAIN, "stops": normalized}
+
+
+def route_sequence_hash(stops: Iterable[object]) -> str:
+    """SHA-256 kanonicznej, renderowanej sekwencji fizycznych stopów."""
+    payload = json.dumps(
+        route_sequence_contract(stops),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
 
 
 def _pickup_spread_ok(orders) -> bool:
@@ -302,6 +351,21 @@ def build_route_stops(bag, plan_doc=None, *, plan_aware=False,
             }
         stops.append(stop)
     return stops
+
+
+def build_eta_binding_sequence(bag, plan_doc=None) -> list[dict]:
+    """Jedyna sekwencja wejściowa kontraktu wersjonowanego ETA.
+
+    Producent oraz każda powierzchnia konsumencka muszą hashować dokładnie ten
+    sam kanon. Parametry są celowo zamknięte tutaj: lokalne flagi renderowania
+    panelu/apki nie mogą tworzyć innej tożsamości tej samej trasy.
+    """
+    return build_route_stops(
+        bag,
+        plan_doc,
+        plan_aware=True,
+        trust_canon=True,
+    )
 
 
 def repair_dropoffs_after_pickups(seq, *, kind_key="kind", id_key="order_id"):

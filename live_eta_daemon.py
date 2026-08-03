@@ -150,12 +150,15 @@ def build_routes(
             and raw_plan.get("invalidated_at") is None
             else None
         )
-        sequence = route_order.build_route_stops(
-            bag,
-            plan_doc=plan,
-            plan_aware=True,
-            trust_canon=True,
-        )
+        try:
+            sequence = route_order.build_eta_binding_sequence(bag, plan)
+        except Exception as exc:
+            _log.warning(
+                "LIVE_ETA route-build fail-soft courier_id=%s error=%s",
+                courier_id,
+                type(exc).__name__,
+            )
+            sequence = []
         available_floor = _available_floor(courier_id, now)
         plan_steps = {
             (str(step.get("order_id")), step.get("type")): step
@@ -185,6 +188,12 @@ def build_routes(
                     )
                     continue
                 route_complete = False
+                _log.warning(
+                    "LIVE_ETA stop fail-soft courier_id=%s stop_id=%s "
+                    "reason=missing_order",
+                    courier_id,
+                    route_stop.get("stop_id"),
+                )
                 break
             coord = (
                 first.get("pickup_coords")
@@ -196,6 +205,12 @@ def build_routes(
                     coord = None
                 else:
                     route_complete = False
+                    _log.warning(
+                        "LIVE_ETA stop fail-soft courier_id=%s stop_id=%s "
+                        "reason=bad_coords",
+                        courier_id,
+                        route_stop.get("stop_id"),
+                    )
                     break
             if coord is None and not source_contract:
                 route_complete = False
@@ -262,6 +277,11 @@ def build_routes(
                 "courier_id": courier_id,
                 "start": start,
                 "stops": stops,
+                "plan_version": (plan or {}).get("plan_version"),
+                # Hash opisuje wyłącznie sekwencję faktycznie opublikowaną. W
+                # legacy fail-soft niepełna trasa staje się `stops=[]`, więc jej
+                # kontrakt także musi być hashem pustej trasy.
+                "sequence_hash": route_order.route_sequence_hash(stops),
                 **(
                     {
                         "start_source": start_source,
