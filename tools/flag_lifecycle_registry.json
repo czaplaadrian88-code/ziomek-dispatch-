@@ -2,16 +2,16 @@
  "_meta": {
   "counts": {
    "apka": 30,
-   "engine": 447,
+   "engine": 448,
    "engine_1b_units": 13,
-   "etap4": 160,
+   "etap4": 161,
    "flags_json_keys": 272,
    "fp_extra": 37,
    "known_drift": 0,
    "numeric": 36,
    "panel": 89,
    "test_isolated": 13,
-   "total": 566,
+   "total": 567,
    "twins_concepts": 9
   },
   "generator": "tools/flag_lifecycle_seed.py",
@@ -10374,6 +10374,45 @@
     "engine"
    ]
   },
+  "ENABLE_ORDERS_STATE_PERSISTENCE_V2": {
+   "carriers": [
+    "common.py:ETAP4_DECISION_FLAGS",
+    "common.py:ENABLE_ORDERS_STATE_PERSISTENCE_V2"
+   ],
+   "consumers": [
+    "dispatch_v2/state_machine.py:_orders_state_persistence_v2_on",
+    "dispatch_v2/state_machine.py:_read_state",
+    "dispatch_v2/state_machine.py:_read_state_strict",
+    "dispatch_v2/state_machine.py:_write_state"
+   ],
+   "curated_at": "2026-08-03",
+   "current_snapshot": {
+    "default": false
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_ORDERS_STATE_PERSISTENCE_V2",
+   "notes": "A-2 iter3: osobna flaga calej polityki orders_state. OFF = legacy reader/writer bajt-w-bajt (best-effort predecessor, array-root zachowany), takze po rollbacku z ON. ON = hardened object-only read oraz walidowany, fail-closed predecessor w jednym ownerze state_persistence. Brak klucza = OFF; flip/live wymaga osobnego ACK ownera.",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-panel-watcher.service + dispatch-shadow.service + dispatch-orders-state-prune.service"
+   },
+   "removal_condition": "aktywacja lub retire wg roadmapy (ACK Adrian)",
+   "review_date": "2026-08-10",
+   "rollback": "flags.json false albo brak klucza (hot reload); sidecary ON sa inert dla calej sciezki OFF",
+   "source_of_truth": "flags.json",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
   "ENABLE_ORDERS_STATE_PRUNE": {
    "carriers": [
     "flags.json"
@@ -11617,14 +11656,14 @@
    "lifecycle": "planned",
    "lifecycle_seeded": false,
    "name": "ENABLE_PLAN_CORRUPT_RAISE",
-   "notes": "A-2 rework shadow-first: ON = strict read + recovery z predecessor .prev oraz monotoniczny version-HWM anti-ABA; OFF bez istniejącego HWM = legacy bez nowych artefaktów. Flip/obserwacja/blind za ACK ownera.",
+   "notes": "A-2 rework iter3 shadow-first: ON = strict read + recovery z predecessor .prev; caly zakres tokenow recovery jest fsyncowany w version-HWM i odzyskany main jest utrwalony pod EX przed wydaniem widoku (persist-then-issue). OFF = pelny legacy niezaleznie od pozostalych sidecarow. Flip/obserwacja/blind za ACK ownera.",
    "owner": {
     "business": "Adrian",
     "service": "dispatch-shadow.service"
    },
    "removal_condition": "aktywacja lub retire wg roadmapy (ACK Adrian)",
    "review_date": "2026-08-10",
-   "rollback": "flags.json false albo brak klucza (hot reload, bez restartu); istniejący version-HWM pozostaje monotonicznym fence'em",
+   "rollback": "flags.json false albo brak klucza (hot reload, bez restartu); OFF ignoruje .prev/version-HWM i zapisuje bajtowo stara sciezka current+1",
    "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [
