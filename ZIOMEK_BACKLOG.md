@@ -1,4 +1,10 @@
 # ZIOMEK AI DISPATCHER - BACKLOG ROZWOJU
+> **READ-ONLY DATA GATE 2026-08-03 — EKSTRAKTOR v2:** BUG-1 (rank na
+> `{best} ∪ alternatives`) i BUG-2 (join bieżącego `orders_state` + pełnej
+> znalezionej retencji snapshotów) zamknięte w artefakcie
+> `/root/artifacts/reguly-koordynatora-20260803/v2/`. `1634` pary, `592`
+> true-outside, `237` best-agreements, `0` naruszeń rank=1; zero zmian LIVE.
+> Raport/manifest/komenda: `v2/WALIDACJA.md`; ACK `LUNA-EXTRACT-V2 | OK | 1634 par`.
 > **KANDYDAT SOURCE-ONLY 2026-08-03 — ROOT-FIX NEW-1 PO BLIND 491870 ITER2:**
 > commit kodu `5c8ffa2517740d3abc523922ab05093bec37ab34` usuwa przyczynę
 > kolizji adresów u źródła. Czysty `address_canon` jest jednym ownerem rejestru

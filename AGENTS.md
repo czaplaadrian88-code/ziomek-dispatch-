@@ -39,6 +39,12 @@ BUILT_OFF→WAIT_DATA→READY_FOR_REVIEW→READY_FOR_OWNER→OWNER_ACKED→APPLI
 - AT-JOBY: planuj WYŁĄCZNIE przez `dispatch_v2/tools/at_gate.py` (rejestracja+reconcile; job zniknął bez werdyktu = ALARM w widoku).
 - Kolektor propozycji: `tools/process_debt_collect.py` (`--apply` tylko świadomie). `todo_master.md` = kontekst; ledger = prawda.
 
+## 📥 JEDNO WEJŚCIE POLECEŃ OWNERA (Adrian 2026-07-23)
+**KAŻDE polecenie/zadanie ownera MUSI natychmiast trafić do
+`/root/.claude/projects/-root/memory/todo_master.md` (i jako gate do ledgera,
+gdy to dług) — ZAWSZE. Zakaz zostawiania zadań tylko w transkrypcie sesji.
+Wszystko ma swoje miejsce.**
+
 ## Kolejność czytania — NIE skanuj repo, wszystko ma mapę
 1. **Przykazanie #0** (niżej) — JAK bezpiecznie zmieniać Ziomka; bez wyjątków.
 2. **`docs/CODEMAP.md`** — spis treści repo + „gdzie szukać czego" + pułapki nawigacyjne.
