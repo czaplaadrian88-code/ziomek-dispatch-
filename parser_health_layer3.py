@@ -407,7 +407,7 @@ def _maybe_send_alert_v3(self, alert: Dict[str, Any]) -> None:
         # Type techniczny zostaje w log.error/warning powyżej dla parsability.
         try:
             from dispatch_v2.telegram_utils import send_admin_alert
-            ok = send_admin_alert(msg)
+            ok = send_admin_alert(msg, source="parser_health_layer3")
             if not ok:
                 log.warning(f"ParserHealthMonitor: send_admin_alert returned False dla {alert_type}")
         except Exception as e:

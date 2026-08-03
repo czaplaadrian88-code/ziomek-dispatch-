@@ -473,7 +473,7 @@ def _mp13_send_alert_safe(msg: str) -> None:
     """
     try:
         from dispatch_v2 import telegram_utils
-        telegram_utils.send_admin_alert(msg)
+        telegram_utils.send_admin_alert(msg, source="osrm_client")
     except Exception as e:
         _log.warning(f"MP-#13 L2 alert send fail ({type(e).__name__}: {e}): {msg!r}")
 
