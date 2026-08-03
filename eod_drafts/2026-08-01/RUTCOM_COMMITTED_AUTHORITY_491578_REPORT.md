@@ -1,4 +1,4 @@
-# RUTCOM committed pickup authority — raport kandydata v27, 2026-08-03
+# RUTCOM committed pickup authority — raport kandydata v28, 2026-08-03
 
 ## Wynik
 
@@ -12,6 +12,54 @@ Rutcom. Granica transportu przed zapisem outboxa zamienia legalny CK na jeden
 kanoniczny `PICKUP_TIME_UPDATED`. Jeden handler state atomowo zapisuje pickup,
 CK, HH:MM, monotoniczną rewizję oraz provenance. Plan, scoring po potwierdzonym
 apply i aplikacja dziedziczą tę samą prawdę.
+
+## Co domknięto w v28
+
+Dwa blind review exact-byte v27 ponownie poprawnie zatrzymały live. Authority
+verdict ma SHA-256
+`57fb04abfb7234fa429558b520c7aee993948b07f3adc5e950af021f7e8aefb7`,
+a rollout verdict
+`ce35134afb0505f6897f723829f5858c237d517c6e2218428e0ebfbc02ca70a5`;
+oba przeszły mechaniczny checker jako `CONFIRMED_DEFECT`. MAIN niezależnie
+odtworzył rozjazd queue↔authority dla naive v6, brak transaction ID rollback
+fence'a oraz ręczny `--v4-code-active`, który nie dowodził ani bajtów deployu,
+ani procesu, który miał je uruchomić. Negatywny baseline miał 7/7 czerwonych.
+
+V28 zamyka te klasy u właścicieli kontraktu. `_receipt_clock_pair` nie przypisuje
+UTC do niejawnego wall-clocka; v4/v5/v6 bez strefy pozostaje poison evidence i
+nie może zostać ready/claimed. `rollback_fence.v3` ma UUID v4, exact hash
+backupu i pustej kolejki oraz manifest jedenastu plików wykonawczych. Release
+wymaga tego samego ID i tego samego manifestu pod queue flockiem, więc stale A
+nie usuwa B. Operator mierzy wyłącznie kanoniczny deploy root i odmawia mutacji,
+gdy sam działa z worktree/stagingu. Probe unitów wymaga loaded+inactive oraz
+exact WorkingDirectory, interpreter i moduł ExecStart dla panel-watcher i
+shadow. `safe_for_code_revert` wymaga zgodności bieżących bajtów z manifestem
+fence'a. Stary projection contract został usunięty: code revert dopuszcza tylko
+faktycznie pustą kolejkę, bez translacji trwałego receiptu i bez drugiego TTL.
+
+Po fixie focused ma 14/14, direct cluster 166/166, a sibling authority/state/
+outbox/recovery cluster 338/338. Dziewięć kontrolowanych mutacji ponownie
+czerwieniło 2F + 8×1F. Pełna hermetyczna regresja ma 6791 passed / 74 skipped /
+8 xfailed / 153 warnings / 0 failed w 463,33 s, czyli +10 PASS względem V27 z
+identycznym profilem non-pass. Lifecycle repo/live ma 557/557, skill scope
+znajduje nową klasę `durable-time-authority-boundary` 8/8, a selftest skilla
+przechodzi. Produkcja, procesy i flaga nadal są nietknięte/OFF. V27 commit
+`a168e7a519f19425ba8aef69120f9e8ad93f2e49` pozostaje odrzucony; przed live
+pozostają DoD oraz dwa świeże review exact-byte V28.
+
+### Mapa kompletności v28
+
+| Miejsce | Rola | Dotknięte | Dowód |
+|---|---|---|---|
+| `coordinator_time_recheck._receipt_clock_pair` | wspólny queue clock oracle | TAK | naive v5/v6 fail-closed + bezpośredni parity check authority |
+| rollback audit/prepare/status/release | transaction owner | TAK | exact empty queue, UUID ABA, bound manifest i trwały backup |
+| `committed_pickup_authority._valid_coordinator_receipt` | authority clock oracle | N-D kod | już strict-aware; test dowodzi identycznego odrzucenia |
+| rollback operator tool | target-mode owner | TAK | canonical-root, 11 plików, stable remeasure, effective OFF i quiesce |
+| oba unity writerów | przyszły executable target | TAK probe | exact WorkingDirectory/interpreter/module; wrong-module mutation RED |
+| watcher/outbox/state | exact durable transport | N-D | istniejący claim/apply/ACK, 338/338 sibling tests |
+| feasibility/route/plan/scoring/selection | downstream | N-D | brak zmiany HARD/SOFT i brak receiptu/fence parsing |
+| panel/API/apka | display consumer | N-D | brak render override; nadal czyta kanoniczny sprzężony state |
+| twins registry + trzy test modules | future completeness/release gate | TAK | scope 8/8, selftest, 10 nowych oracli i dziewięć mutation groups |
 
 ## Co domknięto w v27
 

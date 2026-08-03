@@ -75,8 +75,27 @@ _LEGACY_DURABLE_BOOLEAN_KEYS = {
     ),
 }
 _FUTURE_SKEW = timedelta(seconds=30)
-_ROLLBACK_FENCE_SCHEMA = "coordinator_time_recheck.rollback_fence.v2"
+_ROLLBACK_FENCE_SCHEMA = "coordinator_time_recheck.rollback_fence.v3"
 _ROLLBACK_TARGET = "pre-v4-legacy-queue"
+ROLLFORWARD_CODE_MANIFEST_SCHEMA = (
+    "rutcom_committed_authority.rollforward_code_manifest.v1"
+)
+# Exact executable contract that must be restored before a rollback fence can
+# be released. The queue owns this set; the operator tool only measures the
+# canonical deployed paths and cannot silently choose a narrower target.
+ROLLFORWARD_CODE_PATHS = (
+    "committed_pickup_apply.py",
+    "committed_pickup_authority.py",
+    "common.py",
+    "coordinator_time_recheck.py",
+    "dispatch_pipeline.py",
+    "durable_event_apply.py",
+    "event_bus.py",
+    "panel_watcher.py",
+    "shadow_dispatcher.py",
+    "state_machine.py",
+    "tools/rutcom_committed_authority_rollback.py",
+)
 _FORWARD_FENCE_SCHEMA = "coordinator_time_recheck.forward_fence.v1"
 _FORWARD_FENCE_TARGET = "rutcom-forward-authority-rollout"
 _QUEUE_RECEIPT_SOURCES = frozenset(
@@ -199,10 +218,16 @@ def _receipt_clock_pair(
         )
     except (TypeError, ValueError):
         return None
-    if requested_at.tzinfo is None:
-        requested_at = requested_at.replace(tzinfo=timezone.utc)
-    if eligible_at.tzinfo is None:
-        eligible_at = eligible_at.replace(tzinfo=timezone.utc)
+    # Canonical receipts cross process and storage boundaries. Assigning UTC
+    # to a naive wall clock invents provenance and diverges from the committed
+    # authority oracle, which correctly rejects such a timestamp.
+    if (
+        requested_at.tzinfo is None
+        or requested_at.utcoffset() is None
+        or eligible_at.tzinfo is None
+        or eligible_at.utcoffset() is None
+    ):
+        return None
     if eligible_at < requested_at:
         return None
     return requested_at, eligible_at
@@ -221,6 +246,58 @@ def _queue_snapshot_sha256(data: Mapping[str, object]) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
+
+
+def build_rollforward_code_manifest(
+    files: Mapping[str, object],
+) -> dict:
+    """Build the sole canonical executable target receipt from exact hashes."""
+    if not isinstance(files, Mapping) or frozenset(files) != frozenset(
+        ROLLFORWARD_CODE_PATHS
+    ):
+        raise ValueError("roll-forward code manifest path set mismatch")
+    normalized_files = {}
+    for relative_path in ROLLFORWARD_CODE_PATHS:
+        digest = files.get(relative_path)
+        if (
+            not isinstance(digest, str)
+            or len(digest) != 64
+            or any(char not in "0123456789abcdef" for char in digest)
+        ):
+            raise ValueError("invalid roll-forward code file digest")
+        normalized_files[relative_path] = digest
+    body = {
+        "schema": ROLLFORWARD_CODE_MANIFEST_SCHEMA,
+        "files": normalized_files,
+    }
+    calculated = hashlib.sha256(
+        json.dumps(
+            body,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return {**body, "manifest_sha256": calculated}
+
+
+def _normalized_rollforward_code_manifest(value: object) -> Optional[dict]:
+    """Validate one exact, content-addressed executable target manifest."""
+    if not isinstance(value, Mapping) or frozenset(value) != {
+        "schema",
+        "files",
+        "manifest_sha256",
+    }:
+        return None
+    if value.get("schema") != ROLLFORWARD_CODE_MANIFEST_SCHEMA:
+        return None
+    try:
+        canonical = build_rollforward_code_manifest(value.get("files"))
+    except (TypeError, ValueError):
+        return None
+    if value.get("manifest_sha256") != canonical["manifest_sha256"]:
+        return None
+    return canonical
 
 
 def _validate_continuation_depth(continuation_depth: object) -> int:
@@ -322,7 +399,7 @@ def _valid_unclaimed_receipt_shape(
     *,
     order_id: str,
 ) -> bool:
-    """One exact shape owner shared by runtime and rollback projection."""
+    """One exact shape owner shared by runtime and rollback audit."""
     if not isinstance(record, Mapping):
         return False
     base = receipt_base(record)
@@ -1305,29 +1382,21 @@ def drain(ttl_min: float = DEFAULT_TTL_MIN) -> set:
     return set(drain_with_receipts(ttl_min=ttl_min))
 
 
-def _legacy_rollback_projection(
-    data: dict,
-    *,
-    projection_now: Optional[datetime] = None,
-) -> tuple[dict, dict]:
-    """Pure audit: code rollback is legal only with an empty exact queue.
+def _legacy_rollback_audit(data: dict) -> dict:
+    """Prove that code rollback sees one exact, empty queue contract.
 
-    Translating durable receipts into five-minute scalars creates a second
-    lifetime owner and can lose work if activation is delayed. Hot OFF remains
-    immediate rollback; code revert waits until the current watcher drains every
-    request and then fences one exact empty snapshot.
+    Durable receipts are never translated, rebased or assigned a second TTL.
+    Hot OFF remains immediate rollback; a code revert waits until the current
+    watcher drains every request and then fences one canonical empty snapshot.
     """
-    projection_now = projection_now or _utc_now()
-    projection: dict[str, str] = {}
     blockers: list[str] = []
     counts = {
         "records": len(data),
         "legacy_records": 0,
-        "pending_v4_records": 0,
+        "pending_pre_policy_records": 0,
         "claimed_records": 0,
         "successor_records": 0,
         "invalid_records": 0,
-        "not_ready_records": 0,
         "policy_bound_records": 0,
     }
     for oid_raw, raw in data.items():
@@ -1358,33 +1427,22 @@ def _legacy_rollback_projection(
             counts["invalid_records"] += 1
             blockers.append(f"{oid}:orphan_successor")
             continue
-        base = receipt_base(raw)
         if not _valid_unclaimed_receipt_shape(raw, order_id=oid):
             counts["invalid_records"] += 1
-            blockers.append(f"{oid}:invalid_v4_receipt")
+            blockers.append(f"{oid}:invalid_receipt")
             continue
         if raw.get("schema") == RECEIPT_SCHEMA:
             counts["policy_bound_records"] += 1
             blockers.append(f"{oid}:policy_bound_receipt")
             continue
-        clocks = _receipt_clock_pair(raw)
-        if clocks is None:
-            counts["invalid_records"] += 1
-            blockers.append(f"{oid}:invalid_v4_timestamp")
-            continue
-        if not _receipt_ready(raw, order_id=oid, now=projection_now):
-            counts["not_ready_records"] += 1
-            blockers.append(f"{oid}:receipt_not_yet_eligible")
-            continue
-        counts["pending_v4_records"] += 1
+        counts["pending_pre_policy_records"] += 1
         blockers.append(f"{oid}:pending_pre_policy_receipt")
 
-    status = {
+    return {
         **counts,
-        "safe_queue_projection": not blockers,
+        "safe_empty_queue": not data and not blockers,
         "blockers": blockers,
     }
-    return projection, status
 
 
 def _persistent_rollback_backup_path(value: object) -> Optional[Path]:
@@ -1416,9 +1474,12 @@ def _rollback_fence_status_unlocked() -> dict:
         "rollback_fence_present": fence.exists(),
         "rollback_prepared": False,
         "rollback_fence_error": None,
+        "rollback_fence_id": None,
         "rollback_backup_path": None,
         "rollback_backup_sha256": None,
-        "rollback_projected_queue_sha256": None,
+        "rollback_fenced_queue_sha256": None,
+        "rollback_rollforward_code_manifest": None,
+        "rollback_rollforward_code_manifest_sha256": None,
     }
     if not result["rollback_fence_present"]:
         return result
@@ -1441,21 +1502,60 @@ def _rollback_fence_status_unlocked() -> dict:
     if receipt.get("target") != _ROLLBACK_TARGET:
         result["rollback_fence_error"] = "fence_target_mismatch"
         return result
+    if frozenset(receipt) != {
+        "schema",
+        "created_at",
+        "target",
+        "fence_id",
+        "backup_path",
+        "backup_sha256",
+        "fenced_queue_sha256",
+        "rollforward_code_manifest",
+    }:
+        result["rollback_fence_error"] = "fence_shape_invalid"
+        return result
+    try:
+        fence_uuid = uuid.UUID(str(receipt.get("fence_id") or ""))
+    except (TypeError, ValueError, AttributeError):
+        result["rollback_fence_error"] = "fence_id_invalid"
+        return result
+    if fence_uuid.version != 4 or receipt.get("fence_id") != fence_uuid.hex:
+        result["rollback_fence_error"] = "fence_id_invalid"
+        return result
+    result["rollback_fence_id"] = fence_uuid.hex
+    try:
+        created_at = datetime.fromisoformat(str(receipt.get("created_at")))
+    except (TypeError, ValueError):
+        result["rollback_fence_error"] = "created_at_invalid"
+        return result
+    if created_at.tzinfo is None or created_at.utcoffset() is None:
+        result["rollback_fence_error"] = "created_at_invalid"
+        return result
+    code_manifest = _normalized_rollforward_code_manifest(
+        receipt.get("rollforward_code_manifest")
+    )
+    if code_manifest is None:
+        result["rollback_fence_error"] = "rollforward_code_manifest_invalid"
+        return result
+    result["rollback_rollforward_code_manifest"] = _json_copy(code_manifest)
+    result["rollback_rollforward_code_manifest_sha256"] = code_manifest[
+        "manifest_sha256"
+    ]
 
     backup = _persistent_rollback_backup_path(receipt.get("backup_path"))
     if backup is None or str(backup) != str(receipt.get("backup_path") or ""):
         result["rollback_fence_error"] = "backup_path_invalid"
         return result
     expected_backup_sha = str(receipt.get("backup_sha256") or "")
-    expected_queue_sha = str(receipt.get("projected_queue_sha256") or "")
+    expected_queue_sha = str(receipt.get("fenced_queue_sha256") or "")
     result["rollback_backup_path"] = str(backup)
     result["rollback_backup_sha256"] = expected_backup_sha or None
-    result["rollback_projected_queue_sha256"] = expected_queue_sha or None
+    result["rollback_fenced_queue_sha256"] = expected_queue_sha or None
     if len(expected_backup_sha) != 64:
         result["rollback_fence_error"] = "backup_sha256_invalid"
         return result
     if len(expected_queue_sha) != 64:
-        result["rollback_fence_error"] = "projected_queue_sha256_invalid"
+        result["rollback_fence_error"] = "fenced_queue_sha256_invalid"
         return result
     try:
         backup_bytes = backup.read_bytes()
@@ -1469,35 +1569,44 @@ def _rollback_fence_status_unlocked() -> dict:
         result["rollback_fence_error"] = "backup_sha256_mismatch"
         return result
     try:
-        projected_bytes = Path(QUEUE_PATH).read_bytes()
+        fenced_queue_bytes = Path(QUEUE_PATH).read_bytes()
     except FileNotFoundError:
-        result["rollback_fence_error"] = "projected_queue_missing"
+        result["rollback_fence_error"] = "fenced_queue_missing"
         return result
     except OSError:
-        result["rollback_fence_error"] = "projected_queue_unreadable"
+        result["rollback_fence_error"] = "fenced_queue_unreadable"
         return result
-    if hashlib.sha256(projected_bytes).hexdigest() != expected_queue_sha:
-        result["rollback_fence_error"] = "projected_queue_sha256_mismatch"
+    if hashlib.sha256(fenced_queue_bytes).hexdigest() != expected_queue_sha:
+        result["rollback_fence_error"] = "fenced_queue_sha256_mismatch"
         return result
     result["rollback_prepared"] = True
     return result
 
 
 def legacy_rollback_status() -> dict:
-    """Read-only proof whether queue data can be read by the pre-v4 code."""
+    """Read-only proof that rollback owns one exact empty queue snapshot."""
     with _lockfile():
-        _projection, status = _legacy_rollback_projection(_load())
+        status = _legacy_rollback_audit(_load())
         status.update(_rollback_fence_status_unlocked())
         return status
 
 
-def prepare_legacy_rollback(backup_path: str) -> dict:
-    """Fence v4 writers, backup exact bytes and downgrade only safe requests.
+def prepare_legacy_rollback(
+    backup_path: str,
+    rollforward_code_manifest: Mapping[str, object],
+) -> dict:
+    """Fence writers and bind an exact empty queue to roll-forward code.
 
-    Claimed/corrupt records are never coerced. The caller must separately prove
-    that no unfinished authority outbox exists and that the decision flag is
-    OFF; the operator CLI owns that cross-store preflight.
+    No receipt is coerced or translated. The caller must separately prove that
+    no unfinished authority outbox exists and that the decision flag is OFF;
+    the operator CLI owns that cross-store preflight and measures the canonical
+    deployed code manifest supplied here.
     """
+    normalized_code_manifest = _normalized_rollforward_code_manifest(
+        rollforward_code_manifest
+    )
+    if normalized_code_manifest is None:
+        raise ValueError("invalid roll-forward code manifest")
     backup = _persistent_rollback_backup_path(backup_path)
     if backup is None:
         raise ValueError(
@@ -1511,11 +1620,8 @@ def prepare_legacy_rollback(backup_path: str) -> dict:
         if os.path.exists(_forward_fence_path()):
             raise RuntimeError("forward rollout fence is already active")
         data = _load()
-        projection_now = _utc_now()
-        projection, status = _legacy_rollback_projection(
-            data, projection_now=projection_now
-        )
-        if not status["safe_queue_projection"]:
+        status = _legacy_rollback_audit(data)
+        if not status["safe_empty_queue"]:
             raise RuntimeError(
                 "legacy rollback blocked by queue: "
                 + ",".join(status["blockers"])
@@ -1535,21 +1641,23 @@ def prepare_legacy_rollback(backup_path: str) -> dict:
         # Backup powstaje jako pierwszy. Sama jego porażka nie może zostawić
         # markera sugerującego gotowość do code revert ani zmienić kolejki.
         _write_once(backup, original)
-        projection_started = False
+        queue_canonicalization_started = False
         fence_created = False
         try:
-            # Projection and the final fence are one supervised transaction.
+            # Empty-queue canonicalization and the final fence are one
+            # supervised transaction.
             # Any failure after the first mutation restores the exact original
             # queue bytes before the exception leaves this lock.
-            projection_started = True
-            _save(projection)
-            _projection, after = _legacy_rollback_projection(
-                _load(), projection_now=projection_now
-            )
-            if not after["safe_queue_projection"] or after["pending_v4_records"]:
-                raise RuntimeError("legacy queue projection postcondition failed")
-            projected_bytes = queue_path.read_bytes()
-            projected_sha256 = hashlib.sha256(projected_bytes).hexdigest()
+            queue_canonicalization_started = True
+            _save({})
+            after = _legacy_rollback_audit(_load())
+            if not after["safe_empty_queue"] or after["records"]:
+                raise RuntimeError("empty queue fence postcondition failed")
+            fenced_queue_bytes = queue_path.read_bytes()
+            fenced_queue_sha256 = hashlib.sha256(
+                fenced_queue_bytes
+            ).hexdigest()
+            fence_id = uuid.uuid4().hex
             # Fence jest ostatnim commitem transakcji operatorskiej i zawiera
             # weryfikowalny receipt obu wcześniejszych artefaktów. Do tego momentu
             # status nigdy nie może autoryzować powrotu do kodu pre-v4.
@@ -1558,9 +1666,11 @@ def prepare_legacy_rollback(backup_path: str) -> dict:
                     "schema": _ROLLBACK_FENCE_SCHEMA,
                     "created_at": _utc_now().isoformat(),
                     "target": _ROLLBACK_TARGET,
+                    "fence_id": fence_id,
                     "backup_path": str(backup),
                     "backup_sha256": backup_sha256,
-                    "projected_queue_sha256": projected_sha256,
+                    "fenced_queue_sha256": fenced_queue_sha256,
+                    "rollforward_code_manifest": normalized_code_manifest,
                 },
                 ensure_ascii=False,
                 sort_keys=True,
@@ -1583,7 +1693,7 @@ def prepare_legacy_rollback(backup_path: str) -> dict:
                     restore_errors.append(
                         f"fence_cleanup:{type(exc).__name__}:{exc}"
                     )
-            if projection_started:
+            if queue_canonicalization_started:
                 try:
                     if queue_existed:
                         _atomic_replace_bytes(queue_path, original)
@@ -1602,29 +1712,51 @@ def prepare_legacy_rollback(backup_path: str) -> dict:
         return {
             "backup_path": str(backup),
             "backup_sha256": backup_sha256,
-            "projected_queue_sha256": projected_sha256,
-            "converted_v4_records": status["pending_v4_records"],
-            "legacy_records": after["legacy_records"],
+            "fenced_queue_sha256": fenced_queue_sha256,
+            "fenced_queue_records": after["records"],
+            "rollback_fence_id": fence_id,
+            "rollforward_code_manifest_sha256": normalized_code_manifest[
+                "manifest_sha256"
+            ],
             "rollback_fence_path": str(fence),
         }
 
 
-def release_legacy_rollback_fence() -> bool:
-    """Re-open v4 writers after a verified roll-forward to this code."""
+def release_legacy_rollback_fence(
+    fence_id: str,
+    active_code_manifest: Mapping[str, object],
+) -> bool:
+    """Release only the exact transaction on exact measured roll-forward code."""
+    try:
+        normalized_fence_id = uuid.UUID(str(fence_id)).hex
+    except (TypeError, ValueError, AttributeError) as exc:
+        raise ValueError("invalid rollback fence id") from exc
+    normalized_code_manifest = _normalized_rollforward_code_manifest(
+        active_code_manifest
+    )
+    if normalized_code_manifest is None:
+        raise ValueError("invalid active roll-forward code manifest")
     with _lockfile():
-        _projection, status = _legacy_rollback_projection(_load())
-        if not status["safe_queue_projection"]:
+        fence = Path(_rollback_fence_path())
+        if not fence.exists():
+            return False
+        fence_status = _rollback_fence_status_unlocked()
+        if not fence_status["rollback_prepared"]:
+            raise RuntimeError(
+                "rollback fence receipt invalid: "
+                + str(fence_status.get("rollback_fence_error") or "unknown")
+            )
+        if fence_status["rollback_fence_id"] != normalized_fence_id:
+            raise RuntimeError("rollback fence id mismatch")
+        if fence_status["rollback_rollforward_code_manifest"] != (
+            normalized_code_manifest
+        ):
+            raise RuntimeError("roll-forward code manifest mismatch")
+        status = _legacy_rollback_audit(_load())
+        if not status["safe_empty_queue"]:
             raise RuntimeError(
                 "rollback fence release blocked by queue: "
                 + ",".join(status["blockers"])
             )
-        fence = Path(_rollback_fence_path())
-        if not fence.exists():
-            return False
-        os.unlink(fence)
-        dir_fd = os.open(str(fence.parent), os.O_RDONLY | os.O_DIRECTORY)
-        try:
-            os.fsync(dir_fd)
-        finally:
-            os.close(dir_fd)
+        _unlink_durable(fence)
         return True

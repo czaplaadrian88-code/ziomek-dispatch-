@@ -1,5 +1,7 @@
 """Mechanical code-rollback gate for committed pickup authority."""
 
+import hashlib
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -36,17 +38,38 @@ def _queue_status(**overrides):
     status = {
         "records": 0,
         "legacy_records": 0,
-        "pending_v4_records": 0,
+        "pending_pre_policy_records": 0,
         "claimed_records": 0,
         "successor_records": 0,
         "invalid_records": 0,
-        "safe_queue_projection": True,
+        "safe_empty_queue": True,
         "blockers": [],
         "rollback_fence_present": False,
         "rollback_prepared": False,
+        "rollback_rollforward_code_manifest": None,
     }
     status.update(overrides)
     return status
+
+
+def _rollforward_code_manifest(*, salt: str = "v28") -> dict:
+    files = {
+        path: hashlib.sha256(f"{salt}:{path}".encode("utf-8")).hexdigest()
+        for path in rollback.queue.ROLLFORWARD_CODE_PATHS
+    }
+    body = {
+        "schema": rollback.queue.ROLLFORWARD_CODE_MANIFEST_SCHEMA,
+        "files": files,
+    }
+    manifest_sha256 = hashlib.sha256(
+        json.dumps(
+            body,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+    return {**body, "manifest_sha256": manifest_sha256}
 
 
 def _authority_event():
@@ -1173,6 +1196,7 @@ def test_forward_deploy_blocks_live_flag_or_nonempty_queue(
 def test_code_revert_requires_off_terminal_outbox_fence_and_legacy_queue(
     monkeypatch,
 ):
+    manifest = _rollforward_code_manifest()
     monkeypatch.setattr(rollback.C, "decision_flag", lambda _name: False)
     monkeypatch.setattr(
         rollback.event_bus,
@@ -1185,6 +1209,7 @@ def test_code_revert_requires_off_terminal_outbox_fence_and_legacy_queue(
         lambda: _queue_status(
             rollback_fence_present=True,
             rollback_prepared=True,
+            rollback_rollforward_code_manifest=manifest,
         ),
     )
     monkeypatch.setattr(
@@ -1199,10 +1224,55 @@ def test_code_revert_requires_off_terminal_outbox_fence_and_legacy_queue(
         },
     )
 
-    status = rollback.collect_status(writer_quiescence_verified=True)
+    status = rollback.collect_status(
+        writer_quiescence_verified=True,
+        deployed_code_manifest=manifest,
+    )
 
     assert status["safe_to_prepare"] is False
+    assert status["rollback_target_code_verified"] is True
     assert status["safe_for_code_revert"] is True
+
+
+def test_code_revert_blocks_when_deployed_bytes_drift_from_bound_target(
+    monkeypatch,
+):
+    expected = _rollforward_code_manifest(salt="expected")
+    observed = _rollforward_code_manifest(salt="drifted")
+    monkeypatch.setattr(rollback.C, "decision_flag", lambda _name: False)
+    monkeypatch.setattr(
+        rollback.event_bus,
+        "list_unfinished_state_applies",
+        lambda: [],
+    )
+    monkeypatch.setattr(
+        rollback.queue,
+        "legacy_rollback_status",
+        lambda: _queue_status(
+            rollback_fence_present=True,
+            rollback_prepared=True,
+            rollback_rollforward_code_manifest=expected,
+        ),
+    )
+    monkeypatch.setattr(
+        rollback.queue,
+        "forward_rollout_fence_status",
+        lambda: {
+            "forward_fence_present": False,
+            "forward_fence_valid": False,
+            "forward_fence_error": None,
+            "forward_fence_id": None,
+            "forward_fence_queue_sha256": None,
+        },
+    )
+
+    status = rollback.collect_status(
+        writer_quiescence_verified=True,
+        deployed_code_manifest=observed,
+    )
+
+    assert status["rollback_target_code_verified"] is False
+    assert status["safe_for_code_revert"] is False
 
 
 def test_code_revert_blocks_active_persisted_authority_even_when_flags_off(
@@ -1318,20 +1388,172 @@ def test_release_fence_refuses_when_manual_authority_writer_remains_on(
             "ENABLE_CZASOWKA_CK_MANUAL_EDIT_PASSTHROUGH"
         ],
         "unfinished_authority_outbox": 0,
-        "queue": {"safe_queue_projection": True},
+        "queue": {"safe_empty_queue": True},
     }
-    monkeypatch.setattr(rollback, "collect_status", lambda: before)
+    monkeypatch.setattr(rollback, "collect_status", lambda **_kwargs: before)
+    monkeypatch.setattr(
+        rollback,
+        "_probe_forward_writer_quiescence",
+        lambda: (True, {"writers": "inactive"}),
+    )
     monkeypatch.setattr(
         rollback.queue,
         "release_legacy_rollback_fence",
-        lambda: (_ for _ in ()).throw(
+        lambda *_args: (_ for _ in ()).throw(
             AssertionError("manual authority writer must keep fence closed")
         ),
     )
 
     assert rollback._cmd_release_fence(
-        SimpleNamespace(apply=True, v4_code_active=True)
+        SimpleNamespace(
+            apply=True,
+            quiesced=True,
+            fence_id="00000000-0000-4000-8000-000000000028",
+        )
     ) == 2
+
+
+def test_deployed_rollforward_manifest_hashes_every_exact_authority_file(
+    tmp_path, monkeypatch
+):
+    assert rollback.queue.ROLLFORWARD_CODE_PATHS == (
+        "committed_pickup_apply.py",
+        "committed_pickup_authority.py",
+        "common.py",
+        "coordinator_time_recheck.py",
+        "dispatch_pipeline.py",
+        "durable_event_apply.py",
+        "event_bus.py",
+        "panel_watcher.py",
+        "shadow_dispatcher.py",
+        "state_machine.py",
+        "tools/rutcom_committed_authority_rollback.py",
+    )
+    deploy_root = tmp_path / "deployed-dispatch-v2"
+    for relative_path in rollback.queue.ROLLFORWARD_CODE_PATHS:
+        target = deploy_root / relative_path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(f"first:{relative_path}\n".encode("utf-8"))
+    monkeypatch.setattr(rollback, "DEPLOYED_DISPATCH_ROOT", deploy_root)
+    monkeypatch.setattr(rollback, "_PACKAGE_ROOT", str(deploy_root))
+
+    first = rollback._deployed_rollforward_code_manifest()
+    second = rollback._deployed_rollforward_code_manifest()
+
+    assert first == second
+    assert set(first["files"]) == set(
+        rollback.queue.ROLLFORWARD_CODE_PATHS
+    )
+    assert first["manifest_sha256"]
+
+    changed_path = deploy_root / "coordinator_time_recheck.py"
+    changed_path.write_bytes(b"second\n")
+    changed = rollback._deployed_rollforward_code_manifest()
+    assert changed["manifest_sha256"] != first["manifest_sha256"]
+    assert changed["files"]["coordinator_time_recheck.py"] != (
+        first["files"]["coordinator_time_recheck.py"]
+    )
+
+
+def test_deployed_manifest_rejects_noncanonical_tool_copy(
+    tmp_path, monkeypatch
+):
+    deploy_root = tmp_path / "deployed-dispatch-v2"
+    runtime_root = tmp_path / "staging-dispatch-v2"
+    deploy_root.mkdir()
+    runtime_root.mkdir()
+    monkeypatch.setattr(rollback, "DEPLOYED_DISPATCH_ROOT", deploy_root)
+    monkeypatch.setattr(rollback, "_PACKAGE_ROOT", str(runtime_root))
+
+    with pytest.raises(RuntimeError, match="canonical deployed root"):
+        rollback._deployed_rollforward_code_manifest()
+
+
+def test_release_fence_binds_exact_id_and_measured_deployed_manifest(
+    monkeypatch
+):
+    fence_id = "00000000-0000-4000-8000-000000000028"
+    manifest = _rollforward_code_manifest()
+    before = {
+        "enabled_authority_flags": [],
+        "unfinished_authority_outbox": 0,
+        "queue": {
+            "safe_empty_queue": True,
+            "rollback_fence_present": True,
+        },
+    }
+    verified_before = {
+        **before,
+        "rollback_target_code_verified": True,
+    }
+    after = {
+        "queue": {
+            "safe_empty_queue": True,
+            "rollback_fence_present": False,
+        },
+    }
+    statuses = iter([before, verified_before, after])
+    monkeypatch.setattr(
+        rollback,
+        "_probe_forward_writer_quiescence",
+        lambda: (True, {"writers": "inactive"}),
+    )
+    monkeypatch.setattr(
+        rollback,
+        "collect_status",
+        lambda **_kwargs: next(statuses),
+    )
+    monkeypatch.setattr(
+        rollback,
+        "_deployed_rollforward_code_manifest",
+        lambda: manifest,
+    )
+    released_with = []
+
+    def release(received_fence_id, received_manifest):
+        released_with.append((received_fence_id, received_manifest))
+        return True
+
+    monkeypatch.setattr(
+        rollback.queue,
+        "release_legacy_rollback_fence",
+        release,
+    )
+
+    result = rollback._cmd_release_fence(
+        SimpleNamespace(
+            apply=True,
+            quiesced=True,
+            fence_id=fence_id,
+        )
+    )
+
+    assert result == 0
+    assert released_with == [(fence_id, manifest)]
+
+
+def test_release_fence_cli_removes_unverifiable_v4_code_boolean():
+    with pytest.raises(SystemExit):
+        rollback._parser().parse_args(
+            ["release-fence", "--apply", "--v4-code-active"]
+        )
+    with pytest.raises(SystemExit):
+        rollback._parser().parse_args(
+            ["release-fence", "--apply", "--quiesced"]
+        )
+
+    parsed = rollback._parser().parse_args(
+        [
+            "release-fence",
+            "--apply",
+            "--quiesced",
+            "--fence-id",
+            "00000000-0000-4000-8000-000000000028",
+        ]
+    )
+    assert parsed.quiesced is True
+    assert parsed.fence_id.endswith("0028")
+    assert not hasattr(parsed, "v4_code_active")
 
 
 def test_fence_without_validated_backup_never_authorizes_code_revert(
@@ -1370,7 +1592,7 @@ def test_prepare_cli_requires_explicit_apply_and_quiesced(monkeypatch, capsys):
     monkeypatch.setattr(
         rollback.queue,
         "prepare_legacy_rollback",
-        lambda _path: (_ for _ in ()).throw(
+        lambda *_args: (_ for _ in ()).throw(
             AssertionError("must not mutate without both acknowledgements")
         ),
     )
@@ -1420,7 +1642,12 @@ def test_forward_status_mechanically_rejects_active_writer(
         raising=False,
     )
 
-    def status(*, writer_quiescence_verified=False, writer_states=None):
+    def status(
+        *,
+        writer_quiescence_verified=False,
+        writer_states=None,
+        deployed_code_manifest=None,
+    ):
         return {
             "writer_quiescence_verified": writer_quiescence_verified,
             "writer_states": writer_states,
@@ -1444,6 +1671,7 @@ def test_forward_writer_probe_requires_both_loaded_and_inactive(
 ):
     def run(command, **_kwargs):
         unit = command[2]
+        module = rollback.FORWARD_WRITER_UNIT_MODULES[unit]
         active_state = (
             shadow_active_state
             if unit == "dispatch-shadow.service"
@@ -1454,6 +1682,11 @@ def test_forward_writer_probe_requires_both_loaded_and_inactive(
             stdout=(
                 "LoadState=loaded\n"
                 f"ActiveState={active_state}\n"
+                f"WorkingDirectory={rollback.DEPLOYED_SCRIPTS_ROOT}\n"
+                "ExecStart={ "
+                f"path={rollback.DISPATCH_PYTHON} ; "
+                f"argv[]={rollback.DISPATCH_PYTHON} -m {module} ; "
+                "ignore_errors=no }\n"
             ),
         )
 
@@ -1466,6 +1699,41 @@ def test_forward_writer_probe_requires_both_loaded_and_inactive(
     assert states["dispatch-shadow.service"]["active_state"] == (
         shadow_active_state
     )
+    assert states["dispatch-shadow.service"][
+        "target_mode_verified"
+    ] is True
+
+
+def test_forward_writer_probe_rejects_wrong_deployed_module(monkeypatch):
+    def run(command, **_kwargs):
+        unit = command[2]
+        module = rollback.FORWARD_WRITER_UNIT_MODULES[unit]
+        if unit == "dispatch-shadow.service":
+            module = "dispatch_v2.staging_shadow"
+        return SimpleNamespace(
+            returncode=0,
+            stdout=(
+                "LoadState=loaded\n"
+                "ActiveState=inactive\n"
+                f"WorkingDirectory={rollback.DEPLOYED_SCRIPTS_ROOT}\n"
+                "ExecStart={ "
+                f"path={rollback.DISPATCH_PYTHON} ; "
+                f"argv[]={rollback.DISPATCH_PYTHON} -m {module} ; "
+                "ignore_errors=no }\n"
+            ),
+        )
+
+    monkeypatch.setattr(rollback.subprocess, "run", run)
+
+    verified, states = rollback._probe_forward_writer_quiescence()
+
+    assert verified is False
+    assert states["dispatch-panel-watcher.service"][
+        "target_mode_verified"
+    ] is True
+    assert states["dispatch-shadow.service"][
+        "target_mode_verified"
+    ] is False
 
 
 def test_code_revert_reserves_assignment_policy_snapshot():
@@ -1512,7 +1780,7 @@ def test_code_revert_safety_requires_mechanical_writer_quiescence(monkeypatch):
     assert status["safe_for_code_revert"] is False
 
 
-def test_prepare_reprobes_writers_after_queue_projection(monkeypatch, capsys):
+def test_prepare_reprobes_writers_after_empty_queue_fence(monkeypatch, capsys):
     """A writer becoming active during prepare must turn the receipt red."""
     probes = iter(
         [
@@ -1521,13 +1789,20 @@ def test_prepare_reprobes_writers_after_queue_projection(monkeypatch, capsys):
         ]
     )
     seen_probes = []
+    measured_manifest = _rollforward_code_manifest()
+    prepared_with = []
 
     def probe():
         result = next(probes)
         seen_probes.append(result)
         return result
 
-    def status(*, writer_quiescence_verified=False, writer_states=None):
+    def status(
+        *,
+        writer_quiescence_verified=False,
+        writer_states=None,
+        deployed_code_manifest=None,
+    ):
         # Legacy implementation calls with no mechanical evidence and therefore
         # falsely sees both scans as green. The fixed path binds each scan to
         # its exact probe result.
@@ -1541,9 +1816,19 @@ def test_prepare_reprobes_writers_after_queue_projection(monkeypatch, capsys):
     monkeypatch.setattr(rollback, "_probe_forward_writer_quiescence", probe)
     monkeypatch.setattr(rollback, "collect_status", status)
     monkeypatch.setattr(
+        rollback,
+        "_deployed_rollforward_code_manifest",
+        lambda: measured_manifest,
+    )
+
+    def prepare(path, manifest):
+        prepared_with.append((path, manifest))
+        return {"fenced": True}
+
+    monkeypatch.setattr(
         rollback.queue,
         "prepare_legacy_rollback",
-        lambda _path: {"projected": True},
+        prepare,
     )
 
     result = rollback._cmd_prepare(
@@ -1556,6 +1841,12 @@ def test_prepare_reprobes_writers_after_queue_projection(monkeypatch, capsys):
 
     assert result == 3
     assert len(seen_probes) == 2
+    assert prepared_with == [
+        (
+            "/root/worktrees/not-created-by-mock.json",
+            measured_manifest,
+        )
+    ]
     assert '"prepared": false' in capsys.readouterr().out
 
 
@@ -1600,7 +1891,7 @@ def test_forward_deploy_ignores_valid_unclaimed_elastic_queue_receipt(
     monkeypatch.setattr(
         rollback.queue,
         "legacy_rollback_status",
-        lambda: _queue_status(records=1, pending_v4_records=1),
+        lambda: _queue_status(records=1, pending_pre_policy_records=1),
     )
     monkeypatch.setattr(
         rollback.queue,
@@ -1656,7 +1947,7 @@ def test_forward_deploy_blocks_unbound_pre_policy_elastic_receipt(
     monkeypatch.setattr(
         rollback.queue,
         "legacy_rollback_status",
-        lambda: _queue_status(records=1, pending_v4_records=1),
+        lambda: _queue_status(records=1, pending_pre_policy_records=1),
     )
     monkeypatch.setattr(
         rollback.queue,
@@ -1726,7 +2017,7 @@ def test_forward_queue_elastic_exception_fails_closed_on_mutation(
     monkeypatch.setattr(
         rollback.queue,
         "legacy_rollback_status",
-        lambda: _queue_status(records=1, pending_v4_records=1),
+        lambda: _queue_status(records=1, pending_pre_policy_records=1),
     )
     monkeypatch.setattr(
         rollback.queue,
@@ -1762,7 +2053,7 @@ def test_forward_queue_snapshot_count_mismatch_fails_closed(monkeypatch):
     monkeypatch.setattr(
         rollback.queue,
         "legacy_rollback_status",
-        lambda: _queue_status(records=1, pending_v4_records=1),
+        lambda: _queue_status(records=1, pending_pre_policy_records=1),
     )
     monkeypatch.setattr(
         rollback.queue,

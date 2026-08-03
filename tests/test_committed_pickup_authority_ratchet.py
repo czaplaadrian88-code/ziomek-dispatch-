@@ -512,6 +512,9 @@ def test_coordinator_authority_is_receipt_bound_end_to_end():
 
 def test_coordinator_queue_has_immutable_head_successor_and_safe_legacy_drain():
     queue = _source("coordinator_time_recheck.py")
+    clock_pair = queue.split("def _receipt_clock_pair(", 1)[1].split(
+        "\ndef _json_copy(", 1
+    )[0]
 
     assert 'SUCCESSOR_FIELD = "successor"' in queue
     assert "def _same_head(" in queue
@@ -529,7 +532,13 @@ def test_coordinator_queue_has_immutable_head_successor_and_safe_legacy_drain():
     assert "def _receipt_ready(" in queue
     assert "def _fresh_receipt(" not in queue
     assert "eligible_at <= now" in queue
-    assert "projection[oid] = projection_now.isoformat()" not in queue
+    assert ".replace(tzinfo=timezone.utc)" not in clock_pair
+    assert "requested_at.utcoffset() is None" in clock_pair
+    assert "eligible_at.utcoffset() is None" in clock_pair
+    assert "def _legacy_rollback_projection(" not in queue
+    assert '"safe_queue_projection"' not in queue
+    assert '"pending_v4_records"' not in queue
+    assert '"safe_empty_queue": not data and not blockers' in queue
     assert "pending_pre_policy_receipt" in queue
 
 
@@ -616,7 +625,8 @@ def test_code_rollback_is_mechanically_gated_across_queue_and_outbox():
     assert "state_has_committed_pickup_artifact(order)" in tool
     assert "not enabled_authority_flags" in tool
     assert 'before["enabled_authority_flags"]' in tool
-    assert "queue.prepare_legacy_rollback(args.queue_backup)" in tool
+    assert "queue.prepare_legacy_rollback(" in tool
+    assert "rollforward_code_manifest," in tool
     assert "not args.apply or not args.quiesced" in tool
     assert "def _pre_v4_coordinator_time_row_blocks_forward(" in tool
     assert "def _pre_v16_assignment_ck_row_blocks_forward(" in tool
@@ -629,6 +639,12 @@ def test_code_rollback_is_mechanically_gated_across_queue_and_outbox():
     assert "and not pre_v16_assignment_ck_rows" in tool
     assert "and active_incomplete_time_contract_count == 0" in tool
     assert "FORWARD_WRITER_UNITS = (" in tool
+    assert "FORWARD_WRITER_UNIT_MODULES = {" in tool
+    assert "DEPLOYED_SCRIPTS_ROOT = DEPLOYED_DISPATCH_ROOT.parent" in tool
+    assert '"--property=WorkingDirectory"' in tool
+    assert '"--property=ExecStart"' in tool
+    assert 'state["target_mode_verified"] = bool(' in tool
+    assert "and state.get(\"target_mode_verified\") is True" in tool
     assert "def _probe_forward_writer_quiescence(" in tool
     assert "and writer_quiescence_verified" in tool
     assert tool.count("_probe_forward_writer_quiescence()") >= 4
@@ -647,7 +663,26 @@ def test_code_rollback_is_mechanically_gated_across_queue_and_outbox():
     assert 'and forward_fence["forward_fence_valid"]' in tool
     assert "def _cmd_fence_forward(" in tool
     assert "def _cmd_release_forward_fence(" in tool
-    assert "projection[oid] = projection_now.isoformat()" not in queue
+    assert "ROLLFORWARD_CODE_PATHS = (" in queue
+    assert "def build_rollforward_code_manifest(" in queue
+    assert "rollforward_code_manifest" in queue
+    assert '"fence_id": fence_id' in queue
+    assert "rollback fence id mismatch" in queue
+    assert "roll-forward code manifest mismatch" in queue
+    assert "queue.release_legacy_rollback_fence(" in tool
+    assert "args.fence_id," in tool
+    assert "_deployed_rollforward_code_manifest()" in tool
+    assert (
+        'DEPLOYED_DISPATCH_ROOT = Path(\n'
+        '    "/root/.openclaw/workspace/scripts/dispatch_v2"'
+        in tool
+    )
+    assert 'release.add_argument("--fence-id", required=True)' in tool
+    assert 'release.add_argument("--quiesced", action="store_true")' in tool
+    assert "--v4-code-active" not in tool
+    assert "queue_conversion_receipt" not in tool
+    assert "safe_queue_projection" not in tool
+    assert "pending_v4_records" not in tool
     assert "pending_pre_policy_receipt" in queue
     assert "pending_legacy_timestamp" in queue
     assert '"safe_for_forward_deploy": safe_for_forward_deploy' in tool

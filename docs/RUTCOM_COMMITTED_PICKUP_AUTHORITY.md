@@ -1,8 +1,21 @@
 # Rutcom committed pickup authority
 
-Status: kandydat v27 niewdrożony, kod ciemny, nowa flaga domyślnie `OFF`.
+Status: kandydat v28 niewdrożony, kod ciemny, nowa flaga domyślnie `OFF`.
 Owner 2026-08-01 polecił docelowo włączyć ją `ON`, ale wdrożenie kodu,
 kontrolowane restarty i weryfikacja runtime pozostają osobną operacją live.
+
+V28 zamyka trzy klasy ustaleń dwóch blind review exact-byte v27 i audytu MAIN.
+Queue oraz committed-authority używają teraz tego samego kontraktu zegara:
+kanoniczny v4/v5/v6 bez jawnej strefy jest poison evidence i nigdy nie staje
+się ready przez domyślne przypisanie UTC. Rollback fence ma losowy UUID v4,
+exact release wymaga tego samego ID, więc spóźnione polecenie transakcji A nie
+może skasować fence'a B. Fence wiąże również SHA-256 jedenastu dokładnych
+plików wykonawczych authority. Operator mierzy wyłącznie kanoniczny katalog
+deployu i sam musi być uruchomiony z tego katalogu; deklaracja
+`--v4-code-active` została usunięta. Code revert i późniejszy release wymagają
+zgodności bajtów, mechanicznego quiesce i stabilnego ponownego pomiaru. Stary
+kontrakt „projection” zniknął całkowicie: rollback kodu dopuszcza wyłącznie
+pustą kolejkę, exact backup i jeden fenced snapshot.
 
 V27 domyka sześć unikalnych defektów znalezionych przez dwa blind review
 exact-byte v26. Brak agregatu nie omija już wspólnego exact-claim gate: raw
@@ -271,7 +284,7 @@ Po zmianie obowiązuje jedna granica:
 |---|---|---|---|---|
 | `panel_client.normalize_order` | ingest jednego response Rutcom | producer CK/pickup/marker/status | N-D | Już zwraca sprzężony snapshot; oracle korzysta z produkcyjnego schematu, bez nowego parsera. |
 | panel/console koordynatora | klik „Odśwież czas” | producer żądania | N-D | Istniejący caller nadal woła `enqueue`; semantyka dowodu została scentralizowana poniżej. |
-| `coordinator_time_recheck.py` | trwała kolejka intencji | writer/reader receiptu | TAK | V6 rozdziela immutable audit `requested_at` od epoki wykonania `eligible_at` i wiąże jeden exact click-time policy lease; successor tego samego kliknięcia zachowuje lease, a nowy re-click dostaje nowy. Czytnik zachowuje v4/v5 wyłącznie jako pre-policy legacy bez prawa nabycia authority. V26 ustanawia exact queue membership jako trwały lease od enqueue do claim/exact ACK: wiek nie kasuje v4/v5/v6, future/corrupt zostaje fail-closed, a TTL dotyczy tylko starego scalaru bez `request_id`. V27 wymaga `eligible_at <= now` bez tolerancji, promuje successor monotonicznie, ogranicza oid-only drain do scalara i prowadzi enqueue/upgrade/claim/pending-cleanup/ACK przez jednego ownera obu fence'ów. Code rollback nie rebazuje trwałej pracy do drugiego TTL: wymaga pustej kolejki, exact backupu i fence. Immutable claimed head, exact-event claim, bounded continuation i poison/corrupt retention pozostają wspólne. V23 dodał crash-safe `forward_fence.v1`: UUID i SHA dokładnego snapshotu kolejki są tworzone pod wspólnym flockiem. V24 blokuje code revert przy każdym policy-bound v6. Nie ma drugiego writera ani in-memory locka. |
+| `coordinator_time_recheck.py` | trwała kolejka intencji | writer/reader receiptu | TAK | V6 rozdziela immutable audit `requested_at` od epoki wykonania `eligible_at` i wiąże jeden exact click-time policy lease; successor tego samego kliknięcia zachowuje lease, a nowy re-click dostaje nowy. Czytnik zachowuje v4/v5 wyłącznie jako pre-policy legacy bez prawa nabycia authority. V26 ustanawia exact queue membership jako trwały lease od enqueue do claim/exact ACK: wiek nie kasuje v4/v5/v6, future/corrupt zostaje fail-closed, a TTL dotyczy tylko starego scalaru bez `request_id`. V27 wymaga `eligible_at <= now` bez tolerancji, promuje successor monotonicznie, ogranicza oid-only drain do scalara i prowadzi enqueue/upgrade/claim/pending-cleanup/ACK przez jednego ownera obu fence'ów. V28 odrzuca każdy kanoniczny zegar bez strefy, usuwa osobny projection audit oraz wiąże rollback fence z exact UUID, pustym snapshotem i kanonicznym manifestem kodu roll-forward. Immutable claimed head, exact-event claim, bounded continuation i poison/corrupt retention pozostają wspólne. V23 dodał crash-safe `forward_fence.v1`: UUID i SHA dokładnego snapshotu kolejki są tworzone pod wspólnym flockiem. V24 blokuje code revert przy każdym policy-bound v6. Nie ma drugiego writera ani in-memory locka. |
 | `panel_watcher._diff_czas_kuriera` | cykliczna obserwacja CK | producer eventu | TAK | Deleguje do resolvera, nie ma własnej polityki; `null→wartość` i `wartość→wartość` mają ten sam authority path, a raw first-acceptance istnieje tylko w parytecie OFF. Wspólny próg szumu 3 min obowiązuje delty z baseline i bliźniaka. Przy rolloucie emituje wspólny status/courier/assignment/revision CAS dla CK. V25 wiąże deliberate v6 z policy lease kliknięcia także na legacy ścieżce, więc późniejszy tick/flip nie zmienia CAS. |
 | `panel_watcher._diff_pickup_time` | równoległa obserwacja pickup | producer eventu | TAK | Deleguje do resolvera pickup zarówno dla `null→wartość`, jak i `wartość→wartość`, i blokuje stale baseline po CK-derived authority. V25 używa tego samego transaction policy ownera co bliźniaczy CK. |
 | `panel_watcher._claim_forced_time_event` / `_apply_time_update_event` / `_diff_and_emit` / `_post_restart_cold_start_scan` | watcher transport/recovery | consumer eventu | TAK | Każdy force event jest claimowany przed side effectem; claimed kolejka jest odtwarzana przed `current_state`, a ACK zależy od exact terminalnego rekordu outbox state+downstream. V21/V22 zachowują i wcześnie odzyskują initial intent. V23 chwyta jeden panelowy policy snapshot przed drain/prefetch/detail I/O i przekazuje go przez NEW_ORDER, oba detektory oraz legacy/durable apply. V25 dla v6 zastępuje go exact lease'em receiptu w obu callsite'ach apply i w crash replayu; v4/v5 zachowują historyczny tick-time kontrakt i są drenowane przed rolloutem. Raw event utrwala exact lease, więc recovery nie czyta ponownie żywych flag. Cold start ma ten sam kontrakt. |
@@ -293,11 +306,26 @@ Po zmianie obowiązuje jedna granica:
 | courier API serializer | kontrakt aplikacji | consumer CK/HH:MM | N-D | Czyta sprzężone pola ze state; brak render override lub drugiego writera. |
 | Android `RouteLogic` | prezentacja kurierowi | consumer API | N-D | Zachowuje istniejącą precedencję; 19:21 pochodzi z jednego kanonicznego zapisu. |
 | `common.py`, lifecycle registry/checkery | rollout/fingerprint | owner flagi | TAK | Decision flag, const default OFF, rejestr i effect coverage. V23 przypina manual i forward flagę także do rzeczywistego panelowego snapshot readera; pierwszy pełny przebieg słusznie zatrzymał brak tej deklaracji, po root fixie AST/spec/test/registry są zgodne 557/557. |
-| `tools/rutcom_committed_authority_rollback.py` | rollback/roll-forward | operator gate | TAK | Wymaga OFF każdej authority flag, terminalnego outboxa, pustej i bezpiecznej kolejki oraz mechanicznego quiesce exact writerów. V24 dopuszcza w forward preflight wyłącznie exact poprawny v6 unclaimed elastyk, którego receipt sam dowodzi click-time forward `OFF`; każdy v4/v5 lub malformed snapshot blokuje. `safe_for_forward_deploy` wymaga ważnego forward fence. `fence-forward` reprobuje writerów przed i po założeniu fence; `release-forward-fence` wiąże exact ID z efektywnym ON albo jawnym abortem OFF. V27 zabrania code-revert projection do scalara: hot OFF jest rollbackiem zachowania, a code revert czeka na opróżnienie kolejki i exact fenced backup. |
+| `tools/rutcom_committed_authority_rollback.py` | rollback/roll-forward | operator gate | TAK | Wymaga OFF każdej authority flag, terminalnego outboxa, pustej kolejki oraz mechanicznego quiesce exact writerów. V24 dopuszcza w forward preflight wyłącznie exact poprawny v6 unclaimed elastyk, którego receipt sam dowodzi click-time forward `OFF`; każdy v4/v5 lub malformed snapshot blokuje. `safe_for_forward_deploy` wymaga ważnego forward fence. `fence-forward` reprobuje writerów przed i po założeniu fence; `release-forward-fence` wiąże exact ID z efektywnym ON albo jawnym abortem OFF. V28 mierzy dziesięć plików w kanonicznym deploy root, wiąże manifest z rollback fence i wymaga exact ID, ponownego pomiaru oraz quiesce przy release. Hot OFF jest rollbackiem zachowania, a code revert czeka na opróżnienie kolejki i exact fenced backup. |
 | logi/outbox/provenance | audyt i recovery | consumer zdarzenia | TAK | Pełny proof key, revision i exact attestation pozwalają mierzyć/retry bez nowego źródła prawdy. |
-| testy incident/ratchet/twins/rollback | bramka regresji | verifier | TAK | V27 odtwarza missing-state claim bypass, future receipt w starej tolerancji, backward-clock promotion, trzy destrukcyjne drainy, utratę trwałej pracy przez projekcję rollbacku i mutacje po rollback fence. Negatywny baseline miał 11F/2P; po fixie targeted 22/22, broad 265/265, scalar compatibility 1/1 i siedem mutation probes ponownie czerwieniło 2F/1F/1F/1F/3F/2F/1F. Pełna regresja ma 6781 passed / 74 skipped / 8 xfailed / 153 warnings / 0 failed; dwa świeże final-byte review v27 pozostają bramką przed live. |
+| testy incident/ratchet/twins/rollback | bramka regresji | verifier | TAK | V27 odtwarza missing-state claim bypass, future receipt w starej tolerancji, backward-clock promotion, trzy destrukcyjne drainy, utratę trwałej pracy przez historyczną projekcję rollbacku i mutacje po rollback fence. V28 ma osobny negatywny baseline 7/7 czerwonych: naive v5/v6, brak exact ID/ABA, brak manifestu deployu i ręczny boolean operatora. Po zmianie focused 14/14, direct cluster 166/166, sibling cluster 338/338, dziewięć mutation groups ponownie czerwieniło 2F+8×1F, a pełna regresja ma 6791 passed / 74 skipped / 8 xfailed / 153 warnings / 0 failed. Dwa świeże exact-byte review V28 pozostają bramką przed live. |
+| `.claude/skills/ziomek-cto/references/twins-registry.json` | mapa kompletności #0 | owner procedury | TAK | V28 dodaje klasę `durable-time-authority-boundary` z queue, authority, watcherem, rollback tool, target-mode i trzema oracle; driver `scope` znajduje 8/8 miejsc, a selftest skilla jest zielony. |
 
 ## Dowody przed wydaniem
+
+- Dwa blind review exact-byte v27 poprawnie zatrzymały live. Authority verdict
+  SHA `57fb04abfb7234fa429558b520c7aee993948b07f3adc5e950af021f7e8aefb7`,
+  rollout verdict SHA
+  `ce35134afb0505f6897f723829f5858c237d517c6e2218428e0ebfbc02ca70a5`;
+  oba przeszły mechaniczny `check` jako `CONFIRMED_DEFECT`. MAIN niezależnie
+  odtworzył rozjazd tego samego naive v6 (`queue ready=true`, authority
+  `valid=false`), usuwanie fence'a bez transaction ID i brak mierzalnego dowodu
+  za `--v4-code-active`. Negatywny baseline V28 miał 7/7 failed; po zmianie
+  7/7 jest zielone; trzy powiązane oracles target-mode także są zielone.
+  Focused ma 14/14, direct cluster 166/166, sibling cluster 338/338, a pełna
+  regresja 6791P/0F/74S/8X/153W. DoD i dwa nowe exact-byte review V28 pozostają
+  przed live. V27 commit
+  `a168e7a519f19425ba8aef69120f9e8ad93f2e49` pozostaje odrzucony.
 
 - Dwa blind review exact-byte v26 poprawnie zatrzymały live. Authority verdict
   SHA `e5bb7976a00f6d515cbfd35b7a5a47a3d0822e96ae33ece3aac07bf32fc47fdd`,
@@ -505,7 +533,7 @@ Po zmianie obowiązuje jedna granica:
   wykryły osiem kolejnych klas opisanych wyżej. Review v18 zatrzymały live z
   czterema klasami opisanymi w dowodach v19. Review v19 znalazły kolejne cztery
   klasy zamknięte w v20, a review v20 osiem kolejnych klas zamkniętych w v21;
-  v21 wymaga nowego podwójnego `CLEAN` exact final-byte przed live.
+  bieżący V28 wymaga nowego podwójnego `CLEAN` exact final-byte przed live.
 
 ## Rollout, obserwacja i rollback
 
@@ -542,12 +570,17 @@ Po zmianie obowiązuje jedna granica:
   writerów, doprowadzić exact claim/outbox do terminalnego stanu i uruchomić:
   `python3 tools/rutcom_committed_authority_rollback.py status`. Następnie
   `prepare --apply --quiesced --queue-backup <trwała-ścieżka>` zakłada trwały
-  fence, robi exact backup 0600 i konwertuje wyłącznie nieclaimowane v4 receipts
-  do timestampów czytelnych przez stary kod. Każdy claim, corrupt rekord albo
-  niedomknięty authority outbox daje `HOLD`; wtedy kod v22 zostaje, flaga OFF.
+  fence z UUID, robi exact backup 0600 pustego snapshotu i wiąże SHA-256
+  jedenastu plików kanonicznego kodu roll-forward. Nie konwertuje żadnego
+  receiptu. Każdy rekord kolejki, claim, corrupt rekord albo
+  niedomknięty authority outbox daje `HOLD`; wtedy kod bieżący zostaje, flaga OFF.
   Dopiero `safe_for_code_revert=true` zezwala na jawny revert i kontrolowany
-  restart za ACK. Po roll-forward do v22 fence zwalnia się wyłącznie przez
-  `release-fence --apply --v4-code-active` przy OFF i pustym authority outboxie.
+  restart za ACK. Po roll-forward do exact kodu związanego w fence status musi
+  potwierdzić zgodność bajtów, a fence zwalnia się wyłącznie przez
+  `release-fence --apply --quiesced --fence-id <id>` przy OFF, pustym authority
+  outboxie i mechanicznie nieaktywnych writerach. Probe sprawdza również exact
+  `WorkingDirectory`, interpreter i moduł `ExecStart` obu unitów. Spóźniony ID,
+  zmieniony plik albo unit wskazujący inną kopię failuje closed.
   SQLite przed operacją nadal wymaga backupu przez API `.backup`.
   `dispatch-telegram` pozostaje nietknięty.
 - Obserwacja po aktywacji minimum 48 h: applied/suppressed per reason, retry
