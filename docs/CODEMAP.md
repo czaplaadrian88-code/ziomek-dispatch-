@@ -56,7 +56,7 @@ Pominięto szum: `.git`, `__pycache__`, `.pytest_cache`. ⚠ `.claude/skills/` t
 - `state_machine.py` — jedyne źródło prawdy o stanie zlecenia (upsert `orders_state`, 26 ścieżek); observer FSM Phase A log-only
 - `state_persistence.py` — jedyny leaf-owner trwałości JSON state: strict/legacy read, pochodna `.prev`, hardened predecessor oraz nazwany byte-compatible adapter legacy; temp→fsync→rename→dir-fsync
 - `order_fsm.py` — formalny validator cyklu życia + jawne wyjątki reconcile; w Phase A nie blokuje writera
-- `plan_manager.py` — domenowy zapis/odczyt `courier_plans.json`; guarded recovery przechodzi SH→EX, fsyncuje cały zakres globalnego JSON-safe version-HWM i recovered main przed wydaniem tokenu; OFF nie konsumuje sidecarów
+- `plan_manager.py` — domenowy zapis/odczyt `courier_plans.json`; guarded recovery tylko dla braku/złej treści przechodzi SH→EX, fsyncuje zakres globalnego JSON-safe version-HWM i recovered main przed wydaniem tokenu; wyczerpany I/O fail-loud; re-ON uzgadnia HWM pod EX, OFF nie konsumuje sidecarów
 - `plan_recheck.py` — periodyczny re-canon kolejności (timer 5 min); `_apply_canon_order_invariants`
 - `panel_watcher.py` — ingest z panelu gastro (event-driven poll); 4 handlery recanon
 - `panel_client.py` — dostęp do `gastro.nadajesz.pl` (login/CSRF/edit; cykl z `panel_html_parser`)

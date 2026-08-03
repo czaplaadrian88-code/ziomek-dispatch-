@@ -53,6 +53,12 @@ class _RecoveryReservationRequired(RuntimeError):
 
     pass
 
+
+class _VersionHwmReconciliationRequired(RuntimeError):
+    """A shared reader found legal main versions not yet covered by HWM."""
+
+    pass
+
 # Procesowy, monotoniczny licznik odrzuconych zapisow CAS. Dwa procesy
 # (panel-watcher i plan-recheck) publikuja delte we wlasnych podsumowaniach;
 # licznik w jednym miejscu obejmuje wszystkie production call-site'y save_plan.
@@ -179,19 +185,39 @@ def _write_version_hwm(value: int) -> None:
     )
 
 
-def _validate_main_epoch(plans: Dict[str, Any]) -> None:
+def _validate_or_reconcile_main_epoch(
+    plans: Dict[str, Any], *, allow_reconcile: bool
+) -> None:
+    """Validate main/HWM or reconcile a legal feature-OFF interval under EX.
+
+    Guarded writers reserve HWM before main, so a valid main ahead of a valid
+    HWM can only be produced while the guard's byte-legacy path is OFF (or by an
+    explicit operator rollback that removes the ON-only HWM).  The version
+    owner adopts that observed maximum when the flag is enabled again.  A
+    shared reader requests an unlock + EX re-read first; malformed HWM content
+    still fails closed in ``_read_version_hwm`` and is never repaired here.
+    """
     observed = _max_plan_version(plans)
     hwm = _read_version_hwm()
     if hwm is None:
-        if observed >= _VERSION_EPOCH_FLOOR:
-            raise PlanVersionStateError(
-                "epoch plan exists but durable version HWM is missing"
-            )
+        if observed < _VERSION_EPOCH_FLOOR:
+            return
+    elif observed <= hwm:
         return
-    if observed > hwm:
-        raise PlanVersionStateError(
-            f"plan version {observed} exceeds durable HWM {hwm}"
-        )
+
+    if not allow_reconcile:
+        raise _VersionHwmReconciliationRequired()
+
+    previous = hwm
+    _write_version_hwm(observed)
+    _invalidate_plan_cache()
+    _log.warning(
+        "PLAN_VERSION_HWM_RECONCILED path=%s previous=%s observed=%s; "
+        "adopted versions written while guard was OFF",
+        version_hwm_path(),
+        "missing" if previous is None else previous,
+        observed,
+    )
 
 
 def _rebase_recovered_versions(plans: Dict[str, Any]) -> Dict[str, Any]:
@@ -262,21 +288,27 @@ def _read_raw_result(
     *,
     guard_on: Optional[bool] = None,
     _raise_on_corrupt: Optional[bool] = None,
-    reserve_recovery: bool = False,
+    allow_exclusive_repair: bool = False,
 ) -> _state_store.JsonObjectRead:
     """Read plans through the canonical store; caller must hold plan lock."""
     enabled = _corrupt_guard_on() if guard_on is None else bool(guard_on)
     strict = _raise_on_corrupt is True
     try:
-        result = _state_store.read_json_object(
-            PLANS_FILE,
-            recover_previous=enabled and not strict,
-            allow_bootstrap=True,
-            missing_empty=not enabled,
-            legacy_empty=not enabled and not strict,
-            retry_delays=(0.05, 0.10) if enabled else (),
-            retry_transient_os_errors=enabled,
-        )
+        if enabled:
+            result = _state_store.read_json_object(
+                PLANS_FILE,
+                recover_previous=not strict,
+                allow_bootstrap=True,
+                retry_delays=(0.05, 0.10),
+                retry_transient_os_errors=True,
+            )
+        else:
+            legacy = _state_store.read_json_value(
+                PLANS_FILE,
+                allow_bootstrap=True,
+                missing_empty=True,
+                legacy_empty=not strict,
+            )
     except (OSError, ValueError) as exc:
         _log.error(
             "courier_plans read failed path=%s (%s: %s)",
@@ -285,8 +317,27 @@ def _read_raw_result(
             exc,
         )
         raise
+    if not enabled:
+        if isinstance(legacy.data, dict):
+            result = _state_store.JsonObjectRead(
+                data=legacy.data,
+                source=legacy.source,
+                main_error=legacy.main_error,
+            )
+        else:
+            _log.warning(
+                "courier_plans.json is not an object; treating as corrupt"
+            )
+            shape_error = ValueError("courier_plans.json is not an object")
+            if strict:
+                raise shape_error
+            result = _state_store.JsonObjectRead(
+                data={},
+                source="legacy_empty_corrupt",
+                main_error=shape_error,
+            )
     if result.source == "previous":
-        if not reserve_recovery:
+        if not allow_exclusive_repair:
             raise _RecoveryReservationRequired()
         recovered = _rebase_recovered_versions(result.data)
         _persist_recovered_view(recovered)
@@ -302,7 +353,9 @@ def _read_raw_result(
             type(result.main_error).__name__,
         )
     elif result.source == "main" and enabled:
-        _validate_main_epoch(result.data)
+        _validate_or_reconcile_main_epoch(
+            result.data, allow_reconcile=allow_exclusive_repair
+        )
     return result
 
 
@@ -310,12 +363,12 @@ def _read_raw(
     *,
     guard_on: Optional[bool] = None,
     _raise_on_corrupt: Optional[bool] = None,
-    reserve_recovery: bool = False,
+    allow_exclusive_repair: bool = False,
 ) -> Dict[str, Any]:
     return _read_raw_result(
         guard_on=guard_on,
         _raise_on_corrupt=_raise_on_corrupt,
-        reserve_recovery=reserve_recovery,
+        allow_exclusive_repair=allow_exclusive_repair,
     ).data
 
 
@@ -324,15 +377,18 @@ def _read_raw_for_reader(
     guard_on: bool,
     _raise_on_corrupt: Optional[bool] = None,
 ) -> Dict[str, Any]:
-    """Read under SH, upgrading via unlock+re-read under EX only for recovery."""
+    """Read under SH; unlock + re-read under EX for state repair only."""
     with _locked(exclusive=False):
         try:
             return _read_raw(
                 guard_on=guard_on,
                 _raise_on_corrupt=_raise_on_corrupt,
-                reserve_recovery=False,
+                allow_exclusive_repair=False,
             )
-        except _RecoveryReservationRequired:
+        except (
+            _RecoveryReservationRequired,
+            _VersionHwmReconciliationRequired,
+        ):
             pass
     # Never upgrade a held flock: release SH, acquire EX, and re-read. Another
     # writer may have healed main in between, in which case no range is burned.
@@ -340,7 +396,7 @@ def _read_raw_for_reader(
         return _read_raw(
             guard_on=guard_on,
             _raise_on_corrupt=_raise_on_corrupt,
-            reserve_recovery=True,
+            allow_exclusive_repair=True,
         )
 
 
@@ -521,13 +577,16 @@ def snapshot_for_recording(
         try:
             with _locked(exclusive=False):
                 plans = _read_raw(
-                    guard_on=True, reserve_recovery=False
+                    guard_on=True, allow_exclusive_repair=False
                 )
                 hwm_value = _read_version_hwm()
-        except _RecoveryReservationRequired:
+        except (
+            _RecoveryReservationRequired,
+            _VersionHwmReconciliationRequired,
+        ):
             with _locked(exclusive=True):
                 plans = _read_raw(
-                    guard_on=True, reserve_recovery=True
+                    guard_on=True, allow_exclusive_repair=True
                 )
                 hwm_value = _read_version_hwm()
         observed = _max_plan_version(plans)
@@ -679,7 +738,7 @@ def save_plan(
         plans = _read_raw(
             guard_on=guard_on,
             _raise_on_corrupt=_raise_on_corrupt,
-            reserve_recovery=guard_on,
+            allow_exclusive_repair=guard_on,
         )
         current = plans.get(cid)
         prev_version = (current or {}).get("plan_version", 0)
@@ -747,7 +806,7 @@ def invalidate_plan(
         plans = _read_raw(
             guard_on=guard_on,
             _raise_on_corrupt=_raise_on_corrupt,
-            reserve_recovery=guard_on,
+            allow_exclusive_repair=guard_on,
         )
         plan = plans.get(cid)
         current_version = (plan or {}).get("plan_version", 0)
@@ -790,7 +849,7 @@ def touch_plan(
         plans = _read_raw(
             guard_on=guard_on,
             _raise_on_corrupt=_raise_on_corrupt,
-            reserve_recovery=guard_on,
+            allow_exclusive_repair=guard_on,
         )
         plan = plans.get(cid)
         if plan is None:
@@ -824,7 +883,7 @@ def advance_plan(
         plans = _read_raw(
             guard_on=guard_on,
             _raise_on_corrupt=_raise_on_corrupt,
-            reserve_recovery=guard_on,
+            allow_exclusive_repair=guard_on,
         )
         plan = plans.get(cid)
         if plan is None or plan.get("invalidated_at") is not None:
@@ -892,7 +951,7 @@ def remove_stops(
         plans = _read_raw(
             guard_on=guard_on,
             _raise_on_corrupt=_raise_on_corrupt,
-            reserve_recovery=guard_on,
+            allow_exclusive_repair=guard_on,
         )
         plan = plans.get(cid)
         current_version = (plan or {}).get("plan_version", 0)
@@ -941,7 +1000,7 @@ def mark_picked_up(courier_id: str, order_id: str,
         plans = _read_raw(
             guard_on=guard_on,
             _raise_on_corrupt=_raise_on_corrupt,
-            reserve_recovery=guard_on,
+            allow_exclusive_repair=guard_on,
         )
         plan = plans.get(cid)
         if plan is None or plan.get("invalidated_at") is not None:
@@ -1017,7 +1076,7 @@ def refloor_pickup(courier_id: str, order_id: str, czas_kuriera_iso: str,
     guard_on = _corrupt_guard_on()
     with _locked(exclusive=True):
         plans = _read_raw(
-            guard_on=guard_on, reserve_recovery=guard_on
+            guard_on=guard_on, allow_exclusive_repair=guard_on
         )
         plan = plans.get(cid)
         if plan is None or plan.get("invalidated_at") is not None:
@@ -1136,7 +1195,7 @@ def gc_invalidated(
     guard_on = _corrupt_guard_on()
     with _locked(exclusive=True):
         plans = _read_raw(
-            guard_on=guard_on, reserve_recovery=guard_on
+            guard_on=guard_on, allow_exclusive_repair=guard_on
         )
         to_del = []
         for cid, p in plans.items():

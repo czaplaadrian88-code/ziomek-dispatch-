@@ -306,26 +306,42 @@ def test_d2_hwm_is_durable_before_main_and_crash_gap_is_never_reused(
     assert int(retry["plan_version"]) <= (1 << 53) - 1
 
 
-def test_d2_epoch_main_without_hwm_fails_closed(store, monkeypatch):
+def test_d2_epoch_main_without_hwm_reconciles_before_next_token(
+    store, monkeypatch
+):
+    """Iter4 re-flip contract: adopt healthy main durably, then advance."""
     _flag_on(monkeypatch)
-    PM.save_plan("9", _body("epoch"))
+    saved = PM.save_plan("9", _body("epoch"))
+    issued = int(saved["plan_version"])
     _hwm_path().unlink()
     _clear_cache()
-    with pytest.raises(PM.PlanVersionStateError, match="HWM is missing"):
-        PM.load_plans()
+
+    assert PM.load_plans()["9"]["plan_version"] == issued
+    reconciled = int(json.loads(
+        _hwm_path().read_text(encoding="utf-8")
+    )["last_issued"])
+    assert reconciled == issued
+    advanced = PM.save_plan("9", _body("after-reflip"), expected_version=issued)
+    assert int(advanced["plan_version"]) > reconciled
 
 
-def test_d2_warm_cache_cannot_hide_missing_hwm(store, monkeypatch):
+def test_d2_warm_cache_cannot_hide_or_skip_missing_hwm_reconciliation(
+    store, monkeypatch
+):
     _flag_on(monkeypatch)
     saved = PM.save_plan("9", _body("epoch"))
     _clear_cache()
     assert PM._read_raw_shared()["9"]["plan_version"] == saved["plan_version"]
     assert PM._perf_plans_cache["data"] is not None
+    key_before = PM._perf_plans_cache["key"]
 
     _hwm_path().unlink()
 
-    with pytest.raises(PM.PlanVersionStateError, match="HWM is missing"):
-        PM._read_raw_shared()
+    assert PM._read_raw_shared()["9"]["plan_version"] == saved["plan_version"]
+    assert int(json.loads(
+        _hwm_path().read_text(encoding="utf-8")
+    )["last_issued"]) == int(saved["plan_version"])
+    assert PM._perf_plans_cache["key"] != key_before
 
 
 def test_d1_recovery_heals_main_and_later_prev_change_cannot_override_it(
@@ -497,6 +513,13 @@ def test_d2_two_process_writers_recovery_between_never_reuses_cas_token(
     assert worker_source.index("_arm_safety(scratch)") < worker_source.index(
         "from dispatch_v2 import plan_manager as PM"
     )
+    assert worker_source.index("PYTHONPYCACHEPREFIX") < worker_source.index(
+        "from dispatch_v2 import common"
+    )
+    assert worker_source.index(
+        "_pin_plan_store(PM, SP, state_dir)"
+    ) < worker_source.index('if args.mode == "recovery_pause_after_commit"')
+    assert "fail-closed selftest did not block live path" in worker_source
 
 
 def test_d2_two_recovery_writers_real_multiprocess_race_has_one_winner(

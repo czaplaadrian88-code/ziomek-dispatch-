@@ -10399,7 +10399,7 @@
    "lifecycle": "planned",
    "lifecycle_seeded": false,
    "name": "ENABLE_ORDERS_STATE_PERSISTENCE_V2",
-   "notes": "A-2 iter3: osobna flaga calej polityki orders_state. OFF = legacy reader/writer bajt-w-bajt (best-effort predecessor, array-root zachowany), takze po rollbacku z ON. ON = hardened object-only read oraz walidowany, fail-closed predecessor w jednym ownerze state_persistence. Brak klucza = OFF; flip/live wymaga osobnego ACK ownera.",
+   "notes": "A-2 iter4: osobna flaga calej polityki orders_state. OFF = legacy reader/writer bajt-w-bajt (best-effort predecessor, array-root zachowany), takze po rollbacku z ON; non-missing OSError przechodzi bez StateReadError i bez alertu. ON = hardened object-only read, retry I/O, StateReadError+alert oraz walidowany fail-closed predecessor w jednym ownerze state_persistence. Brak klucza = OFF; flip/live wymaga osobnego ACK ownera.",
    "owner": {
     "business": "Adrian",
     "service": "dispatch-panel-watcher.service + dispatch-shadow.service + dispatch-orders-state-prune.service"
@@ -11656,14 +11656,14 @@
    "lifecycle": "planned",
    "lifecycle_seeded": false,
    "name": "ENABLE_PLAN_CORRUPT_RAISE",
-   "notes": "A-2 rework iter3 shadow-first: ON = strict read + recovery z predecessor .prev; caly zakres tokenow recovery jest fsyncowany w version-HWM i odzyskany main jest utrwalony pod EX przed wydaniem widoku (persist-then-issue). OFF = pelny legacy niezaleznie od pozostalych sidecarow. Flip/obserwacja/blind za ACK ownera.",
+   "notes": "A-2 rework iter4 shadow-first: ON = strict read + recovery z .prev tylko po braku/zlej tresci maina; wyczerpany OSError fail-loud i nigdy nie nadpisuje nieodczytanego maina. Zakres tokenow recovery jest fsyncowany w version-HWM i recovered main jest utrwalony pod EX przed wydaniem widoku. Po re-ON brakujacy/stary poprawny HWM jest monotonnie uzgadniany do zdrowego maina pod EX; malformed HWM fail-closed. OFF = pelny legacy niezaleznie od sidecarow. Flip/obserwacja/blind za ACK ownera.",
    "owner": {
     "business": "Adrian",
     "service": "dispatch-shadow.service"
    },
    "removal_condition": "aktywacja lub retire wg roadmapy (ACK Adrian)",
    "review_date": "2026-08-10",
-   "rollback": "flags.json false albo brak klucza (hot reload, bez restartu); OFF ignoruje .prev/version-HWM i zapisuje bajtowo stara sciezka current+1",
+   "rollback": "flags.json false albo brak klucza (hot reload, bez restartu); OFF ignoruje .prev/version-HWM i zapisuje bajtowo stara sciezka current+1; ponowny ON uzgadnia pozostawiony albo usuniety HWM pod EX bez zmiany maina/.prev",
    "source_of_truth": "flags.json",
    "twin_of": [],
    "worlds": [

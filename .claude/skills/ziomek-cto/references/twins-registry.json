@@ -182,15 +182,15 @@
       "typ": "procedura",
       "opis": "Trwałe pliki stanu JSON z jednym kontraktem predecessor .prev, strict read i atomowym zapisem.",
       "keywords": ["state persistence", "json state", "backup-on-write", ".prev", "strict read", "corrupt state", "plan corruption", "recovery ABA", "plan_version HWM"],
-      "przypomnienie": "JEDYNY owner mechaniki = state_persistence.py. .prev jest wyłącznie poprzednim poprawnym mainem: nigdy post-write clone, nigdy snapshot z brakującego/uszkodzonego maina. Każdy konsument deleguje read/write/path do ownera. Plan recovery dodatkowo wymaga durable version-HWM zapisanego przed mainem; syntetyczny token recovery musi być > HWM, aby stary CAS nigdy nie wrócił (ABA).",
+      "przypomnienie": "JEDYNY owner mechaniki = state_persistence.py. .prev jest wyłącznie poprzednim poprawnym mainem: nigdy post-write clone, nigdy snapshot z brakującego/uszkodzonego maina. Recovery wymaga dowodu braku/złej treści; OSError nie jest korupcją i po retry wychodzi bez zapisu. Każdy konsument deleguje read/write/path do ownera. Plan recovery wymaga durable version-HWM przed mainem; re-ON uzgadnia poprawny HWM ze zdrowym mainem wyłącznie pod EX; malformed HWM fail-closed.",
       "miejsca": [
         {"nazwa": "kanoniczny owner", "plik": "state_persistence.py", "symbol": "read_json_object / atomic_write_json / previous_path", "uwaga": "leaf module; temp→fsync→validated predecessor rename+dir fsync→main rename+dir fsync"},
-        {"nazwa": "plan-domain recovery + anti-ABA", "plik": "plan_manager.py", "symbol": "_read_raw_result / _next_plan_version", "uwaga": "flaga default OFF; strict caller przed recovery; HWM przed main"},
-        {"nazwa": "orders-state consumer", "plik": "state_machine.py", "symbol": "_read_state_strict / _guarded_write", "uwaga": "domain StateReadError/alert zostają lokalne, persistence delegowane"},
+        {"nazwa": "plan-domain recovery + anti-ABA", "plik": "plan_manager.py", "symbol": "_read_raw_result / _validate_or_reconcile_main_epoch / _next_plan_version", "uwaga": "flaga default OFF; strict caller przed content-recovery; SH→EX dla recovery/re-ON; HWM przed main"},
+        {"nazwa": "orders-state consumer", "plik": "state_machine.py", "symbol": "_read_state_strict / _guarded_write", "uwaga": "OFF przepuszcza non-missing OSError bez alertu; ON trzyma lokalny StateReadError/alert; persistence delegowane"},
         {"nazwa": "offline konsumenci predecessor path", "plik": "tools/address_pin_aggregator.py; tools/czasowka_uwagi_oracle.py; tools/rebuild_state_from_events.py", "symbol": "previous_path", "uwaga": "zakaz ręcznego składania suffixu .prev"},
         {"nazwa": "record/replay planu i HWM", "plik": "world_record.py; tools/world_replay.py", "symbol": "snapshot_for_recording / plan_version_hwm", "uwaga": "guard ON: main+HWM pod jednym shared lockiem; OFF: legacy lockless read bez HWM; scratch replay zapisuje oba przez ownera i epokowy rekord bez HWM jest fail-closed"},
-        {"nazwa": "disaster recovery", "plik": "docs/deploy/ha-lite/backup_restic.sh; docs/deploy/ha-lite/restore_from_restic.sh", "symbol": "dispatch_state directory snapshot", "uwaga": "sidecar objęty całym katalogiem; legacy restore bez HWM legalny tylko dla wersji pre-epoch, runtime epoch bez HWM fail-closed"},
-        {"nazwa": "oracle D-1/D-2/D-3 + MP", "plik": "tests/test_plan_corrupt_guard_a2.py", "symbol": null, "uwaga": "missing main, predecessor semantics, strict precedence, HWM anti-ABA, dwa procesy"}
+        {"nazwa": "disaster recovery", "plik": "docs/deploy/ha-lite/backup_restic.sh; docs/deploy/ha-lite/restore_from_restic.sh", "symbol": "dispatch_state directory snapshot", "uwaga": "sidecar objęty całym katalogiem; zdrowy epokowy main bez HWM jest uzgadniany pod EX przed zwrotem, malformed HWM pozostaje fail-closed"},
+        {"nazwa": "oracle D-1/D-2/D-3 + MP", "plik": "tests/test_plan_corrupt_guard_a2.py; tests/test_a2_iter4_reflip_io_off_parity.py", "symbol": null, "uwaga": "predecessor, anti-ABA, dwa procesy, ON→OFF→ON, I/O≠korupcja, alert OFF, mutation"}
       ]
     },
     "artefakt-werdykt": {
