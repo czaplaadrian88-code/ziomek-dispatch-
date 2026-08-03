@@ -14,7 +14,7 @@
 > łamie fizyczny NO-RETURN, z osobnym per-order R6 non-worsening. Replay 34
 > przypadków obejmuje 27 zamrożonych tras TIME-B i 7 wariantów 491870; trzy
 > warianty zmieniają trasę ON i usuwają HARD revisit. Finalna hermetyczna suita:
-> `6928P/7F/74S/8X/159W` wobec baseline `6902P/7F/74S/8X/159W`; siedem failów
+> `6929P/7F/74S/8X/159W` wobec baseline `6902P/7F/74S/8X/159W`; siedem failów
 > to dokładnie te same zależne od pory dnia testy `test_parser_health_layer3`,
 > delta nowych failów/skips/xfails/warnings = 0. Branch
 > `wt/fix-491870-i2-codex292-20260803`; zero live, ledgera, flipa, deployu,
