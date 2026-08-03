@@ -99,7 +99,7 @@ Pełne mapy: `FAZA1_01_mapa_antywzorcow.md` (rooty), `backing/A6_twin_import_gra
 ## 5. ŹRÓDŁA PRAWDY (gdzie żyje CO — dziś, po naprawie K1 = konsolidacja)
 - **Intencja/reguły biznesowe:** najnowszy Owner Decision Record + `memory/ZIOMEK_REGULY_KANON.md`. `common.py`, `feasibility_v2.py`, scoring i pipeline są dowodem implementacji na konkretnym SHA, nie źródłem intencji.
 - **Stan flag EFEKTYWNY:** NIE flags.json ani env-default — `flag_registry.py` (3 warstwy: common.py default ↔ systemd drop-iny ↔ flags.json hot-reload). Serwisy różne = env różny (`dispatch-shadow` ≠ `dispatch-plan-recheck` ≠ `dispatch-panel-watcher`).
-- **Stan zleceń/planów:** `dispatch_state/orders_state.json`, `courier_plans.json` (atomic + fcntl).
+- **Stan zleceń/planów:** `dispatch_state/orders_state.json`, `courier_plans.json`; domenowi ownerzy `state_machine`/`plan_manager`, jedna mechanika durability w `state_persistence` (strict read + validated predecessor `.prev` + atomic rename/fsync). Guard planu ON dodatkowo utrzymuje durable, JSON-safe version-HWM zapisany przed mainem, aby recovery nie mogło cofnąć/reużyć tokenu CAS.
 - **Snapshot predykcji as-of decyzja:** `dispatch_state/decision_eta_log.jsonl`
   przez jeden writer `decision_eta_log.py`; źródła finalne: shadow selection,
   czasówka, reassignment, global resweep i commit planu. Brak rekordu = brak
