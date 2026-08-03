@@ -109,6 +109,24 @@ ENABLE_GPS_MERGE_LOCK = False
 # module-OFF czytany przez decision_flag() globals(); kanon po flipie = flags.json (za ACK).
 ENABLE_UPSERT_PROPOSALS_IDEMPOTENT = False
 
+# A-6 SECURITY P0 (2026-08-02, sesja A-6): dwa NIEDECYZYJNE kill-switche security.
+# Nie zmieniają TREŚCI decyzji dispatchu (kto/kiedy/score/ETA) — dotyczą wyłącznie
+# formatu MAGAZYNU PIN (higiena) oraz DŁAWIENIA floodu na endpointcie GPS. Ten sam
+# wzorzec allowlist co ENABLE_GPS_MERGE_LOCK wyżej (write-integrity / concurrency
+# kill-switch): POZA ETAP4_DECISION_FLAGS, wewnątrz TEST_ISOLATED_INFRA_FLAGS,
+# stała-fallback = literal OFF = default czytelnika (`flag(..., False)`), kanon po
+# flipie = flags.json. Czytelnicy wołają literalnie `flag("NAZWA", False)`.
+#
+#  • ENABLE_PIN_KDF — weryfikacja PIN z KDF (PBKDF2-HMAC-SHA256) + sól per-user.
+#    Czytelnik: identity/pin_auth.resolve_pin (dual-read; OFF = legacy piny.get(pin)
+#    bajt-w-bajt, ZERO dostępu do magazynu KDF). ON = addytywny magazyn
+#    kurier_piny_kdf.json + lazy re-hash. Konsumenci GPS/ID (courier_resolver,
+#    courier_info) czytają NIEZMIENIONY {pin:name} legacy — moduł go nie nadpisuje.
+#  • ENABLE_GPS_RATE_LIMIT — sliding-window per-kurier/per-IP na gps_server /gps.
+#    Czytelnik: gps_rate_limit.check (OFF = legacy, ZERO dławienia, do_POST bez zmian).
+ENABLE_PIN_KDF = False
+ENABLE_GPS_RATE_LIMIT = False
+
 # Noc 2026-07-28 — drabina eskalacji S1→S2→S3. Wszystkie cztery przełączniki
 # startują OFF i są w ETAP4_DECISION_FLAGS, bo nawet shadow producer stanie się
 # wejściem decyzji po odczycie certyfikatu przez plan-recheck/selection.
@@ -1048,6 +1066,16 @@ TEST_ISOLATED_INFRA_FLAGS = (
     # decyzje -> determinizm zachowany bez zywej wartosci. Ten sam wzorzec allowlist
     # co ENABLE_LEX_WINDOW_LEDGER_V2 / ENABLE_NOTIFY_CHANNEL_SPLIT (non-behavioral).
     "ENABLE_GPS_MERGE_LOCK",
+    # A-6 SECURITY P0 (2026-08-02, sesja A-6): niedecyzyjne kill-switche security —
+    # ENABLE_PIN_KDF (format magazynu PIN: KDF+sól, dual-read; NIE zmienia treści
+    # decyzji) i ENABLE_GPS_RATE_LIMIT (dławienie floodu pozycji na /gps). Shadow-first,
+    # kod-default OFF, jeszcze bez klucza w flags.json → wpis daje pokrycie strip Z
+    # WYPRZEDZENIEM (jak ENABLE_NOTIFY_CHANNEL_SPLIT_SHADOW): po przyszłym flipie ON za
+    # ACK żywa wartość nie przecieknie do testów ani nie wywali ratcheta INV-FLAG-STRIP.
+    # W fixturach hermetycznych nie ma ich w flags.json → flaga nie wpływa na decyzje,
+    # determinizm zachowany. Ten sam wzorzec allowlist co ENABLE_GPS_MERGE_LOCK wyżej.
+    "ENABLE_PIN_KDF",
+    "ENABLE_GPS_RATE_LIMIT",
 )
 
 # Flagi zunifikowane już wcześniej wzorcem runtime (E2 audytu 10.06) — wchodzą

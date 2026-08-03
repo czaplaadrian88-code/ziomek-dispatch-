@@ -2,7 +2,7 @@
  "_meta": {
   "counts": {
    "apka": 29,
-   "engine": 441,
+   "engine": 443,
    "engine_1b_units": 13,
    "etap4": 156,
    "flags_json_keys": 271,
@@ -10,8 +10,8 @@
    "known_drift": 0,
    "numeric": 36,
    "panel": 88,
-   "test_isolated": 11,
-   "total": 558,
+   "test_isolated": 13,
+   "total": 560,
    "twins_concepts": 8
   },
   "generator": "tools/flag_lifecycle_seed.py",
@@ -8040,6 +8040,44 @@
     "engine"
    ]
   },
+  "ENABLE_GPS_RATE_LIMIT": {
+   "carriers": [
+    "common.py:TEST_ISOLATED_INFRA_FLAGS",
+    "common.py-const",
+    "explicit-dynamic-source-scan"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/gps_rate_limit.py"
+   ],
+   "curated_at": "2026-08-02",
+   "current_snapshot": {
+    "default": false
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_GPS_RATE_LIMIT",
+   "notes": "A-6 SECURITY P0 (2026-08-02). Sliding-window per-kurier (20/60s) + per-IP (60/60s) na gps_server /gps (gps_rate_limit.check). OFF=zero limitu. Blizniak courier_api ma login rate-limit (pin_attempts) ale nie flood-pozycji per-batch. Niedecyzyjny (dlawi flood, nie tresc decyzji).",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-gps.service"
+   },
+   "removal_condition": "flip ON za ACK + 2 dni shadow: 429 tylko na floodzie, zero dlawienia legalnego ruchu; progi (per-kurier 20/60s, per-IP 60/60s) dostrojone do realnej floty",
+   "review_date": "2026-08-12",
+   "rollback": "flaga OFF = brak w flags.json (default False w kodzie) — zero live; OFF = zero dlawienia (bajt-parytet do_POST)",
+   "source_of_truth": "explicit-dynamic-source-scan",
+   "twin_of": [],
+   "worlds": [
+    "engine"
+   ]
+  },
   "ENABLE_GRAFIK_ENTRY_SALVAGE": {
    "carriers": [
     "flags.json"
@@ -11195,6 +11233,45 @@
    "twin_of": [],
    "worlds": [
     "apka"
+   ]
+  },
+  "ENABLE_PIN_KDF": {
+   "carriers": [
+    "common.py:TEST_ISOLATED_INFRA_FLAGS",
+    "common.py-const",
+    "explicit-dynamic-source-scan"
+   ],
+   "consumers": [
+    "dispatch_v2/common.py",
+    "dispatch_v2/gps_server.py",
+    "dispatch_v2/identity/pin_auth.py"
+   ],
+   "curated_at": "2026-08-02",
+   "current_snapshot": {
+    "default": false
+   },
+   "default": false,
+   "intentional_per_process": {
+    "reason": "",
+    "value": false
+   },
+   "known_drift": false,
+   "known_drift_note": "",
+   "lifecycle": "planned",
+   "lifecycle_seeded": false,
+   "name": "ENABLE_PIN_KDF",
+   "notes": "A-6 SECURITY P0 (2026-08-02). Dual-read KDF (PBKDF2-HMAC-SHA256 200k iter + sol per-user) w identity/pin_auth.resolve_pin. OFF=legacy piny.get(pin) bajt-parytet, zero I/O do magazynu KDF. Blizniaki plaintext-verify: courier_api/auth.py::resolve_pin (live) + /root/gps_server.py (legacy) — adopcja za ACK. Niedecyzyjny (format magazynu PIN, nie tresc decyzji dispatchu).",
+   "owner": {
+    "business": "Adrian",
+    "service": "dispatch-gps.service"
+   },
+   "removal_condition": "flip ON za ACK + zapelnienie magazynu KDF (lazy re-hash przy logowaniach) + adopcja blizniakow (courier_api/auth.py::resolve_pin, /root/gps_server.py) + migracja konsumentow {pin:name} i usuniecie plaintextu z kurier_piny.json (LIVE za ACK)",
+   "review_date": "2026-08-12",
+   "rollback": "flaga OFF = brak w flags.json (default False w kodzie) — zero live; magazyn kurier_piny_kdf.json addytywny (usuniecie nie blokuje kuriera, legacy plaintext niezmieniony)",
+   "source_of_truth": "explicit-dynamic-source-scan",
+   "twin_of": [],
+   "worlds": [
+    "engine"
    ]
   },
   "ENABLE_PLANNER_UNIFIED": {
