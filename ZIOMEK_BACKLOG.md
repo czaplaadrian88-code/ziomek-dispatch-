@@ -1,5 +1,26 @@
 # ZIOMEK AI DISPATCHER - BACKLOG ROZWOJU
 
+> **SESSION CLOSE 2026-08-01 20:45 UTC — LICZNIK DOSTAW 16 VS 17 / ROOT-FIX CANDIDATE:**
+> jedna realnie wykonana dostawa została po pickupie oznaczona w panelu jako
+> status `9/cancelled`. `panel_watcher` zastosował `ORDER_RETURNED_TO_POOL`, a
+> `state_machine` wyczyścił kuriera; późniejszy GPS potwierdził przejazd i
+> kilkuminutowy postój przy odrębnym celu dostawy. Courier API liczy tylko
+> `status=delivered` + zgodny kurier + dzisiejszy `delivered_at`, więc poprawnie
+> policzył wadliwy upstreamowy zbiór jako 16. Po zgłoszeniu doszła osobna nowa
+> dostawa i snapshot urósł do 17, ale brakujący kurs nadal nie został
+> rozliczony. Gate `courier.delivered-count-16-vs-17-20260801` jest
+> `READY_FOR_REVIEW` v4. Root-fix powstał w dwóch izolowanych branchach:
+> `courier_api` `95bdc02e` (append-only delivery ledger, DB v8, lockowany
+> manual-7 recovery, OFF/SHADOW/ENFORCE) i rejestr flag `01cc28954`; 24 oracle,
+> dwa mutation probe, pełna regresja delta=0. Kod NIE jest zmergowany ani LIVE,
+> a historyczny kurs nadal nie jest skorygowany — wymagane niezależne review i
+> osobny ACK na backup/migrację/restart/shadow/enforce oraz korektę danych.
+> Raport bez PII:
+> `eod_drafts/2026-08-01/COURIER_COUNT_16_VS_17_ROOT_CAUSE.md`.
+> Owner polecił utrwalić wiedzę i zamknąć sesję. Sesja implementacyjna jest
+> zamknięta, ale gate pozostaje otwarty w `READY_FOR_REVIEW`; zamknięcie nie
+> oznacza merge'u, wdrożenia ani korekty danych. Tmux 286 pozostał nietknięty.
+
 > **FINAL LIVE 2026-08-01 15:57 UTC — AT-GATE/LEDGER V4 WDROŻONY, FABLE #229:**
 > jawny owner ACK „wprowadź live, audyt powdrożeniowy Fable” wykonany.
 > Provider `d0c0640b5` jest na kanonicznym masterze; ledger produkcyjny
@@ -15,6 +36,102 @@
 > `/root/handover/SESSIONS_274_280_SINGLE_ULTRA_HANDOFF_2026-07-30.md`.
 > Osobno nadal otwarte: błędne czasy Jakub/Grill/Kolejowa, Q5 outcome-manifest,
 > `S-AUTO-01` oraz PII denylista blind-review bundlera.
+
+> **KOREKTA KANONICZNA 2026-08-01 09:44 UTC — FABLE #228 ANULOWANY / AT-GATE ROOT-FIX P0:**
+> ledger `release.sessions274-280-review-queue-pinned-20260802` jest
+> `SUPERSEDED` v4/event #433, a `atq` nie zawiera #228. Anulowanie ma receipt
+> i `alarm=false`; kolejka Fable nie wykona się 02.08. Niezależny trace kodu
+> potwierdził, że `at_gate run` wykonuje przekazane argv przed weryfikacją
+> tokenu/statusu i bez porównania z registered hash, a cancel nie arbitruje
+> atomowo z już startującym runem. Nowy gate
+> `release.at-gate-execution-claim-race-20260801` = `BUILT_OFF` v1. Pierwszym
+> krokiem `S-AUTO-01` jest teraz root-fix exact argv pre-exec claim + CAS
+> run↔cancel, negative oracle, mutation, ratchet, pełna regresja i blind
+> review; dopiero potem nowy gate i nowe ID joba. Addendum:
+> `/root/handover/TMUX_285_S_AUTO_01_ADDENDUM_AT228_CANCELLED_2026-08-01.md`.
+> Q5 i LIVE pozostają HOLD; wszystkie niższe wzmianki o aktywnym #228 są
+> historycznym snapshotem.
+
+> **SPRINT GOTOWY 2026-08-01 — `S-AUTO-01` / FIRST SAFE AUTO:** priorytetem
+> jest najszybsza uczciwa ścieżka do jednego autonomicznego przypisania.
+> Zweryfikowane blokady źródłowe: niekompletna/stale authority truth p1–p7,
+> brak jednego cross-event allocatora i proposal writera, brak operacyjnego
+> toru sign/init/monitor oraz brak outcome certificate HARD/ETA/km/PLN.
+> T3 jest ilościowo spełnione (238 epizodów/24 h), ale routing AUTO ma
+> agreement 1/34 i wymaga obiektywnego outcome trace. Source work zaczyna się
+> dopiero po Fable 02.08 10:10 UTC i trusted baseline; wszystkie live akcje
+> wymagają osobnego ACK. Pełna mapa ETAP 3, testy, rollback i DoD:
+> `/root/handover/ZIOMEK_SPRINT_FIRST_SAFE_AUTO_2026-08-01.md`.
+
+> **REWERYFIKACJA 2026-08-01 — LIVE PINS STABILNE / Q5 NIGHT-GUARD HOLD:**
+> Q1 `6d87c124`, Panel+Dareczek `464e489f`, portal `95592768` i Q5
+> `c9a365f0` nadal są HEAD-ami aktywnych procesów; health/PID/NRestarts są
+> stabilne. Dzisiejszy night-guard ma `6367P/0F/24S/8X`, lecz werdykt
+> `ALERT` przez `SUITE-OUTCOME-DRIFT(1)`: test kanonicznego hostowego
+> daily-reset writera przeszedł, a manifest v36 dopuszczał tylko `xfail`.
+> Gate `release.q5-night-manifest-v36-outcome-drift-20260801` =
+> `BUILT_OFF` v3; root cause potwierdzony (host/repo = identyczny kanoniczny
+> writer, test prawidłowo PASS, manifest stale `xfail`). Nie zmieniać
+> przypiętego Q5 przed at#228 bez decyzji o przebudowie kolejki; korekta
+> manifestu i pełna regresja po Fable. Fable nadal 0%, execution-pinned at
+> `#228` oczekuje 02.08 10:10 UTC; stary #227 jest `CANCELLED/SUPERSEDED`.
+> Launcher `62679bce…`, runner `cf63775a…`, suplement `9d1b59db…`, selftest
+> `31/31`, preflight `47d7bab1…`; nowy gate
+> `release.sessions274-280-review-queue-pinned-20260802` =
+> `READY_FOR_REVIEW` v3/event #428. Kanoniczny cancel receipt root-fix commit
+> `cfbfe8e92`; pełna regresja `6367P/0F/24S/8X`. Autonomia/wysyłki/nowe flagi/auto-assign/
+> `dispatch-telegram` pozostają HOLD/OFF. Dokładny przypadek czasów
+> Jakub/Grill/Kolejowa nie ma jeszcze dowodu naprawy tym wdrożeniem.
+
+> **LIVE 2026-07-30 — SESJE 274–280 WDROŻONE / FABLE POSTDEPLOY
+> SCHEDULED:** Q5 Dispatcher jest LIVE na
+> `c9a365f0ca4f26fcdb8fc47ca68530484690490f` (tree
+> `b4068ca1de97ff97e9dedfa08376adbf649d4e4e`), pełna regresja
+> `6366P/0F/24S/9X`, watcher+shadow active z `NRestarts=0`, `16/16`
+> timerów active+enabled, parser healthy i route parity `8/8`. Nowe flagi
+> Q5 oraz `ENABLE_AUTO_ASSIGN` pozostają OFF; `dispatch-telegram` nadal
+> disabled/inactive. Panel+Dareczek `464e489f`, portal `95592768` i Q1
+> Mailek `6d87c124` również wdrożone; efekty wysyłkowe/autonomia pozostają
+> HOLD. Fable nie została uruchomiona: at `#227` czeka do
+> `2026-08-02 10:10 UTC`, dokładnie `claude-fable-5/max`, bez fallbacku,
+> auto-promocji i authority live. Fresh postdeploy preflight
+> `1a6bf56a272448b1332484e53e9d3d13c22028aaf53212fe382bcb106f22f11e`,
+> queue selftest `28/28`, niezależny review `GO`; Q1/Q5 dual-attestują
+> frozen worktree i kanoniczny LIVE na `14/59` ścieżkach. Ledger
+> `release.sessions274-280-review-queue-20260802` =
+> `READY_FOR_REVIEW` v6. Handoff:
+> `/root/handover/SESSIONS_274_280_SINGLE_ULTRA_HANDOFF_2026-07-30.md`.
+
+> **HISTORYCZNY KANDYDAT 2026-07-30 — S275 + R16d (SUPERSEDED PRZEZ LIVE POWYŻE):** źródłowa
+> integracja typed shift-window/provenance z kontraktami carry, Alarm,
+> HARD35 i lex została złożona semantycznie w local commit
+> `ff0ceccc5`; kanoniczny night manifest v34 jest w `6962ac525`.
+> Finalny HEAD: `6305P/0F/74S/9X`, `missing/unexpected/outcome-drift=0`,
+> entropy bez wzrostu. Rollback tags:
+> `session283-q5-s275-r16d-source-20260730` i
+> `session283-q5-night-manifest-20260730`. Brak push/merge/deploy/restartu/
+> flipa/migracji. Gate `engine.carry35-hard-plus-alarm` pozostaje
+> `BUILT_OFF`; świeży Opus5/max review czeka na reset capacity
+> `2026-08-02 10:00 UTC`, potem nadal wymagany osobny ACK ownera na live.
+> Handoff:
+> `/root/handover/SESSIONS_274_280_SINGLE_ULTRA_HANDOFF_2026-07-30.md`.
+
+> **LIVE DEFECT 2026-07-29 — CANCEL PANELU SPLIT-BRAIN (P1):** E2E
+> `nowe.nadajesz.pl` udowodnił, że `/api/coordinator/cancel` poprawnie usuwa
+> zlecenie z gastro/dispatch i apki kuriera, ale nie domyka odpowiadającego
+> lokalnego `Delivery`; nawet po udanym `nadajesz-history-ingest` restauracja
+> nadal widzi `assigned`. Cleanup testu wykonany kanonicznie, bez zmian kodu.
+> Gate `panel.coordinator-cancel-delivery-split-brain` BUILT_OFF; wymagany jeden
+> owner synchronizacji, oracle negatywny, mutation i ratchet przed deployem.
+> Dowód: `/root/output/playwright/e2e_20260729_cancel_sync_evidence.md`.
+
+> **KANDYDAT 2026-07-25 — R4 KROK 2:** krok 1 jest w masterze
+> (`8153a0afc`). Krok 2 przeniósł 35 aktywnych modułów z host-path literal
+> na kanoniczne stałe `common.py`; ratchet 35→0, mutation PASS, baseline
+> `5835P/0F/27S/8X`, final `5837P/0F/27S/8X`, E2E 2P, domyślne wartości
+> bajt-identyczne. Lokalny commit `a3cbb6a92` na
+> `wt/r4-krok2-sol-20260725`; bez blind review, merge, push i live. Raport:
+> `/root/handover/R4_KROK2_2026-07-25.md`.
 
 > **KANDYDAT 2026-07-24 — C7 POST-SHIFT REPLAY GO:** owner związał kryterium
 > monotonicznie („każde 5 min w dół to poprawa, najlepsze 0"). Branch
@@ -153,7 +270,7 @@ przed rozpoczeciem implementacji.
 | Z-P0-06 | Bezpieczenstwo courier API — auth + ownership | Rate-limit per-IP i wspolny ownership guard status/arrival/ground-truth/payment sa LIVE; BEZP-04 pozostaje osobna decyzja UX. | Foreign/missing/malformed dostaja identyczne 403 przed order-specific I/O; owner zachowuje kontrakt. | M | Wydane za ACK 11.07; rollback przywraca BEZP-02, preferowany fix-forward | DONE/LIVE `320aa0e`, API master `fa249e6`; 186/186 predeploy, 19/19 postrestart, PID 925329/NRestarts0/health PASS |
 | Z-P0-07 | R4-GOVERNANCE: podpisana karta execution authority i runtime gate | ODR-002 rozstrzyga owner-only promotion, zakaz samopromocji i fail-closed card check. Dzisiaj nie ma autorytatywnej podpisanej karty sprawdzanej przed każdym execution entry pointem. | Candidate może powstać izolowanie; docelowo każda egzekucja sprawdzi wersjonowaną kartę, a brak/błąd da `recommend-only`/`HOLD`; automatyczna degradacja nie umożliwi re-promocji. | XL | Każda zmiana karty/schema/parsera/gate/policy/ochrony = R4; evidence hash + niezależny review + owner-only approval/signature + deterministic apply; osobny ACK live | OWNER DECISION DONE 12.07 (`ODR-002`); implementacja/karta/runtime ZERO, HOLD. Aktywny lease `docs/chief-engineer/**` nietknięty i musi zrekoncyliować nowe źródło. |
 | M-P0-01 | Mailek: idempotentna wysyłka follow-up po granicy SQLite/SMTP | 13.07 SMTP i IMAP zakończyły się sukcesem, ale lock SQLite zostawił draft pending, więc automat mógł wysłać go drugi raz. | Schema v6 zapisuje trwały claim i Message-ID przed SMTP; niepewny skutek jest HOLD bez auto-retry, a legacy draft został zrekonsyliowany po zgodnym dowodzie SMTP+IMAP. | M + 2 runy obserwacji | LIVE `b4cdcbb`, rollback tag `mailek-pre-followup-idempotency-v6`; finalny read-only verifier at-215 15.07 09:25 UTC | LIVE; schema/integrity/cron smoke PASS, listener PID 2431013/NRestarts0; operacyjny DoD czeka na werdykt dwóch runów. |
-| D-P0-01 | Dareczek/Mailek: jeden centralny outbox, suppression i hot kill | Kod Dareczka ma wspólny fail-closed kontrakt, ale produkcyjne ścieżki cold/follow-up/reply/test Maileka nadal wysyłają poza nim. Realny pilot mógłby więc ominąć centralną rezygnację albo kill switch. | Każda ścieżka pocztowa przejdzie przez jeden claim/outbox i cztery bramy: permission, suppression, kill oraz quota; `send_uncertain` pozostanie bez auto-retry. | L; `model_tier=sol`, `effort=ultra` | Osobny sprint 5–7 dni, migracja/deploy/restart za ACK; przed pilotem 3–5 ręcznie wskazanych kontaktów i 5/dzień | PILOT P0 HOLD; source-only Dareczek `038d33b`, bez integracji live |
+| D-P0-01 | Dareczek/Mailek: jeden centralny outbox, suppression i hot kill | Audyt 29.07 skorygował stary opis: centralny endpoint i activation flow są LIVE w panelu, a cold/follow-up/reply/test Maileka przechodzą przez claim+exact-bytes. Efektywnie kill jest ON, transport OFF i sender disabled. Pozostały P0 jest wcześniej: aktywny writer BiałystokOnline nie konsumuje `resolve_source_scope`, ma pustą macierz policy i tworzy manual-only leady. | Jeden kanoniczny owner obejmie wszystkie source writery i pola source/proposal/eligibility; readiness sprawdzi kompletność aktywnych writerów, a potem wspólny outbox wymusi permission, suppression, kill, quota i HOLD bez retry dla `send_uncertain`. | M; `model_tier=sol`, `effort=high` | Root-fix supply+ratchet, konsolidacja cron→systemd, testy/mutation; dopiero potem ACK na flagi, restart, test-send i canary 1→5/dzień/2 dni | OUTBOX CORE LIVE/FAIL-CLOSED; PILOT P0 HOLD. Dowód `/root/handover/MAILEK_DARECZEK_AUTONOMY_AUDIT_2026-07-29.md`; gate `mailek.supply-bialystok-writer-coverage` |
 
 ### P1 - stabilnosc przed autonomia
 
@@ -171,7 +288,7 @@ przed rozpoczeciem implementacji.
 | Z-P1-10 | Restore game day i RTO/RPO | Istnienie backupu nie dowodzi odtworzenia; real provenance/decrypt obu DB/app smoke i service RTO/RPO nadal nie sa udowodnione. | DR0 daje fail-closed source/fake: strict SQL, manifest, budgety, provenance i cleanup; DR1A przygotowuje carrier/app-smoke, DR1B wykona real game-day. | M | DR0 SOURCE ACCEPT `d873f0b`; DR1A SOURCE/FAKE IN MASTER w `a360-wave3-safe-source-integrated-20260711`, C32 fixed, NOT INSTALLED/NOT EXECUTED; real verify/artifact/drill/RTO = DR1B HOLD / NOT DONE |
 | Z-P1-11 | Triage i disposition Audytu 360 | Pakiet ma 110 wpisow: 49 CONFIRMED, 4 REFUTED, 4 PARTIAL, 1 PLAUSIBLE, 52 UNVERIFIED; severity 1 P1/47 P2/58 P3/4 NONE. | Potwierdzone naprawy sa zgrupowane bez duplikatow, PARTIAL/PLAUSIBLE maja verify-first, UNVERIFIED tylko reprodukcje. | M | DONE — pakiet, walidator i kolejka zintegrowane; decyzje HARD/SOFT, security i ops osobno |
 | Z-P1-12 | Flow-liveness panelu, API i decyzji | OPS-02: krytyczne uslugi moga restartowac sie, lecz nie maja bezposredniego, zweryfikowanego alert route; sam PID nie wykrywa ciszy przeplywu. | Health panel/API i brak decyzji w peak beda mialy watermark, prog, ownera, consumer i kontrolowany negative control. | M | Kod/prep bez live; instalacja/restart za osobnym ACK |
-| D-P1-01 | Dareczek: brama pilota sprzedażowo-obsługowego | ETAP 0 i lokalny ETAP 1 są domknięte source-only w panelu `3328b50` + hardening `f262c55` + potrzeby/ceny `038d33b`: RBAC/MFA/HMAC, sender authority, wersje/revoke ofert, trwały denied audit, hot kill, quota, fail-closed migracje oraz dokładny profil potrzeb. Selektor nie może zmienić całego katalogu: krajowe karty blokują palety/fracht/import/eksport; dry-run wymusza wagi +15%, usługi procentowe +20% i stałe bez zmian. Dowód: 184 testy + 1 skip, 19 PostgreSQL oraz pełny backend 1274 + 1 skip. | Po D-P0-01 i zatwierdzeniu realnych granic pilot użyje wyłącznie aktualnych ofert z epaka, osobnej skrzynki i exact `ACK SEND`; żadna ścieżka nie ominie eligibility ani wąskiego zakresu taryfy. | XL; `model_tier=sol`, `effort=ultra` | LOCAL ETAP 1 ACCEPT; ETAP 2/LIVE HOLD. Brakuje umowy+read-only mapy realnego katalogu/UI epaka, zatwierdzonych allowlist fingerprint/basis, okresu ważności potrzeb, testu code-only rollback po `dareczek03`, produkcyjnego importera ofert/zgód, mailbox/DNS, KMS/restore, audytu pełnych odczytów, DPO/legal i osobnych ACK na migrację, deploy/restart/login/pricing apply/send |
+| D-P1-01 | Dareczek: brama pilota sprzedażowo-obsługowego | ETAP 1 i bezpieczniki pilota są source-only. Decyzje ownera 1A–6A zapisano w kandydacie `3986c041`: wersjonowane extraction/review/state/draft, suppression odmowy, pełny binding potrzeb/ceny, corpus v2 i narzędzie real-corpus per-mail. Kandydat jest pushed/clean, lecz nie ma runtime i jest 80 commitów za bieżącym panelem. | Po D-P0-01 i świeżej integracji pilot użyje wyłącznie aktualnych ofert z epaka, jednego inbound routera, wspólnego outboxa i exact `ACK SEND`; żadna ścieżka nie ominie eligibility ani wąskiego zakresu taryfy. | XL; `model_tier=sol`, `effort=high` | Gate `dareczek.krok2-semantics-contracts` READY_FOR_OWNER: ACK/odrzucenie whitelisty proposal-v1; rebase 4 nakładających się plików + pełna regresja/PG/blind; potem importer/router/mailbox/DNS/inventory epaka/DPO/legal i osobne ACK live | ZERO własnego runtime/unita; świeży klaster 373/373, dowód nadzorczy 399/1511/24; PILOT/LIVE HOLD |
 
 ### P2 - skalowanie i granice produktu
 
@@ -179,7 +296,7 @@ przed rozpoczeciem implementacji.
 |---|---|---|---|---:|---|
 | Z-P2-01 | Naprawa sygnalow mode layer S2/S3 | Observer nie dostarcza `s2_infeasible_rate`, ustawia defer count na 99; 1188/1188 obserwacji to S1. | Shadow rzeczywiscie sprawdzi trzy tryby i ich przejscia, bez aktywacji polityki. | M + 7 dni danych | Flip dopiero po osobnym ACK |
 | Z-P2-02 | Wersjonowanie i odchudzenie schematu decyzji | `best` ma do 296 pol; rekord medianowo ok. 60 KB, max 2,27 MB. | Konsumenci dostana wersjonowany kontrakt; log operacyjny i korpus ML zostana rozdzielone. | XL | Migracja czytelnikow |
-| Z-P2-03 | Stabilny adapter panelu / API integracyjne | Krytyczny odczyt i zapis korzysta z prywatnego HTML, regexow, CSRF i subprocessu. Papu exact-marker recovery jest LIVE, ale kontrakt exactly-once po zewnetrznym POST nadal nie istnieje. | Awaria lub zmiana panelu bedzie izolowana w adapterze z idempotency key, read-back i typed error. | XL | I1 DONE/LIVE `b2c65b2`; szerszy kierunek partner API i exactly-once otwarte |
+| Z-P2-03 | Stabilny adapter panelu / API integracyjne | Krytyczny odczyt i zapis korzysta z prywatnego HTML, regexow, CSRF i subprocessu. Incydent 28.07: niewalidowany cache shadow→watcher wyzwalał 419, a retry ponawiał stary POST i tworzył burzę. | Awaria lub zmiana panelu bedzie izolowana w adapterze z idempotency key, read-back, typed error i jednym kontraktem sesji/cache. | XL | P0 retry LIVE watcher `34bcf5b40`; rollout shadow+24h gate `panel.csrf419-stale-retry-loop`; PanelGateway/exactly-once otwarte |
 | Z-P2-04 | Konfiguracja miasta i tenanta | BBox, centrum, dzielnice, traffic i domyslne miasto sa bialostockie w wielu modulach. | Nowe miasto nie bedzie wymagalo kopiowania silnika ani ryzyka cross-city geocode. | XL | Decyzja B-04 |
 | Z-P2-05 | Ewolucja plikow stanu do repozytorium danych | Krytyczny stan jest rozproszony po wielu JSON/JSONL; czesc plikow jest multi-writer. | Najpierw rejestr ownership/schema, potem selektywna migracja tylko plikow z realnym problemem skali lub transakcji. | XL | Bez big-bang rewrite |
 | Z-P2-06 | Wiarygodny OSRM health i polityka cache | Health uznawal fallback za zdrowy OSRM; eviction nadal sortuje duzy cache pod globalnym lockiem. | Faza A rozdziela upstream/cache/fallback i mierzy contention/eviction; optymalizacja polityki cache pozostaje otwarta dla zachowania parytetu decyzji. | M | FAZA A health/telemetry DONE; optymalizacja eviction otwarta |
@@ -665,13 +782,21 @@ corpus pozostaje nietkniety do at-214; delete jest zabroniony do decyzji B-05.
 
 - **Na czym polega:** zamkniecie scrapowania HTML/CSRF i subprocessow za jednym
   interfejsem domenowym.
+- **Incydent 28.07.2026:** watcher przyjmował tylko po TTL sesję zapisaną przez
+  shadow; niektóre generacje dawały 419 po 1–3 s. `_open_with_relogin` robił
+  fresh login, lecz ponawiał ten sam POST ze starym CSRF, tworząc trwałą lawinę.
+  Source-fix `6f2ee0b92` / merge `34bcf5b40` buduje request per próbę; watcher
+  LIVE bez 419 w smoke. Timer historii nie był triggerem. Gate pozostaje otwarty
+  do restartu procesu shadow i 24 h obserwacji.
 - **Zakres pracy:** `PanelGateway`, typed errors, timeouty, retry, idempotency key,
-  read-back, contract tests i mozliwosc podmiany na partnerskie API.
+  read-back, walidowany writer/generation cache, contract tests i mozliwosc
+  podmiany na partnerskie API.
 - **Co zmieni w Ziomku:** zmiana HTML nie rozsypie wielu modulow, a zapis bedzie
   mial jeden kontrolowany wynik `confirmed/unknown/rejected`.
 - **Czego nie zmieni:** samego panelu w pierwszej fazie; adapter opakuje istniejacy tor.
 - **Koniec zadania:** wszystkie krytyczne call-site'y przez gateway, fault-injection
-  401/419/timeout oraz brak podwojnego przypisania po retry.
+  401/419/timeout z tokenem v1→v2, parity main/prefetch/courier-api, bezpieczny
+  cache międzyprocesowy oraz brak podwojnego przypisania po retry.
 - **Effort:** XL; kierunek zgodny z roadmapa API.
 
 ### Z-P2-04 - Konfiguracja miasta i tenanta
