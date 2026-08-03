@@ -147,6 +147,14 @@ CANDIDATE_FEATURES = (
     "shift_remaining_min",
     "n_waves",
     "paczka_is",
+    "a3_diagnostic",
+    "a3_diagnostic_marker",
+    "a3_solo_score",
+    "a3_hard_safe",
+    "a3_feasibility_verdict",
+    "a3_feasibility_reason",
+    "a3_pickup_dist_km",
+    "a3_has_plan",
 )
 PLAN_FIELDS = (
     "pickup_at",
@@ -408,34 +416,60 @@ def _index_latest(records: Iterable[Mapping], time_fields: Sequence[str]) -> dic
     return {oid: item[1] for oid, item in index.items()}
 
 
+def _a3_diagnostic_overlay(candidate: Mapping) -> dict:
+    """Namespaced overlay A-3; nigdy nie nadpisuje kanonicznych cech/score."""
+    solo_score = candidate.get("a3_solo_score")
+    if "a3_solo_score" not in candidate:
+        # Backward read compatibility dla rekordów 79ff801af. Stara wartość
+        # `score` była skalą R29, więc migrujemy ją wyłącznie do pola A-3.
+        solo_score = candidate.get("score")
+    return {
+        "a3_diagnostic": True,
+        "a3_diagnostic_marker": candidate.get("diagnostic_marker"),
+        "a3_solo_score": solo_score,
+        "a3_hard_safe": candidate.get("hard_safe"),
+        "a3_feasibility_verdict": candidate.get("feasibility_verdict"),
+        "a3_feasibility_reason": candidate.get("feasibility_reason"),
+        "a3_pickup_dist_km": candidate.get("pickup_dist_km"),
+        "a3_has_plan": candidate.get("has_plan"),
+    }
+
+
 def _shadow_candidates(shadow: Mapping) -> list[dict]:
     candidates: list[dict] = []
-    # A-3 no_solo może mieć ten sam CID także w legacy alternatives jako
-    # odrzucony wariant z głównej puli. Jawny best-of-worst jest właścicielem
-    # semantyki tej podpowiedzi, więc musi wygrać dedup po CID.
-    best_of_worst = shadow.get("proposal_best_of_worst")
-    diagnostic = (
-        best_of_worst.get("candidate")
-        if isinstance(best_of_worst, Mapping) else None
-    )
-    if isinstance(diagnostic, Mapping):
-        candidates.append(dict(diagnostic))
+    # Kanoniczny pełny wiersz pochodzi z legacy best/alternatives. Diagnostyka
+    # A-3 jest dopiero namespaced overlayem dla tego CID (F4), więc nie może
+    # wyprzeć pełnego wektora ani wprowadzić skali R29 do ogólnego `score`.
     best = shadow.get("best")
     if isinstance(best, Mapping):
         candidates.append(dict(best))
     alternatives = shadow.get("alternatives")
     if isinstance(alternatives, list):
         candidates.extend(dict(x) for x in alternatives if isinstance(x, Mapping))
-    # Pierwszy zapis danego courier_id wygrywa. To usuwa historyczny duplikat
-    # best w alternatives bez dopisywania jakiejkolwiek cechy.
+
     unique: list[dict] = []
-    seen: set[str] = set()
+    index_by_cid: dict[str, int] = {}
     for candidate in candidates:
         cid = _cid(candidate.get("courier_id"))
-        if cid is None or cid in seen:
+        if cid is None or cid in index_by_cid:
             continue
-        seen.add(cid)
+        index_by_cid[cid] = len(unique)
         unique.append(candidate)
+
+    best_of_worst = shadow.get("proposal_best_of_worst")
+    diagnostic = (
+        best_of_worst.get("candidate")
+        if isinstance(best_of_worst, Mapping) else None
+    )
+    if isinstance(diagnostic, Mapping):
+        cid = _cid(diagnostic.get("courier_id"))
+        if cid is not None:
+            overlay = _a3_diagnostic_overlay(diagnostic)
+            if cid in index_by_cid:
+                unique[index_by_cid[cid]].update(overlay)
+            else:
+                index_by_cid[cid] = len(unique)
+                unique.append({"courier_id": cid, **overlay})
     return unique
 
 
@@ -1186,6 +1220,13 @@ def extract_decision_episodes(
             "first_choice_eligible": not reassign,
             "action": public_action,
             "proposal_output_type": learning.get("proposal_output_type"),
+            "coordinator_escalation_class": (
+                learning.get("coordinator_escalation_class")
+                or (
+                    shadow.get("coordinator_escalation_class")
+                    if shadow is not None else None
+                )
+            ),
             "learning_event_type": learning.get("learning_event_type"),
             "reason": learning.get("reason"),
             "explanation": learning.get("explanation"),

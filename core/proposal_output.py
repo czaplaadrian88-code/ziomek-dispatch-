@@ -40,6 +40,7 @@ shadow-first): OFF = brak pól (bajt-parytet baseline), ON = `proposal_output_ty
 """
 from __future__ import annotations
 
+from enum import Enum
 from typing import Any, Optional
 
 # ── Kanoniczne typy (OD-1). Wartości = stabilne stringi w shadow_decisions.jsonl ──
@@ -53,6 +54,26 @@ COORDINATOR_ESCALATION = "COORDINATOR_ESCALATION"
 
 OWNER_TYPES = (EXECUTABLE_PROPOSAL, LEAST_DAMAGE_ALERT, OWNER_EXCEPTION)
 ALL_LABELS = OWNER_TYPES + (COORDINATOR_ESCALATION,)
+
+
+class CoordinatorEscalationClass(str, Enum):
+    """Nazwane źródło operacyjnej eskalacji D-A3-1."""
+
+    STALE = "STALE"
+    GEOMETRY = "GEOMETRY"
+    COMMIT = "COMMIT"
+    DIFFICULT = "DIFFICULT"
+    UNKNOWN = "UNKNOWN"
+
+
+# Jedyny owner mapy reason-prefix -> klasa. Kolejność jest stabilna; reasony
+# spoza czterech decyzji ownera są jawnie UNKNOWN, nigdy domyślną piątą klasą.
+COORDINATOR_ESCALATION_REASON_CLASSES = (
+    ("state_likely_stale", CoordinatorEscalationClass.STALE),
+    ("geometry_blind_fallback", CoordinatorEscalationClass.GEOMETRY),
+    ("commit_divergence_gate", CoordinatorEscalationClass.COMMIT),
+    ("difficult_geometry_redirect", CoordinatorEscalationClass.DIFFICULT),
+)
 
 # Marker istniejącej tier-3 least-damage (parytet z telegram._is_hard35_owner_alert).
 LEAST_DAMAGE_REASON_PREFIX = "hard35_least_damage_alert"
@@ -130,6 +151,31 @@ def is_coordinator_escalation(result: Any) -> bool:
         and bool(_reason(result))
         and classify(result) is None
     )
+
+
+def coordinator_escalation_class(
+    result: Any,
+) -> Optional[CoordinatorEscalationClass]:
+    """Nazwana klasa D-A3-1 albo explicit UNKNOWN dla jawnego KOORD."""
+    if not is_coordinator_escalation(result):
+        return None
+    reason = _reason(result)
+    for prefix, escalation_class in COORDINATOR_ESCALATION_REASON_CLASSES:
+        if reason.startswith(prefix):
+            return escalation_class
+    return CoordinatorEscalationClass.UNKNOWN
+
+
+def normalize_coordinator_escalation_class(
+    value: Any,
+) -> CoordinatorEscalationClass:
+    """Fail-closed parser pól trwałych; brak/nowa wartość staje się UNKNOWN."""
+    if isinstance(value, CoordinatorEscalationClass):
+        return value
+    try:
+        return CoordinatorEscalationClass(str(value))
+    except (TypeError, ValueError):
+        return CoordinatorEscalationClass.UNKNOWN
 
 
 def output_label(result: Any) -> Optional[str]:

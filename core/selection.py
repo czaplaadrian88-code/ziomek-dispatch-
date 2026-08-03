@@ -1549,9 +1549,54 @@ def select_and_emit(ctx: SelectionContext, candidates: list):
         pool_feasible_count=0,
     )
     if _a3_solo_observations is not None:
-        from dispatch_v2.core.always_propose import build_best_of_worst
-        _result_no_solo.always_propose_best_of_worst = build_best_of_worst(
-            _a3_solo_observations,
-            fleet_count=len(fleet_snapshot),
-        )
+        def _safe_a3_log(message, *args):
+            """A logging backend failure must never erase the KOORD decision."""
+            try:
+                log.error(message, *args)
+            except Exception:
+                pass
+
+        try:
+            from dispatch_v2.core import always_propose as _a3_policy
+
+            def _log_a3_failure(code, exception_type):
+                _safe_a3_log(
+                    "A3_TOTAL_FALLBACK order=%s code=%s exception_type=%s",
+                    order_id,
+                    code,
+                    exception_type,
+                )
+
+            _result_no_solo.always_propose_best_of_worst = (
+                _a3_policy.build_best_of_worst(
+                    _a3_solo_observations,
+                    fleet_count=len(fleet_snapshot),
+                    on_error=_log_a3_failure,
+                )
+            )
+        except Exception as _a3_attach_exc:
+            # Defense-in-depth na granicy decyzji: nawet import/publiczny
+            # instrument po przyszłym refaktorze nie może skasować już
+            # zbudowanego KOORD/no_solo. Logujemy wyłącznie klasę wyjątku.
+            _safe_a3_log(
+                "A3_ATTACH_FALLBACK order=%s exception_type=%s",
+                order_id,
+                type(_a3_attach_exc).__name__,
+            )
+            try:
+                from dispatch_v2.core import always_propose as _a3_policy
+                _result_no_solo.always_propose_best_of_worst = (
+                    _a3_policy.build_failure_diagnostic(
+                        fleet_count=len(fleet_snapshot),
+                        code=_a3_policy.SELECT_ATTACHMENT_ERROR,
+                    )
+                )
+            except Exception as _a3_diagnostic_exc:
+                # Ostatnim fallbackiem jest sam jawny PipelineResult KOORD z
+                # reasonem no_solo; funkcja nadal zawsze zwraca decyzję.
+                _safe_a3_log(
+                    "A3_DIAGNOSTIC_UNAVAILABLE order=%s exception_type=%s",
+                    order_id,
+                    type(_a3_diagnostic_exc).__name__,
+                )
     return _result_no_solo

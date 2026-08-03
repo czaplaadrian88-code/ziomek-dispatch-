@@ -123,7 +123,7 @@ Najważniejsze pola top-level:
 | `lifecycle_event_id`, `assignment_lifecycle_event_id`, `engine_decision_event_id`, `learning_event_id`, `shadow_event_id`, `order_id` | bezpośrednie klucze źródłowe lub `null`; learning ID wiąże późniejsze wyjaśnienie D3 |
 | `category`, `first_choice_eligible` | pierwsze przypisanie kontra reassign |
 | `action` | `OVERRIDE`, `AGREE` albo `ESCALATION_RESOLUTION` |
-| `proposal_output_type`, `learning_event_type`, `reason`, `explanation` | addytywny kontrakt D1/D3 lub `null` dla legacy |
+| `proposal_output_type`, `coordinator_escalation_class`, `learning_event_type`, `reason`, `explanation` | addytywny kontrakt D1/D3; klasa eskalacji to `STALE`, `GEOMETRY`, `COMMIT`, `DIFFICULT`, jawne `UNKNOWN` albo `null` |
 | `panel_source` | techniczna droga zapisu, nigdy dowód osoby |
 | `actor`, `actor_id`, `actor_provenance`, `actor_audit_schema` | pseudonimowana atestacja i dokładny wariant schematu audytu albo jawny brak |
 | `cohort` | `POST_A8` albo `PRE_A8` |
@@ -142,9 +142,14 @@ Najważniejsze pola top-level:
 | `analysis_state` | `ELIGIBLE` albo fail-closed `HOLD` |
 | `missing_reasons` | wyłącznie kanoniczne enumy braków |
 
-`recorded_pool.candidate_count` liczy unikalne `courier_id` z `best`,
-`alternatives` i nested `proposal_best_of_worst.candidate`; pierwszy zapis
-wygrywa przy historycznym duplikacie best.
+`recorded_pool.candidate_count` liczy unikalne `courier_id` z `best` i
+`alternatives`, uzupełnione o CID obecny wyłącznie w nested
+`proposal_best_of_worst.candidate`. Przy wspólnym CID pełny wiersz legacy jest
+bazą, a nested A-3 wnosi tylko pola namespaced: `a3_diagnostic`,
+`a3_diagnostic_marker`, `a3_solo_score`, `a3_hard_safe`,
+`a3_feasibility_*`, `a3_pickup_dist_km`, `a3_has_plan`. Stary nested `score`
+jest czytany kompatybilnie jako `a3_solo_score`; nigdy nie nadpisuje
+kanonicznego `score` ani bogatego wektora legacy.
 `world_complete=false`: top-16 (w praktyce zwykle mniej alternatyw) nie jest
 pełnym zapisem świata wyboru. H nieobecny w jednoznacznie połączonej puli daje
 `human_candidate=null`, `OUT_OF_RECORDED_POOL` i `HOLD`. Nie powstaje

@@ -799,27 +799,39 @@ def _check_panel_override(
         if _context_by_receipt is not None
         else decision_flag("ENABLE_ALWAYS_PROPOSE")
     )
-    if _a3_enabled:
-        # KOORDYNATOR_ID jest technicznym holdem, nie odpowiedzią na pytanie
-        # ownera „kto ostatecznie dostał zlecenie”. Kontekst musi przeżyć do
-        # późniejszego przypisania realnego kuriera.
-        if (
+    # KOORDYNATOR_ID jest technicznym holdem, nie finalną odpowiedzią D1.
+    # Hold omija cały opcjonalny tor A-3 (także jego import), aby żaden jego
+    # błąd nie mógł odciąć kanonicznego legacy writera PANEL_OVERRIDE (F5).
+    _a3_coordinator_hold = bool(
+        _a3_enabled and (
             not panel_courier_id
             or str(panel_courier_id) == str(KOORDYNATOR_ID)
-        ):
-            return
+        )
+    )
+    if _a3_enabled and not _a3_coordinator_hold:
         try:
             from dispatch_v2.core import always_propose_learning as _a3_learning
 
             _a3_context = (
                 _context_by_receipt.get("always_propose_decision_context")
-                if _context_by_receipt is not None else None
+                if _context_by_receipt is not None
+                else None
             )
-            if not isinstance(_a3_context, dict) and _context_by_receipt is None:
+            if (
+                not isinstance(_a3_context, dict)
+                and _context_by_receipt is None
+            ):
                 _a3_context = _a3_learning.peek_decision(order_id)
-            if not isinstance(_a3_context, dict) and isinstance(dr, dict) and dr:
+            if (
+                not isinstance(_a3_context, dict)
+                and isinstance(dr, dict)
+                and dr
+            ):
                 _a3_context = _a3_learning.decision_context_from_record(dr)
-            if not isinstance(_a3_context, dict) and _context_by_receipt is not None:
+            if (
+                not isinstance(_a3_context, dict)
+                and _context_by_receipt is not None
+            ):
                 _a3_assign_direct = _context_by_receipt.get("assign_direct")
                 _a3_direct_decision = (
                     _a3_assign_direct.get("decision")

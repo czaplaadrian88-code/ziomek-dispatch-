@@ -1261,8 +1261,16 @@ def _serialize_result(result: PipelineResult, event_id: str, latency_ms: float) 
     # = telegram (parytet _is_hard35_owner_alert), panel, konsola, upsert (A-4).
     if C.decision_flag("ENABLE_ALWAYS_PROPOSE"):
         from dispatch_v2.core import proposal_output as _po
-        out["proposal_output_type"] = _po.output_label(result)
+        _proposal_output_type = _po.output_label(result)
+        out["proposal_output_type"] = _proposal_output_type
         out["proposal_output_silent"] = _po.is_silent_nothing(result)
+        if _proposal_output_type == _po.COORDINATOR_ESCALATION:
+            _escalation_class = _po.coordinator_escalation_class(result)
+            out["coordinator_escalation_class"] = (
+                _escalation_class.value
+                if _escalation_class is not None
+                else _po.CoordinatorEscalationClass.UNKNOWN.value
+            )
         _best_of_worst = getattr(
             result, "always_propose_best_of_worst", None
         )

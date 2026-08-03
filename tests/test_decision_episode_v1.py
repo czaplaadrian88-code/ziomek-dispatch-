@@ -257,20 +257,35 @@ def test_a3_escalation_resolution_is_analyzable_with_exact_dual_ids():
     shadow["verdict"] = "KOORD"
     shadow["reason"] = "no_solo_candidates (fleet_n=2)"
     shadow["proposal_output_type"] = "COORDINATOR_ESCALATION"
+    shadow["coordinator_escalation_class"] = "UNKNOWN"
     shadow["best"] = None
     shadow["proposal_best_of_worst"] = {
         "candidate": {
                 "courier_id": "C1",
-                "score": 10.0,
+                # Legacy A-3 producer przed F4 używał ogólnego `score` dla
+                # skali R29. Ekstraktor musi migrować go do namespaced overlayu.
+                "score": 79.0,
                 "hard_safe": False,
                 "feasibility_verdict": "NO",
                 "pickup_dist_km": 1.0,
                 "has_plan": False,
         }
     }
-    # Ten sam CID w legacy alternatives nie może przesłonić jawnej semantyki
-    # nested A-3 (first-wins po CID ma najpierw best-of-worst).
-    shadow["alternatives"].append(_candidate("C1", "Legacy wariant", 999.0))
+    rich_legacy = _candidate("C1", "Legacy wariant", -137.4)
+    rich_legacy.update({
+        "bag_size_before": 2,
+        "best_effort": True,
+        "cs_tier_label": "T2",
+        "feasibility": "NO_ACTIVE_SHIFT",
+        "free_at_min": 12.5,
+        "n_waves": 3,
+        "pos_source": "gps",
+        "shift_remaining_min": 180.0,
+        "travel_min": 8.5,
+    })
+    # Ten sam CID ma bogaty wiersz legacy. F4: diagnostyka jest wyłącznie
+    # namespaced overlayem i nigdy nie wypiera ani nie nadpisuje tego wiersza.
+    shadow["alternatives"].append(rich_legacy)
     learning = _learning(
         action="COORDINATOR_ESCALATION_RESOLVED",
         actual="C2",
@@ -282,6 +297,7 @@ def test_a3_escalation_resolution_is_analyzable_with_exact_dual_ids():
         "assignment_lifecycle_event_id": "assign-O1-C2",
         "engine_decision_event_id": "A3-O1_NEW_ORDER_1",
         "proposal_output_type": "COORDINATOR_ESCALATION",
+        "coordinator_escalation_class": "UNKNOWN",
         "reason": "no_solo_candidates (fleet_n=2)",
         "assigned_by": {
             "status": "ATTESTED",
@@ -296,6 +312,7 @@ def test_a3_escalation_resolution_is_analyzable_with_exact_dual_ids():
     episode = episodes[0]
     assert episode["action"] == "ESCALATION_RESOLUTION"
     assert episode["proposal_output_type"] == "COORDINATOR_ESCALATION"
+    assert episode["coordinator_escalation_class"] == "UNKNOWN"
     assert episode["decision_key"] == "assign-O1-C2"
     assert episode["learning_event_id"] == "a3_learning_sha256:fixture"
     assert episode["actor_audit_schema"] == "legacy_gastro_assign_signature"
@@ -304,9 +321,70 @@ def test_a3_escalation_resolution_is_analyzable_with_exact_dual_ids():
     )
     assert episode["joins"]["shadow"]["method"] == "engine_decision_event_id"
     assert episode["proposed_candidate"]["courier_id"] == "C1"
-    assert episode["proposed_candidate"]["feasibility_verdict"] == "NO"
-    assert episode["proposed_candidate"]["hard_safe"] is False
+    assert episode["proposed_candidate"]["score"] == -137.4
+    assert episode["proposed_candidate"]["a3_solo_score"] == 79.0
+    assert episode["proposed_candidate"]["a3_feasibility_verdict"] == "NO"
+    assert episode["proposed_candidate"]["a3_hard_safe"] is False
+    for field, expected in {
+        "bag_size_before": 2,
+        "best_effort": True,
+        "cs_tier_label": "T2",
+        "feasibility": "NO_ACTIVE_SHIFT",
+        "free_at_min": 12.5,
+        "n_waves": 3,
+        "pos_source": "gps",
+        "shift_remaining_min": 180.0,
+        "travel_min": 8.5,
+    }.items():
+        assert episode["proposed_candidate"][field] == expected
     assert episode["actual_courier_id"] == "C2"
+
+
+def test_f4_mutation_prepend_first_wins_reintroduces_score_scale_mix(
+    monkeypatch,
+):
+    shadow = {
+        "best": None,
+        "alternatives": [
+            {
+                "courier_id": "C1",
+                "score": -137.4,
+                "travel_min": 8.5,
+                "pos_source": "gps",
+            }
+        ],
+        "proposal_best_of_worst": {
+            "candidate": {
+                "courier_id": "C1",
+                "score": 79.0,
+                "hard_safe": False,
+                "feasibility_verdict": "NO",
+            }
+        },
+    }
+    canonical = de._shadow_candidates(shadow)
+    assert canonical[0]["score"] == -137.4
+    assert canonical[0]["a3_solo_score"] == 79.0
+    assert canonical[0]["travel_min"] == 8.5
+
+    def old_prepend_first_wins(value):
+        diagnostic = value["proposal_best_of_worst"]["candidate"]
+        candidates = [diagnostic] + list(value["alternatives"])
+        unique = []
+        seen = set()
+        for candidate in candidates:
+            cid = candidate.get("courier_id")
+            if cid in seen:
+                continue
+            seen.add(cid)
+            unique.append(candidate)
+        return unique
+
+    monkeypatch.setattr(de, "_shadow_candidates", old_prepend_first_wins)
+    mutant = de._shadow_candidates(shadow)
+    assert mutant[0]["score"] == 79.0
+    assert "travel_min" not in mutant[0]
+    assert "a3_solo_score" not in mutant[0]
 
 
 def test_fallback_never_searches_past_ambiguous_latest_shadow():

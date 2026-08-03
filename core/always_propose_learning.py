@@ -44,14 +44,18 @@ _BEST_OF_WORST_FIELDS = (
     "soft_evidence_complete",
     "proposal_output_type",
     "recommend_only",
+    "invariant_violation",
+    "diagnostic_error",
 )
+_DIAGNOSTIC_FIELDS = ("status", "code")
 _CANDIDATE_FIELDS = (
     "courier_id",
+    "diagnostic_marker",
     "hard_safe",
     "feasibility_verdict",
     "feasibility_reason",
     "pickup_dist_km",
-    "score",
+    "a3_solo_score",
     "has_plan",
 )
 _CONTEXT_OPTIONAL_FIELDS = ("stored_at", "expires_at")
@@ -185,11 +189,25 @@ def _sanitize_best_of_worst(value: Any) -> Optional[dict]:
         result["candidate"] = {
             field: raw_candidate.get(field) for field in _CANDIDATE_FIELDS
         }
+        # Backward read compatibility dla rekordów 79ff801af: stary producer
+        # wkładał skalę R29 pod ogólny `score`. Nigdy nie wypuszczamy jej z
+        # sanitizera pod tą nazwą.
+        if "a3_solo_score" not in raw_candidate:
+            result["candidate"]["a3_solo_score"] = raw_candidate.get("score")
         result["candidate"]["courier_id"] = canon_cid(
             raw_candidate.get("courier_id")
         ) or None
     else:
         result["candidate"] = None
+    raw_diagnostic = value.get("diagnostic")
+    result["diagnostic"] = (
+        {
+            field: raw_diagnostic.get(field)
+            for field in _DIAGNOSTIC_FIELDS
+        }
+        if isinstance(raw_diagnostic, Mapping)
+        else None
+    )
     return result
 
 
@@ -200,16 +218,31 @@ def decision_context_from_record(record: Mapping[str, Any]) -> Optional[dict]:
     if not oid or not event_id:
         return None
 
+    result_view = SimpleNamespace(
+        verdict=record.get("verdict"),
+        reason=record.get("reason"),
+        best=record.get("best"),
+        owner_exception=bool(record.get("owner_exception", False)),
+    )
     output_type = record.get("proposal_output_type")
     if output_type not in proposal_output.ALL_LABELS:
-        output_type = proposal_output.output_label(SimpleNamespace(
-            verdict=record.get("verdict"),
-            reason=record.get("reason"),
-            best=record.get("best"),
-            owner_exception=bool(record.get("owner_exception", False)),
-        ))
+        output_type = proposal_output.output_label(result_view)
     if output_type not in proposal_output.ALL_LABELS:
         return None
+    escalation_class = None
+    if output_type == proposal_output.COORDINATOR_ESCALATION:
+        raw_class = record.get("coordinator_escalation_class")
+        if raw_class is not None:
+            escalation_class = (
+                proposal_output.normalize_coordinator_escalation_class(
+                    raw_class
+                )
+            )
+        else:
+            escalation_class = (
+                proposal_output.coordinator_escalation_class(result_view)
+                or proposal_output.CoordinatorEscalationClass.UNKNOWN
+            )
 
     best = record.get("best")
     best_cid = (
@@ -223,6 +256,9 @@ def decision_context_from_record(record: Mapping[str, Any]) -> Optional[dict]:
         "decision_event_id": event_id,
         "decision_at": record.get("ts"),
         "proposal_output_type": output_type,
+        "coordinator_escalation_class": (
+            escalation_class.value if escalation_class is not None else None
+        ),
         "verdict": str(record.get("verdict") or ""),
         "reason": str(record.get("reason") or ""),
         "best_courier_id": best_cid or None,
@@ -242,12 +278,32 @@ def _sanitize_context(value: Mapping[str, Any]) -> Optional[dict]:
     output_type = value.get("proposal_output_type")
     if not oid or not event_id or output_type not in proposal_output.ALL_LABELS:
         return None
+    escalation_class = None
+    if output_type == proposal_output.COORDINATOR_ESCALATION:
+        raw_class = value.get("coordinator_escalation_class")
+        if raw_class is not None:
+            escalation_class = (
+                proposal_output.normalize_coordinator_escalation_class(
+                    raw_class
+                )
+            )
+        else:
+            escalation_class = proposal_output.coordinator_escalation_class(
+                SimpleNamespace(
+                    verdict=value.get("verdict"),
+                    reason=value.get("reason"),
+                    best=None,
+                )
+            ) or proposal_output.CoordinatorEscalationClass.UNKNOWN
     result = {
         "schema": CONTEXT_SCHEMA,
         "order_id": oid,
         "decision_event_id": event_id,
         "decision_at": value.get("decision_at"),
         "proposal_output_type": output_type,
+        "coordinator_escalation_class": (
+            escalation_class.value if escalation_class is not None else None
+        ),
         "verdict": str(value.get("verdict") or ""),
         "reason": str(value.get("reason") or ""),
         "best_courier_id": canon_cid(value.get("best_courier_id")) or None,
@@ -562,6 +618,11 @@ def build_learning_record(
         "action": action,
         "learning_event_type": kind,
         "proposal_output_type": kind,
+        "coordinator_escalation_class": (
+            safe_context.get("coordinator_escalation_class")
+            if kind == proposal_output.COORDINATOR_ESCALATION
+            else None
+        ),
         "reason": reason,
         "proposed_courier_id": proposed,
         "proposed_score": safe_context.get("best_score"),

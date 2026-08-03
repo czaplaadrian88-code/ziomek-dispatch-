@@ -39,14 +39,19 @@ przy fladze ON. Reguła jest deterministyczna i HARD-before-SOFT:
 5. Jeśli każdy członek floty jest HARD-NO, ten sam klucz wskazuje diagnostyczny
    CID, ale `hard_safe=false`, `recommend_only=true` i
    `proposal_output_type=COORDINATOR_ESCALATION`. Nie powstaje wykonywalny best.
-6. `candidate=null` jest legalne tylko przy fizycznym `fleet_count=0`;
-   niepusta flota bez obserwowalnego CID jest błędem fail-loud.
+6. Publiczna granica jest totalna. Przy `fleet_count>0` bez obserwowalnego CID
+   albo przy dowolnym błędzie wewnętrznym nadal powstaje jawna diagnostyczna
+   `COORDINATOR_ESCALATION` z `candidate=null`, stabilnym kodem w
+   `diagnostic` oraz logiem klasy wyjątku. Instrument nigdy nie przerywa
+   `select_and_emit`; już zbudowany `KOORD/no_solo` pozostaje decyzją.
 
 Pola: `schema`, `selection_rule`, `fleet_count`,
 `observed_candidate_count`, `hard_safe_count`, `soft_evidence_complete`,
-`proposal_output_type`, `recommend_only`, `candidate`. Kandydat zawiera
-wyłącznie CID, wynik feasibility, reason, odległość, score i `has_plan`; bez
-nazwy, adresu, GPS i trasy.
+`proposal_output_type`, `recommend_only`, `candidate` oraz opcjonalne
+`diagnostic`/`invariant_violation`/`diagnostic_error`. Kandydat zawiera
+wyłącznie CID, `diagnostic_marker`, wynik feasibility, reason, odległość,
+`a3_solo_score` i `has_plan`; bez nazwy, adresu, GPS i trasy. Skala R29 nigdy
+nie używa ogólnego pola `score`.
 
 ## Indeks `always_propose.decision_context_index.v1`
 
@@ -56,7 +61,7 @@ Top-level ma `schema` oraz mapę `entries[order_id]`. Wpis
 | Pole | Znaczenie |
 |---|---|
 | `order_id`, `decision_event_id`, `decision_at` | exact tożsamość decyzji shadow |
-| `proposal_output_type`, `verdict`, `reason` | oryginalna klasa i uzasadnienie silnika |
+| `proposal_output_type`, `coordinator_escalation_class`, `verdict`, `reason` | typ, nazwana klasa eskalacji i uzasadnienie silnika |
 | `best_courier_id`, `best_score` | oryginalny best lub `null` |
 | `proposal_best_of_worst` | PII-free nested podpowiedź albo `null` |
 | `source` | zawsze `shadow_decisions` |
@@ -77,6 +82,7 @@ Wspólne pola rekordu w `learning_log.jsonl`:
 | `engine_decision_event_id` | exact `shadow.event_id` |
 | `assignment_lifecycle_event_id` | exact durable `COURIER_ASSIGNED.event_id` |
 | `lifecycle_event_id` | alias engine ID dla zgodności z istniejącym joinem E1 |
+| `coordinator_escalation_class` | `STALE`, `GEOMETRY`, `COMMIT`, `DIFFICULT` albo jawne `UNKNOWN` |
 | `proposed_courier_id`, `actual_courier_id` | wskazanie silnika i późniejszy H |
 | `assignment.assigned_at` | czas uchwycony przed exact durable assignmentem |
 | `assignment.source` | `panel_initial`, `panel_diff` lub `panel_reassign` |
@@ -98,12 +104,22 @@ dwóch sygnatur legacy.
 
 - `action=COORDINATOR_ESCALATION_RESOLVED`
 - `learning_event_type=proposal_output_type=COORDINATOR_ESCALATION`
+- `coordinator_escalation_class` ma jednego ownera w
+  `core.proposal_output`: `state_likely_stale→STALE`,
+  `geometry_blind_fallback→GEOMETRY`, `commit_divergence_gate→COMMIT`,
+  `difficult_geometry_redirect→DIFFICULT`; każde inne źródło jest jawnie
+  `UNKNOWN`
 - `reason` zachowuje reason eskalacji silnika
 - actual CID, czas, source i actor pochodzą z exact assignmentu
 
-Obejmuje `no_solo`, stale-state, geometry-blind, commit-divergence i difficult
-geometry, ponieważ wszystkie używają jednego `proposal_output_type` oraz
-jednego context writera.
+`no_solo` i bramki jakości pozostają rozdzielone od czterech nazwanych klas
+przez explicit `UNKNOWN`, zamiast mieszać się pod niejawny catch-all.
+
+Techniczny hold na `KOORDYNATOR_ID` nie jest finalnym resolution D1 i nie
+zużywa kontekstu A-3. Zachowuje jednak dotychczasowy legacy `PANEL_OVERRIDE`;
+późniejszy assignment realnego kuriera dopisuje osobny
+`COORDINATOR_ESCALATION_RESOLVED`. Dzięki temu włączenie A-3 nie wycina
+historycznego strumienia KPI/replay.
 
 ### D3 — automatyczny OWNER_EXCEPTION
 
@@ -124,7 +140,8 @@ wyjaśnienia w chwili przypisania.
 
 `tools/decision_episode_v1.py` akceptuje także
 `COORDINATOR_ESCALATION_RESOLVED`, dołącza nested best-of-worst do zapisanej
-puli i łączy exact-first:
+puli jako namespaced overlay i łączy exact-first. Pełny `best/alternatives`
+jest bazą; diagnostyka nie nadpisuje kanonicznego `score` ani pozostałych cech:
 
 1. assignment po `assignment_lifecycle_event_id`;
 2. shadow po `engine_decision_event_id`;

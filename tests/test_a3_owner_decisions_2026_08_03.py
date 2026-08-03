@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import inspect
+import logging
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
@@ -155,6 +156,55 @@ def test_off_is_byte_shape_parity_for_no_solo(monkeypatch):
     assert "proposal_output_type" not in serialized
 
 
+def test_off_serializer_is_byte_identical_even_for_result_instrumented_on(
+    monkeypatch,
+):
+    enabled = {"value": True}
+
+    def decision_flag(name, *args, **kwargs):
+        return enabled["value"] if name == "ENABLE_ALWAYS_PROPOSE" else False
+
+    monkeypatch.setattr(C, "decision_flag", decision_flag)
+    monkeypatch.setattr(C, "flag", lambda _name, default=False: default)
+    monkeypatch.setattr(SD, "now_iso", lambda: "2026-08-03T12:30:00+00:00")
+    monkeypatch.setattr(
+        DP,
+        "check_feasibility_v2",
+        lambda **_kw: (
+            "NO",
+            "NO_ACTIVE_SHIFT",
+            {"pickup_dist_km": 1.0},
+            None,
+        ),
+    )
+    instrumented_result = SEL.select_and_emit(_ctx(_fleet()), [])
+    assert hasattr(instrumented_result, "always_propose_best_of_worst")
+
+    enabled["value"] = False
+    with_instrument_bytes = json.dumps(
+        SD._serialize_result(
+            instrumented_result,
+            event_id="A3-BYTE",
+            latency_ms=1.0,
+        ),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    del instrumented_result.always_propose_best_of_worst
+    legacy_shape_bytes = json.dumps(
+        SD._serialize_result(
+            instrumented_result,
+            event_id="A3-BYTE",
+            latency_ms=1.0,
+        ),
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    assert with_instrument_bytes == legacy_shape_bytes
+
+
 def test_best_of_worst_policy_is_hard_first_and_tie_is_canonical_cid():
     from dispatch_v2.core import always_propose as AP
 
@@ -182,16 +232,247 @@ def test_best_of_worst_policy_is_hard_first_and_tie_is_canonical_cid():
     assert first == second
     assert first["candidate"]["courier_id"] == "10"
     assert first["candidate"]["hard_safe"] is True
+    assert first["candidate"]["a3_solo_score"] == 50.0
+    assert "score" not in first["candidate"]
     assert first["proposal_output_type"] == PO.LEAST_DAMAGE_ALERT
 
 
-def test_nonempty_fleet_can_never_degrade_to_candidate_null():
+def test_f3_nonempty_fleet_without_observable_cid_is_total_diagnostic():
     from dispatch_v2.core import always_propose as AP
 
-    with pytest.raises(ValueError, match="non-empty fleet without observable CID"):
-        AP.build_best_of_worst([], fleet_count=1)
+    observed_errors = []
+    fallback = AP.build_best_of_worst(
+        [],
+        fleet_count=1,
+        on_error=lambda code, exception_type: observed_errors.append(
+            (code, exception_type)
+        ),
+    )
+    assert fallback["candidate"] is None
+    assert fallback["proposal_output_type"] == PO.COORDINATOR_ESCALATION
+    assert fallback["recommend_only"] is True
+    assert fallback["diagnostic"]["status"] == "FALLBACK"
+    assert fallback["invariant_violation"] == (
+        AP.NON_EMPTY_FLEET_WITHOUT_OBSERVABLE_CID
+    )
+    assert observed_errors == [
+        (AP.NON_EMPTY_FLEET_WITHOUT_OBSERVABLE_CID, "_AlwaysProposeInvariant")
+    ]
+
     empty = AP.build_best_of_worst([], fleet_count=0)
     assert empty["candidate"] is None
+    assert "diagnostic" not in empty
+
+
+def test_f3_blank_cid_on_always_returns_a_decision_and_logs(
+    monkeypatch, caplog
+):
+    from dispatch_v2.core import always_propose as AP
+
+    monkeypatch.setattr(
+        C, "decision_flag", lambda name, *a, **k: name == "ENABLE_ALWAYS_PROPOSE"
+    )
+    monkeypatch.setattr(C, "flag", lambda _name, default=False: default)
+    monkeypatch.setattr(
+        DP,
+        "check_feasibility_v2",
+        lambda **_kw: (
+            "NO",
+            "NO_ACTIVE_SHIFT",
+            {"pickup_dist_km": 1.0},
+            None,
+        ),
+    )
+    blank_cid_fleet = {"  ": next(iter(_fleet().values()))}
+
+    with caplog.at_level(logging.ERROR):
+        result = SEL.select_and_emit(_ctx(blank_cid_fleet), [])
+
+    assert result.verdict == "KOORD"
+    assert result.best is None
+    assert result.reason.startswith("no_solo_candidates")
+    diagnostic = result.always_propose_best_of_worst
+    assert diagnostic["proposal_output_type"] == PO.COORDINATOR_ESCALATION
+    assert diagnostic["invariant_violation"] == (
+        AP.NON_EMPTY_FLEET_WITHOUT_OBSERVABLE_CID
+    )
+    assert any(
+        "A3_TOTAL_FALLBACK" in record.getMessage()
+        and AP.NON_EMPTY_FLEET_WITHOUT_OBSERVABLE_CID in record.getMessage()
+        for record in caplog.records
+    )
+
+
+@pytest.mark.parametrize(
+    "faulted_symbol",
+    [
+        "_physical_fleet_count",
+        "_finite_number",
+        "_score",
+        "_rank_key",
+        "canon_cid",
+        "_deduplicate",
+        "_is_hard_safe",
+        "_pickup_distance",
+        "_soft_rank_key",
+        "_public_candidate",
+    ],
+)
+def test_f3_every_internal_builder_branch_falls_back_to_a_decision(
+    monkeypatch, faulted_symbol
+):
+    from dispatch_v2.core import always_propose as AP
+
+    plan = SimpleNamespace(total_duration_min=20.0)
+    candidate = SimpleNamespace(
+        courier_id="10",
+        feasibility_verdict="MAYBE",
+        feasibility_reason="fixture",
+        plan=plan,
+        score=50.0,
+        metrics={"pickup_dist_km": 1.0},
+    )
+
+    def injected_failure(*_args, **_kwargs):
+        raise RuntimeError(f"fault:{faulted_symbol}")
+
+    monkeypatch.setattr(AP, faulted_symbol, injected_failure)
+    observed_errors = []
+    fallback = AP.build_best_of_worst(
+        [candidate],
+        fleet_count=1,
+        on_error=lambda code, exception_type: observed_errors.append(
+            (code, exception_type)
+        ),
+    )
+
+    assert fallback["candidate"] is None
+    assert fallback["proposal_output_type"] == PO.COORDINATOR_ESCALATION
+    assert fallback["diagnostic"] == {
+        "status": "FALLBACK",
+        "code": AP.INTERNAL_ERROR,
+    }
+    assert observed_errors == [(AP.INTERNAL_ERROR, "RuntimeError")]
+
+    # Ten sam seam musi zostać domknięty także przez publiczny boundary:
+    # nie wystarcza payload helpera — select_and_emit zawsze zwraca decyzję.
+    monkeypatch.setattr(
+        C, "decision_flag", lambda name, *a, **k: name == "ENABLE_ALWAYS_PROPOSE"
+    )
+    monkeypatch.setattr(C, "flag", lambda _name, default=False: default)
+    monkeypatch.setattr(
+        DP,
+        "check_feasibility_v2",
+        lambda **_kw: (
+            "NO",
+            "NO_ACTIVE_SHIFT",
+            {"pickup_dist_km": 1.0},
+            None,
+        ),
+    )
+    result = SEL.select_and_emit(_ctx(_fleet()), [])
+    assert result.verdict == "KOORD"
+    assert result.best is None
+    assert result.always_propose_best_of_worst["diagnostic"]["code"] == (
+        AP.INTERNAL_ERROR
+    )
+
+
+def test_f3_logger_failure_cannot_break_total_fallback(monkeypatch):
+    from dispatch_v2.core import always_propose as AP
+
+    monkeypatch.setattr(
+        AP,
+        "_deduplicate",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("builder fault")),
+    )
+
+    def broken_logger(*_args, **_kwargs):
+        raise RuntimeError("logger fault")
+
+    fallback = AP.build_best_of_worst(
+        [SimpleNamespace(courier_id="10")],
+        fleet_count=1,
+        on_error=broken_logger,
+    )
+    assert fallback["proposal_output_type"] == PO.COORDINATOR_ESCALATION
+    assert fallback["diagnostic"]["code"] == AP.INTERNAL_ERROR
+
+
+def test_f3_callsite_preserves_decision_if_public_instrument_raises(
+    monkeypatch, caplog
+):
+    from dispatch_v2.core import always_propose as AP
+
+    monkeypatch.setattr(
+        C, "decision_flag", lambda name, *a, **k: name == "ENABLE_ALWAYS_PROPOSE"
+    )
+    monkeypatch.setattr(C, "flag", lambda _name, default=False: default)
+    monkeypatch.setattr(
+        DP,
+        "check_feasibility_v2",
+        lambda **_kw: (
+            "NO",
+            "NO_ACTIVE_SHIFT",
+            {"pickup_dist_km": 1.0},
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        AP,
+        "build_best_of_worst",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("public fault")),
+    )
+
+    with caplog.at_level(logging.ERROR):
+        result = SEL.select_and_emit(_ctx(_fleet()), [])
+
+    assert result.verdict == "KOORD"
+    assert result.best is None
+    assert result.always_propose_best_of_worst["diagnostic"]["code"] == (
+        AP.SELECT_ATTACHMENT_ERROR
+    )
+    assert any(
+        "A3_ATTACH_FALLBACK" in record.getMessage()
+        for record in caplog.records
+    )
+
+
+def test_f3_callsite_logger_failure_cannot_erase_decision(monkeypatch):
+    from dispatch_v2.core import always_propose as AP
+
+    monkeypatch.setattr(
+        C, "decision_flag", lambda name, *a, **k: name == "ENABLE_ALWAYS_PROPOSE"
+    )
+    monkeypatch.setattr(C, "flag", lambda _name, default=False: default)
+    monkeypatch.setattr(
+        DP,
+        "check_feasibility_v2",
+        lambda **_kw: (
+            "NO",
+            "NO_ACTIVE_SHIFT",
+            {"pickup_dist_km": 1.0},
+            None,
+        ),
+    )
+    monkeypatch.setattr(
+        AP,
+        "build_best_of_worst",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("public fault")),
+    )
+    monkeypatch.setattr(
+        DP.log,
+        "error",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("logger fault")),
+    )
+
+    result = SEL.select_and_emit(_ctx(_fleet()), [])
+
+    assert result.verdict == "KOORD"
+    assert result.best is None
+    assert result.always_propose_best_of_worst["diagnostic"]["code"] == (
+        AP.SELECT_ATTACHMENT_ERROR
+    )
 
 
 def test_missing_gps_soft_evidence_is_neutral_not_a_hidden_penalty():
@@ -212,7 +493,8 @@ def test_missing_gps_soft_evidence_is_neutral_not_a_hidden_penalty():
     assert first == second
     assert first["soft_evidence_complete"] is False
     assert first["candidate"]["courier_id"] == "10"
-    assert first["candidate"]["score"] is None
+    assert first["candidate"]["a3_solo_score"] is None
+    assert "score" not in first["candidate"]
 
 
 def test_missing_soft_metric_never_rewrites_a_hard_safe_verdict(monkeypatch):
@@ -293,7 +575,22 @@ def test_coordinator_hold_is_not_mistaken_for_final_human_assignment(
 ):
     learning = tmp_path / "learning_log.jsonl"
     monkeypatch.setattr(PW, "_LEARNING_LOG_PATH", str(learning))
-    receipt = _receipt_context(decision_context=_escalation_context())
+    legacy_decision = {
+        "order_id": "A3-O1",
+        "event_id": "A3-O1_NEW_ORDER_1",
+        "ts": "2026-08-03T12:29:00+00:00",
+        "verdict": "KOORD",
+        "reason": "no_solo_candidates (fleet_n=2)",
+        "best": {"courier_id": "10", "score": -137.4},
+        "alternatives": [{"courier_id": "20", "score": -140.0}],
+    }
+    receipt = _receipt_context(
+        pending_record={
+            "sent_at": legacy_decision["ts"],
+            "decision_record": legacy_decision,
+        },
+        decision_context=_escalation_context(),
+    )
 
     PW._check_panel_override(
         "A3-O1",
@@ -301,7 +598,12 @@ def test_coordinator_hold_is_not_mistaken_for_final_human_assignment(
         "panel_diff",
         _context_by_receipt=receipt,
     )
-    assert _read_jsonl(learning) == []
+    hold_rows = _read_jsonl(learning)
+    assert len(hold_rows) == 1
+    assert hold_rows[0]["action"] == "PANEL_OVERRIDE"
+    assert hold_rows[0]["actual_courier_id"] == str(PW.KOORDYNATOR_ID)
+    assert hold_rows[0]["decision"] == legacy_decision
+    assert hold_rows[0].get("learning_event_type") is None
 
     PW._check_panel_override(
         "A3-O1",
@@ -311,9 +613,10 @@ def test_coordinator_hold_is_not_mistaken_for_final_human_assignment(
     )
     rows = _read_jsonl(learning)
     assert [row["action"] for row in rows] == [
+        "PANEL_OVERRIDE",
         "COORDINATOR_ESCALATION_RESOLVED"
     ]
-    assert rows[0]["actual_courier_id"] == "20"
+    assert rows[1]["actual_courier_id"] == "20"
 
 
 def test_red_manual_override_is_owner_exception_without_reason_prompt(
@@ -663,14 +966,25 @@ def test_lifecycle_consumes_context_only_after_final_courier_assignment(
     assert acknowledgements == expected_acknowledgements
 
 
-@pytest.mark.parametrize("reason", [
-    "no_solo_candidates (fleet_n=2)",
-    "state_likely_stale (age=90s)",
-    "geometry_blind_fallback (pool=2)",
-    "commit_divergence_gate (delta=16min)",
-    "difficult_geometry_redirect (score=-40)",
-])
-def test_all_operational_escalation_twins_use_the_same_learning_builder(reason):
+@pytest.mark.parametrize(
+    "reason,source_prefix,expected_class",
+    [
+        ("state_likely_stale (age=90s)", "state_likely_stale", "STALE"),
+        ("geometry_blind_fallback (pool=2)", "geometry_blind_fallback", "GEOMETRY"),
+        ("commit_divergence_gate (delta=16min)", "commit_divergence_gate", "COMMIT"),
+        ("difficult_geometry_redirect (score=-40)", "difficult_geometry_redirect", "DIFFICULT"),
+    ],
+)
+def test_f1_named_escalation_classes_map_from_their_real_sources(
+    reason, source_prefix, expected_class
+):
+    result = SimpleNamespace(verdict="KOORD", reason=reason, best=None)
+    escalation_class = PO.coordinator_escalation_class(result)
+    assert escalation_class.value == expected_class
+    # Ratchet writera: każdy prefiks klasy musi nadal pochodzić z realnej
+    # gałęzi selection, a nie wyłącznie z fixture/mappingu.
+    assert source_prefix in inspect.getsource(SEL.select_and_emit)
+
     context = APL.decision_context_from_record({
         "ts": "2026-08-03T12:29:00+00:00",
         "event_id": "A3-O1_NEW_ORDER_1",
@@ -689,13 +1003,71 @@ def test_all_operational_escalation_twins_use_the_same_learning_builder(reason):
         assignment_lifecycle_event_id="A3-ASSIGN-1",
     )
     assert record["action"] == "COORDINATOR_ESCALATION_RESOLVED"
+    assert record["coordinator_escalation_class"] == expected_class
+    assert record["engine_context"]["coordinator_escalation_class"] == (
+        expected_class
+    )
     assert record["engine_context"]["reason"] == reason
 
 
+def test_f1_escalation_enum_has_exact_owner_named_classes_plus_unknown():
+    assert tuple(item.value for item in PO.CoordinatorEscalationClass) == (
+        "STALE",
+        "GEOMETRY",
+        "COMMIT",
+        "DIFFICULT",
+        "UNKNOWN",
+    )
+
+
+@pytest.mark.parametrize(
+    "reason",
+    [
+        "no_solo_candidates (fleet_n=2)",
+        "all_candidates_low_score (best=-99)",
+        "best_effort_r6_breach (count=1)",
+        "best_effort_r6_breach_v2 (count=1)",
+        "best_effort_low_score (best=-99)",
+        "new_unclassified_coordinator_reason",
+    ],
+)
+def test_f1_unmapped_coordinator_reason_is_explicit_unknown(reason):
+    result = SimpleNamespace(verdict="KOORD", reason=reason, best=None)
+    escalation_class = PO.coordinator_escalation_class(result)
+    assert escalation_class.value == "UNKNOWN"
+
+
+def test_f1_mutation_removing_source_mapping_turns_named_class_unknown(
+    monkeypatch
+):
+    result = SimpleNamespace(
+        verdict="KOORD",
+        reason="commit_divergence_gate (delta=16min)",
+        best=None,
+    )
+    assert PO.coordinator_escalation_class(result).value == "COMMIT"
+    monkeypatch.setattr(
+        PO,
+        "COORDINATOR_ESCALATION_REASON_CLASSES",
+        tuple(
+            item
+            for item in PO.COORDINATOR_ESCALATION_REASON_CLASSES
+            if item[0] != "commit_divergence_gate"
+        ),
+    )
+    assert PO.coordinator_escalation_class(result).value == "UNKNOWN"
+
+
 def test_ratchet_single_learning_stream_and_exact_context_wiring():
+    from dispatch_v2.core import always_propose as AP
+    from dispatch_v2.tools import decision_episode_v1 as DE
+
     learning_source = inspect.getsource(APL)
     shadow_source = inspect.getsource(SD._tick)
     panel_source = inspect.getsource(PW._check_panel_override)
+    proposal_source = inspect.getsource(PO)
+    public_candidate_source = inspect.getsource(AP._public_candidate)
+    episode_candidate_source = inspect.getsource(DE._shadow_candidates)
     assert "append_jsonl" not in learning_source
     assert "remember_decision(record)" in shadow_source
     assert shadow_source.index(
@@ -708,3 +1080,8 @@ def test_ratchet_single_learning_stream_and_exact_context_wiring():
     assert "except Exception as _a3_context_exc" in shadow_source
     assert "_append_learning_record(" in panel_source
     assert "always_propose_decision_context.json" in learning_source
+    assert "if _a3_enabled and not _a3_coordinator_hold:" in panel_source
+    assert proposal_source.count("COORDINATOR_ESCALATION_REASON_CLASSES =") == 1
+    assert '"score":' not in public_candidate_source
+    assert "candidates.append(dict(diagnostic))" not in episode_candidate_source
+    assert "update(overlay)" in episode_candidate_source

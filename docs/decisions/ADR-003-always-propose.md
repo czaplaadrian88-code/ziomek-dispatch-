@@ -12,6 +12,16 @@ D-A3-1/3 ustanawiają osobny typ `COORDINATOR_ESCALATION` oraz trwałą parę
 decyzja→późniejszy assignment w istniejącym `learning_log`. Ręczny wybór inny
 niż wynik silnika jest automatycznie `OWNER_EXCEPTION` z początkowym
 `reason="nieokreślony"`; operator nie jest blokowany pytaniem o powód.
+`COORDINATOR_ESCALATION` ma obowiązkową podklasę: `STALE`, `GEOMETRY`, `COMMIT`,
+`DIFFICULT` albo jawne `UNKNOWN`; mapę prefiksów posiada wyłącznie
+`core.proposal_output`. Diagnostyczny score próby R29 ma osobne pole
+`a3_solo_score` i nie może nadpisywać kanonicznego `score` w danych uczących.
+
+Granica A-3 jest totalna: wyjątek instrumentu nigdy nie wychodzi z
+`select_and_emit`. Powstaje deterministyczna diagnostyczna eskalacja i log
+klasy błędu, a istniejący jawny wynik `KOORD/no_solo` zawsze wraca do callera.
+Techniczny hold Koordynatora zachowuje legacy learning-record i nie jest
+traktowany jako finalne rozwiązanie D1.
 
 ## Konsekwencje
 - Wolno/trzeba: pokazać sentinel/best-effort jako jawny `NO/ALERT` z przyczyną; sam sentinel nie jest bugiem.
