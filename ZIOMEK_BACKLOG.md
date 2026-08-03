@@ -1,19 +1,21 @@
 # ZIOMEK AI DISPATCHER - BACKLOG ROZWOJU
-> **KANDYDAT SOURCE-ONLY 2026-08-03 — A-2 REWORK PO BLIND CONFIRMED_DEFECT:**
-> commit kodu `4add120baa6acee654df3ffff6a4119a7ca0b041` ustanawia jeden
-> leaf-owner `state_persistence` dla strict/legacy JSON read, pochodnej `.prev`
-> i durable backup-on-write. `.prev` jest wyłącznie poprzednim poprawnym mainem;
-> brak/uszkodzenie maina nigdy go nie nadpisuje. Guard planu ON rezerwuje
-> globalny JSON-safe version-HWM przed mainem, recovery rebazuje ponad HWM,
-> a cache fingerprintuje main+HWM+`.prev`, więc stary CAS nie wraca (ABA).
-> OFF na świeżym store zachowuje legacy I/O i nie tworzy `.prev`/HWM; flaga
-> pozostaje default OFF. RED odrzuconego `aba32b0e`: 12F/1P; rework A-2: 23P,
-> rzeczywisty race dwóch procesów 10/10 i osiem fizycznych mutation probes RED.
-> Pełna hermetyczna regresja: `6996P/0F/74S/8X/159W` vs exact baseline
-> `6982P/0F/74S/8X/159W`; dokładne listy skip/xfail identyczne, delta = +14P
-> i zero innych zmian. Lifecycle 566/566, entropy bez pogorszenia, mechaniczny
-> DoD PASS. Gate `engine.a2-plan-corrupt-guard-rework` czeka na niezależny blind
-> CTO; zero merge/push/deploy/restart/flip/runtime-write. Raport:
+> **KANDYDAT SOURCE-ONLY 2026-08-03 — A-2 ITERACJA 3 PO ODRZUCENIU `fd18c040c`:**
+> commit kodu `c73bb1a9c26c30edf831536f4939604b49ee6a44` zachowuje zamknięte
+> D-1/D-3 i domyka blind D-2/ABA u źródła. Recovery zwalnia SH, bierze EX,
+> fsyncuje cały zakres syntetycznych tokenów w HWM, utrwala recovered main i
+> dopiero wtedy wydaje widok; przejściowe errno mają backoff. Realny oracle
+> `EMFILE + SIGKILL + czekający writer` odrzuca oba stare tokeny i zachowuje
+> legalny plan; mutation bez zapisu HWM ponownie robi RED. Rollback planu OFF
+> ignoruje `.prev`/HWM i wraca do exact `current+1`, także po ON.
+> `orders_state` ma osobną `ENABLE_ORDERS_STATE_PERSISTENCE_V2` default OFF:
+> cały nowy writer/read jest za flagą, a OFF deleguje byte-compatible legacy
+> normalnie i po rollbacku. Exact blind ABA/EMFILE/OFF probes są GREEN;
+> skupione A-2 35P, lifecycle 567/567, DoD PASS, entropy bez zmiany. Pełna
+> hermetyczna regresja: `7008P/0F/74S/8X/159W` vs exact baseline
+> `6982P/0F/74S/8X/159W`; listy skip/xfail identyczne, delta = +26P i zero
+> nowych fail/skip/xfail/warning. Następna bramka: świeży blind CTO. **Nie
+> mergować ITER2 ani ITER3 przed blindem**; zero push/deploy/restart/flip/LIVE.
+> Raport:
 > `/root/artifacts/a2-rework-20260803/REPORT.md`.
 
 > **KANDYDAT SOURCE-ONLY 2026-08-03 — ROOT-FIX NEW-1 PO BLIND 491870 ITER2:**
