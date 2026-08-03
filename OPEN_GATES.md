@@ -2,10 +2,10 @@
 
 > GENERATED — edycja bezcelowa; źródłem prawdy jest kanoniczna baza SQLite.
 > Źródło: `process-gates-ledger`
-> Ledger SHA-256: `9e1dbcfa165adc7db6056ef405d34fbd2ec24173dd479a9b95e3dc11d30b992c`
-> Stan na: `2026-08-03T12:42:53Z`
+> Ledger SHA-256: `4d8b0a70bc36c4f52d6cab4f09311483a0ced0e4cdaafdfdf4d59826e132537f`
+> Stan na: `2026-08-03T20:31:30Z`
 
-Otwarte: **96** | po terminie: **62** | ALARM: **2**
+Otwarte: **94** | po terminie: **66** | ALARM: **2**
 Anomalie schedulera (także terminalne): **0**
 
 | dni | ID | stan | owner | termin | notatka | alarm |
@@ -24,7 +24,7 @@ Anomalie schedulera (także terminalne): **0**
 ## Kontrola
 
 - Najstarsza: 59 dni / audit.fail03-k2.
-- Pominięte z tabeli: 86.
+- Pominięte z tabeli: 84.
 - Kolejność: dni wiszenia malejąco, potem ID rosnąco.
 - Terminalne: CLOSED, REJECTED i SUPERSEDED nie są pokazywane.
 - ŚWIEŻA = notatka audytowa nowsza niż ostatnie przejście FSM.
