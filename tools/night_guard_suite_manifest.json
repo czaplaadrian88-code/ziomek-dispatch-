@@ -1,6 +1,6 @@
 {
-  "base_sha": "9a0fb093e774768f6e79661184e47f0a43875e7e",
-  "manifest_version": 42,
+  "base_sha": "62f45a52a3735bfcbc262228511ca48aa267ad36",
+  "manifest_version": 43,
   "nodeids": [
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix1_kurier_ids_load_fail_logs_error_and_dedups",
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix2_bag_not_stale_dedup_same_input",
@@ -1691,6 +1691,28 @@
     "tests/test_coordinator_force_recheck_2026_06_30.py::test_v6_policy_snapshot_mutations_are_poison_evidence[non_boolean]",
     "tests/test_coordinator_force_recheck_2026_06_30.py::test_v6_policy_snapshot_mutations_are_poison_evidence[wrong_producer]",
     "tests/test_coordinator_force_recheck_2026_06_30.py::test_well_formed_receipt_absent_from_queue_is_not_authority",
+    "tests/test_courier_admin_a6_g4_onboarding.py::test_k6_legit_int_cid_still_writes_all_five",
+    "tests/test_courier_admin_a6_g4_onboarding.py::test_k6_noncanonical_cid_never_written_to_any_of_5_files[bool-False]",
+    "tests/test_courier_admin_a6_g4_onboarding.py::test_k6_noncanonical_cid_never_written_to_any_of_5_files[bool-True]",
+    "tests/test_courier_admin_a6_g4_onboarding.py::test_k6_noncanonical_cid_never_written_to_any_of_5_files[empty-str]",
+    "tests/test_courier_admin_a6_g4_onboarding.py::test_k6_noncanonical_cid_never_written_to_any_of_5_files[float-integer]",
+    "tests/test_courier_admin_a6_g4_onboarding.py::test_k6_noncanonical_cid_never_written_to_any_of_5_files[float-zero]",
+    "tests/test_courier_admin_a6_g4_onboarding.py::test_k6_noncanonical_cid_never_written_to_any_of_5_files[float]",
+    "tests/test_courier_admin_a6_g4_onboarding.py::test_k6_noncanonical_cid_never_written_to_any_of_5_files[int-zero]",
+    "tests/test_courier_admin_a6_g4_onboarding.py::test_k6_noncanonical_cid_never_written_to_any_of_5_files[leading-zero]",
+    "tests/test_courier_admin_a6_g4_onboarding.py::test_k6_noncanonical_cid_never_written_to_any_of_5_files[negative-int]",
+    "tests/test_courier_admin_a6_g4_onboarding.py::test_k6_noncanonical_cid_never_written_to_any_of_5_files[non-digit-str]",
+    "tests/test_courier_admin_a6_g4_onboarding.py::test_k6_noncanonical_cid_never_written_to_any_of_5_files[none]",
+    "tests/test_courier_admin_a6_g4_onboarding.py::test_k6_noncanonical_cid_never_written_to_any_of_5_files[plus-sign]",
+    "tests/test_courier_admin_a6_g4_onboarding.py::test_k6_noncanonical_cid_never_written_to_any_of_5_files[str-double-zero]",
+    "tests/test_courier_admin_a6_g4_onboarding.py::test_k6_noncanonical_cid_never_written_to_any_of_5_files[str-zero]",
+    "tests/test_courier_admin_a6_g4_onboarding.py::test_k6_noncanonical_cid_never_written_to_any_of_5_files[underscore]",
+    "tests/test_courier_admin_a6_g4_onboarding.py::test_k6_noncanonical_cid_never_written_to_any_of_5_files[whitespace]",
+    "tests/test_courier_admin_a6_g4_onboarding.py::test_k6_positive_int_cid_8001_still_writes_all_five",
+    "tests/test_courier_admin_a6_g4_onboarding.py::test_k8_cid_owned_by_another_identity_rejected",
+    "tests/test_courier_admin_a6_g4_onboarding.py::test_k8_forward_full_name_collision_still_fires",
+    "tests/test_courier_admin_a6_g4_onboarding.py::test_k8_legit_new_courier_passes_parity",
+    "tests/test_courier_admin_a6_g4_onboarding.py::test_k8_reverse_full_name_collision_rejected",
     "tests/test_courier_admin_five_files_zp105.py::test_add_new_courier_writes_all_five_files",
     "tests/test_courier_admin_five_files_zp105.py::test_conflict_checks_still_fire",
     "tests/test_courier_admin_five_files_zp105.py::test_partial_fail_rolls_back_all_five",
@@ -7398,7 +7420,7 @@
     "tests/test_zombie01_pickup_guard.py::test_picked_up_recent_kept",
     "tests/test_zombie01_pickup_guard.py::test_zombie_assigned_with_stale_pickup_filtered"
   ],
-  "nodeids_sha256": "3e0f6d989ceb84d0812517f92c255e2ac592be53cdfe5cfce34a4d2e2103cd68",
+  "nodeids_sha256": "09ba1e9a0e1cac70abc78ec1ff80bfa7faa899a8ebe7d0778e91a01f82dbba7b",
   "outcome_contracts": {
     "tests/test_canon_static_check_a1.py::test_defer_completion_guard_armed_when_defer_exists": [
       "skipped"
@@ -7522,7 +7544,7 @@
     ]
   },
   "owner": "CTO-Fable-sesja-dzienna-0408",
-  "reason": "Re-seed po O-1 (test regresyjny G7 dlugi CID, +6 nodeidow, test-only); HEAD 9a0fb093e774768f6e79661184e47f0a43875e7e",
+  "reason": "Re-seed po merge G4 (A-6/K6+K8, +22 nodeidy); HEAD 62f45a52a3735bfcbc262228511ca48aa267ad36",
   "schema_version": 1,
-  "updated_at_utc": "2026-08-04T12:53:20+00:00"
+  "updated_at_utc": "2026-08-04T15:26:15+00:00"
 }
