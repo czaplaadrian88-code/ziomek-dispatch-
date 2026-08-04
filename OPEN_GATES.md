@@ -2,10 +2,10 @@
 
 > GENERATED — edycja bezcelowa; źródłem prawdy jest kanoniczna baza SQLite.
 > Źródło: `process-gates-ledger`
-> Ledger SHA-256: `f39af4524597bed730ef4704bcd98cb989bfb11f07d54ef866f7a5589a2660dc`
-> Stan na: `2026-08-04T06:35:56Z`
+> Ledger SHA-256: `7b6711582b88b5829d1baabb720fe480cf48ef561293eaaeddabb8b63a5aecb5`
+> Stan na: `2026-08-04T08:04:40Z`
 
-Otwarte: **106** | po terminie: **66** | ALARM: **2**
+Otwarte: **107** | po terminie: **67** | ALARM: **2**
 Anomalie schedulera (także terminalne): **0**
 
 | dni | ID | stan | owner | termin | notatka | alarm |
@@ -17,14 +17,14 @@ Anomalie schedulera (także terminalne): **0**
 | 24 | audit.data0 | OWNER_ACKED | CTO | 2026-07-26 | — | — |
 | 24 | audit.dr1b | OWNER_ACKED | CTO | 2026-07-26 | — | — |
 | 23 | audit.host-boundary-hold | OWNER_ACKED | OWNER | 2026-07-23 | ŚWIEŻA 2026-07-25 codex-sol-g… | — |
+| 13 | audit.cid400-pool-absence | APPLIED | CTO | 2026-07-28 | — | — |
 | 13 | engine.czasowka-reclaim-shadow | APPLIED | CTO | 2026-07-24 | ŚWIEŻA 2026-07-25 codex-sol-p… | — |
-| 13 | eta.decision-time-log-flip | APPLIED | OWNER | 2026-07-23 | ŚWIEŻA 2026-07-25 codex-sol-g… | — |
-| 12 | audit.cid400-pool-absence | APPLIED | CTO | 2026-07-28 | — | — |
+| 13 | engine.uwagi-envelope-v2 | OWNER_ACKED | CTO | 2026-07-25 | — | — |
 
 ## Kontrola
 
 - Najstarsza: 60 dni / audit.fail03-k2.
-- Pominięte z tabeli: 96.
+- Pominięte z tabeli: 97.
 - Kolejność: dni wiszenia malejąco, potem ID rosnąco.
 - Terminalne: CLOSED, REJECTED i SUPERSEDED nie są pokazywane.
 - ŚWIEŻA = notatka audytowa nowsza niż ostatnie przejście FSM.
