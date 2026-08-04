@@ -16,13 +16,11 @@ from __future__ import annotations
 import functools
 import hashlib
 import json
-import logging
+import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import Mapping, Optional
-
-_log = logging.getLogger(__name__)
 
 
 PASSIVE_CK_SOURCES = frozenset(
@@ -682,24 +680,89 @@ def _resolution(
 #
 # PII: do linii trafiają wyłącznie identyfikatory (order_id) i pola techniczne.
 # Adresy klientów, nazwy restauracji i treść uwag NIE są logowane.
+#
+# LOGGER (iteracja 2): kanoniczny ``setup_logger`` do ``dispatch.log``, tak jak w
+# 15 innych modułach silnika. Iteracja 1 użyła bare ``logging.getLogger``, przez
+# co emisja była MARTWA w produkcji: demony konfigurują handlery wyłącznie na
+# loggerach NAZWANYCH przez ``setup_logger``, root zostaje na WARNING bez
+# handlerów, więc każdy rekord INFO ginął, a jedyny WARNING uciekał przez
+# ``logging.lastResort`` na stderr. Ta sama pułapka i ta sama naprawa opisane są
+# przy ``dispatch_pipeline.py`` (T1, 2026-05-01).
+#
+# Import ``common`` jest PÓŹNY, bo ``common`` importuje ten moduł
+# (``COMMITTED_CK_DELTA_THRESHOLD_MIN``) — import modułowy dałby ImportError na
+# częściowo zainicjalizowanym ``common``. Logger powstaje przy pierwszej emisji,
+# gdy ``common`` jest już kompletny; późny import ``common`` to idiom repo
+# (``scoring``, ``courier_resolver``).
 _LOG_PREFIX = "RUTCOM_AUTHORITY"
+# Nazwa loggera jest ZWYKŁYM literałem i CELOWO nie jest nazwą modułu.
+#
+# ``committed_pickup_authority`` to nazwa POLA autorytetu w zleceniu
+# (``order.get("committed_pickup_authority")``), pilnowanego przez ratchet
+# semantycznych stałych (``tests/test_committed_pickup_authority_ratchet.py``):
+# każda stała produkcyjna o tej wartości wygląda jak alias ukrywający pisarza,
+# więc bramka słusznie czerwieni się na jej dodaniu.
+#
+# Iteracja 2 próbowała ominąć to wyprowadzeniem nazwy z ``__name__``. To był
+# BŁĄD i został odrzucony w recenzji: wyprowadzenie usuwa literał z drzewa AST,
+# więc ratchet przestaje widzieć COKOLWIEK, co przez tę stałą pisze. Zmierzone
+# na obu wariantach: ``state[_LOG_NAME] = value`` przechodziło CAŁY ratchet
+# (32 passed), podczas gdy ten sam zapis literałem czerwienił. Obejście
+# OSŁABIAŁO więc istniejące zabezpieczenie przed drugim pisarzem pola
+# autorytetu — dziury tej przed iteracją 2 nie było.
+#
+# Rozwiązanie u źródła: moduł nie trzyma ŻADNEJ zmiennej o wartości równej
+# chronionej nazwie pola, więc nie ma czym prać zapisu. Logger nazywa się jak
+# strumień, który wypisuje (``RUTCOM_AUTHORITY`` stoi w każdej linii), przypięty
+# hash ratchetu zostaje nietknięty, a prawdziwe obejścia znów czerwienią.
+_LOG_NAME = "rutcom_authority"
+_LOG_FILE = "/root/.openclaw/workspace/scripts/logs/dispatch.log"
+_log = None
+
+
+def _logger():
+    """Kanoniczny logger modułu; leniwy wyłącznie z powodu cyklu z ``common``."""
+    global _log
+    if _log is None:
+        from dispatch_v2.common import setup_logger
+
+        _log = setup_logger(_LOG_NAME, _LOG_FILE)
+    return _log
+
+
+# Zagnieżdżenie (D-2): ``resolve_czasowka_initial_time_intent`` woła wewnętrznie
+# dwa inne publiczne wejścia, więc JEDNO rozstrzygnięcie zostawiało 4 rekordy — w
+# tym dwie linie ``SUPPRESS reason=rutcom_status_not_active`` przy realnym
+# werdykcie APPLY. Operator liczący wystąpienia dostawał wynik ~3× zawyżony.
+# Linii pośrednich nie kasujemy (mówią, DLACZEGO wejście zewnętrzne sięgnęło po
+# ścieżkę deadline'u — to była szukana diagnostyka 03.08), ale każda niesie teraz
+# swoją głębokość i znacznik finalności. KONTRAKT DLA OPERATORA: dokładnie jedna
+# linia ``final=yes`` na rozstrzygnięcie — licz i alarmuj wyłącznie po niej.
+# Licznik jest thread-local, bo te wejścia są wołane z ``state_machine`` i
+# ``panel_watcher``, a ``state_machine`` pracuje wielowątkowo (trzyma własne
+# ``threading.local`` + ``RLock`` na re-entrancy lifecycle'u, ``state_machine.py``
+# :703-706). Wspólny int mieszałby głębokości między wątkami.
+_entry_depth = threading.local()
 
 
 def _log_resolution(
     entry: str,
     existing: Mapping[str, object] | None,
     resolution: CommittedPickupResolution,
+    depth: int = 0,
 ) -> CommittedPickupResolution:
     """Zaloguj werdykt publicznego wejścia i zwróć go BEZ ZMIAN."""
     try:
-        _log.info(
-            "%s entry=%s oid=%s outcome=%s reason=%s event=%s",
+        _logger().info(
+            "%s entry=%s oid=%s outcome=%s reason=%s event=%s depth=%s final=%s",
             _LOG_PREFIX,
             entry,
             _clean_id((existing or {}).get("order_id")) or "?",
             getattr(resolution.outcome, "name", resolution.outcome),
             resolution.reason,
             "yes" if resolution.event else "no",
+            depth,
+            "yes" if depth == 0 else "no",
         )
     except Exception:  # noqa: BLE001 - obserwowalność nigdy nie wywraca decyzji
         pass
@@ -720,7 +783,16 @@ def _observed(entry: str):
         @functools.wraps(fn)
         def wrapper(*args, **kwargs):
             existing = args[0] if args else kwargs.get("existing")
-            return _log_resolution(entry, existing, fn(*args, **kwargs))
+            depth = getattr(_entry_depth, "value", 0)
+            _entry_depth.value = depth + 1
+            try:
+                resolution = fn(*args, **kwargs)
+            finally:
+                # ``finally`` przywraca głębokość także przy wyjątku, ale NIE
+                # przechwytuje go: wyjątek wychodzi z wrappera ten sam i emisja
+                # się nie wykonuje (nie ma werdyktu do zalogowania).
+                _entry_depth.value = depth
+            return _log_resolution(entry, existing, resolution, depth)
 
         return wrapper
 
@@ -1967,7 +2039,7 @@ def resolve_czasowka_initial_time_intent(
     # bramkę statusu Rutcom. Do 04.08 działo się to bezgłośnie — operator nie
     # miał jak zobaczyć, że polityka czasu została poszerzona dla zlecenia.
     try:
-        _log.warning(
+        _logger().warning(
             "%s deadline_boundary_crossed oid=%s deadline=%s as_of=%s "
             "bypass=enforce_active_rutcom_status_off prev_reason=%s",
             _LOG_PREFIX,

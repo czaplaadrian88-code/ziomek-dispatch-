@@ -13,7 +13,6 @@ The tool never drains or mutates the durable event outbox.
 from __future__ import annotations
 
 import argparse
-import logging
 import hashlib
 import json
 import os
@@ -545,7 +544,13 @@ def collect_status(
 
 
 _LOG_PREFIX = "RUTCOM_ROLLBACK_CLI"
-_log = logging.getLogger(__name__)
+# Kanoniczny logger (iteracja 2) — ten sam cel co moduły silnika, żeby akcja
+# operatora stała w ``dispatch.log`` obok linii fence'u, których dotyczy. Bare
+# ``logging.getLogger`` nie miał handlera i nie zostawiał śladu (lekcja T1).
+_log = C.setup_logger(
+    "rutcom_committed_authority_rollback",
+    "/root/.openclaw/workspace/scripts/logs/dispatch.log",
+)
 
 
 def _log_cli(event: str, **fields: object) -> None:
