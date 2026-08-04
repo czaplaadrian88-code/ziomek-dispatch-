@@ -134,10 +134,13 @@ def patched_scan(monkeypatch, tmp_path):
     monkeypatch.setattr(ncp, "STATE_PATH", str(state_file))
     # Anty-prod (C17): self-heal + trusted-resolve nie mogą dotykać żywych plików.
     monkeypatch.setattr(ncp, "GRAFIK_FULL_NAMES", str(tmp_path / "grafik_full_names.json"))
-    monkeypatch.setattr(ncp, "_load_kurier_ids",
-                        lambda: {"Bartek O": "123", "Bartek Ołdziej": "123"})
+    kids = {"Bartek O": "123", "Bartek Ołdziej": "123"}
+    monkeypatch.setattr(ncp, "_load_kurier_ids", lambda: dict(kids))
+    monkeypatch.setattr(ncp, "COURIER_NAMES", str(tmp_path / "courier_names.json"))
+    monkeypatch.setattr(ncp, "COURIER_TIERS", str(tmp_path / "courier_tiers.json"))
     assert "/dispatch_state/" not in ncp.STATE_PATH
     assert "/dispatch_state/" not in ncp.GRAFIK_FULL_NAMES
+    assert "/dispatch_state/" not in ncp.COURIER_NAMES
 
     sent = []
     monkeypatch.setattr(ncp, "_tg", lambda text, *, silent=False: sent.append(text))
@@ -146,9 +149,14 @@ def patched_scan(monkeypatch, tmp_path):
 
     def fake_add(cid, full_name):
         added.append((cid, full_name))
+        alias = full_name.split()[0] + " " + full_name.split()[1][:2]
+        # Realny add_new_courier zapisuje alias ORAZ pełne imię do kurier_ids
+        # zanim ruszy self-heal grafiku. Bez tego fikstura nie modeluje
+        # kontraktu, na którym opiera się sprawdzenie własności CID (A-6/K7).
+        kids[alias] = str(cid)
+        kids[full_name] = str(cid)
         return {"cid": cid, "full_name": full_name,
-                "alias": full_name.split()[0] + " " + full_name.split()[1][:2],
-                "pin": "4242"}
+                "alias": alias, "pin": "4242"}
 
     monkeypatch.setattr(ncp, "add_new_courier", fake_add)
     monkeypatch.setattr(ncp, "verify_courier_wired",
@@ -169,7 +177,8 @@ def patched_scan(monkeypatch, tmp_path):
     monkeypatch.setattr(ncp, "resolve_cid",
                         lambda name, kids=None: "123" if name == "Bartek Ołdziej" else None)
 
-    return {"sent": sent, "added": added, "flags": flags, "state_file": state_file}
+    return {"sent": sent, "added": added, "flags": flags,
+            "state_file": state_file, "kids": kids}
 
 
 def _sched(monkeypatch, mapping):
@@ -268,10 +277,15 @@ def bare_key_scan(patched_scan, monkeypatch):
     """patched_scan z REALNYM resolve_cid + kontrolowanym kurier_ids (case 541)."""
     from dispatch_v2.shift_notifications import worker as snw
     monkeypatch.setattr(ncp, "resolve_cid", snw.resolve_cid)
-    monkeypatch.setattr(ncp, "_load_kurier_ids", lambda: dict(GABRIEL_KIDS))
+    # Współdzielony, MUTOWALNY rejestr: fake_add dopisuje do niego tak jak realny
+    # add_new_courier, więc self-heal grafiku widzi świeżo wpiętego kuriera.
+    kids = patched_scan["kids"]
+    kids.clear()
+    kids.update(GABRIEL_KIDS)
+    monkeypatch.setattr(ncp, "_load_kurier_ids", lambda: dict(kids))
     # Ścieżka plain-resolve (resolve_cid bez kids) ładuje przez loader WORKERA —
     # patch też tam, żeby test nie czytał żywego kurier_ids.json (C17 anty-prod).
-    monkeypatch.setattr(snw, "_load_kurier_ids", lambda: dict(GABRIEL_KIDS))
+    monkeypatch.setattr(snw, "_load_kurier_ids", lambda: dict(kids))
     # Aktywny roster gastro jak 06.07: nowy 541 'Gabriel P' + stary 179 'Gabriel'.
     monkeypatch.setattr(ncp.panel_roster, "fetch_active_roster",
                         lambda force=False: {541: "Gabriel P", 179: "Gabriel"})
@@ -288,15 +302,22 @@ def test_bare_key_strict_pairs_new_courier(bare_key_scan, monkeypatch):
 
 
 def test_bare_key_strict_off_reproduces_silent_skip(bare_key_scan, monkeypatch):
-    """Flaga OFF = stare zachowanie (ON≠OFF): cichy skip (0 wpięć, 0 pytań)
-    + self-heal utrwala ZATRUCIE Przyborowski->179 w grafik_full_names."""
+    """Flaga OFF = stare zachowanie (ON≠OFF): cichy skip (0 wpięć, 0 pytań).
+
+    ZMIANA A-6/K7 (04.08): dawniej self-heal utrwalał tu ZATRUCIE
+    Przyborowski->179 (cid Ostapczuka). Kontrakt własności CID odmawia teraz
+    tego zapisu u writera, więc obrona nie zależy już wyłącznie od flagi —
+    ON≠OFF nadal widać po wpięciach/pytaniach, ale grafik zostaje czysty,
+    a odmowa jest raportowana operatorowi.
+    """
     bare_key_scan["flags"]["NEW_COURIER_AUTOPAIR_BARE_KEY_STRICT"] = False
     _sched(monkeypatch, {"Gabriel Przyborowski": {"start": "11:00", "end": "21:00"}})
     s = ncp.scan_once(dry_run=False)
     assert bare_key_scan["added"] == []
     assert s["paired"] == [] and s["asked"] == []
-    poisoned = json.load(open(ncp.GRAFIK_FULL_NAMES))
-    assert str(poisoned["Gabriel Przyborowski"]) == "179"   # udokumentowany bug
+    # Odmowa oznacza, że pliku mogło w ogóle nie być — _read_json zwraca wtedy {}.
+    assert "Gabriel Przyborowski" not in ncp._read_json(ncp.GRAFIK_FULL_NAMES)
+    assert s["grafik_refused"] == [{"name": "Gabriel Przyborowski", "cid": "179"}]
 
 
 def test_bare_key_strict_no_poison_selfheal(bare_key_scan, monkeypatch):
@@ -453,3 +474,491 @@ def test_nowy_without_cid_ambiguous(patched_nowy, monkeypatch):
     r = ta._handle_nowy_command({}, _msg("/nowy Marek Nowak"), "/nowy Marek Nowak")
     assert patched_nowy["added"] == []
     assert "Kilku pasuje" in r
+
+
+# --------------------------------------------------------------------------- #
+# A-6/K7: grafik_full_names — wlasnosc CID w pozostalych rootach tozsamosci
+# --------------------------------------------------------------------------- #
+
+@pytest.fixture
+def grafik_env(monkeypatch, tmp_path):
+    """Izolowane rooty tozsamosci dla kontraktu wlasnosci CID w grafiku."""
+    grafik = tmp_path / "grafik_full_names.json"
+    names = tmp_path / "courier_names.json"
+    tiers = tmp_path / "courier_tiers.json"
+    for path in (grafik, names, tiers):
+        path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(ncp, "GRAFIK_FULL_NAMES", str(grafik))
+    monkeypatch.setattr(ncp, "COURIER_NAMES", str(names), raising=False)
+    monkeypatch.setattr(ncp, "COURIER_TIERS", str(tiers), raising=False)
+    monkeypatch.setattr(ncp, "_load_kurier_ids", lambda: {"Courier A": 17})
+    assert "/dispatch_state/" not in ncp.GRAFIK_FULL_NAMES
+    return {"grafik": grafik, "names": names, "tiers": tiers}
+
+
+def _grafik(env):
+    return json.loads(env["grafik"].read_text(encoding="utf-8"))
+
+
+class TestGrafikCidOwnership:
+    def test_refuses_cid_owned_by_another_identity(self, grafik_env):
+        status = ncp._ensure_grafik_full_name("Courier B", 17)
+        assert _grafik(grafik_env) == {}
+        assert status == "refused"
+
+    @pytest.mark.parametrize("cid", [True, False, [], "   ", 999])
+    def test_refuses_non_canonical_or_unknown_cid(self, grafik_env, cid):
+        status = ncp._ensure_grafik_full_name("Courier A", cid)
+        assert _grafik(grafik_env) == {}
+        assert status == "refused"
+
+    def test_refuses_when_courier_names_owner_differs(self, grafik_env):
+        grafik_env["names"].write_text(
+            json.dumps({"17": "Someone Else"}), encoding="utf-8")
+        status = ncp._ensure_grafik_full_name("Courier A", 17)
+        assert _grafik(grafik_env) == {}
+        assert status == "refused"
+
+    def test_refuses_when_courier_tiers_owner_differs(self, grafik_env):
+        grafik_env["tiers"].write_text(
+            json.dumps({"17": {"name": "Someone Else"}}), encoding="utf-8")
+        status = ncp._ensure_grafik_full_name("Courier A", 17)
+        assert _grafik(grafik_env) == {}
+        assert status == "refused"
+
+    def test_refuses_duplicate_cid_binding_in_grafik(self, grafik_env):
+        grafik_env["grafik"].write_text(
+            json.dumps({"Other Name": 17}), encoding="utf-8")
+        status = ncp._ensure_grafik_full_name("Courier A", 17)
+        assert _grafik(grafik_env) == {"Other Name": 17}
+        assert status == "refused"
+
+    def test_writes_when_owner_matches(self, grafik_env):
+        status = ncp._ensure_grafik_full_name("Courier A", 17)
+        assert _grafik(grafik_env) == {"Courier A": 17}
+        assert status == "healed"
+
+    def test_noop_when_already_correct(self, grafik_env):
+        grafik_env["grafik"].write_text(
+            json.dumps({"Courier A": 17}), encoding="utf-8")
+        status = ncp._ensure_grafik_full_name("Courier A", 17)
+        assert _grafik(grafik_env) == {"Courier A": 17}
+        assert status == "ok"
+
+    def test_alias_owner_is_accepted(self, grafik_env, monkeypatch):
+        """kurier_ids trzyma skrot ('Darek os'); grafik pelne imie — norm laczy."""
+        monkeypatch.setattr(ncp, "_load_kurier_ids", lambda: {"Darek os": 543})
+        status = ncp._ensure_grafik_full_name("Darek Osmólski", 543)
+        assert _grafik(grafik_env) == {"Darek Osmólski": 543}
+        assert status == "healed"
+
+
+# --------------------------------------------------------------------------- #
+# A-6/K7 iter2 — findingi F-1 / F-2 / F-3 ze security-blinda fc6fab872
+# --------------------------------------------------------------------------- #
+
+def _break_root(path, mode):
+    """Uczyn root NIECZYTELNYM w sposob odrozniamy od 'pusty root'."""
+    if mode == "corrupt-json":
+        path.write_text("{ to nie jest json", encoding="utf-8")
+    elif mode == "is-a-directory":
+        path.unlink(missing_ok=True)
+        path.mkdir()
+    elif mode == "not-an-object":
+        path.write_text("[1, 2, 3]", encoding="utf-8")
+    else:  # pragma: no cover
+        raise AssertionError(mode)
+
+
+class TestGrafikUnreadableRootIsRefusal:
+    """F-1: nieczytelny root konfliktu NIE moze byc cicha zgoda na zapis.
+
+    Kazdy przypadek: konflikt istnieje DOKLADNIE w tym roocie, ktory psujemy.
+    Przy czytelnym roocie kontrakt odmawia — po zepsuciu MUSI odmawiac dalej.
+    """
+
+    @pytest.mark.parametrize(
+        "mode", ["corrupt-json", "is-a-directory", "not-an-object"])
+    def test_courier_names_unreadable_refuses(self, grafik_env, mode):
+        grafik_env["names"].write_text(
+            json.dumps({"17": "Someone Else"}), encoding="utf-8")
+        _break_root(grafik_env["names"], mode)
+        assert ncp._ensure_grafik_full_name("Courier A", 17) == "refused"
+        assert _grafik(grafik_env) == {}
+
+    @pytest.mark.parametrize(
+        "mode", ["corrupt-json", "is-a-directory", "not-an-object"])
+    def test_courier_tiers_unreadable_refuses(self, grafik_env, mode):
+        grafik_env["tiers"].write_text(
+            json.dumps({"17": {"name": "Someone Else"}}), encoding="utf-8")
+        _break_root(grafik_env["tiers"], mode)
+        assert ncp._ensure_grafik_full_name("Courier A", 17) == "refused"
+        assert _grafik(grafik_env) == {}
+
+    @pytest.mark.parametrize(
+        "mode", ["corrupt-json", "is-a-directory", "not-an-object"])
+    def test_grafik_root_unreadable_refuses(self, grafik_env, mode):
+        grafik_env["grafik"].write_text(
+            json.dumps({"Other Name": 17}), encoding="utf-8")
+        _break_root(grafik_env["grafik"], mode)
+        assert ncp._ensure_grafik_full_name("Courier A", 17) == "refused"
+
+    def test_unreadable_kurier_ids_refuses(self, grafik_env, monkeypatch):
+        """Dowod POZYTYWNY tez nie moze uchodzic za 'pusty rejestr'."""
+        def boom():
+            raise OSError(5, "EIO")
+        monkeypatch.setattr(ncp, "_load_kurier_ids", boom)
+        assert ncp._ensure_grafik_full_name("Courier A", 17) == "refused"
+        assert _grafik(grafik_env) == {}
+
+
+class TestGrafikCheckedEqualsWritten:
+    """F-2: kontrprzykad recenzenta — sprawdzana i zapisywana reprezentacja."""
+
+    def test_boolean_cid_cannot_hijack_victim_cid(self, grafik_env, monkeypatch):
+        monkeypatch.setattr(
+            ncp, "_load_kurier_ids", lambda: {"Attacker": True, "Victim": 1})
+        assert ncp._ensure_grafik_full_name("Attacker", True) == "refused"
+        assert _grafik(grafik_env) == {}
+
+    @pytest.mark.parametrize("cid", [True, False, 1.0, [1, 2], None, "", "   "])
+    def test_type_gate_refuses_non_canonical_before_any_write(
+        self, grafik_env, monkeypatch, cid
+    ):
+        monkeypatch.setattr(
+            ncp, "_load_kurier_ids", lambda: {"Courier A": cid})
+        assert ncp._ensure_grafik_full_name("Courier A", cid) == "refused"
+        assert _grafik(grafik_env) == {}
+
+    @pytest.mark.parametrize("cid", ["  17  ", "17", 17])
+    def test_realistic_forms_normalize_to_one_written_representation(
+        self, grafik_env, cid
+    ):
+        assert ncp._ensure_grafik_full_name("Courier A", cid) == "healed"
+        assert _grafik(grafik_env) == {"Courier A": 17}
+
+
+class TestGrafikEmptyCidGuard:
+    """F-3: guard pustego CID jest nosny — ma wlasny oracle."""
+
+    def test_none_cid_with_none_in_roster_refuses(self, grafik_env, monkeypatch):
+        monkeypatch.setattr(ncp, "_load_kurier_ids", lambda: {"Ghost": None})
+        assert ncp._ensure_grafik_full_name("Ghost", None) == "refused"
+        assert _grafik(grafik_env) == {}
+
+
+# --------------------------------------------------------------------------- #
+# A-6/K7 iter3 — findingi G-1 / G-2 / G-3 z delta-blinda 2b9f76c07
+# --------------------------------------------------------------------------- #
+
+from dispatch_v2.identity.schema import canonical_courier_id as _canon  # noqa: E402
+
+# Formy tej samej liczby 17, ktore przechodza bramke TYPU bez zmiany, a `int()`
+# zwija do INNEJ tozsamosci. To jest literalny rdzen klasy K7.
+NIEKANONICZNE_FORMY_17 = [
+    "017",      # wiodace zero (literowka / eksport z arkusza)
+    "0017",
+    "１７",   # cyfry pelnej szerokosci
+    "١٧",   # cyfry arabsko-indyjskie
+    "१७",   # cyfry dewanagari
+]
+
+
+@pytest.fixture
+def victim_env(grafik_env, monkeypatch):
+    """Ofiara 'Victim Y' ma CID 17 we WSZYSTKICH rootach + w grafiku.
+
+    Forma kanoniczna 17 jest wtedy poprawnie odmawiana napastnikowi. Kazde
+    wejscie oznaczajace TE SAMA liczbe musi konczyc sie tak samo — inaczej
+    checki cross-root i guard duplikatu sa do ominiecia jedna literowka.
+    """
+    grafik_env["names"].write_text(
+        json.dumps({"17": "Victim Y"}), encoding="utf-8")
+    grafik_env["tiers"].write_text(
+        json.dumps({"17": {"name": "Victim Y"}}), encoding="utf-8")
+    grafik_env["grafik"].write_text(
+        json.dumps({"Victim Y": 17}), encoding="utf-8")
+
+    def _roster(attacker_cid):
+        monkeypatch.setattr(
+            ncp, "_load_kurier_ids",
+            lambda: {"Attacker X": attacker_cid, "Victim Y": 17})
+    grafik_env["roster"] = _roster
+    return grafik_env
+
+
+class TestGrafikCanonicalNumericForm:
+    """G-1: reprezentacja SPRAWDZANA musi byc tozsama z ZAPISYWANA.
+
+    `canonical_courier_id` to bramka TYPU, nie kanonizator WARTOSCI — zwraca
+    '017' bez zmian. Wszystkie trzy checki cross-root oraz guard duplikatu
+    licza sie na tym stringu, a zapis uzywal `int(cid_s)` = 17. Kontrola i
+    zapis dotyczyly wiec DWOCH ROZNYCH tozsamosci.
+    """
+
+    def test_kanoniczna_forma_jest_odmawiana(self, victim_env):
+        """Kontrola pozytywna: baza porownania dla wariantow nizej."""
+        victim_env["roster"](17)
+        assert ncp._ensure_grafik_full_name("Attacker X", 17) == "refused"
+        assert _grafik(victim_env) == {"Victim Y": 17}
+
+    @pytest.mark.parametrize("forma", NIEKANONICZNE_FORMY_17)
+    def test_niekanoniczna_forma_nie_przejmuje_cudzego_cid(
+        self, victim_env, forma
+    ):
+        """Kontrprzyklad recenzenta: '017' omijalo 3 checki cross-root ORAZ
+        guard duplikatu, po czym zapisywalo 17 — grafik konczyl z jednym CID
+        zwiazanym z DWIEMA tozsamosciami."""
+        victim_env["roster"](forma)
+        assert ncp._ensure_grafik_full_name("Attacker X", forma) == "refused"
+        assert _grafik(victim_env) == {"Victim Y": 17}
+
+    @pytest.mark.parametrize("forma", NIEKANONICZNE_FORMY_17)
+    def test_niekanoniczna_forma_odmawiana_takze_bez_ofiary(
+        self, grafik_env, monkeypatch, forma
+    ):
+        """Wymog kanonicznej formy jest bezwarunkowy — nie zalezy od tego, czy
+        akurat istnieje kolidujacy wpis (inaczej wracalby przez puste rooty)."""
+        monkeypatch.setattr(
+            ncp, "_load_kurier_ids", lambda: {"Courier A": forma})
+        assert ncp._ensure_grafik_full_name("Courier A", forma) == "refused"
+        assert _grafik(grafik_env) == {}
+
+    @pytest.mark.parametrize("forma", [
+        "17", 17, "  17  ", "017", "0017", "+17", "17.0", "1_7", "abc",
+        "17 17", "１７", "١٧", "१७",
+        "²", "⁵", " ", "",
+    ])
+    def test_zapis_odczytuje_sie_z_powrotem_jako_sprawdzony_cid(
+        self, grafik_env, monkeypatch, forma
+    ):
+        """NIEZMIENNIK CALEJ KLASY, nie lista kontrprzykladow: dla KAZDEGO
+        wejscia albo odmawiamy, albo zapisana wartosc odczytuje sie z powrotem
+        dokladnie jako ten CID, na ktorym liczyly sie checki wlasnosci."""
+        monkeypatch.setattr(
+            ncp, "_load_kurier_ids", lambda: {"Courier A": forma})
+        cid_s = _canon(forma)
+        status = ncp._ensure_grafik_full_name("Courier A", forma)
+        data = _grafik(grafik_env)
+        if status == "healed":
+            assert cid_s is not None
+            assert _canon(data["Courier A"]) == cid_s
+        else:
+            assert status == "refused"
+            assert data == {}
+
+    def test_legalne_formy_nadal_przechodza(self, grafik_env):
+        """Parytet: fix nie moze odmawiac realnym kurierom."""
+        assert ncp._ensure_grafik_full_name("Courier A", 17) == "healed"
+        assert _grafik(grafik_env) == {"Courier A": 17}
+
+
+class TestGrafikSkanPrzezywaZatruteWejscie:
+    """G-2: regresja dostepnosci wobec bazy.
+
+    `str.isdigit()` jest True takze dla kategorii No ('²'), ktorej `int()`
+    nie przyjmuje. Konwersja stala POZA `try`, wiec niezlapany ValueError
+    przechodzil przez `scan_once` do `main()` (zaden nie ma `except`) i wywalal
+    CALY skan. Baza degradowala lagodnie: psula jeden wpis, przetwarzala reszte.
+    """
+
+    @pytest.mark.parametrize("forma", ["²", "⁵", "³"])
+    def test_isdigit_bez_int_nie_podnosi_wyjatku(
+        self, grafik_env, monkeypatch, forma
+    ):
+        monkeypatch.setattr(
+            ncp, "_load_kurier_ids", lambda: {"Courier A": forma})
+        assert ncp._ensure_grafik_full_name("Courier A", forma) == "refused"
+        assert _grafik(grafik_env) == {}
+
+    def test_scan_once_przetwarza_wpisy_po_zatrutym(
+        self, patched_scan, monkeypatch
+    ):
+        """Pelna petla skanu: zatruty wpis konczy sie ODMOWA, a skan ZYJE dalej
+        i domyka kolejnego kuriera. Bez tego automat pairingu jest DOWN dla
+        WSZYSTKICH kurierow po pierwszym zatrutym wpisie."""
+        patched_scan["kids"]["Attacker X"] = "²"
+        monkeypatch.setattr(
+            ncp, "resolve_cid",
+            lambda name, kids=None: {"Attacker X": "²",
+                                     "Bartek Ołdziej": "123"}.get(name))
+        _sched(monkeypatch, {
+            "Attacker X": {"start": "09:00", "end": "19:00"},
+            "Bartek Ołdziej": {"start": "09:00", "end": "19:00"},
+        })
+        s = ncp.scan_once(dry_run=False)
+        assert s["scanned"] == 2
+        assert [r["name"] for r in s.get("grafik_refused", [])] == ["Attacker X"]
+        assert [r["name"] for r in s.get("healed", [])] == ["Bartek Ołdziej"]
+
+    def test_scan_once_przetwarza_wpisy_po_niekanonicznym_cid(
+        self, patched_scan, monkeypatch
+    ):
+        """Ta sama wlasnosc dla G-1: odmowa jest ODMOWA, nie przerwaniem skanu."""
+        patched_scan["kids"]["Attacker X"] = "017"
+        monkeypatch.setattr(
+            ncp, "resolve_cid",
+            lambda name, kids=None: {"Attacker X": "017",
+                                     "Bartek Ołdziej": "123"}.get(name))
+        _sched(monkeypatch, {
+            "Attacker X": {"start": "09:00", "end": "19:00"},
+            "Bartek Ołdziej": {"start": "09:00", "end": "19:00"},
+        })
+        s = ncp.scan_once(dry_run=False)
+        assert [r["name"] for r in s.get("grafik_refused", [])] == ["Attacker X"]
+        assert [r["name"] for r in s.get("healed", [])] == ["Bartek Ołdziej"]
+
+
+class TestGrafikDuplikatPorownywanyKanonicznie:
+    """G-3: guard duplikatu CID musi porownywac KANONICZNIE, nie surowo.
+
+    Mutacja N3 recenzenta (`str(c) == cid_s` zamiast `canonical_courier_id(c)`)
+    przezyla caly oracle iteracji 2 — sprawdzenie bylo nosne, ale nic go nie
+    pilnowalo.
+    """
+
+    @pytest.mark.parametrize("wartosc_w_grafiku", [" 17 ", "\t17", "17\n"])
+    def test_istniejace_wiazanie_widoczne_mimo_bialych_znakow(
+        self, grafik_env, monkeypatch, wartosc_w_grafiku
+    ):
+        monkeypatch.setattr(
+            ncp, "_load_kurier_ids", lambda: {"Attacker X": 17})
+        grafik_env["grafik"].write_text(
+            json.dumps({"Victim Y": wartosc_w_grafiku}), encoding="utf-8")
+        assert ncp._ensure_grafik_full_name("Attacker X", 17) == "refused"
+        assert _grafik(grafik_env) == {"Victim Y": wartosc_w_grafiku}
+
+
+# --------------------------------------------------------------------------- #
+# A-6/K7 iter4 — finding R-1 z delta-blinda 7a2be9434
+# --------------------------------------------------------------------------- #
+
+# Formy, ktorych `str.isdigit()` NIE lapie, ale `int()` czytelnika owszem —
+# wiec writer utrwalal je jako STRING, a czytelnik zwijal do liczby ofiary.
+FORMY_NIE_ISDIGIT_PARSOWALNE = ["+17", "1_7", "+1_7", "  +17  ", "-17"]
+
+
+class TestGrafikNieCyfrowyCidJestOdmawiany:
+    """R-1: niezmiennik round-trip byl egzekwowany TYLKO w galezi `isdigit`.
+
+    W galezi `else` zapisywana wartoscia bylo samo `cid_s`, wiec porownanie
+    `canonical_courier_id(cid_s) == cid_s` bylo TRYWIALNIE prawdziwe — kod
+    martwy, ktorego zadna mutacja nie mogla zaczerwienic. Tymczasem czytelnicy
+    grafiku parsuja wartosc przez `int()`, ktory przyjmuje `'+17'` i `'1_7'`:
+    writer zapisywal string, czytelnik czytal 17 = CID ofiary.
+    """
+
+    @pytest.mark.parametrize("forma", FORMY_NIE_ISDIGIT_PARSOWALNE)
+    def test_forma_nie_isdigit_jest_odmawiana(
+        self, grafik_env, monkeypatch, forma
+    ):
+        monkeypatch.setattr(
+            ncp, "_load_kurier_ids", lambda: {"Attacker X": forma})
+        assert ncp._ensure_grafik_full_name("Attacker X", forma) == "refused"
+        assert _grafik(grafik_env) == {}
+
+    @pytest.mark.parametrize("forma", FORMY_NIE_ISDIGIT_PARSOWALNE)
+    def test_forma_nie_isdigit_nie_przejmuje_cudzego_cid(
+        self, victim_env, forma
+    ):
+        victim_env["roster"](forma)
+        assert ncp._ensure_grafik_full_name("Attacker X", forma) == "refused"
+        assert _grafik(victim_env) == {"Victim Y": 17}
+
+    @pytest.mark.parametrize("forma", ["abc", "17.0", "17 17", "½", "cid"])
+    def test_forma_zupelnie_nieliczbowa_tez_odmawiana(
+        self, grafik_env, monkeypatch, forma
+    ):
+        """Jeden spojny warunek, nie lista wyjatkow: grafik przyjmuje WYLACZNIE
+        kanoniczna dziesietna forme liczby. Najstrozszy istniejacy konsument
+        (`courier_availability._canon_cid`) wymaga dokladnie tego samego."""
+        monkeypatch.setattr(
+            ncp, "_load_kurier_ids", lambda: {"Courier A": forma})
+        assert ncp._ensure_grafik_full_name("Courier A", forma) == "refused"
+        assert _grafik(grafik_env) == {}
+
+    @pytest.mark.parametrize("forma", ["17", 17, "  17  ", "0", "541"])
+    def test_kanoniczne_formy_nadal_przechodza(
+        self, grafik_env, monkeypatch, forma
+    ):
+        """Parytet: wymog nie moze odciac realnych kurierow."""
+        monkeypatch.setattr(
+            ncp, "_load_kurier_ids", lambda: {"Courier A": forma})
+        assert ncp._ensure_grafik_full_name("Courier A", forma) == "healed"
+        zapis = _grafik(grafik_env)["Courier A"]
+        assert isinstance(zapis, int)
+        assert str(zapis) == str(int(str(forma).strip()))
+
+
+class TestGrafikLancuchDoCzytelnikow:
+    """R-1 E2E: writer -> plik grafiku -> PRAWDZIWY kod czytelnikow.
+
+    Sam status `refused` nie dowodzi jeszcze braku przejecia — dowodzi go
+    dopiero to, co z pliku odczyta `manual_overrides._all_name_to_cid()`,
+    ktory robi `int(cid)` i wlasnie tym zwijal `'+17'` do CID ofiary.
+    """
+
+    @pytest.mark.parametrize("forma", FORMY_NIE_ISDIGIT_PARSOWALNE)
+    def test_manual_overrides_nie_widzi_przejecia(
+        self, victim_env, monkeypatch, tmp_path, forma
+    ):
+        from dispatch_v2 import manual_overrides as mo
+
+        victim_env["roster"](forma)
+        status = ncp._ensure_grafik_full_name("Attacker X", forma)
+
+        puste = tmp_path / "puste.json"
+        puste.write_text("{}", encoding="utf-8")
+        monkeypatch.setattr(mo, "GRAFIK_FULL_NAMES_PATH",
+                            str(victim_env["grafik"]))
+        monkeypatch.setattr(mo, "KURIER_IDS_PATH", str(puste))
+        monkeypatch.setattr(mo, "COURIER_NAMES_PATH", str(puste))
+        assert "/dispatch_state/" not in mo.GRAFIK_FULL_NAMES_PATH
+
+        # Najpierw to, co REALNIE widzi czytelnik — status writera jest wtorny.
+        mapa = mo._all_name_to_cid()
+        assert "Attacker X" not in mapa, (
+            f"czytelnik zwinal {forma!r} do CID ofiary: {mapa} "
+            f"(grafik na dysku: {_grafik(victim_env)}, status writera: {status})")
+        assert mapa.get("Victim Y") == 17
+        assert status == "refused"
+
+    @pytest.mark.parametrize("forma", FORMY_NIE_ISDIGIT_PARSOWALNE)
+    def test_courier_availability_nie_traci_tozsamosci_wszystkich(
+        self, victim_env, forma
+    ):
+        """Szkoda uboczna: `_schedule_names` na PIERWSZYM nie-cyfrowym CID
+        zwraca `{}, 'grafik_identity_invalid_cid'` — czyli kasuje tozsamosc
+        grafiku dla WSZYSTKICH kurierow, nie tylko dla zatrutego wpisu."""
+        from dispatch_v2 import courier_availability as ca
+
+        victim_env["roster"](forma)
+        ncp._ensure_grafik_full_name("Attacker X", forma)
+        names, error = ca._schedule_names(str(victim_env["grafik"]))
+        assert error is None, f"tozsamosc grafiku odrzucona dla wszystkich: {error}"
+        assert names == {"17": "Victim Y"}
+
+    @pytest.mark.parametrize("forma", ["17", 17, "  17  "])
+    def test_lancuch_zgodny_dla_formy_legalnej(
+        self, grafik_env, monkeypatch, tmp_path, forma
+    ):
+        """Kontrola pozytywna calego lancucha: to, co writer zapisze, czytelnik
+        MUSI odczytac jako te sama tozsamosc."""
+        from dispatch_v2 import courier_availability as ca
+        from dispatch_v2 import manual_overrides as mo
+
+        monkeypatch.setattr(
+            ncp, "_load_kurier_ids", lambda: {"Courier A": forma})
+        assert ncp._ensure_grafik_full_name("Courier A", forma) == "healed"
+
+        puste = tmp_path / "puste.json"
+        puste.write_text("{}", encoding="utf-8")
+        monkeypatch.setattr(mo, "GRAFIK_FULL_NAMES_PATH",
+                            str(grafik_env["grafik"]))
+        monkeypatch.setattr(mo, "KURIER_IDS_PATH", str(puste))
+        monkeypatch.setattr(mo, "COURIER_NAMES_PATH", str(puste))
+
+        assert mo._all_name_to_cid() == {"Courier A": 17}
+        names, error = ca._schedule_names(str(grafik_env["grafik"]))
+        assert error is None
+        assert names == {"17": "Courier A"}

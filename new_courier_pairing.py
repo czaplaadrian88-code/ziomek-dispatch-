@@ -52,7 +52,11 @@ if _SCRIPTS_DIR not in sys.path:
 
 from dispatch_v2.common import flag, setup_logger
 from dispatch_v2 import panel_roster
-from dispatch_v2.courier_admin import add_new_courier, derive_alias
+from dispatch_v2.courier_admin import (
+    COURIER_NAMES, add_new_courier, derive_alias,
+)
+from dispatch_v2.identity.normalize import norm
+from dispatch_v2.identity.schema import canonical_courier_id
 
 WARSAW = ZoneInfo("Europe/Warsaw")
 LOG_DIR = "/root/.openclaw/workspace/scripts/logs/"
@@ -161,20 +165,159 @@ def _read_json(path: str) -> dict:
         return {}
 
 
-def _ensure_grafik_full_name(full_name: str, cid) -> bool:
+GRAFIK_OK = "ok"            # wpis już poprawny — nic nie zapisano
+GRAFIK_HEALED = "healed"    # dopisano/poprawiono (self-heal)
+GRAFIK_REFUSED = "refused"  # ODMOWA: CID nie należy do tej tożsamości
+
+
+def _read_root_strict(path: str) -> dict:
+    """Treść roota tożsamości albo WYJĄTEK — nigdy ciche `{}` (A-6/K7 iter2, F-1).
+
+    BRAK pliku to TREŚĆ (root pusty) i jest bezpieczny. Każda inna awaria —
+    EIO, uprawnienia, niepoprawny JSON, obiekt innego typu — MUSI podnieść,
+    bo „nie umiem odczytać rootu" nie może być nieodróżnialne od „w roocie nie
+    ma konfliktu". Ten drugi przypadek jest zgodą na zapis, pierwszy nie jest.
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return {}
+    if not isinstance(data, dict):
+        raise ValueError(f"{path}: root tożsamości nie jest obiektem JSON")
+    return data
+
+
+def _grafik_cid_value(cid_s: str):
+    """Wartość zapisywana w grafiku dla kanonicznego `cid_s`, albo None = ODMOWA.
+
+    NIEZMIENNIK (A-6/K7 iter3, G-1): reprezentacja SPRAWDZANA jest tożsama z
+    ZAPISYWANĄ — `canonical_courier_id(zapis) == cid_s`. `canonical_courier_id`
+    jest bramką TYPU, nie kanonizatorem WARTOŚCI: `'017'`, `'１７'`, `'١٧'`
+    przechodzą ją bez zmiany, więc wszystkie checki własności (klucze
+    `courier_names`/`courier_tiers`, guard duplikatu w grafiku) liczą się na tym
+    stringu, a `int()` zwija go do INNEJ tożsamości. To jest literalny rdzeń
+    klasy K7 — jedna literówka omijała wszystkie trzy checki cross-root.
+    Dlatego wartość do zapisu wyprowadzamy w JEDNYM miejscu i odrzucamy każdą,
+    która nie odczytuje się z powrotem jako dokładnie ten sprawdzony CID.
+
+    `str.isdigit()` jest True także dla znaków kategorii No (`'²'`), których
+    `int()` nie przyjmuje — ValueError łapiemy TU (G-2), bo poza `try` leciał
+    przez `scan_once` do `main()` (żaden nie ma `except`) i wywalał CAŁY skan,
+    podczas gdy baza degradowała łagodnie.
+
+    Warunek jest JEDEN i obejmuje CAŁĄ przestrzeń wejść — grafik przyjmuje
+    wyłącznie kanoniczną dziesiętną formę liczby całkowitej (R-1). Wcześniej
+    wartości nieliczbowe szły osobną gałęzią, w której round-trip był
+    TRYWIALNIE prawdziwy (zapisywano samo `cid_s`), więc niezmiennik był tam
+    martwy: `'+17'` i `'1_7'` nie są `isdigit`, ale `int()` czytelnika je
+    PRZYJMUJE (`manual_overrides._all_name_to_cid` robi `int(cid)`), więc
+    writer utrwalał string, a czytelnik widział CID ofiary. Ten sam wymóg ma
+    już najsurowszy konsument grafiku: `courier_availability._canon_cid` żąda
+    `isdigit`, a na pierwszym wpisie bez tego `_schedule_names` zwraca
+    `{}, 'grafik_identity_invalid_cid'` — czyli kasuje tożsamość grafiku dla
+    WSZYSTKICH kurierów, nie tylko dla zatrutego wpisu.
+    """
+    if not cid_s.isdigit():
+        return None
+    try:
+        value = int(cid_s)
+    except (ValueError, TypeError):
+        return None
+    return value if canonical_courier_id(value) == cid_s else None
+
+
+def _cid_identity_set(cid_s: str, kids: dict) -> set:
+    """Zbiór tożsamości danego CID wg kanonicznego rejestru kurier_ids.
+
+    kurier_ids trzyma też aliasy wtórne (Lekcja #78), więc jeden CID ma zwykle
+    kilka kluczy ("Darek os" i "Darek Osmólski"). Porównujemy przez `norm`, bo
+    rejestr bywa zapisany inną wielkością liter niż grafik, a wartości przez
+    ten sam `canonical_courier_id`, którym bramkujemy wejście — inaczej można
+    dopasować się jedną reprezentacją, a zapisać inną.
+    """
+    return {norm(k) for k, v in kids.items() if canonical_courier_id(v) == cid_s}
+
+
+def _grafik_ownership_refusal(full_name: str, cid_s: str, grafik: dict) -> Optional[str]:
+    """None = wolno zapisać; tekst = powód odmowy.
+
+    Grafik jest JEDNOZNACZNYM wiązaniem cid↔pełne imię, więc wolno w nim utrwalić
+    wyłącznie wiązanie już potwierdzone w kanonicznym rejestrze tożsamości.
+
+    ŚWIADOMIE NIE sprawdzamy `kurier_full_names` — jest kluczowany SKRÓTEM, który
+    legalnie koliduje ("Rafał Ja" → Jankowski|Jabłoński). Rozstrzyganie tej
+    kolizji to powód istnienia grafiku; traktowanie jej jako konfliktu odmawiałoby
+    zapisu realnym kurierom (pomiar 04.08 na żywych danych: 2 z 58).
+
+    Rooty konfliktu czytamy STRICT: nieczytelny root podnosi wyjątek, który
+    wołający zamienia na odmowę (F-1). Dowód własności też — nieczytelny
+    `kurier_ids` nie może uchodzić za pusty rejestr.
+    """
+    identity = _cid_identity_set(cid_s, _load_kurier_ids())
+    if not identity & {norm(full_name), norm(derive_alias(full_name))}:
+        return (f"CID {cid_s} nie należy do {full_name!r} wg kurier_ids "
+                f"(właściciele: {sorted(identity) or 'brak'})")
+    owner = _read_root_strict(COURIER_NAMES).get(cid_s)
+    if owner is not None and norm(owner) not in identity:
+        return f"courier_names[{cid_s}]={owner!r} spoza tożsamości CID"
+    entry = _read_root_strict(COURIER_TIERS).get(cid_s)
+    if (isinstance(entry, dict) and entry.get("name") is not None
+            and norm(entry["name"]) not in identity):
+        return f"courier_tiers[{cid_s}].name={entry['name']!r} spoza tożsamości CID"
+    taken = [g for g, c in grafik.items()
+             if canonical_courier_id(c) == cid_s and norm(g) != norm(full_name)]
+    if taken:
+        return f"CID {cid_s} jest już w grafiku związany z {taken!r}"
+    return None
+
+
+def _ensure_grafik_full_name(full_name: str, cid) -> str:
     """Utrzymuj grafik_full_names.json = {pełne imię: cid} — źródło prawdy cid↔imię
     dla dispatchu (courier_resolver._load_courier_names, PANEL-CANON #1) i panelu.
-    Zwraca True gdy wpis JUŻ był poprawny (no-op), False gdy DOPISANO/poprawiono
-    (self-heal). Atomic (temp+fsync+rename) + fail-soft. Bez tego nowy/zmapowany
-    kurier nie trafia do źródła prawdy → kolizja skrótów wraca (bug 2026-06-10)."""
+    Zwraca GRAFIK_OK / GRAFIK_HEALED / GRAFIK_REFUSED. Atomic (temp+fsync+rename).
+
+    Fail-soft zostaje WYŁĄCZNIE na samym zapisie grafiku (intencja pętli self-heal:
+    błąd dysku nie blokuje skanu). Odmowa z powodu konfliktu własności ORAZ awaria
+    odczytu rootów są twarde i widoczne: log ERROR + status REFUSED, który wołający
+    raportuje operatorowi. Bez tego self-heal mógł po cichu związać CID należący do
+    innej tożsamości (A-6/K7)."""
+    # Bramka typu PRZED int(cid) (F-2): sprawdzana i zapisywana reprezentacja musi
+    # być ta sama. canonical_courier_id odrzuca bool jawnie — inaczej check liczyłby
+    # się na "True", a zapis utrwalał int(True)==1, przejmując cudzy CID.
+    cid_s = canonical_courier_id(cid)
+    if cid_s is None:
+        _log.error(
+            f"grafik_full_names ODMOWA zapisu {full_name!r} -> {cid!r}: "
+            f"niekanoniczny CID (typ {type(cid).__name__})"
+        )
+        return GRAFIK_REFUSED
+    # Bramka WARTOŚCI (G-1/G-2): dopiero ona domyka niezmiennik dla całej klasy,
+    # a nie dla pojedynczego typu. Odmowa PRZED checkami własności, żeby forma
+    # niekanoniczna nigdy nie trafiła do lookupów kluczowanych po cid_s.
+    cid_val = _grafik_cid_value(cid_s)
+    if cid_val is None:
+        _log.error(
+            f"grafik_full_names ODMOWA zapisu {full_name!r} -> {cid!r}: "
+            f"CID {cid_s!r} nie jest w kanonicznej formie liczbowej — zapis "
+            f"utrwaliłby inną tożsamość niż ta, którą sprawdzamy"
+        )
+        return GRAFIK_REFUSED
     try:
-        cid_val = int(cid)
-    except (ValueError, TypeError):
-        cid_val = cid
+        grafik = _read_root_strict(GRAFIK_FULL_NAMES)
+        refusal = _grafik_ownership_refusal(full_name, cid_s, grafik)
+    except Exception as e:  # noqa: BLE001
+        # Nieczytelny root != brak konfliktu. Nie wolno zgodzić się na zapis.
+        refusal = f"nie można zweryfikować własności CID: {type(e).__name__}: {e}"
+    if refusal is not None:
+        _log.error(
+            f"grafik_full_names ODMOWA zapisu {full_name!r} -> {cid!r}: {refusal}"
+        )
+        return GRAFIK_REFUSED
     try:
-        data = _read_json(GRAFIK_FULL_NAMES)
-        if str(data.get(full_name)) == str(cid_val):
-            return True  # już poprawne — no-op
+        data = grafik
+        if canonical_courier_id(data.get(full_name)) == cid_s:
+            return GRAFIK_OK  # już poprawne — no-op
         data[full_name] = cid_val
         _d = os.path.dirname(GRAFIK_FULL_NAMES)
         fd, tmp = tempfile.mkstemp(dir=_d, suffix=".tmp")
@@ -184,10 +327,10 @@ def _ensure_grafik_full_name(full_name: str, cid) -> bool:
             os.fsync(f.fileno())
         os.replace(tmp, GRAFIK_FULL_NAMES)
         _log.info(f"grafik_full_names self-heal: {full_name!r} -> {cid_val}")
-        return False
+        return GRAFIK_HEALED
     except Exception as e:  # noqa: BLE001
         _log.warning(f"_ensure_grafik_full_name fail {full_name!r}: {e}")
-        return True  # fail-soft: nie blokuj scanu
+        return GRAFIK_OK  # fail-soft na I/O: nie blokuj scanu
 
 
 def verify_courier_wired(cid: int, full_name: str) -> tuple[bool, List[str]]:
@@ -291,10 +434,17 @@ def _auto_wire(full_name: str, cid: int) -> dict:
         return {"ok": False, "note": f"{type(e).__name__}: {e}"}
     # #2: wpisz pełne imię do źródła prawdy dispatchu PRZED weryfikacją, by reverse
     # (cid->imię->grafik) resolwował (PANEL-CANON #1). Self-heal nowego kuriera.
-    _ensure_grafik_full_name(full_name, cid)
+    grafik_status = _ensure_grafik_full_name(full_name, cid)
     ok, lines = verify_courier_wired(cid, full_name)
-    return {"ok": ok, "pin": result.get("pin"), "alias": result.get("alias"),
-            "lines": lines}
+    wired = {"ok": ok, "pin": result.get("pin"), "alias": result.get("alias"),
+             "lines": lines}
+    if grafik_status == GRAFIK_REFUSED:
+        # Bez wpisu w źródle prawdy cid↔imię kurier NIE jest podpięty — nie wolno
+        # zameldować sukcesu tylko dlatego, że pozostałe pliki się zapisały.
+        wired["ok"] = False
+        wired["note"] = ("grafik_full_names: ODMOWA zapisu (konflikt własności "
+                         "CID) — sprawdź logi i rejestr tożsamości")
+    return wired
 
 
 def scan_once(now: Optional[datetime] = None, *, dry_run: bool = False) -> dict:
@@ -334,9 +484,16 @@ def scan_once(now: Optional[datetime] = None, *, dry_run: bool = False) -> dict:
             # reverse (cid->imię w dispatchu). Upewnij się, że pełne imię grafiku
             # jest w grafik_full_names -> cid (źródło prawdy #1). Bez tego kolizja
             # skrótów wraca dla istniejących kurierów spoza grafik_full_names.
-            if not dry_run and not _ensure_grafik_full_name(full_name, _cid_existing):
-                summary.setdefault("healed", []).append(
-                    {"name": full_name, "cid": _cid_existing})
+            if not dry_run:
+                _grafik_status = _ensure_grafik_full_name(full_name, _cid_existing)
+                if _grafik_status == GRAFIK_HEALED:
+                    summary.setdefault("healed", []).append(
+                        {"name": full_name, "cid": _cid_existing})
+                elif _grafik_status == GRAFIK_REFUSED:
+                    # Odmowa MUSI dojść do operatora, inaczej cicha korupcja
+                    # źródła prawdy cid↔imię wraca tylnymi drzwiami.
+                    summary.setdefault("grafik_refused", []).append(
+                        {"name": full_name, "cid": _cid_existing})
             continue  # zmapowany + zapewniony w źródle prawdy
         if full_name in bucket["paired"]:
             summary["skipped_already"] += 1
@@ -381,10 +538,11 @@ def scan_once(now: Optional[datetime] = None, *, dry_run: bool = False) -> dict:
                 _log.info(f"AUTO-WIRED {full_name!r} -> cid={m.cid} pin={pin}")
             else:
                 # write happened but verification failed — loud alert (Z2)
+                _note = f"\n{res['note']}" if res.get("note") else ""
                 _tg(
                     f"❗ Wpiąłem '<b>{full_name}</b>' (cid {m.cid}) ale "
                     f"WERYFIKACJA NIE PRZESZŁA:\n" + "\n".join(res.get("lines", []))
-                    + f"\nSprawdź roster ręcznie."
+                    + _note + f"\nSprawdź roster ręcznie."
                 )
                 summary["conflict"].append({"name": full_name, "cid": m.cid,
                                             "note": "verify_failed"})
@@ -433,7 +591,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     _log.info(
         f"scan done: scanned={summary['scanned']} paired={len(summary['paired'])} "
         f"asked={len(summary['asked'])} conflict={len(summary['conflict'])} "
-        f"dry={dry}"
+        f"grafik_refused={len(summary.get('grafik_refused', []))} dry={dry}"
     )
     return 0
 
