@@ -7297,7 +7297,7 @@
    "lifecycle": "shadow",
    "lifecycle_seeded": false,
    "name": "ENABLE_FULL_CHOICE_SET_LOG",
-   "notes": "Pełna pula sprzed top-N jako sześciopolowy full_pool_compact; brak klucza = OFF. Klucz flags.json=false dodaje CTO w kroku wydania.",
+   "notes": "Pełna pula sprzed top-N jako siedmiopolowy full_pool_compact (7. pole feasibility_reason od 2026-08-04 = bramka, która ustaliła finalny werdykt; None dla feasible); brak klucza = OFF. Klucz flags.json=false dodaje CTO w kroku wydania.",
    "owner": {
     "business": "Adrian",
     "service": "dispatch-shadow.service"

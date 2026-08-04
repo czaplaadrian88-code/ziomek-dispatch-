@@ -313,6 +313,11 @@ _METRICS_FLAG_OWNERS = {
     "hard35_enforcement": "ENABLE_HARD35_ENFORCE",
 }
 
+# Jedyny werdykt feasibility oznaczający „kandydat NIE został wycięty" — ten sam
+# literał, po którym selekcja buduje pulę feasible (`core.selection`) i po którym
+# post-bramki w `core.candidates` rozpoznają kandydata do odwrócenia na NO.
+_FEASIBLE_VERDICT = "MAYBE"
+
 
 def _metric_owner_enabled(owner_flag: str) -> bool:
     """Serializer parity uses the same effective coupling as decision code."""
@@ -364,15 +369,34 @@ def _propagate_prefixed_metrics(base: dict, metrics) -> None:
 def _serialize_candidate_compact(c) -> dict:
     """Minimalny, stabilny projection kandydata do pełnego choice-setu.
 
-    To jest wspólne źródło sześciu pól dla LOCATION A (alternatives),
+    To jest wspólne źródło siedmiu pól dla LOCATION A (alternatives),
     LOCATION B (inline best) i ``full_pool_compact``. Nie wolno rozszerzać
     payloadu o pełne metrics/plan — ledger ma pozostać mały i bez PII.
+
+    ``feasibility_reason`` jest przepisywany DOSŁOWNIE z kandydata — to ten sam
+    atrybut, który LOCATION A publikuje jako ``reason``. Silnik zapisuje parę
+    (verdict, reason) zawsze RAZEM, w warstwie, która realnie rozstrzyga:
+    ``check_feasibility_v2`` wraca na PIERWSZEJ odrzucającej bramce, a post-bramki
+    w ``core.candidates`` (v324a extension, carry_chain, v3273 wait, intra-restaurant
+    gap) przepisują parę tylko wtedy, gdy same odwracają MAYBE→NO. Powód jest więc
+    bramką, która ustaliła FINALNY werdykt — nie rekonstrukcją po fakcie.
+
+    ``None`` dla kandydata feasible (``MAYBE``): jego powód to stała ``ok_sla_fits``
+    (90% zalogowanych powodów), a informacja „nie został wycięty" jest już w pełni
+    zawarta w ``feasibility_verdict``. Klucz zostaje obecny z wartością ``None``,
+    żeby schemat wiersza był stały dla czytelników tabelarycznych.
     """
     m = (getattr(c, "metrics", None) or {}) if c is not None else {}
+    verdict = getattr(c, "feasibility_verdict", None)
     return {
         "cid": getattr(c, "courier_id", None),
         "score": getattr(c, "score", None),
-        "feasibility_verdict": getattr(c, "feasibility_verdict", None),
+        "feasibility_verdict": verdict,
+        "feasibility_reason": (
+            None
+            if verdict == _FEASIBLE_VERDICT
+            else (getattr(c, "feasibility_reason", None) or None)
+        ),
         "pos_source": m.get("pos_source"),
         "km_to_pickup": m.get("km_to_pickup"),
         "r6_bag_size": m.get("r6_bag_size"),
