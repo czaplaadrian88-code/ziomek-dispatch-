@@ -69,10 +69,13 @@ def canonical_numeric_cid(value) -> Optional[str]:
     persist a form that a reader would read as a different CID, so here the
     accepted set is exactly the canonical decimal integer:
 
-    ``str(value)`` must be all ASCII digits and round-trip through ``int``
-    (``str(int(s)) == s`` rejects leading zeros). ``bool`` stays rejected (it is
-    an ``int`` subclass), ``float`` / ``None`` / other types are rejected.
-    Returns the canonical decimal string, or ``None`` to reject.
+    ``str(value)`` must be all ASCII digits, round-trip through ``int``
+    (``str(int(s)) == s`` rejects leading zeros) and be strictly positive
+    (``int(s) > 0`` rejects ``0`` / ``"0"`` — no real courier owns CID 0, and the
+    canonical reader ``courier_availability._canon_cid(0)`` raises because ``0``
+    is falsy, so a persisted 0 would be a writer-only identity no reader accepts).
+    ``bool`` stays rejected (it is an ``int`` subclass), ``float`` / ``None`` /
+    other types are rejected. Returns the canonical decimal string, or ``None``.
     """
     if isinstance(value, bool) or not isinstance(value, (str, int)):
         return None
@@ -86,7 +89,7 @@ def canonical_numeric_cid(value) -> Optional[str]:
         canonical = str(int(s))
     except (ValueError, OverflowError):  # digit string beyond int_max_str_digits
         return None
-    return s if canonical == s else None  # rejects leading zeros
+    return s if (canonical == s and int(s) > 0) else None  # rejects leading zeros AND 0/non-positive
 
 
 def validate_courier_ids_store(store) -> Dict:

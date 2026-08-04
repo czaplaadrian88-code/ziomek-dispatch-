@@ -13,7 +13,10 @@ late-bound w ciele funkcji), zero I/O do żywego dispatch_state.
 """
 from __future__ import annotations
 
+import glob
+import hashlib
 import json
+import os
 
 import pytest
 
@@ -55,6 +58,21 @@ def _snapshot(paths):
     return {c: _read(paths, c) for c in paths}
 
 
+def _sha256(path):
+    with open(path, "rb") as fh:
+        return hashlib.sha256(fh.read()).hexdigest()
+
+
+def _physical(paths):
+    """(sha256, mtime_ns) per file — a rejected write must leave BYTES + mtime untouched."""
+    return {c: (_sha256(paths[c]), os.stat(paths[c]).st_mtime_ns) for c in paths}
+
+
+def _bak_count(tmp_path):
+    """add_new_courier writes .bak-pre-add-* backups only once past the CID gate."""
+    return len(glob.glob(str(tmp_path / "*.bak-pre-add-*")))
+
+
 # --- K6: walidacja CID u źródła ---------------------------------------------
 # każdy z tych CID jest NIEKANONICZNY i NIGDY nie może trafić do żadnego z 5 plików.
 BAD_CIDS = [
@@ -70,6 +88,14 @@ BAD_CIDS = [
     pytest.param("017", id="leading-zero"),
     pytest.param("", id="empty-str"),
     pytest.param(None, id="none"),
+    # A-6/G4 iter2 (FINDING-1, security-blind 2026-08-04): int 0 leaked przez bramkę
+    # bo canonical_numeric_cid(0)=='0'; kanoniczny czytelnik courier_availability._canon_cid(0)
+    # RZUCA (0 falsy -> ""), więc pisarz utrwaliłby tożsamość, której czytelnik nie odczyta.
+    # 0 jest na liście MUST-reject i żaden żywy kurier nie ma CID 0 (min 21).
+    pytest.param(0, id="int-zero"),
+    pytest.param(0.0, id="float-zero"),
+    pytest.param("0", id="str-zero"),
+    pytest.param("00", id="str-double-zero"),
 ]
 
 
@@ -78,14 +104,19 @@ def test_k6_noncanonical_cid_never_written_to_any_of_5_files(tmp_path, monkeypat
     paths = _seed(tmp_path)
     _patch_paths(monkeypatch, paths)
     before = _snapshot(paths)
+    phys_before = _physical(paths)
 
     with pytest.raises(ValueError):
         CA.add_new_courier(bad_cid, "Jan Kowalski")
 
-    # asercja na WSZYSTKICH 5 plikach: nic się nie zmieniło = zły CID nigdzie nie trafił
+    # asercja na WSZYSTKICH 5 plikach: nic się nie zmieniło = zły CID nigdzie nie trafił.
+    # (a) treść JSON, (b) FIZYCZNIE bajty sha256 + mtime_ns, (c) ZERO backupów .bak — write
+    # path (a tym samym backup) rusza dopiero PO bramce CID, więc odrzucenie = 0 baków.
     after = _snapshot(paths)
     for c in paths:
         assert after[c] == before[c], f"{c} zmienione — niekanoniczny CID {bad_cid!r} wyciekł do rejestru"
+    assert _physical(paths) == phys_before, f"bajty/mtime tknięte — CID {bad_cid!r} wyciekł fizycznie"
+    assert _bak_count(tmp_path) == 0, f"powstał backup .bak — CID {bad_cid!r} przeszedł bramkę i zaczął zapis"
 
 
 def test_k6_legit_int_cid_still_writes_all_five(tmp_path, monkeypatch):
@@ -99,6 +130,23 @@ def test_k6_legit_int_cid_still_writes_all_five(tmp_path, monkeypatch):
     assert _read(paths, "COURIER_TIERS")["901"]["name"] == "Nowy Te"
     assert _read(paths, "COURIER_NAMES")["901"] == "Nowy Te"
     assert _read(paths, "KURIER_FULL_NAMES")["Nowy Te"] == "Nowy Testowy"
+
+
+def test_k6_positive_int_cid_8001_still_writes_all_five(tmp_path, monkeypatch):
+    """PARYTET (iter2): fix 0-boundary NIE zawęża legalnych DODATNICH int CID.
+
+    8001 to realny zakres roster (żywe min 21); musi dalej przechodzić bramkę i
+    zapisać wszystkie 5 rejestrów — dowód że `int(s) > 0` odrzuca tylko 0, nie >0.
+    """
+    paths = _seed(tmp_path)
+    _patch_paths(monkeypatch, paths)
+    res = CA.add_new_courier(8001, "Piotr Wysocki")
+    assert res["cid"] == 8001 and res["alias"] == "Piotr Wy"
+    assert _read(paths, "KURIER_IDS")["Piotr Wy"] == 8001
+    assert _read(paths, "KURIER_IDS")["Piotr Wysocki"] == 8001
+    assert _read(paths, "COURIER_TIERS")["8001"]["name"] == "Piotr Wy"
+    assert _read(paths, "COURIER_NAMES")["8001"] == "Piotr Wy"
+    assert _read(paths, "KURIER_FULL_NAMES")["Piotr Wy"] == "Piotr Wysocki"
 
 
 # --- K8: dwukierunkowe kolizje ----------------------------------------------
