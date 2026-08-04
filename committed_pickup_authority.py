@@ -695,19 +695,27 @@ def _resolution(
 # gdy ``common`` jest już kompletny; późny import ``common`` to idiom repo
 # (``scoring``, ``courier_resolver``).
 _LOG_PREFIX = "RUTCOM_AUTHORITY"
-# Nazwa loggera = nazwa modułu (konwencja repo), ale WYPROWADZONA, nie wpisana
-# literałem. ``committed_pickup_authority`` to nazwa POLA autorytetu w zleceniu
+# Nazwa loggera jest ZWYKŁYM literałem i CELOWO nie jest nazwą modułu.
+#
+# ``committed_pickup_authority`` to nazwa POLA autorytetu w zleceniu
 # (``order.get("committed_pickup_authority")``), pilnowanego przez ratchet
-# semantycznych stałych (``tests/test_committed_pickup_authority_ratchet.py``).
-# Ten ratchet czerwieni się na każdej nowej stałej produkcyjnej o tej wartości,
-# bo dokładnie tak wygląda alias ukrywający autorytet (``FIELD = '...'``).
-# Stała ``_LOG_NAME = "committed_pickup_authority"` byłaby wprawdzie niewinna
-# (to tylko nazwa loggera), ale zostawiałaby w module gotowy, już policzony
-# alias tego pola — a wtedy przyszłe użycie go JAKO pola nie zapaliłoby już
-# bramki. Moduł jest czystą biblioteką (zero ``__main__``), importowaną wyłącznie
-# jako ``dispatch_v2.committed_pickup_authority``, więc ``__name__`` jest tu
-# stabilnym źródłem tej samej nazwy.
-_LOG_NAME = __name__.rsplit(".", 1)[-1]
+# semantycznych stałych (``tests/test_committed_pickup_authority_ratchet.py``):
+# każda stała produkcyjna o tej wartości wygląda jak alias ukrywający pisarza,
+# więc bramka słusznie czerwieni się na jej dodaniu.
+#
+# Iteracja 2 próbowała ominąć to wyprowadzeniem nazwy z ``__name__``. To był
+# BŁĄD i został odrzucony w recenzji: wyprowadzenie usuwa literał z drzewa AST,
+# więc ratchet przestaje widzieć COKOLWIEK, co przez tę stałą pisze. Zmierzone
+# na obu wariantach: ``state[_LOG_NAME] = value`` przechodziło CAŁY ratchet
+# (32 passed), podczas gdy ten sam zapis literałem czerwienił. Obejście
+# OSŁABIAŁO więc istniejące zabezpieczenie przed drugim pisarzem pola
+# autorytetu — dziury tej przed iteracją 2 nie było.
+#
+# Rozwiązanie u źródła: moduł nie trzyma ŻADNEJ zmiennej o wartości równej
+# chronionej nazwie pola, więc nie ma czym prać zapisu. Logger nazywa się jak
+# strumień, który wypisuje (``RUTCOM_AUTHORITY`` stoi w każdej linii), przypięty
+# hash ratchetu zostaje nietknięty, a prawdziwe obejścia znów czerwienią.
+_LOG_NAME = "rutcom_authority"
 _LOG_FILE = "/root/.openclaw/workspace/scripts/logs/dispatch.log"
 _log = None
 
