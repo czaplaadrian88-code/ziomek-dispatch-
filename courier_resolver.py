@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, NamedTuple, Optional, Tuple
 
 from dispatch_v2.identity.normalize import norm
+from dispatch_v2.identity.roster import load_courier_names
 from dispatch_v2.position_model import resolve_courier_position
 from dispatch_v2.shift_interval import (
     EffectiveShiftWindow,
@@ -485,46 +486,24 @@ def _load_courier_names() -> Dict:
     → silent bypass schedule check H1).
 
     Conflict policy: courier_names.json wins (assumed manually curated).
+
+    A-6/G3 (K4): roster keying is delegated to the single validated owner
+    ``identity.roster.load_courier_names`` — CID validated via
+    ``canonical_numeric_cid`` (parytet z onboardingiem/grafikiem G4/G7),
+    niekanoniczny rekord pominięty pojedynczo (fail-soft, PII-safe count).
+    Ten resolver jest JEDYNYM z 4 konsumentów, który czyta grafik_full_names
+    (PANEL-CANON, 2026-06-10): pełne imię (najwyższy priorytet) nadpisuje skróty
+    z kurier_ids/courier_names ("Rafał Ja" → AMBIGUOUS) → eliminuje klasę kolizji
+    skrótów u źródła. Flag-gated (hot-reload kill-switch) + fail-soft.
     """
-    merged: Dict[str, str] = {}
-    try:
-        with open(KURIER_IDS_PATH) as f:
-            ids = json.load(f)
-        for name, cid in ids.items():
-            cid_str = str(cid)
-            if cid_str not in merged:
-                merged[cid_str] = name
-    except Exception as e:
-        _log.warning(f"_load_courier_names: kurier_ids fallback fail: {e}")
-    try:
-        with open(COURIER_NAMES_PATH) as f:
-            names = json.load(f)
-        for cid_str, name in names.items():
-            merged[cid_str] = name
-    except FileNotFoundError:
-        pass
-    except Exception as e:
-        _log.warning(f"_load_courier_names: courier_names fail: {e}")
-    # PANEL-CANON (2026-06-10): grafik_full_names.json = {pełne imię: cid} —
-    # autorytatywne, JEDNOZNACZNE wiązanie cid↔pełne nazwisko, którego używa też
-    # panel admin (schedule_grid/fleet_state) do związania grafiku z kurierami.
-    # NAJWYŻSZY priorytet: nadpisuje skróty z kurier_ids/courier_names ("Rafał Ja"
-    # → Jankowski|Jabłoński AMBIGUOUS) pełnym imieniem trafiającym WPROST w klucz
-    # grafiku → match_courier resolwuje, eliminuje całą klasę kolizji skrótów u
-    # źródła. Flag-gated (hot-reload kill-switch) + fail-soft (brak/zły plik →
-    # zachowanie sprzed zmiany, courier_names.json zostaje backstopem).
-    if flag("ENABLE_GRAFIK_FULL_NAMES_SOURCE", default=True):
-        try:
-            with open(GRAFIK_FULL_NAMES_PATH, encoding="utf-8") as f:
-                gfn = json.load(f)
-            for full_name, cid in gfn.items():
-                if isinstance(full_name, str) and full_name.strip():
-                    merged[str(cid)] = full_name
-        except FileNotFoundError:
-            pass
-        except Exception as e:
-            _log.warning(f"_load_courier_names: grafik_full_names fail: {e}")
-    return merged
+    grafik_path = (
+        GRAFIK_FULL_NAMES_PATH
+        if flag("ENABLE_GRAFIK_FULL_NAMES_SOURCE", default=True)
+        else None
+    )
+    return load_courier_names(
+        KURIER_IDS_PATH, COURIER_NAMES_PATH, grafik_path, log=_log
+    )
 
 
 def _load_gps_positions() -> Dict:

@@ -1,11 +1,10 @@
 {
  "_frozen": "2026-06-25",
- "_updated": "2026-07-30 Q5: ENABLE_LOAD_PLAN_PURE_READ i ENABLE_R6_BREACH_SHADOW_LOG usuniete po dodaniu pelnych macierzy OFF/ON; baseline ma 8 pozycji.",
- "_count": 8,
+ "_updated": "2026-08-04 A-6/G3: ENABLE_GRAFIK_FULL_NAMES_SOURCE usuniete po dodaniu testu efektu ON<->OFF (test_a6_g3_resolver_shared_validators.test_grafik_flag_off_source_skipped / test_grafik_flag_on_source_included); baseline ma 7 pozycji.",
+ "_count": 7,
  "_note": "C-FLAG-EFFECT: flagi decyzyjne ETAP4 bez testu dotykajacego flagi (swiadomy dlug). Cel = kurczyc liste. NOWA flaga ETAP4 bez testu efektu poza ta lista -> FAIL. Naprawa: test toggle ON<->OFF z asercja zmiany decyzji, potem usun z baseline.",
  "baseline": [
   "ENABLE_BEST_EFFORT_POS_SOURCE_KEY",
-  "ENABLE_GRAFIK_FULL_NAMES_SOURCE",
   "ENABLE_OBJ_DELIVERY_FOOD_AGE_SHADOW",
   "ENABLE_PANEL_PACKS_CID_MATCH",
   "ENABLE_PLN_COURIER_PAY",
