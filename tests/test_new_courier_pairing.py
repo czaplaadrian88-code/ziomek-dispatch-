@@ -645,3 +645,185 @@ class TestGrafikEmptyCidGuard:
         monkeypatch.setattr(ncp, "_load_kurier_ids", lambda: {"Ghost": None})
         assert ncp._ensure_grafik_full_name("Ghost", None) == "refused"
         assert _grafik(grafik_env) == {}
+
+
+# --------------------------------------------------------------------------- #
+# A-6/K7 iter3 — findingi G-1 / G-2 / G-3 z delta-blinda 2b9f76c07
+# --------------------------------------------------------------------------- #
+
+from dispatch_v2.identity.schema import canonical_courier_id as _canon  # noqa: E402
+
+# Formy tej samej liczby 17, ktore przechodza bramke TYPU bez zmiany, a `int()`
+# zwija do INNEJ tozsamosci. To jest literalny rdzen klasy K7.
+NIEKANONICZNE_FORMY_17 = [
+    "017",      # wiodace zero (literowka / eksport z arkusza)
+    "0017",
+    "１７",   # cyfry pelnej szerokosci
+    "١٧",   # cyfry arabsko-indyjskie
+    "१७",   # cyfry dewanagari
+]
+
+
+@pytest.fixture
+def victim_env(grafik_env, monkeypatch):
+    """Ofiara 'Victim Y' ma CID 17 we WSZYSTKICH rootach + w grafiku.
+
+    Forma kanoniczna 17 jest wtedy poprawnie odmawiana napastnikowi. Kazde
+    wejscie oznaczajace TE SAMA liczbe musi konczyc sie tak samo — inaczej
+    checki cross-root i guard duplikatu sa do ominiecia jedna literowka.
+    """
+    grafik_env["names"].write_text(
+        json.dumps({"17": "Victim Y"}), encoding="utf-8")
+    grafik_env["tiers"].write_text(
+        json.dumps({"17": {"name": "Victim Y"}}), encoding="utf-8")
+    grafik_env["grafik"].write_text(
+        json.dumps({"Victim Y": 17}), encoding="utf-8")
+
+    def _roster(attacker_cid):
+        monkeypatch.setattr(
+            ncp, "_load_kurier_ids",
+            lambda: {"Attacker X": attacker_cid, "Victim Y": 17})
+    grafik_env["roster"] = _roster
+    return grafik_env
+
+
+class TestGrafikCanonicalNumericForm:
+    """G-1: reprezentacja SPRAWDZANA musi byc tozsama z ZAPISYWANA.
+
+    `canonical_courier_id` to bramka TYPU, nie kanonizator WARTOSCI — zwraca
+    '017' bez zmian. Wszystkie trzy checki cross-root oraz guard duplikatu
+    licza sie na tym stringu, a zapis uzywal `int(cid_s)` = 17. Kontrola i
+    zapis dotyczyly wiec DWOCH ROZNYCH tozsamosci.
+    """
+
+    def test_kanoniczna_forma_jest_odmawiana(self, victim_env):
+        """Kontrola pozytywna: baza porownania dla wariantow nizej."""
+        victim_env["roster"](17)
+        assert ncp._ensure_grafik_full_name("Attacker X", 17) == "refused"
+        assert _grafik(victim_env) == {"Victim Y": 17}
+
+    @pytest.mark.parametrize("forma", NIEKANONICZNE_FORMY_17)
+    def test_niekanoniczna_forma_nie_przejmuje_cudzego_cid(
+        self, victim_env, forma
+    ):
+        """Kontrprzyklad recenzenta: '017' omijalo 3 checki cross-root ORAZ
+        guard duplikatu, po czym zapisywalo 17 — grafik konczyl z jednym CID
+        zwiazanym z DWIEMA tozsamosciami."""
+        victim_env["roster"](forma)
+        assert ncp._ensure_grafik_full_name("Attacker X", forma) == "refused"
+        assert _grafik(victim_env) == {"Victim Y": 17}
+
+    @pytest.mark.parametrize("forma", NIEKANONICZNE_FORMY_17)
+    def test_niekanoniczna_forma_odmawiana_takze_bez_ofiary(
+        self, grafik_env, monkeypatch, forma
+    ):
+        """Wymog kanonicznej formy jest bezwarunkowy — nie zalezy od tego, czy
+        akurat istnieje kolidujacy wpis (inaczej wracalby przez puste rooty)."""
+        monkeypatch.setattr(
+            ncp, "_load_kurier_ids", lambda: {"Courier A": forma})
+        assert ncp._ensure_grafik_full_name("Courier A", forma) == "refused"
+        assert _grafik(grafik_env) == {}
+
+    @pytest.mark.parametrize("forma", [
+        "17", 17, "  17  ", "017", "0017", "+17", "17.0", "1_7", "abc",
+        "17 17", "１７", "١٧", "१७",
+        "²", "⁵", " ", "",
+    ])
+    def test_zapis_odczytuje_sie_z_powrotem_jako_sprawdzony_cid(
+        self, grafik_env, monkeypatch, forma
+    ):
+        """NIEZMIENNIK CALEJ KLASY, nie lista kontrprzykladow: dla KAZDEGO
+        wejscia albo odmawiamy, albo zapisana wartosc odczytuje sie z powrotem
+        dokladnie jako ten CID, na ktorym liczyly sie checki wlasnosci."""
+        monkeypatch.setattr(
+            ncp, "_load_kurier_ids", lambda: {"Courier A": forma})
+        cid_s = _canon(forma)
+        status = ncp._ensure_grafik_full_name("Courier A", forma)
+        data = _grafik(grafik_env)
+        if status == "healed":
+            assert cid_s is not None
+            assert _canon(data["Courier A"]) == cid_s
+        else:
+            assert status == "refused"
+            assert data == {}
+
+    def test_legalne_formy_nadal_przechodza(self, grafik_env):
+        """Parytet: fix nie moze odmawiac realnym kurierom."""
+        assert ncp._ensure_grafik_full_name("Courier A", 17) == "healed"
+        assert _grafik(grafik_env) == {"Courier A": 17}
+
+
+class TestGrafikSkanPrzezywaZatruteWejscie:
+    """G-2: regresja dostepnosci wobec bazy.
+
+    `str.isdigit()` jest True takze dla kategorii No ('²'), ktorej `int()`
+    nie przyjmuje. Konwersja stala POZA `try`, wiec niezlapany ValueError
+    przechodzil przez `scan_once` do `main()` (zaden nie ma `except`) i wywalal
+    CALY skan. Baza degradowala lagodnie: psula jeden wpis, przetwarzala reszte.
+    """
+
+    @pytest.mark.parametrize("forma", ["²", "⁵", "³"])
+    def test_isdigit_bez_int_nie_podnosi_wyjatku(
+        self, grafik_env, monkeypatch, forma
+    ):
+        monkeypatch.setattr(
+            ncp, "_load_kurier_ids", lambda: {"Courier A": forma})
+        assert ncp._ensure_grafik_full_name("Courier A", forma) == "refused"
+        assert _grafik(grafik_env) == {}
+
+    def test_scan_once_przetwarza_wpisy_po_zatrutym(
+        self, patched_scan, monkeypatch
+    ):
+        """Pelna petla skanu: zatruty wpis konczy sie ODMOWA, a skan ZYJE dalej
+        i domyka kolejnego kuriera. Bez tego automat pairingu jest DOWN dla
+        WSZYSTKICH kurierow po pierwszym zatrutym wpisie."""
+        patched_scan["kids"]["Attacker X"] = "²"
+        monkeypatch.setattr(
+            ncp, "resolve_cid",
+            lambda name, kids=None: {"Attacker X": "²",
+                                     "Bartek Ołdziej": "123"}.get(name))
+        _sched(monkeypatch, {
+            "Attacker X": {"start": "09:00", "end": "19:00"},
+            "Bartek Ołdziej": {"start": "09:00", "end": "19:00"},
+        })
+        s = ncp.scan_once(dry_run=False)
+        assert s["scanned"] == 2
+        assert [r["name"] for r in s.get("grafik_refused", [])] == ["Attacker X"]
+        assert [r["name"] for r in s.get("healed", [])] == ["Bartek Ołdziej"]
+
+    def test_scan_once_przetwarza_wpisy_po_niekanonicznym_cid(
+        self, patched_scan, monkeypatch
+    ):
+        """Ta sama wlasnosc dla G-1: odmowa jest ODMOWA, nie przerwaniem skanu."""
+        patched_scan["kids"]["Attacker X"] = "017"
+        monkeypatch.setattr(
+            ncp, "resolve_cid",
+            lambda name, kids=None: {"Attacker X": "017",
+                                     "Bartek Ołdziej": "123"}.get(name))
+        _sched(monkeypatch, {
+            "Attacker X": {"start": "09:00", "end": "19:00"},
+            "Bartek Ołdziej": {"start": "09:00", "end": "19:00"},
+        })
+        s = ncp.scan_once(dry_run=False)
+        assert [r["name"] for r in s.get("grafik_refused", [])] == ["Attacker X"]
+        assert [r["name"] for r in s.get("healed", [])] == ["Bartek Ołdziej"]
+
+
+class TestGrafikDuplikatPorownywanyKanonicznie:
+    """G-3: guard duplikatu CID musi porownywac KANONICZNIE, nie surowo.
+
+    Mutacja N3 recenzenta (`str(c) == cid_s` zamiast `canonical_courier_id(c)`)
+    przezyla caly oracle iteracji 2 — sprawdzenie bylo nosne, ale nic go nie
+    pilnowalo.
+    """
+
+    @pytest.mark.parametrize("wartosc_w_grafiku", [" 17 ", "\t17", "17\n"])
+    def test_istniejace_wiazanie_widoczne_mimo_bialych_znakow(
+        self, grafik_env, monkeypatch, wartosc_w_grafiku
+    ):
+        monkeypatch.setattr(
+            ncp, "_load_kurier_ids", lambda: {"Attacker X": 17})
+        grafik_env["grafik"].write_text(
+            json.dumps({"Victim Y": wartosc_w_grafiku}), encoding="utf-8")
+        assert ncp._ensure_grafik_full_name("Attacker X", 17) == "refused"
+        assert _grafik(grafik_env) == {"Victim Y": wartosc_w_grafiku}

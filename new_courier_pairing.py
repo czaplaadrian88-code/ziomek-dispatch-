@@ -188,6 +188,34 @@ def _read_root_strict(path: str) -> dict:
     return data
 
 
+def _grafik_cid_value(cid_s: str):
+    """Wartość zapisywana w grafiku dla kanonicznego `cid_s`, albo None = ODMOWA.
+
+    NIEZMIENNIK (A-6/K7 iter3, G-1): reprezentacja SPRAWDZANA jest tożsama z
+    ZAPISYWANĄ — `canonical_courier_id(zapis) == cid_s`. `canonical_courier_id`
+    jest bramką TYPU, nie kanonizatorem WARTOŚCI: `'017'`, `'１７'`, `'١٧'`
+    przechodzą ją bez zmiany, więc wszystkie checki własności (klucze
+    `courier_names`/`courier_tiers`, guard duplikatu w grafiku) liczą się na tym
+    stringu, a `int()` zwija go do INNEJ tożsamości. To jest literalny rdzeń
+    klasy K7 — jedna literówka omijała wszystkie trzy checki cross-root.
+    Dlatego wartość do zapisu wyprowadzamy w JEDNYM miejscu i odrzucamy każdą,
+    która nie odczytuje się z powrotem jako dokładnie ten sprawdzony CID.
+
+    `str.isdigit()` jest True także dla znaków kategorii No (`'²'`), których
+    `int()` nie przyjmuje — ValueError łapiemy TU (G-2), bo poza `try` leciał
+    przez `scan_once` do `main()` (żaden nie ma `except`) i wywalał CAŁY skan,
+    podczas gdy baza degradowała łagodnie.
+    """
+    if cid_s.isdigit():
+        try:
+            value = int(cid_s)
+        except (ValueError, TypeError):
+            return None
+    else:
+        value = cid_s
+    return value if canonical_courier_id(value) == cid_s else None
+
+
 def _cid_identity_set(cid_s: str, kids: dict) -> set:
     """Zbiór tożsamości danego CID wg kanonicznego rejestru kurier_ids.
 
@@ -253,7 +281,17 @@ def _ensure_grafik_full_name(full_name: str, cid) -> str:
             f"niekanoniczny CID (typ {type(cid).__name__})"
         )
         return GRAFIK_REFUSED
-    cid_val = int(cid_s) if cid_s.isdigit() else cid_s
+    # Bramka WARTOŚCI (G-1/G-2): dopiero ona domyka niezmiennik dla całej klasy,
+    # a nie dla pojedynczego typu. Odmowa PRZED checkami własności, żeby forma
+    # niekanoniczna nigdy nie trafiła do lookupów kluczowanych po cid_s.
+    cid_val = _grafik_cid_value(cid_s)
+    if cid_val is None:
+        _log.error(
+            f"grafik_full_names ODMOWA zapisu {full_name!r} -> {cid!r}: "
+            f"CID {cid_s!r} nie jest w kanonicznej formie liczbowej — zapis "
+            f"utrwaliłby inną tożsamość niż ta, którą sprawdzamy"
+        )
+        return GRAFIK_REFUSED
     try:
         grafik = _read_root_strict(GRAFIK_FULL_NAMES)
         refusal = _grafik_ownership_refusal(full_name, cid_s, grafik)
