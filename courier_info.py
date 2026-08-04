@@ -17,6 +17,7 @@ import os
 from typing import Dict, List, Optional, Tuple
 
 from dispatch_v2.identity.normalize import norm
+from dispatch_v2.identity.schema import validate_courier_ids_store
 
 PINY_PATH = "/root/.openclaw/workspace/dispatch_state/kurier_piny.json"
 IDS_PATH = "/root/.openclaw/workspace/dispatch_state/kurier_ids.json"
@@ -47,13 +48,21 @@ def _load_pin_to_name() -> Dict[str, str]:
 
 
 def _load_name_to_cid() -> Dict[str, int]:
-    out: Dict[str, int] = {}
-    for k, v in _load_json_safe(IDS_PATH).items():
-        try:
-            out[str(k)] = int(v)
-        except (TypeError, ValueError):
-            continue
-    return out
+    """One complete name->CID generation, or ``ValueError`` — never a subset.
+
+    The shared schema owns what a valid CID is; this consumer only adds its own
+    numeric requirement. Dropping an unrelated malformed row (the pre-2026-08-04
+    ``continue``) let /pin answer from a roster generation that failed
+    validation, disclosing a PIN for a record that happened to look fine.
+    """
+    ids = _load_json_safe(IDS_PATH)
+    validate_courier_ids_store(ids)
+    try:
+        return {str(name): int(cid) for name, cid in ids.items()}
+    except (TypeError, ValueError) as exc:
+        raise ValueError(
+            "courier ID store contains a non-numeric CID"
+        ) from exc
 
 
 def resolve_courier_query(
@@ -78,7 +87,13 @@ def resolve_courier_query(
         return None, None, None, []
 
     pin_to_name = _load_pin_to_name()
-    name_to_cid = _load_name_to_cid()
+    try:
+        name_to_cid = _load_name_to_cid()
+    except ValueError:
+        # Fail the whole generation closed: no name, no cid, no PIN. The
+        # handlers render this as "nie znaleziono", which is the correct
+        # answer when the roster cannot be trusted.
+        return None, None, None, []
     name_to_pin: Dict[str, str] = {}
     for pin, name in pin_to_name.items():
         nn = _norm(name)
