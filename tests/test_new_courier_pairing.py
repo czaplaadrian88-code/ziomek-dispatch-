@@ -362,6 +362,20 @@ def _write(path, obj):
         json.dump(obj, f)
 
 
+def _isolate_reverse_roots(monkeypatch, tmp_path, *, names=None, grafik=None):
+    """Odetnij testy verifiera od ŻYWYCH `courier_names` / `grafik_full_names`.
+
+    A-6/G6: verifier waliduje schemat WSZYSTKICH czytanych rootów, w tym tych
+    dwóch (reverse cid->imię->grafik). Bez izolacji wynik zależałby od zawartości
+    produkcyjnego `dispatch_state` — hermetyczność testu, nie zmiana asercji.
+    """
+    for const, payload in (("COURIER_NAMES", names or {}),
+                           ("GRAFIK_FULL_NAMES", grafik or {})):
+        path = tmp_path / f"{const.lower()}.json"
+        _write(path, payload)
+        monkeypatch.setattr(ncp, const, str(path))
+
+
 def test_verify_courier_wired_ok(monkeypatch, tmp_path):
     cid, name, alias = 9001, "Jan Kowalski", "Jan Ko"
     kids = tmp_path / "ids.json"; piny = tmp_path / "piny.json"
@@ -374,6 +388,8 @@ def test_verify_courier_wired_ok(monkeypatch, tmp_path):
     monkeypatch.setattr(ncp, "KURIER_PINY", str(piny))
     monkeypatch.setattr(ncp, "COURIER_TIERS", str(tiers))
     monkeypatch.setattr(ncp, "KURIER_FULL_NAMES", str(full))
+    _isolate_reverse_roots(monkeypatch, tmp_path,
+                           names={str(cid): name}, grafik={name: cid})
     monkeypatch.setattr(ncp, "resolve_cid",
                         lambda n, kids=None: str(cid) if n == name else None)
     ok, lines = ncp.verify_courier_wired(cid, name)
@@ -393,6 +409,8 @@ def test_verify_courier_wired_detects_missing_cod(monkeypatch, tmp_path):
     monkeypatch.setattr(ncp, "KURIER_PINY", str(piny))
     monkeypatch.setattr(ncp, "COURIER_TIERS", str(tiers))
     monkeypatch.setattr(ncp, "KURIER_FULL_NAMES", str(full))
+    _isolate_reverse_roots(monkeypatch, tmp_path,
+                           names={str(cid): name}, grafik={name: cid})
     monkeypatch.setattr(ncp, "resolve_cid",
                         lambda n, kids=None: str(cid) if n == name else None)
     ok, lines = ncp.verify_courier_wired(cid, name)

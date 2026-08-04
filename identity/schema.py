@@ -16,11 +16,19 @@ from typing import Dict, List, Optional
 __all__ = [
     "SOURCE_LABELS",
     "COORDINATOR_CIDS",
+    "PIN_LENGTH",
+    "TIERS_META_KEY",
     "CourierRecord",
     "canon_cid",
     "canonical_courier_id",
     "canonical_numeric_cid",
+    "courier_names_record_issue",
+    "full_names_record_issue",
+    "grafik_record_issue",
+    "ids_record_issue",
     "pin_last2",
+    "piny_record_issue",
+    "tiers_record_issue",
     "validate_courier_ids_store",
     "validate_record",
 ]
@@ -110,6 +118,99 @@ def validate_courier_ids_store(store) -> Dict:
         ):
             raise ValueError("courier ID store contains a malformed record")
     return store
+
+
+# --------------------------------------------------------------------------- #
+# Schemat POJEDYNCZEGO rekordu roota tożsamości (A-6/G6, K1)
+# --------------------------------------------------------------------------- #
+# ``validate_courier_ids_store`` odpowiada na pytanie AUTORYZACJI: „czy tej
+# CAŁEJ generacji wolno ufać" (jeden zepsuty wiersz wywraca całość — konsument
+# nie ma prawa odpowiadać z rostera, którego nie da się zweryfikować). Verifier
+# wpięcia kuriera (``new_courier_pairing.verify_courier_wired``) zadaje pytanie
+# o jeden stopień drobniejsze: „czy TEN rekord zobaczy kanoniczny czytelnik" —
+# musi umieć oddzielić rekord audytowanej tożsamości (fail-closed) od rekordu
+# obcego (raport ⚠), więc potrzebuje warstwy per REKORD, nie per generacja.
+#
+# Reguły kształtu rootów mieszkają WYŁĄCZNIE tutaj. Decyzja o formie CID jest w
+# każdym z nich delegowana do ``canonical_numeric_cid`` — tego samego jednego
+# ownera, którego używa writer onboardingu (G4), writer grafiku (G7) i roster
+# (G3). Dzięki temu „widoczny dla czytelnika" znaczy w audycie DOKŁADNIE to, co
+# znaczy przy zapisie; ratchet w ``tests/test_a6_g6_verifier_root_schema.py``
+# pilnuje, żeby nie wróciła druga kopia tej polityki.
+#
+# Każdy walidator: ``None`` = rekord zdrowy, string = powód odrzucenia. Powód
+# NIGDY nie zawiera nazwiska ani PIN-u (parytet z raportami A-6) i nigdy nie
+# podnosi wyjątku — audyt ma raportować cały root, nie kończyć się na pierwszym
+# zepsutym wierszu.
+
+PIN_LENGTH = 4          # forma mintowana przez ``courier_admin._generate_unique_pin``
+TIERS_META_KEY = "_meta"  # blok metadanych courier_tiers — NIE jest rekordem kuriera
+
+
+def ids_record_issue(name, cid) -> Optional[str]:
+    """``kurier_ids.json`` = ``{nazwa: cid}`` — rejestr autoryzacyjny."""
+    if not isinstance(name, str) or not name.strip():
+        return "klucz-nazwa nie jest niepustym stringiem"
+    if canonical_numeric_cid(cid) is None:
+        return "wartość-CID poza kanoniczną formą liczbową"
+    return None
+
+
+def piny_record_issue(pin, alias) -> Optional[str]:
+    """``kurier_piny.json`` = ``{pin: alias}``.
+
+    ``pin_auth.resolve_pin`` trafia klucz DOKŁADNIE, a apka kuriera wysyła to,
+    co da się wystukać na klawiaturze PIN-u — klucz spoza formy mintowanej przez
+    onboarding jest loginem, którego nikt nie wpisze.
+    """
+    if (
+        not isinstance(pin, str)
+        or len(pin) != PIN_LENGTH
+        or not pin.isascii()
+        or not pin.isdigit()
+    ):
+        return f"klucz-PIN poza formą {PIN_LENGTH} cyfr ASCII"
+    if not isinstance(alias, str) or not alias.strip():
+        return "PIN bez aliasu tożsamości"
+    return None
+
+
+def tiers_record_issue(cid, row) -> Optional[str]:
+    """``courier_tiers.json`` = ``{cid: {...}}`` + opcjonalny blok ``_meta``."""
+    if cid == TIERS_META_KEY:
+        return None if isinstance(row, dict) else "blok _meta nie jest obiektem"
+    if canonical_numeric_cid(cid) is None:
+        return "klucz-CID poza kanoniczną formą liczbową"
+    if not isinstance(row, dict):
+        return "rekord kuriera nie jest obiektem"
+    return None
+
+
+def courier_names_record_issue(cid, name) -> Optional[str]:
+    """``courier_names.json`` = ``{cid: krótka nazwa panelowa}``."""
+    if canonical_numeric_cid(cid) is None:
+        return "klucz-CID poza kanoniczną formą liczbową"
+    if not isinstance(name, str) or not name.strip():
+        return "CID bez nazwy"
+    return None
+
+
+def full_names_record_issue(alias, full_name) -> Optional[str]:
+    """``daily_accounting/kurier_full_names.json`` = ``{alias: pełne imię}``."""
+    if not isinstance(alias, str) or not alias.strip():
+        return "klucz-alias nie jest niepustym stringiem"
+    if not isinstance(full_name, str) or not full_name.strip():
+        return "alias bez pełnego imienia"
+    return None
+
+
+def grafik_record_issue(full_name, cid) -> Optional[str]:
+    """``grafik_full_names.json`` = ``{pełne imię: cid}`` (PANEL-CANON)."""
+    if not isinstance(full_name, str) or not full_name.strip():
+        return "klucz-imię nie jest niepustym stringiem"
+    if canonical_numeric_cid(cid) is None:
+        return "wartość-CID poza kanoniczną formą liczbową"
+    return None
 
 
 def pin_last2(pin) -> Optional[str]:
