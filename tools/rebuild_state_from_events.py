@@ -37,6 +37,8 @@ _SCRIPTS = os.path.abspath(os.path.join(_HERE, "..", ".."))
 if _SCRIPTS not in sys.path:
     sys.path.insert(0, _SCRIPTS)
 
+from dispatch_v2.state_persistence import previous_path
+
 DEFAULT_DB = "/root/.openclaw/workspace/dispatch_state/events.db"
 PROD_STATE = "/root/.openclaw/workspace/dispatch_state/orders_state.json"
 
@@ -166,9 +168,14 @@ def main():
     # Izolacja Faza 2b: state_machine._state_path() honoruje DISPATCH_STATE_DIR
     # → wszystkie zapisy idą do target, NIE do produkcji.
     os.environ["DISPATCH_STATE_DIR"] = target
-    for suffix in ("", ".prev", ".lock"):  # świeży start w target
+    clean_paths = (
+        target_file,
+        str(previous_path(target_file)),
+        target_file + ".lock",
+    )
+    for clean_path in clean_paths:  # świeży start w target
         try:
-            os.unlink(target_file + suffix)
+            os.unlink(clean_path)
         except FileNotFoundError:
             pass
 

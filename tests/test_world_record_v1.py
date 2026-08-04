@@ -50,6 +50,11 @@ def test_snapshot_prunes_to_fleet(tmp_path, monkeypatch):
     }))
     plans = tmp_path / "plans.json"
     plans.write_text(json.dumps({"111": {"seq": [1]}, "999": {"seq": [2]}}))
+    plans_hwm = tmp_path / "plans.json.version_hwm"
+    plans_hwm.write_text(json.dumps({
+        "schema": "courier_plans.version_hwm.v1",
+        "last_issued": (1 << 52) + 17,
+    }))
     eta = tmp_path / "eta.json"
     eta.write_text(json.dumps({"slot": {"q": 1}}))
     bias = tmp_path / "bias.json"
@@ -61,6 +66,8 @@ def test_snapshot_prunes_to_fleet(tmp_path, monkeypatch):
     monkeypatch.setattr(WR.C, "A2_RELIABILITY_FEED_PATH", str(rel), raising=False)
     from dispatch_v2 import plan_manager as pm, calib_maps as cm, courier_resolver as cr
     monkeypatch.setattr(pm, "PLANS_FILE", plans)
+    monkeypatch.setattr(pm, "LOCK_FILE", tmp_path / "plans.lock")
+    monkeypatch.setattr(pm, "_corrupt_guard_on", lambda: True)
     monkeypatch.setattr(cm, "ETA_QUANTILE_MAP_PATH", str(eta))
     monkeypatch.setattr(cm, "PREP_BIAS_MAP_PATH", str(bias))
     monkeypatch.setattr(cr, "COURIER_LAST_POS_PATH", str(last_pos))
@@ -69,6 +76,8 @@ def test_snapshot_prunes_to_fleet(tmp_path, monkeypatch):
     assert set(snap["reliability"]["couriers"]) == {"111"}, "reliability przycięta do floty"
     assert snap["reliability"]["fleet_median_breach_rate"] == 0.2
     assert set(snap["plans"]) == {"111"}, "plans przycięte do floty"
+    assert snap["plan_version_hwm"]["last_issued"] == (1 << 52) + 17
+    assert snap["plan_version_hwm"]["covers_all_issued"] is True
     assert snap["eta_quantile"] == {"slot": {"q": 1}}  # eta całość
     assert snap["prep_bias"] == {"R": 0.5}
     assert snap["courier_last_pos"] == {"111": {"lat": 53.1, "lon": 23.1}}
@@ -95,6 +104,10 @@ def test_serve_loaders_read_recorded(tmp_path, monkeypatch):
         "reliability": {"fleet_median_breach_rate": 0.33,
                         "couriers": {"777": {"breach_rate": 0.88, "confidence": "high"}}},
         "plans": {"777": {"invalidated_at": None, "sequence": [{"order_id": "o1"}]}},
+        "plan_version_hwm": {
+            "schema": "courier_plans.version_hwm.v1",
+            "last_issued": (1 << 52) + 17,
+        },
         "eta_quantile": {"__recorded_eta__": 1},
         "prep_bias": {"__recorded_bias__": 1},
         "k07": {"o1": {"czas_kuriera_hhmm": "13:00"}},
@@ -122,6 +135,7 @@ def test_serve_loaders_read_recorded(tmp_path, monkeypatch):
             f"reliability z nagrania oczekiwana, got {(breach, conf, fm)}"
         # plans: _read_raw_shared zwraca nagrane
         assert pm._read_raw_shared().get("777", {}).get("sequence") == [{"order_id": "o1"}]
+        assert json.loads(pm.version_hwm_path().read_text())["last_issued"] == (1 << 52) + 17
         # calib eta/bias: ścieżki przekierowane na nagranie
         assert json.load(open(cm.ETA_QUANTILE_MAP_PATH)) == {"__recorded_eta__": 1}
         assert json.load(open(cm.PREP_BIAS_MAP_PATH)) == {"__recorded_bias__": 1}

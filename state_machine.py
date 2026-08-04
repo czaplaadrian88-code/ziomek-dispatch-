@@ -10,11 +10,8 @@ Kluczowe wlasciwosci:
 """
 import fcntl
 import hashlib
-import json
 import logging
 import os
-import shutil
-import tempfile
 import threading
 import time
 from contextlib import contextmanager
@@ -74,6 +71,7 @@ from dispatch_v2.committed_pickup_authority import (
 )
 from dispatch_v2.core.jsonl_appender import append_jsonl
 from dispatch_v2.order_fsm import FsmOutcome, FsmVerdict, validate_order_event
+from dispatch_v2 import state_persistence as _state_store
 
 _WARSAW_TZ = ZoneInfo("Europe/Warsaw")
 
@@ -889,64 +887,42 @@ def _locked_write():
         lock_fd.close()
 
 
-def _backup_prev(path: Path) -> None:
-    """Faza 1 backup-on-write: snapshot obecnej wersji state file → .prev
-    (1-deep recovery point) PRZED nadpisaniem. Best-effort — porażka backupu
-    NIE blokuje głównego zapisu (loguje warning). Atomiczny: copy do temp +
-    os.replace na .prev."""
-    if not path.exists():
-        return
-    ptmp = None
-    try:
-        ptmp_fd, ptmp = tempfile.mkstemp(
-            dir=str(path.parent), prefix=".prevtmp_", suffix=".json"
-        )
-        os.close(ptmp_fd)
-        shutil.copy2(path, ptmp)
-        os.replace(ptmp, Path(str(path) + ".prev"))
-    except Exception as e:
-        _log.warning(f"_backup_prev: snapshot .prev nieudany dla {path}: "
-                     f"{type(e).__name__}: {e} (zapis główny kontynuuje)")
-        if ptmp and os.path.exists(ptmp):
-            try:
-                os.unlink(ptmp)
-            except OSError:
-                pass
-
-
 def ensure_state_directory_durable(path: Optional[Path] = None) -> None:
     """Utrwal wpis katalogowy aktualnego pliku orders_state."""
     path = Path(_state_path()) if path is None else Path(path)
-    dir_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-    dir_fd = os.open(str(path.parent), dir_flags)
-    try:
-        os.fsync(dir_fd)
-    finally:
-        os.close(dir_fd)
+    _state_store.fsync_parent(path)
 
 
-def _atomic_write(path: Path, data: dict):
-    """Zapis temp -> fsync -> replace -> fsync katalogu (trwale na POSIX).
-    Faza 1: przed nadpisaniem robi snapshot obecnej wersji → .prev."""
-    tmp_fd, tmp_path = tempfile.mkstemp(
-        dir=str(path.parent), prefix=".tmp_", suffix=".json"
-    )
+def _orders_state_persistence_v2_on() -> bool:
+    """Effective hot kill-switch for the hardened orders_state policy."""
     try:
-        with os.fdopen(tmp_fd, "w") as f:
-            json.dump(data, f, ensure_ascii=False, indent=2)
-            f.flush()
-            os.fsync(f.fileno())
-        _backup_prev(path)          # Faza 1: 1-deep recovery snapshot
-        os.replace(tmp_path, path)
-        # Sam fsync pliku tymczasowego nie utrwala wpisu katalogowego rename.
-        # Outbox SQLite moze zostac oznaczony applied zaraz po tym zapisie, wiec
-        # awaria hosta nie moze przywrocic starego orders_state przy trwalszym
-        # receipcie. Blad fsync katalogu jest bledem zapisu, nie best-effort.
-        ensure_state_directory_durable(path)
+        return bool(decision_flag("ENABLE_ORDERS_STATE_PERSISTENCE_V2"))
     except Exception:
-        if os.path.exists(tmp_path):
-            os.unlink(tmp_path)
-        raise
+        return False
+
+
+def _legacy_strict_read_propagates(exc: BaseException) -> bool:
+    """Whether the feature-OFF strict reader historically propagated ``exc``."""
+    return isinstance(exc, OSError) and not isinstance(exc, FileNotFoundError)
+
+
+def _write_state(path: Path, state: dict) -> None:
+    """Select the whole orders_state write transaction at one choke point."""
+    if _orders_state_persistence_v2_on():
+        _state_store.atomic_write_json(
+            path,
+            state,
+            indent=2,
+            ensure_directory_durable=ensure_state_directory_durable,
+            logger=_log,
+        )
+        return
+    _state_store.legacy_atomic_write_json(
+        path,
+        state,
+        ensure_directory_durable=ensure_state_directory_durable,
+        logger=_log,
+    )
 
 
 def _guarded_write(path: Path, new_state: dict, old_count: int, op: str):
@@ -959,9 +935,10 @@ def _guarded_write(path: Path, new_state: dict, old_count: int, op: str):
 
     Defense-in-depth: łapie KAŻDY przyszły bug kurczący stan, nie tylko znany
     wektor _read_state→{}. Kill-switch: ENABLE_STATE_WRITE_GUARD=false
-    (flags.json) — wyłącza guard, przywraca surowy _atomic_write."""
+    (flags.json) wyłącza count guard. Osobna flaga
+    ENABLE_ORDERS_STATE_PERSISTENCE_V2 wybiera całą transakcję zapisu."""
     if not flag("ENABLE_STATE_WRITE_GUARD", True):
-        _atomic_write(path, new_state)
+        _write_state(path, new_state)
         return
     new_count = len(new_state)
     if op == "delete":
@@ -973,7 +950,7 @@ def _guarded_write(path: Path, new_state: dict, old_count: int, op: str):
                   f"przy op={op!r} — zapis ZABLOKOWANY (możliwy clobber orders_state)")
         _alert_state_read_failure(detail)
         raise StateReadError(detail)
-    _atomic_write(path, new_state)
+    _write_state(path, new_state)
 
 
 # Faza 1: throttled alert gdy state RMW odmawia zapisu (clobber prevention).
@@ -1009,7 +986,7 @@ def _alert_state_read_failure(detail: str) -> None:
 
 
 def _read_state() -> dict:
-    """Czyta state z shared lock + retry (P0.5b Fix #2).
+    """Czyta state przez kanonicznego ownera + retry (P0.5b Fix #2).
 
     Problem: watcher 20s + sla_tracker 10s odczytują concurrent. Podczas atomic
     rename pojawia sie okno gdzie plik chwilowo nie istnieje LUB jest partial.
@@ -1019,23 +996,28 @@ def _read_state() -> dict:
     loguje warning). JSONDecodeError → zwraca {} + error log.
     """
     path = Path(_state_path())
-    for attempt in range(3):
-        try:
-            with open(path) as f:
-                fcntl.flock(f.fileno(), fcntl.LOCK_SH)
-                try:
-                    return json.load(f)
-                finally:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-        except FileNotFoundError:
-            if attempt == 2:
-                _log.warning(f"_read_state: {path} not found after 3 retries")
-                return {}
-            time.sleep(0.05 * (2 ** attempt))  # 50ms, 100ms, 200ms
-        except json.JSONDecodeError as e:
-            _log.error(f"JSONDecodeError w {path}: {e}. Zwracam pusty state.")
-            return {}
-    return {}
+    hardened = _orders_state_persistence_v2_on()
+    reader = (
+        _state_store.read_json_object
+        if hardened
+        else _state_store.read_json_value
+    )
+    result = reader(
+        path,
+        legacy_empty=True,
+        retry_delays=(0.05, 0.10),
+        retry_transient_os_errors=hardened,
+        shared_file_lock=True,
+    )
+    if result.source == "legacy_empty_missing":
+        _log.warning(f"_read_state: {path} not found after 3 attempts")
+    elif result.source == "legacy_empty_corrupt":
+        exc = result.main_error
+        _log.error(
+            f"state JSON unreadable at {path}: {type(exc).__name__}: {exc}. "
+            "Zwracam pusty state."
+        )
+    return result.data
 
 
 def state_storage_token() -> str:
@@ -1063,17 +1045,6 @@ def state_storage_token() -> str:
     return f"sha256:{digest.hexdigest()}"
 
 
-def _is_bootstrap() -> bool:
-    """Faza 1: True TYLKO gdy orders_state.json nigdy nie istniał (świeża
-    instalacja). Obecność backupu .prev oznacza, że plik istniał wcześniej —
-    więc jego brak teraz to anomalia (skasowany / zniknął), NIE bootstrap.
-
-    Dzięki temu _read_state_strict odróżnia legalny pierwszy zapis od
-    sytuacji „plik zniknął" (incydent 2026-05-18) i nie pozwala RMW writerowi
-    odtworzyć stanu z jednym zleceniem zamiast całej floty."""
-    return not Path(str(_state_path()) + ".prev").exists()
-
-
 def _read_state_strict() -> dict:
     """Faza 1: zwraca state ALBO raise StateReadError. Wyłącznie dla RMW
     writerów (upsert/set_status/touch/delete).
@@ -1082,30 +1053,38 @@ def _read_state_strict() -> dict:
     cichy {} z RMW nadpisałby cały orders_state.json. Pusty wynik dozwolony
     tylko przy świadomym bootstrapie (plik nigdy nie istniał)."""
     path = Path(_state_path())
-    last_err: Optional[Exception] = None
-    for attempt in range(3):
-        try:
-            with open(path) as f:
-                fcntl.flock(f.fileno(), fcntl.LOCK_SH)
-                try:
-                    return json.load(f)
-                finally:
-                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
-        except FileNotFoundError as e:
-            last_err = e
-            if attempt < 2:
-                time.sleep(0.05 * (2 ** attempt))  # 50ms, 100ms
-        except json.JSONDecodeError as e:
-            last_err = e
-            break  # malformed — retry nie pomoże, plik istnieje ale zepsuty
-    if isinstance(last_err, FileNotFoundError) and _is_bootstrap():
-        _log.warning(f"_read_state_strict: {path} nie istnieje — bootstrap (świeża instalacja)")
-        return {}
-    detail = (f"_read_state_strict: {path} nieczytelny po retry "
-              f"({type(last_err).__name__}: {last_err}) — RMW przerwany, "
-              f"NIE nadpisuję orders_state (ochrona przed clobberem)")
-    _alert_state_read_failure(detail)
-    raise StateReadError(detail)
+    hardened = _orders_state_persistence_v2_on()
+    reader = (
+        _state_store.read_json_object
+        if hardened
+        else _state_store.read_json_value
+    )
+    try:
+        result = reader(
+            path,
+            allow_bootstrap=True,
+            retry_delays=(0.05, 0.10),
+            retry_transient_os_errors=hardened,
+            shared_file_lock=True,
+        )
+    except (OSError, ValueError) as last_err:
+        # Exact feature-OFF contract: the pre-A-2 reader handled missing-main
+        # and malformed JSON itself, but propagated every other I/O failure.
+        # Alerting/wrapping those infrastructure errors is part of the hardened
+        # policy and must not arm merely because its implementation is merged.
+        if not hardened and _legacy_strict_read_propagates(last_err):
+            raise
+        detail = (f"_read_state_strict: {path} nieczytelny po retry "
+                  f"({type(last_err).__name__}: {last_err}) — RMW przerwany, "
+                  f"NIE nadpisuję orders_state (ochrona przed clobberem)")
+        _alert_state_read_failure(detail)
+        raise StateReadError(detail) from last_err
+    if result.source == "bootstrap":
+        _log.warning(
+            f"_read_state_strict: {path} nie istnieje — bootstrap "
+            "(świeża instalacja)"
+        )
+    return result.data
 
 
 def get_all() -> dict:
@@ -3026,7 +3005,7 @@ def delete_order(order_id: str) -> bool:
 #
 # Bezpieczeństwo: bulk-write OMIJA `_guarded_write` (dopuszcza max 1 delete na
 # wywołanie → naiwna pętla = ~3500 pełnych zapisów 8 MB pod LOCK_EX = godziny
-# I/O). Zamiast tego: jeden `_read_state_strict` + jeden `_atomic_write` pod tym
+# I/O). Zamiast tego: jeden `_read_state_strict` + canonical atomic writer pod
 # samym współdzielonym `_locked_write` (serializacja z upsert/set_status/touch/
 # delete) + TWARDY sanity-guard PRZED zapisem (zastępuje _guarded_write):
 #   1. żaden kandydat nie może być nie-terminalny,
@@ -3138,7 +3117,7 @@ def prune_terminal_orders(retention_hours: float = 12.0, dry_run: bool = True) -
             )
             return report
 
-        _atomic_write(path, new_state)
+        _write_state(path, new_state)
         _log.info(
             f"prune_terminal_orders: usunięto {len(to_prune)} terminalnych "
             f"({old_count}→{new_count}); active={active_count} nietknięte; "

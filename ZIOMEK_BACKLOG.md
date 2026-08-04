@@ -1,4 +1,38 @@
 # ZIOMEK AI DISPATCHER - BACKLOG ROZWOJU
+> **KANDYDAT SOURCE-ONLY 2026-08-03 — A-2 PLAN-CORRUPT ITERACJA 5 / N-1:**
+> commit kodu `c4356d120` na exact porcie iter4 do mastera `f08c5b072`
+> domyka jedyny blocker nowego blinda. `.version_hwm` ma jeden jawny dowód
+> `covers_all_issued`: pierwszy zapis OFF atomowo ustawia `false` przed
+> niezmienionym byte-legacy mainem, a kolejne zapisy OFF nie przepisują
+> sidecara. Czytelny main po re-ON odbudowuje marker pod EX; recovery z
+> nieczytelnym/brakującym mainem i nieważnym markerem loguje
+> `PLAN_VERSION_RECOVERY_BLOCKED` i fail-closed przed rebase/CAS. Sprzeczne
+> docstringi `_validate_or_reconcile_main_epoch` / `_rebase_recovered_versions`
+> mają teraz ten sam kontrakt. Exact pre-fix oracle (`corrupt` + `missing`)
+> 2F i przyjęty stale-CAS; po fixie final focused 67/67, mutation bez jedynego
+> invalidatora ponownie przyjmuje token, source ratchet blokuje duplikat writera.
+> Pełna hermetyczna regresja: `7089P/0F/74S/8X/159W` wobec exact master
+> `7036P/0F/74S/8X/159W`; delta istniejących F/S/X/W = 0. Flagi pozostają OFF;
+> zero merge/live/deploy/restart/flip/migracji. Następna bramka: świeży blind
+> finalnego HEAD, potem osobna decyzja ownera o F-5/flipie. Raport:
+> `/root/artifacts/a2-rework-20260803/iter5/REPORT.md`.
+
+> **KANDYDAT SOURCE-ONLY 2026-08-03 — A-2 PLAN-CORRUPT ITERACJA 4:**
+> commit kodu `4add9c7e7819c5737cb24988ced6991c30afeac9` na dokładnej bazie
+> `05038f881` domyka trzy blokery blindu iter3 u kanonicznych ownerów.
+> `plan_manager` pod EX uzgadnia poprawny brakujący/stary HWM z legalnymi
+> zapisami okresu OFF, bez zmiany maina/`.prev`; malformed HWM pozostaje
+> fail-closed. `state_persistence` odzyskuje z `.prev` tylko po dowodzie braku
+> lub złej treści, a wyczerpany błąd I/O maina/`.prev` wychodzi bez zapisu.
+> Orders alert/`StateReadError` są uzbrojone wyłącznie przy własnej fladze ON;
+> OFF zachowuje też dokładny legacy root-shape planu. RED 14F/1P → GREEN,
+> literalne cofnięcie fixów 3F, ratchety A-2 56/56, broad 256/256, realne MP
+> 3/3, OFF 41/41. Pełna hermetyczna regresja: `7083P/0F/74S/8X/159W`
+> wobec baseline `7036P/0F/74S/8X/159W`; delta istniejących outcome 0.
+> Obie flagi pozostają efektywnie OFF. Zero merge/live/deploy/restart/flip/
+> migracji; następna bramka to świeży blind CTO. Raport:
+> `/root/artifacts/a2-rework-20260803/iter4/REPORT.md`.
+
 > **READ-ONLY DATA GATE 2026-08-03 — EKSTRAKTOR v2:** BUG-1 (rank na
 > `{best} ∪ alternatives`) i BUG-2 (join bieżącego `orders_state` + pełnej
 > znalezionej retencji snapshotów) zamknięte w artefakcie

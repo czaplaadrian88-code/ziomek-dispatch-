@@ -10,7 +10,7 @@ Coverage:
   Fix #3 courier_resolver.build_fleet_snapshot — gps timestamp parse (MED)
   Fix #4 courier_resolver.build_fleet_snapshot — order ts parse (MED)
   Fix #5 courier_resolver.dispatchable_fleet   — fleet audit log fail (LOW)
-  Fix #6 plan_manager._atomic_write            — atomic write fail re-raise + log (CRIT)
+  Fix #6 state_persistence.atomic_write_json   — atomic write fail re-raise + log (CRIT)
   Fix #7 plan_manager.gc_invalidated           — invalidated_at parse (LOW)
   Fix #8 scoring.score_candidate               — fleet_context.overload_delta (MED)
 """
@@ -23,7 +23,12 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # scripts/ na ścieżkę → pakiet dispatch_v2
 
-from dispatch_v2 import courier_resolver, plan_manager, scoring  # noqa: E402
+from dispatch_v2 import (  # noqa: E402
+    courier_resolver,
+    plan_manager,
+    scoring,
+    state_persistence,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -164,16 +169,20 @@ def test_fix5_audit_log_fail_logs_warn_dedup(caplog):
 
 
 # ---------------------------------------------------------------------------
-# Fix #6 plan_manager._atomic_write fail logs + re-raises
+# Fix #6 canonical state persistence write fail logs + re-raises
 # ---------------------------------------------------------------------------
 
 
 def test_fix6_atomic_write_fail_logs_path_and_reraises(caplog, tmp_path):
     target = tmp_path / "plans.json"
-    with patch("dispatch_v2.plan_manager.os.replace", side_effect=OSError("disk full")):
+    with patch("dispatch_v2.state_persistence.os.replace", side_effect=OSError("disk full")):
         with caplog.at_level("ERROR"):
             with pytest.raises(OSError):
-                plan_manager._atomic_write(target, {"123": {"foo": "bar"}})
+                state_persistence.atomic_write_json(
+                    target,
+                    {"123": {"foo": "bar"}},
+                    logger=plan_manager._log,
+                )
     err = [r for r in caplog.records if "atomic write fail" in r.message]
     assert len(err) == 1
     assert str(target) in err[0].message
@@ -194,6 +203,9 @@ def test_fix7_gc_invalidated_parse_fail_logs_warn(caplog, tmp_path, monkeypatch)
         "101": {"invalidated_at": "ALSO-BAD"},
     }))
     monkeypatch.setattr(plan_manager, "PLANS_FILE", plans_file)
+    monkeypatch.setattr(
+        plan_manager, "LOCK_FILE", tmp_path / "courier_plans.lock"
+    )
 
     with caplog.at_level("WARNING"):
         plan_manager.gc_invalidated(older_than_hours=0.01)
