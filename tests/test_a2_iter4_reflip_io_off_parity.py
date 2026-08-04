@@ -655,3 +655,159 @@ def test_plan_off_strict_list_root_preserves_exact_legacy_exception(
         PM.load_plans(_raise_on_corrupt=True)
     assert type(raised.value) is ValueError
     assert str(raised.value) == "courier_plans.json is not an object"
+
+
+# ─── N-3 (iteration 6): the OFF kill-switch owes nothing to a readable
+# sidecar.  Content that was read and rejected can never be a continuity
+# proof, so the OFF writer treats it as already void instead of losing the
+# plan write.  Being unable to *learn* or *record* the invalidation is a
+# different failure and stays fail-closed.
+
+_UNPARSABLE_SIDECAR_CONTENT = {
+    "malformed_json": lambda hwm: "{ not json",
+    "wrong_schema": lambda hwm: json.dumps(
+        {"schema": "bogus.v9", "last_issued": hwm}
+    ),
+    "bad_value_type": lambda hwm: json.dumps(
+        {"schema": PM._VERSION_HWM_SCHEMA, "last_issued": "not-an-int"}
+    ),
+    "below_epoch_floor": lambda hwm: json.dumps(
+        {"schema": PM._VERSION_HWM_SCHEMA, "last_issued": 12}
+    ),
+    "bad_marker_type": lambda hwm: json.dumps({
+        "schema": PM._VERSION_HWM_SCHEMA,
+        "last_issued": hwm,
+        "covers_all_issued": "yes",
+    }),
+}
+
+
+def _on_era_then_unparsable_sidecar(monkeypatch, corruption: str) -> dict:
+    """Leave an ON-era sidecar behind, then damage its bytes before OFF."""
+    _set_plan_guard(monkeypatch, True)
+    current = PM.save_plan("c1", _plan_body("on-c1"))
+    assert _hwm_payload()["covers_all_issued"] is True
+
+    _set_plan_guard(monkeypatch, False)
+    PM.version_hwm_path().write_text(
+        _UNPARSABLE_SIDECAR_CONTENT[corruption](_hwm_value()),
+        encoding="utf-8",
+    )
+    _clear_plan_cache()
+    return current
+
+
+@pytest.mark.parametrize("corruption", sorted(_UNPARSABLE_SIDECAR_CONTENT))
+def test_off_write_survives_unparsable_sidecar(
+    plan_store, monkeypatch, corruption
+):
+    """N-3: a damaged sidecar must not immobilize plan writes while OFF."""
+    current = _on_era_then_unparsable_sidecar(monkeypatch, corruption)
+    sidecar_before = PM.version_hwm_path().read_bytes()
+
+    saved = PM.save_plan(
+        "c1",
+        _plan_body("off-after-unparsable-sidecar"),
+        expected_version=int(current["plan_version"]),
+    )
+    assert int(saved["plan_version"]) == int(current["plan_version"]) + 1
+    on_disk = json.loads(PM.PLANS_FILE.read_text(encoding="utf-8"))
+    assert on_disk["c1"]["stops"][0]["order_id"] == (
+        "off-after-unparsable-sidecar"
+    )
+    # Nothing is invented: rewriting an unparsable last_issued could only
+    # fabricate or lower the burned HWM, so the damaged bytes are left alone.
+    assert PM.version_hwm_path().read_bytes() == sidecar_before
+    with pytest.raises((PM.PlanVersionStateError, ValueError)):
+        PM._read_version_hwm_state()
+
+    # The proof stays void for every reader, so recovery is still fail-closed.
+    PM.PLANS_FILE.write_text("{ lost main after OFF window", encoding="utf-8")
+    _clear_plan_cache()
+    _set_plan_guard(monkeypatch, True)
+    with pytest.raises((PM.PlanVersionStateError, ValueError)):
+        PM.load_plans()
+    with pytest.raises((PM.PlanVersionStateError, ValueError)):
+        PM.save_plan(
+            "c1",
+            _plan_body("stale-off-cas-replay"),
+            expected_version=int(saved["plan_version"]),
+        )
+
+
+def test_off_write_still_aborts_when_sidecar_read_is_an_io_failure(
+    plan_store, monkeypatch
+):
+    """Boundary: unread bytes may still prove continuity, so abort stands."""
+    _set_plan_guard(monkeypatch, True)
+    current = PM.save_plan("c1", _plan_body("on"))
+    main_before = PM.PLANS_FILE.read_bytes()
+    hwm_before = PM.version_hwm_path().read_bytes()
+    real_read = SP.read_json_object
+
+    def fail_sidecar_read(path, **kwargs):
+        if Path(path) == PM.version_hwm_path():
+            raise OSError(errno.EACCES, "synthetic sidecar read failure")
+        return real_read(path, **kwargs)
+
+    _set_plan_guard(monkeypatch, False)
+    monkeypatch.setattr(SP, "read_json_object", fail_sidecar_read)
+    with pytest.raises(OSError, match="sidecar read failure"):
+        PM.save_plan(
+            "c1",
+            _plan_body("must-not-land"),
+            expected_version=int(current["plan_version"]),
+        )
+    assert PM.PLANS_FILE.read_bytes() == main_before
+    assert PM.version_hwm_path().read_bytes() == hwm_before
+
+
+def test_mutation_reraising_unparsable_sidecar_loses_the_off_write(
+    plan_store, monkeypatch
+):
+    """Mutation proof: restoring propagation costs the OFF plan write."""
+    def pre_fix_invalidate() -> None:
+        state = PM._read_version_hwm_state()
+        if state is None or state.covers_all_issued is False:
+            return
+        PM._write_version_hwm(state.last_issued, covers_all_issued=False)
+
+    current = _on_era_then_unparsable_sidecar(monkeypatch, "malformed_json")
+    main_before = PM.PLANS_FILE.read_bytes()
+    monkeypatch.setattr(
+        PM, "_invalidate_version_hwm_continuity", pre_fix_invalidate
+    )
+    with pytest.raises(ValueError):
+        PM.save_plan(
+            "c1",
+            _plan_body("lost-by-mutant"),
+            expected_version=int(current["plan_version"]),
+        )
+    assert PM.PLANS_FILE.read_bytes() == main_before
+
+
+def test_off_invalidation_classifies_content_only_never_io():
+    """Source ratchet: widening the catch to I/O would re-arm the trap."""
+    tree = ast.parse(Path(PM.__file__).read_text(encoding="utf-8"))
+    target = next(
+        node for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+        and node.name == "_invalidate_version_hwm_continuity"
+    )
+    handlers = [
+        node for node in ast.walk(target)
+        if isinstance(node, ast.ExceptHandler)
+    ]
+    assert handlers, "the OFF invalidator must classify unreadable sidecars"
+    caught: list[str] = []
+    for handler in handlers:
+        assert handler.type is not None, "a bare except would swallow I/O"
+        nodes = (
+            handler.type.elts
+            if isinstance(handler.type, ast.Tuple)
+            else [handler.type]
+        )
+        for node in nodes:
+            assert isinstance(node, ast.Name), "only named content errors"
+            caught.append(node.id)
+    assert set(caught) == {"PlanVersionStateError", "ValueError"}

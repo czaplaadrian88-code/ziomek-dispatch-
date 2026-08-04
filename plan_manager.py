@@ -235,8 +235,27 @@ def _invalidate_version_hwm_continuity() -> None:
     The OFF main writer remains byte-for-byte legacy. A missing sidecar stays
     missing, and an already-invalid marker is not rewritten on later OFF
     writes. If this durable invalidation fails, the main write must not happen.
+
+    Bytes that were read and rejected — unparsable JSON, a foreign schema, a
+    non-integer or sub-floor counter, a non-boolean marker — are already void
+    as proof: every reader, recovery included, raises on them, so no later
+    recovery can trust them. Blocking the OFF write buys no safety there and
+    costs the kill-switch exactly when a damaged disk makes it necessary, so
+    that state is left untouched and the legacy write proceeds. Its counter
+    cannot be rewritten without fabricating or lowering the burned HWM.
+    An I/O failure is a different fact: it says nothing about the bytes, which
+    may still prove continuity, so it keeps aborting the write.
     """
-    state = _read_version_hwm_state()
+    try:
+        state = _read_version_hwm_state()
+    except (PlanVersionStateError, ValueError) as rejected:
+        _log.warning(
+            "PLAN_VERSION_CONTINUITY_ALREADY_VOID path=%s reason=%s; "
+            "unreadable sidecar cannot prove recovery coverage",
+            version_hwm_path(),
+            rejected,
+        )
+        return
     if state is None or state.covers_all_issued is False:
         return
     _write_version_hwm(
