@@ -134,10 +134,13 @@ def patched_scan(monkeypatch, tmp_path):
     monkeypatch.setattr(ncp, "STATE_PATH", str(state_file))
     # Anty-prod (C17): self-heal + trusted-resolve nie mogą dotykać żywych plików.
     monkeypatch.setattr(ncp, "GRAFIK_FULL_NAMES", str(tmp_path / "grafik_full_names.json"))
-    monkeypatch.setattr(ncp, "_load_kurier_ids",
-                        lambda: {"Bartek O": "123", "Bartek Ołdziej": "123"})
+    kids = {"Bartek O": "123", "Bartek Ołdziej": "123"}
+    monkeypatch.setattr(ncp, "_load_kurier_ids", lambda: dict(kids))
+    monkeypatch.setattr(ncp, "COURIER_NAMES", str(tmp_path / "courier_names.json"))
+    monkeypatch.setattr(ncp, "COURIER_TIERS", str(tmp_path / "courier_tiers.json"))
     assert "/dispatch_state/" not in ncp.STATE_PATH
     assert "/dispatch_state/" not in ncp.GRAFIK_FULL_NAMES
+    assert "/dispatch_state/" not in ncp.COURIER_NAMES
 
     sent = []
     monkeypatch.setattr(ncp, "_tg", lambda text, *, silent=False: sent.append(text))
@@ -146,9 +149,14 @@ def patched_scan(monkeypatch, tmp_path):
 
     def fake_add(cid, full_name):
         added.append((cid, full_name))
+        alias = full_name.split()[0] + " " + full_name.split()[1][:2]
+        # Realny add_new_courier zapisuje alias ORAZ pełne imię do kurier_ids
+        # zanim ruszy self-heal grafiku. Bez tego fikstura nie modeluje
+        # kontraktu, na którym opiera się sprawdzenie własności CID (A-6/K7).
+        kids[alias] = str(cid)
+        kids[full_name] = str(cid)
         return {"cid": cid, "full_name": full_name,
-                "alias": full_name.split()[0] + " " + full_name.split()[1][:2],
-                "pin": "4242"}
+                "alias": alias, "pin": "4242"}
 
     monkeypatch.setattr(ncp, "add_new_courier", fake_add)
     monkeypatch.setattr(ncp, "verify_courier_wired",
@@ -169,7 +177,8 @@ def patched_scan(monkeypatch, tmp_path):
     monkeypatch.setattr(ncp, "resolve_cid",
                         lambda name, kids=None: "123" if name == "Bartek Ołdziej" else None)
 
-    return {"sent": sent, "added": added, "flags": flags, "state_file": state_file}
+    return {"sent": sent, "added": added, "flags": flags,
+            "state_file": state_file, "kids": kids}
 
 
 def _sched(monkeypatch, mapping):
@@ -268,10 +277,15 @@ def bare_key_scan(patched_scan, monkeypatch):
     """patched_scan z REALNYM resolve_cid + kontrolowanym kurier_ids (case 541)."""
     from dispatch_v2.shift_notifications import worker as snw
     monkeypatch.setattr(ncp, "resolve_cid", snw.resolve_cid)
-    monkeypatch.setattr(ncp, "_load_kurier_ids", lambda: dict(GABRIEL_KIDS))
+    # Współdzielony, MUTOWALNY rejestr: fake_add dopisuje do niego tak jak realny
+    # add_new_courier, więc self-heal grafiku widzi świeżo wpiętego kuriera.
+    kids = patched_scan["kids"]
+    kids.clear()
+    kids.update(GABRIEL_KIDS)
+    monkeypatch.setattr(ncp, "_load_kurier_ids", lambda: dict(kids))
     # Ścieżka plain-resolve (resolve_cid bez kids) ładuje przez loader WORKERA —
     # patch też tam, żeby test nie czytał żywego kurier_ids.json (C17 anty-prod).
-    monkeypatch.setattr(snw, "_load_kurier_ids", lambda: dict(GABRIEL_KIDS))
+    monkeypatch.setattr(snw, "_load_kurier_ids", lambda: dict(kids))
     # Aktywny roster gastro jak 06.07: nowy 541 'Gabriel P' + stary 179 'Gabriel'.
     monkeypatch.setattr(ncp.panel_roster, "fetch_active_roster",
                         lambda force=False: {541: "Gabriel P", 179: "Gabriel"})
@@ -288,15 +302,22 @@ def test_bare_key_strict_pairs_new_courier(bare_key_scan, monkeypatch):
 
 
 def test_bare_key_strict_off_reproduces_silent_skip(bare_key_scan, monkeypatch):
-    """Flaga OFF = stare zachowanie (ON≠OFF): cichy skip (0 wpięć, 0 pytań)
-    + self-heal utrwala ZATRUCIE Przyborowski->179 w grafik_full_names."""
+    """Flaga OFF = stare zachowanie (ON≠OFF): cichy skip (0 wpięć, 0 pytań).
+
+    ZMIANA A-6/K7 (04.08): dawniej self-heal utrwalał tu ZATRUCIE
+    Przyborowski->179 (cid Ostapczuka). Kontrakt własności CID odmawia teraz
+    tego zapisu u writera, więc obrona nie zależy już wyłącznie od flagi —
+    ON≠OFF nadal widać po wpięciach/pytaniach, ale grafik zostaje czysty,
+    a odmowa jest raportowana operatorowi.
+    """
     bare_key_scan["flags"]["NEW_COURIER_AUTOPAIR_BARE_KEY_STRICT"] = False
     _sched(monkeypatch, {"Gabriel Przyborowski": {"start": "11:00", "end": "21:00"}})
     s = ncp.scan_once(dry_run=False)
     assert bare_key_scan["added"] == []
     assert s["paired"] == [] and s["asked"] == []
-    poisoned = json.load(open(ncp.GRAFIK_FULL_NAMES))
-    assert str(poisoned["Gabriel Przyborowski"]) == "179"   # udokumentowany bug
+    # Odmowa oznacza, że pliku mogło w ogóle nie być — _read_json zwraca wtedy {}.
+    assert "Gabriel Przyborowski" not in ncp._read_json(ncp.GRAFIK_FULL_NAMES)
+    assert s["grafik_refused"] == [{"name": "Gabriel Przyborowski", "cid": "179"}]
 
 
 def test_bare_key_strict_no_poison_selfheal(bare_key_scan, monkeypatch):
@@ -453,3 +474,80 @@ def test_nowy_without_cid_ambiguous(patched_nowy, monkeypatch):
     r = ta._handle_nowy_command({}, _msg("/nowy Marek Nowak"), "/nowy Marek Nowak")
     assert patched_nowy["added"] == []
     assert "Kilku pasuje" in r
+
+
+# --------------------------------------------------------------------------- #
+# A-6/K7: grafik_full_names — wlasnosc CID w pozostalych rootach tozsamosci
+# --------------------------------------------------------------------------- #
+
+@pytest.fixture
+def grafik_env(monkeypatch, tmp_path):
+    """Izolowane rooty tozsamosci dla kontraktu wlasnosci CID w grafiku."""
+    grafik = tmp_path / "grafik_full_names.json"
+    names = tmp_path / "courier_names.json"
+    tiers = tmp_path / "courier_tiers.json"
+    for path in (grafik, names, tiers):
+        path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(ncp, "GRAFIK_FULL_NAMES", str(grafik))
+    monkeypatch.setattr(ncp, "COURIER_NAMES", str(names), raising=False)
+    monkeypatch.setattr(ncp, "COURIER_TIERS", str(tiers), raising=False)
+    monkeypatch.setattr(ncp, "_load_kurier_ids", lambda: {"Courier A": 17})
+    assert "/dispatch_state/" not in ncp.GRAFIK_FULL_NAMES
+    return {"grafik": grafik, "names": names, "tiers": tiers}
+
+
+def _grafik(env):
+    return json.loads(env["grafik"].read_text(encoding="utf-8"))
+
+
+class TestGrafikCidOwnership:
+    def test_refuses_cid_owned_by_another_identity(self, grafik_env):
+        status = ncp._ensure_grafik_full_name("Courier B", 17)
+        assert _grafik(grafik_env) == {}
+        assert status == "refused"
+
+    @pytest.mark.parametrize("cid", [True, False, [], "   ", 999])
+    def test_refuses_non_canonical_or_unknown_cid(self, grafik_env, cid):
+        status = ncp._ensure_grafik_full_name("Courier A", cid)
+        assert _grafik(grafik_env) == {}
+        assert status == "refused"
+
+    def test_refuses_when_courier_names_owner_differs(self, grafik_env):
+        grafik_env["names"].write_text(
+            json.dumps({"17": "Someone Else"}), encoding="utf-8")
+        status = ncp._ensure_grafik_full_name("Courier A", 17)
+        assert _grafik(grafik_env) == {}
+        assert status == "refused"
+
+    def test_refuses_when_courier_tiers_owner_differs(self, grafik_env):
+        grafik_env["tiers"].write_text(
+            json.dumps({"17": {"name": "Someone Else"}}), encoding="utf-8")
+        status = ncp._ensure_grafik_full_name("Courier A", 17)
+        assert _grafik(grafik_env) == {}
+        assert status == "refused"
+
+    def test_refuses_duplicate_cid_binding_in_grafik(self, grafik_env):
+        grafik_env["grafik"].write_text(
+            json.dumps({"Other Name": 17}), encoding="utf-8")
+        status = ncp._ensure_grafik_full_name("Courier A", 17)
+        assert _grafik(grafik_env) == {"Other Name": 17}
+        assert status == "refused"
+
+    def test_writes_when_owner_matches(self, grafik_env):
+        status = ncp._ensure_grafik_full_name("Courier A", 17)
+        assert _grafik(grafik_env) == {"Courier A": 17}
+        assert status == "healed"
+
+    def test_noop_when_already_correct(self, grafik_env):
+        grafik_env["grafik"].write_text(
+            json.dumps({"Courier A": 17}), encoding="utf-8")
+        status = ncp._ensure_grafik_full_name("Courier A", 17)
+        assert _grafik(grafik_env) == {"Courier A": 17}
+        assert status == "ok"
+
+    def test_alias_owner_is_accepted(self, grafik_env, monkeypatch):
+        """kurier_ids trzyma skrot ('Darek os'); grafik pelne imie — norm laczy."""
+        monkeypatch.setattr(ncp, "_load_kurier_ids", lambda: {"Darek os": 543})
+        status = ncp._ensure_grafik_full_name("Darek Osmólski", 543)
+        assert _grafik(grafik_env) == {"Darek Osmólski": 543}
+        assert status == "healed"
