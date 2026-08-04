@@ -205,14 +205,25 @@ def _grafik_cid_value(cid_s: str):
     `int()` nie przyjmuje — ValueError łapiemy TU (G-2), bo poza `try` leciał
     przez `scan_once` do `main()` (żaden nie ma `except`) i wywalał CAŁY skan,
     podczas gdy baza degradowała łagodnie.
+
+    Warunek jest JEDEN i obejmuje CAŁĄ przestrzeń wejść — grafik przyjmuje
+    wyłącznie kanoniczną dziesiętną formę liczby całkowitej (R-1). Wcześniej
+    wartości nieliczbowe szły osobną gałęzią, w której round-trip był
+    TRYWIALNIE prawdziwy (zapisywano samo `cid_s`), więc niezmiennik był tam
+    martwy: `'+17'` i `'1_7'` nie są `isdigit`, ale `int()` czytelnika je
+    PRZYJMUJE (`manual_overrides._all_name_to_cid` robi `int(cid)`), więc
+    writer utrwalał string, a czytelnik widział CID ofiary. Ten sam wymóg ma
+    już najsurowszy konsument grafiku: `courier_availability._canon_cid` żąda
+    `isdigit`, a na pierwszym wpisie bez tego `_schedule_names` zwraca
+    `{}, 'grafik_identity_invalid_cid'` — czyli kasuje tożsamość grafiku dla
+    WSZYSTKICH kurierów, nie tylko dla zatrutego wpisu.
     """
-    if cid_s.isdigit():
-        try:
-            value = int(cid_s)
-        except (ValueError, TypeError):
-            return None
-    else:
-        value = cid_s
+    if not cid_s.isdigit():
+        return None
+    try:
+        value = int(cid_s)
+    except (ValueError, TypeError):
+        return None
     return value if canonical_courier_id(value) == cid_s else None
 
 

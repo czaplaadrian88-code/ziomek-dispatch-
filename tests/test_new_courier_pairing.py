@@ -827,3 +827,138 @@ class TestGrafikDuplikatPorownywanyKanonicznie:
             json.dumps({"Victim Y": wartosc_w_grafiku}), encoding="utf-8")
         assert ncp._ensure_grafik_full_name("Attacker X", 17) == "refused"
         assert _grafik(grafik_env) == {"Victim Y": wartosc_w_grafiku}
+
+
+# --------------------------------------------------------------------------- #
+# A-6/K7 iter4 — finding R-1 z delta-blinda 7a2be9434
+# --------------------------------------------------------------------------- #
+
+# Formy, ktorych `str.isdigit()` NIE lapie, ale `int()` czytelnika owszem —
+# wiec writer utrwalal je jako STRING, a czytelnik zwijal do liczby ofiary.
+FORMY_NIE_ISDIGIT_PARSOWALNE = ["+17", "1_7", "+1_7", "  +17  ", "-17"]
+
+
+class TestGrafikNieCyfrowyCidJestOdmawiany:
+    """R-1: niezmiennik round-trip byl egzekwowany TYLKO w galezi `isdigit`.
+
+    W galezi `else` zapisywana wartoscia bylo samo `cid_s`, wiec porownanie
+    `canonical_courier_id(cid_s) == cid_s` bylo TRYWIALNIE prawdziwe — kod
+    martwy, ktorego zadna mutacja nie mogla zaczerwienic. Tymczasem czytelnicy
+    grafiku parsuja wartosc przez `int()`, ktory przyjmuje `'+17'` i `'1_7'`:
+    writer zapisywal string, czytelnik czytal 17 = CID ofiary.
+    """
+
+    @pytest.mark.parametrize("forma", FORMY_NIE_ISDIGIT_PARSOWALNE)
+    def test_forma_nie_isdigit_jest_odmawiana(
+        self, grafik_env, monkeypatch, forma
+    ):
+        monkeypatch.setattr(
+            ncp, "_load_kurier_ids", lambda: {"Attacker X": forma})
+        assert ncp._ensure_grafik_full_name("Attacker X", forma) == "refused"
+        assert _grafik(grafik_env) == {}
+
+    @pytest.mark.parametrize("forma", FORMY_NIE_ISDIGIT_PARSOWALNE)
+    def test_forma_nie_isdigit_nie_przejmuje_cudzego_cid(
+        self, victim_env, forma
+    ):
+        victim_env["roster"](forma)
+        assert ncp._ensure_grafik_full_name("Attacker X", forma) == "refused"
+        assert _grafik(victim_env) == {"Victim Y": 17}
+
+    @pytest.mark.parametrize("forma", ["abc", "17.0", "17 17", "½", "cid"])
+    def test_forma_zupelnie_nieliczbowa_tez_odmawiana(
+        self, grafik_env, monkeypatch, forma
+    ):
+        """Jeden spojny warunek, nie lista wyjatkow: grafik przyjmuje WYLACZNIE
+        kanoniczna dziesietna forme liczby. Najstrozszy istniejacy konsument
+        (`courier_availability._canon_cid`) wymaga dokladnie tego samego."""
+        monkeypatch.setattr(
+            ncp, "_load_kurier_ids", lambda: {"Courier A": forma})
+        assert ncp._ensure_grafik_full_name("Courier A", forma) == "refused"
+        assert _grafik(grafik_env) == {}
+
+    @pytest.mark.parametrize("forma", ["17", 17, "  17  ", "0", "541"])
+    def test_kanoniczne_formy_nadal_przechodza(
+        self, grafik_env, monkeypatch, forma
+    ):
+        """Parytet: wymog nie moze odciac realnych kurierow."""
+        monkeypatch.setattr(
+            ncp, "_load_kurier_ids", lambda: {"Courier A": forma})
+        assert ncp._ensure_grafik_full_name("Courier A", forma) == "healed"
+        zapis = _grafik(grafik_env)["Courier A"]
+        assert isinstance(zapis, int)
+        assert str(zapis) == str(int(str(forma).strip()))
+
+
+class TestGrafikLancuchDoCzytelnikow:
+    """R-1 E2E: writer -> plik grafiku -> PRAWDZIWY kod czytelnikow.
+
+    Sam status `refused` nie dowodzi jeszcze braku przejecia — dowodzi go
+    dopiero to, co z pliku odczyta `manual_overrides._all_name_to_cid()`,
+    ktory robi `int(cid)` i wlasnie tym zwijal `'+17'` do CID ofiary.
+    """
+
+    @pytest.mark.parametrize("forma", FORMY_NIE_ISDIGIT_PARSOWALNE)
+    def test_manual_overrides_nie_widzi_przejecia(
+        self, victim_env, monkeypatch, tmp_path, forma
+    ):
+        from dispatch_v2 import manual_overrides as mo
+
+        victim_env["roster"](forma)
+        status = ncp._ensure_grafik_full_name("Attacker X", forma)
+
+        puste = tmp_path / "puste.json"
+        puste.write_text("{}", encoding="utf-8")
+        monkeypatch.setattr(mo, "GRAFIK_FULL_NAMES_PATH",
+                            str(victim_env["grafik"]))
+        monkeypatch.setattr(mo, "KURIER_IDS_PATH", str(puste))
+        monkeypatch.setattr(mo, "COURIER_NAMES_PATH", str(puste))
+        assert "/dispatch_state/" not in mo.GRAFIK_FULL_NAMES_PATH
+
+        # Najpierw to, co REALNIE widzi czytelnik — status writera jest wtorny.
+        mapa = mo._all_name_to_cid()
+        assert "Attacker X" not in mapa, (
+            f"czytelnik zwinal {forma!r} do CID ofiary: {mapa} "
+            f"(grafik na dysku: {_grafik(victim_env)}, status writera: {status})")
+        assert mapa.get("Victim Y") == 17
+        assert status == "refused"
+
+    @pytest.mark.parametrize("forma", FORMY_NIE_ISDIGIT_PARSOWALNE)
+    def test_courier_availability_nie_traci_tozsamosci_wszystkich(
+        self, victim_env, forma
+    ):
+        """Szkoda uboczna: `_schedule_names` na PIERWSZYM nie-cyfrowym CID
+        zwraca `{}, 'grafik_identity_invalid_cid'` — czyli kasuje tozsamosc
+        grafiku dla WSZYSTKICH kurierow, nie tylko dla zatrutego wpisu."""
+        from dispatch_v2 import courier_availability as ca
+
+        victim_env["roster"](forma)
+        ncp._ensure_grafik_full_name("Attacker X", forma)
+        names, error = ca._schedule_names(str(victim_env["grafik"]))
+        assert error is None, f"tozsamosc grafiku odrzucona dla wszystkich: {error}"
+        assert names == {"17": "Victim Y"}
+
+    @pytest.mark.parametrize("forma", ["17", 17, "  17  "])
+    def test_lancuch_zgodny_dla_formy_legalnej(
+        self, grafik_env, monkeypatch, tmp_path, forma
+    ):
+        """Kontrola pozytywna calego lancucha: to, co writer zapisze, czytelnik
+        MUSI odczytac jako te sama tozsamosc."""
+        from dispatch_v2 import courier_availability as ca
+        from dispatch_v2 import manual_overrides as mo
+
+        monkeypatch.setattr(
+            ncp, "_load_kurier_ids", lambda: {"Courier A": forma})
+        assert ncp._ensure_grafik_full_name("Courier A", forma) == "healed"
+
+        puste = tmp_path / "puste.json"
+        puste.write_text("{}", encoding="utf-8")
+        monkeypatch.setattr(mo, "GRAFIK_FULL_NAMES_PATH",
+                            str(grafik_env["grafik"]))
+        monkeypatch.setattr(mo, "KURIER_IDS_PATH", str(puste))
+        monkeypatch.setattr(mo, "COURIER_NAMES_PATH", str(puste))
+
+        assert mo._all_name_to_cid() == {"Courier A": 17}
+        names, error = ca._schedule_names(str(grafik_env["grafik"]))
+        assert error is None
+        assert names == {"17": "Courier A"}
