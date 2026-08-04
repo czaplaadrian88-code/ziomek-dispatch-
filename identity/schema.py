@@ -19,6 +19,7 @@ __all__ = [
     "CourierRecord",
     "canon_cid",
     "canonical_courier_id",
+    "canonical_numeric_cid",
     "pin_last2",
     "validate_courier_ids_store",
     "validate_record",
@@ -54,6 +55,41 @@ def canonical_courier_id(value) -> Optional[str]:
         return None
     normalized = str(value).strip()
     return normalized or None
+
+
+def canonical_numeric_cid(value) -> Optional[str]:
+    """Canonical CID restricted to a positive decimal integer, or ``None``.
+
+    Stricter sibling of :func:`canonical_courier_id`, for the *writer* side
+    (onboarding / grafik) that mints new roster rows. ``canonical_courier_id``
+    only rejects ``bool`` and non ``str``/``int`` scalars, so ``-5``, ``"017"``,
+    ``"+17"``, ``"1_7"`` or ``" 17 "`` would still pass — yet an int()-based
+    reader (``manual_overrides._all_name_to_cid``, ``courier_availability``)
+    coerces every one of those into a *different* identity. A writer must never
+    persist a form that a reader would read as a different CID, so here the
+    accepted set is exactly the canonical decimal integer:
+
+    ``str(value)`` must be all ASCII digits, round-trip through ``int``
+    (``str(int(s)) == s`` rejects leading zeros) and be strictly positive
+    (``int(s) > 0`` rejects ``0`` / ``"0"`` — no real courier owns CID 0, and the
+    canonical reader ``courier_availability._canon_cid(0)`` raises because ``0``
+    is falsy, so a persisted 0 would be a writer-only identity no reader accepts).
+    ``bool`` stays rejected (it is an ``int`` subclass), ``float`` / ``None`` /
+    other types are rejected. Returns the canonical decimal string, or ``None``.
+    """
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        return None
+    try:
+        s = str(value)
+    except (ValueError, OverflowError):  # int beyond int_max_str_digits
+        return None
+    if not s.isascii() or not s.isdigit():  # rejects sign/space/underscore, unicode digits
+        return None
+    try:
+        canonical = str(int(s))
+    except (ValueError, OverflowError):  # digit string beyond int_max_str_digits
+        return None
+    return s if (canonical == s and int(s) > 0) else None  # rejects leading zeros AND 0/non-positive
 
 
 def validate_courier_ids_store(store) -> Dict:
