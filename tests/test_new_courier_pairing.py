@@ -962,3 +962,111 @@ class TestGrafikLancuchDoCzytelnikow:
         names, error = ca._schedule_names(str(grafik_env["grafik"]))
         assert error is None
         assert names == {"17": "Courier A"}
+
+
+# --------------------------------------------------------------------------- #
+# A-6/K7 iter4 — finding O-1 z delta-blinda #3 20668cdcc (luka oracle)
+# --------------------------------------------------------------------------- #
+#
+# `_grafik_cid_value` odmawia CID bedacemu bardzo dlugim ciagiem cyfr
+# (> int_max_str_digits, domyslnie 4300). `str.isdigit()` jest dla niego True,
+# ale `int(cid_s)` podnosi ValueError ("Exceeds the limit ... for integer") —
+# ktory MUSI byc zlapany TU, inaczej leci przez `scan_once` do `main()` (zaden
+# nie ma `except`) i wywala CALY skan = powrot defektu G-2 dla WSZYSTKICH
+# kurierow po pierwszym takim wpisie.
+#
+# Recenzent pokazal mutacje S2 (`isdigit`->`isdecimal` + USUNIECIE `try`), ktora
+# przezywala caly oracle 137/137: '²' (No) jest isdigit ale NIE isdecimal, wiec
+# S2 odmawia go bramka i nie siega do `int()`; dopiero dlugi ciag CYFR (isdecimal
+# True) przechodzi bramke i pod S2 daje NIEZLAPANY ValueError. Bez ponizszego
+# testu naturalnie wygladajace "uszczelnienie" isdigit->isdecimal w przyszlosci
+# cicho przywrociloby G-2. Test pinuje wlasnie te luke.
+
+@pytest.fixture
+def int_str_limit_default():
+    """Przypnij limit konwersji int()<->str do produkcyjnego defaultu (4300).
+
+    Finding O-1 dotyczy DOMYSLNEGO limitu CPythona — venv dispatch ma 4300.
+    Pinujemy go jawnie, zeby test byl deterministyczny niezaleznie od ambientu
+    (np. interpretera z wylaczonym limitem, gdzie `int()` nigdy nie rzuca i
+    zjawisko O-1 znika)."""
+    old = sys.get_int_max_str_digits()
+    sys.set_int_max_str_digits(4300)
+    try:
+        yield 4300
+    finally:
+        sys.set_int_max_str_digits(old)
+
+
+# Ciagi CYFR dluzsze niz limit int_max_str_digits (4300): isdigit ORAZ isdecimal
+# sa True (bramka je przepuszcza), ale `int()` je odrzuca ValueError.
+DLUGIE_CIAGI_CYFR = [
+    "1" * 4301,   # tuz nad limitem
+    "1" * 4400,   # kontrprzyklad recenzenta (S2)
+    "9" * 9000,   # z zapasem
+]
+
+
+class TestGrafikDlugiCyfrowyCidNieWywalaSkanu:
+    """O-1: dlugi ciag cyfr (> int_max_str_digits) = ODMOWA bez wyjatku.
+
+    Zabija mutacje S2 recenzenta (isdigit->isdecimal + usuniecie try): pod nia
+    `int('1'*4400)` leci niezlapany i wywala skan (powrot G-2).
+    """
+
+    def test_precondition_dlugi_ciag_przechodzi_bramke_ale_int_rzuca(
+        self, int_str_limit_default
+    ):
+        """Uzasadnienie testu: forma przechodzi bramke TYPU (isdigit/isdecimal),
+        ale `int()` ja odrzuca — czyli round-trip MUSI wychwycic ValueError."""
+        cid_s = "1" * 4400
+        assert cid_s.isdigit() is True
+        assert cid_s.isdecimal() is True   # dlatego S2 (isdecimal) tez przepuszcza
+        with pytest.raises(ValueError):
+            int(cid_s)
+
+    @pytest.mark.parametrize("cid_s", DLUGIE_CIAGI_CYFR)
+    def test_grafik_cid_value_dlugi_ciag_odmawia_bez_wyjatku(
+        self, int_str_limit_default, cid_s
+    ):
+        """Bezposredni oracle na funkcji: zwraca None (ODMOWA) i NIE propaguje
+        wyjatku. Pod S2 `int(cid_s)` leci niezlapany => ValueError ucieka z
+        funkcji => ten test RED."""
+        try:
+            result = ncp._grafik_cid_value(cid_s)
+        except ValueError as exc:  # pragma: no cover - to wlasnie regresja G-2
+            pytest.fail(
+                f"powrot G-2: _grafik_cid_value podnioslo wyjatek zamiast "
+                f"odmowic (dlugosc {len(cid_s)}): {exc}")
+        assert result is None
+
+    def test_ensure_grafik_dlugi_cid_odmawia_nic_nie_zapisuje(
+        self, grafik_env, monkeypatch, int_str_limit_default
+    ):
+        """Poziom writera: dlugi CID = 'refused', grafik pozostaje pusty."""
+        cid_s = "1" * 4400
+        monkeypatch.setattr(
+            ncp, "_load_kurier_ids", lambda: {"Courier A": cid_s})
+        assert ncp._ensure_grafik_full_name("Courier A", cid_s) == "refused"
+        assert _grafik(grafik_env) == {}
+
+    def test_scan_once_przetwarza_wpisy_po_dlugim_cid(
+        self, patched_scan, monkeypatch, int_str_limit_default
+    ):
+        """PRAWDZIWA petla skanu (nie sam status): wpis z dlugim CID konczy sie
+        ODMOWA, a skan ZYJE dalej i domyka kolejnego kuriera. Pod S2 `scan_once`
+        podnioslby niezlapany ValueError = automat pairingu DOWN dla wszystkich."""
+        long_cid = "1" * 4400
+        patched_scan["kids"]["Attacker X"] = long_cid
+        monkeypatch.setattr(
+            ncp, "resolve_cid",
+            lambda name, kids=None: {"Attacker X": long_cid,
+                                     "Bartek Ołdziej": "123"}.get(name))
+        _sched(monkeypatch, {
+            "Attacker X": {"start": "09:00", "end": "19:00"},
+            "Bartek Ołdziej": {"start": "09:00", "end": "19:00"},
+        })
+        s = ncp.scan_once(dry_run=False)
+        assert s["scanned"] == 2
+        assert [r["name"] for r in s.get("grafik_refused", [])] == ["Attacker X"]
+        assert [r["name"] for r in s.get("healed", [])] == ["Bartek Ołdziej"]
