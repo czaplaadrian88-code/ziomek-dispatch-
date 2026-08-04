@@ -18,7 +18,9 @@ __all__ = [
     "COORDINATOR_CIDS",
     "CourierRecord",
     "canon_cid",
+    "canonical_courier_id",
     "pin_last2",
+    "validate_courier_ids_store",
     "validate_record",
 ]
 
@@ -40,6 +42,38 @@ def canon_cid(cid) -> str:
     if isinstance(cid, float) and cid.is_integer():
         return str(int(cid))
     return str(cid).strip()
+
+
+def canonical_courier_id(value) -> Optional[str]:
+    """Normalize the shared JSON CID scalar or reject a malformed value.
+
+    ``bool`` is rejected explicitly: it is an ``int`` subclass, so ``int(True)``
+    would otherwise mint CID 1 out of a flag.
+    """
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        return None
+    normalized = str(value).strip()
+    return normalized or None
+
+
+def validate_courier_ids_store(store) -> Dict:
+    """Validate the complete name->CID generation used for authorization.
+
+    Authorization reads one *generation* of the roster, never a subset: a
+    consumer that skips an unrelated malformed row keeps answering from a
+    roster nobody is allowed to trust. Raises ``ValueError`` so the caller
+    fails the whole generation closed.
+    """
+    if not isinstance(store, dict):
+        raise ValueError("courier ID store is not a mapping")
+    for name, cid in store.items():
+        if (
+            not isinstance(name, str)
+            or not name.strip()
+            or canonical_courier_id(cid) is None
+        ):
+            raise ValueError("courier ID store contains a malformed record")
+    return store
 
 
 def pin_last2(pin) -> Optional[str]:
