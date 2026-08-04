@@ -21,6 +21,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Tuple
 
 from dispatch_v2.common import WARSAW, setup_logger
+from dispatch_v2.identity.roster import load_courier_names
 
 
 SLA_LOG_PATH = "/root/.openclaw/workspace/scripts/logs/sla_log.jsonl"
@@ -51,25 +52,13 @@ def _today_range_utc() -> Tuple[datetime, datetime]:
 
 def _load_courier_names() -> Dict[str, str]:
     """V3.25 (STEP A.2): MERGE inverse(kurier_ids.json) + courier_names.json.
-    Conflict policy: courier_names wins."""
-    merged: Dict[str, str] = {}
-    try:
-        with open(KURIER_IDS_PATH) as f:
-            ids = json.load(f)
-        for name, cid in ids.items():
-            cid_str = str(cid)
-            if cid_str not in merged:
-                merged[cid_str] = name
-    except Exception as e:
-        _log.warning(f"_load_courier_names: kurier_ids fallback fail: {e}")
-    try:
-        with open(COURIER_NAMES_PATH) as f:
-            names = json.load(f)
-        for cid_str, name in names.items():
-            merged[cid_str] = name
-    except Exception as e:
-        _log.warning(f"courier_names load fail: {e}")
-    return merged
+    Conflict policy: courier_names wins.
+
+    A-6/G3 (K4): delegacja do jednego walidowanego ownera roster
+    ``identity.roster.load_courier_names`` (CID przez canonical_numeric_cid,
+    niekanoniczny rekord pominięty pojedynczo, fail-soft). Ranking NIE czyta
+    grafik_full_names → grafik_full_names_path pominięte (parytet z baseline)."""
+    return load_courier_names(KURIER_IDS_PATH, COURIER_NAMES_PATH, log=_log)
 
 
 def _iter_delivered_in_range(path: str, start_utc: datetime, end_utc: datetime):

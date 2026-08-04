@@ -12,6 +12,7 @@ from typing import Dict
 
 from dispatch_v2 import common as C
 from dispatch_v2.common import now_iso, setup_logger
+from dispatch_v2.identity.roster import load_courier_names
 from dispatch_v2.core.broadcast_handlers import dispatch_config_reload
 from dispatch_v2.core.config_reload_subscriber import BroadcastSubscriber
 from dispatch_v2.event_bus import get_pending, mark_processed, mark_failed, get_pending_count
@@ -77,23 +78,13 @@ _courier_names: Dict[str, str] = {}
 
 
 def _load_courier_names() -> Dict[str, str]:
-    """V3.25 (STEP A.2): MERGE inverse(kurier_ids) + courier_names. courier_names wins."""
-    merged: Dict[str, str] = {}
-    try:
-        ids = json.loads(KURIER_IDS_PATH.read_text())
-        for name, cid in ids.items():
-            cid_str = str(cid)
-            if cid_str not in merged:
-                merged[cid_str] = name
-    except Exception as e:
-        _log.warning(f"_load_courier_names: kurier_ids fallback fail: {e}")
-    try:
-        names = json.loads(COURIER_NAMES_PATH.read_text())
-        for cid_str, name in names.items():
-            merged[cid_str] = name
-    except Exception as e:
-        _log.warning(f"courier_names load fail: {e}")
-    return merged
+    """V3.25 (STEP A.2): MERGE inverse(kurier_ids) + courier_names. courier_names wins.
+
+    A-6/G3 (K4): delegacja do jednego walidowanego ownera roster
+    ``identity.roster.load_courier_names`` (CID przez canonical_numeric_cid,
+    niekanoniczny rekord pominięty pojedynczo, fail-soft). SLA NIE czyta
+    grafik_full_names → grafik_full_names_path pominięte (parytet z baseline)."""
+    return load_courier_names(KURIER_IDS_PATH, COURIER_NAMES_PATH, log=_log)
 
 
 def _handler(signum, frame):

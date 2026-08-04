@@ -34,6 +34,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from dispatch_v2 import manual_overrides  # V3.26 hotfix: top-level import
 from dispatch_v2.identity.normalize import norm
+from dispatch_v2.identity.roster import load_courier_names
                                           # (memory: V3.19g1 crash z `from X import Y` w funkcji)
 from dispatch_v2.core.broadcast_handlers import dispatch_config_reload
 from dispatch_v2.core.config_reload_subscriber import BroadcastSubscriber
@@ -204,28 +205,19 @@ def _load_courier_names() -> Dict[str, str]:
     courier_names.json higher-priority. Cache invalidated only przy restart
     procesu (telegram_approver żyje długo — fresh kurier_ids changes wymagają
     restart, akceptowalne dla rzadkich onboarding events).
+
+    A-6/G3 (K4): budowa roster delegowana do jednego walidowanego ownera
+    ``identity.roster.load_courier_names`` (CID przez canonical_numeric_cid,
+    niekanoniczny rekord pominięty pojedynczo, fail-soft). Cache modułowy bez
+    zmian. Telegram NIE czyta grafik_full_names → grafik_full_names_path
+    pominięte (parytet z baseline name_lookup w powiadomieniach).
     """
     global _courier_names_cache
     if _courier_names_cache is not None:
         return _courier_names_cache
-    merged: Dict[str, str] = {}
-    try:
-        with open(KURIER_IDS_PATH) as f:
-            ids = json.load(f)
-        for name, cid in ids.items():
-            cid_str = str(cid)
-            if cid_str not in merged:
-                merged[cid_str] = name
-    except Exception as e:
-        _log.warning(f"_load_courier_names: kurier_ids fallback fail: {e}")
-    try:
-        with open(COURIER_NAMES_PATH) as f:
-            names = json.load(f)
-        for cid_str, name in names.items():
-            merged[cid_str] = name
-    except Exception as e:
-        _log.warning(f"courier_names load fail: {e}")
-    _courier_names_cache = merged
+    _courier_names_cache = load_courier_names(
+        KURIER_IDS_PATH, COURIER_NAMES_PATH, log=_log
+    )
     return _courier_names_cache
 
 
