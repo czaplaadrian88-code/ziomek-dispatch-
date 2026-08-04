@@ -24,10 +24,34 @@ import contextlib
 import fcntl
 import hashlib
 import json
+import logging
 import os
 import tempfile
 import uuid
 from datetime import datetime, timedelta, timezone
+
+
+_log = logging.getLogger(__name__)
+
+# Obserwowalność (04.08): moduł nie emitował żadnej linii operacyjnej, więc
+# przejęcie i zwolnienie forward-fence'u — najbardziej nieodwracalne operacje
+# rolloutu — były niewidoczne w logu. Emisja jest czystym efektem ubocznym:
+# nigdy nie zmienia wyniku i nie podnosi wyjątku. PII: wyłącznie identyfikatory
+# techniczne (fence_id), zero danych klientów.
+_LOG_PREFIX = "RUTCOM_FENCE"
+
+
+def _log_fence(event: str, **fields: object) -> None:
+    """Jedyny emiter tego modułu; awaria logowania nie wywraca rolloutu."""
+    try:
+        _log.info(
+            "%s %s %s",
+            _LOG_PREFIX,
+            event,
+            " ".join(f"{k}={v}" for k, v in fields.items()),
+        )
+    except Exception:  # noqa: BLE001 - obserwowalność nie wywraca rolloutu
+        pass
 from pathlib import Path
 from typing import Callable, Mapping, Optional
 
@@ -829,6 +853,7 @@ def acquire_forward_rollout_fence(
                 raise RuntimeError(
                     "existing forward rollout fence code manifest mismatch"
                 )
+            _log_fence("acquire_noop_existing", fence_id=current.get("forward_fence_id"), reason="fence_already_present")
             return {"acquired": False, **current}
         data = _load()
         receipt = {
@@ -852,6 +877,7 @@ def acquire_forward_rollout_fence(
                 "forward rollout fence postcondition failed: "
                 + str(status["forward_fence_error"])
             )
+        _log_fence("acquire_ok", fence_id=status.get("forward_fence_id"))
         return {"acquired": True, **status}
 
 
@@ -868,6 +894,7 @@ def release_forward_rollout_fence(
     any drift restores the primary fence before the error leaves this lock.
     """
     expected_id = str(uuid.UUID(str(fence_id)))
+    _log_fence("release_start", fence_id=expected_id)
     if not callable(active_code_manifest_supplier):
         raise TypeError("active code manifest supplier must be callable")
     if not callable(writer_quiescence_supplier):
@@ -876,6 +903,7 @@ def release_forward_rollout_fence(
         data = _load()
         status = _forward_rollout_fence_status_unlocked(data)
         if not status["forward_fence_present"]:
+            _log_fence("release_noop", fence_id=expected_id, reason="fence_absent")
             return False
         if not status["forward_fence_valid"]:
             raise RuntimeError(
@@ -932,6 +960,7 @@ def release_forward_rollout_fence(
                 ) from release_error
             raise
         _unlink_durable(release_marker)
+        _log_fence("release_ok", fence_id=expected_id)
         return True
 
 

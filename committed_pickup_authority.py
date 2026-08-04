@@ -13,12 +13,16 @@ autoryzuje.
 """
 from __future__ import annotations
 
+import functools
 import hashlib
 import json
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import Mapping, Optional
+
+_log = logging.getLogger(__name__)
 
 
 PASSIVE_CK_SOURCES = frozenset(
@@ -666,6 +670,63 @@ def _resolution(
     return CommittedPickupResolution(outcome=outcome, reason=reason, event=event)
 
 
+# ---------------------------------------------------------------- obserwowalność
+# Ten moduł do 04.08 nie emitował ANI JEDNEJ linii operacyjnej: „zero błędów"
+# znaczyło tu „zero widoczności" (ustalenie blinda V29). Cała emisja żyje w tym
+# jednym miejscu — nie wolno logować z 72 wywołań ``_resolution`` ani z wnętrza
+# reguł, bo wtedy prawda „co orzekł moduł" ma tylu właścicieli, ile gałęzi.
+#
+# KONTRAKT: emisja jest CZYSTYM efektem ubocznym. Nie zmienia wyniku, nie
+# podnosi wyjątku i nie wchodzi w gałęzie decyzyjne. Awaria loggera nie może
+# wywrócić decyzji o czasie odbioru, więc łapiemy wszystko.
+#
+# PII: do linii trafiają wyłącznie identyfikatory (order_id) i pola techniczne.
+# Adresy klientów, nazwy restauracji i treść uwag NIE są logowane.
+_LOG_PREFIX = "RUTCOM_AUTHORITY"
+
+
+def _log_resolution(
+    entry: str,
+    existing: Mapping[str, object] | None,
+    resolution: CommittedPickupResolution,
+) -> CommittedPickupResolution:
+    """Zaloguj werdykt publicznego wejścia i zwróć go BEZ ZMIAN."""
+    try:
+        _log.info(
+            "%s entry=%s oid=%s outcome=%s reason=%s event=%s",
+            _LOG_PREFIX,
+            entry,
+            _clean_id((existing or {}).get("order_id")) or "?",
+            getattr(resolution.outcome, "name", resolution.outcome),
+            resolution.reason,
+            "yes" if resolution.event else "no",
+        )
+    except Exception:  # noqa: BLE001 - obserwowalność nigdy nie wywraca decyzji
+        pass
+    return resolution
+
+
+def _observed(entry: str):
+    """Owiń publiczne wejście emisją werdyktu, NIE dotykając jego ciała.
+
+    ``resolve_czasowka_committed_observation`` ma 29 ścieżek ``return``.
+    Dopisanie logu do każdej byłoby 29 miejscami, w których ktoś kiedyś
+    zapomni, i przeniesieniem 225 linii w diffie recenzenta. Dekorator daje
+    dokładnie jeden punkt emisji na wejście, zero ruchu kodu i zachowuje
+    sygnaturę przez ``functools.wraps``.
+    """
+
+    def decorator(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            existing = args[0] if args else kwargs.get("existing")
+            return _log_resolution(entry, existing, fn(*args, **kwargs))
+
+        return wrapper
+
+    return decorator
+
+
 def _parse_aware(value: object) -> Optional[datetime]:
     if not isinstance(value, str) or not value.strip():
         return None
@@ -831,6 +892,7 @@ def _valid_coordinator_receipt(
     return observed_at >= eligible_at
 
 
+@_observed("assignment_ck")
 def resolve_czasowka_assignment_ck(
     existing: Mapping[str, object] | None,
     *,
@@ -1455,6 +1517,7 @@ def _build_pickup_event(
     }
 
 
+@_observed("committed_observation")
 def resolve_czasowka_committed_observation(
     existing: Mapping[str, object] | None,
     observation: Mapping[str, object] | None,
@@ -1778,6 +1841,7 @@ def _resolve_czasowka_pickup_observation(
     )
 
 
+@_observed("pickup_observation")
 def resolve_czasowka_pickup_observation(
     existing: Mapping[str, object] | None,
     observation: Mapping[str, object] | None,
@@ -1810,6 +1874,7 @@ def _initial_time_decision_deadline_reached(
     )
 
 
+@_observed("initial_time_intent")
 def resolve_czasowka_initial_time_intent(
     existing: Mapping[str, object] | None,
     intent: Mapping[str, object] | None,
@@ -1898,6 +1963,21 @@ def resolve_czasowka_initial_time_intent(
     # owns the decision: the restaurant-declared pickup is chosen fail-closed.
     # All lifecycle, generation, revision, value and proof checks still run in
     # the shared pickup resolver; only its mutable Rutcom-status gate is lifted.
+    # WARNING, nie INFO: to jedyne miejsce, w którym moduł świadomie zdejmuje
+    # bramkę statusu Rutcom. Do 04.08 działo się to bezgłośnie — operator nie
+    # miał jak zobaczyć, że polityka czasu została poszerzona dla zlecenia.
+    try:
+        _log.warning(
+            "%s deadline_boundary_crossed oid=%s deadline=%s as_of=%s "
+            "bypass=enforce_active_rutcom_status_off prev_reason=%s",
+            _LOG_PREFIX,
+            _clean_id(existing.get("order_id")) or "?",
+            intent.get("decision_deadline"),
+            as_of,
+            pickup_resolution.reason,
+        )
+    except Exception:  # noqa: BLE001 - obserwowalność nigdy nie wywraca decyzji
+        pass
     deadline_observation = {
         **pickup_observation,
         "source": NEW_ORDER_DECLARED_DEADLINE_SOURCE,
