@@ -13,6 +13,7 @@ The tool never drains or mutates the durable event outbox.
 from __future__ import annotations
 
 import argparse
+import logging
 import hashlib
 import json
 import os
@@ -543,6 +544,23 @@ def collect_status(
     }
 
 
+_LOG_PREFIX = "RUTCOM_ROLLBACK_CLI"
+_log = logging.getLogger(__name__)
+
+
+def _log_cli(event: str, **fields: object) -> None:
+    """Jedyny emiter CLI; nigdy nie zmienia kodu wyjścia ani wydruku."""
+    try:
+        _log.info(
+            "%s %s %s",
+            _LOG_PREFIX,
+            event,
+            " ".join(f"{k}={v}" for k, v in fields.items()),
+        )
+    except Exception:  # noqa: BLE001 - obserwowalność nie wywraca narzędzia
+        pass
+
+
 def _print(value: dict) -> None:
     print(json.dumps(value, ensure_ascii=False, sort_keys=True, indent=2))
 
@@ -701,11 +719,21 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    # Obserwowalność (04.08): dotąd narzędzie zostawiało ślad wyłącznie na
+    # stdout operatora, więc po fakcie nie dało się odtworzyć z logu hosta,
+    # KTO i KIEDY ruszał rollout. Emisja nie zmienia kodu wyjścia ani wydruku.
+    command = getattr(args, "command", None) or getattr(
+        getattr(args, "func", None), "__name__", "?"
+    )
+    _log_cli("start", command=command)
     try:
-        return int(args.func(args))
+        code = int(args.func(args))
     except Exception as exc:  # fail closed for operator automation
+        _log_cli("error", command=command, error=type(exc).__name__)
         _print({"error": type(exc).__name__, "message": str(exc)})
         return 4
+    _log_cli("done", command=command, exit_code=code)
+    return code
 
 
 if __name__ == "__main__":
