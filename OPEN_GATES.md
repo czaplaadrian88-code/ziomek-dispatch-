@@ -2,8 +2,8 @@
 
 > GENERATED — edycja bezcelowa; źródłem prawdy jest kanoniczna baza SQLite.
 > Źródło: `process-gates-ledger`
-> Ledger SHA-256: `1742e7715b1cac2c0b7c7028e121c4ebfd4664039985bac3a07d7cf48698177f`
-> Stan na: `2026-08-04T06:25:44Z`
+> Ledger SHA-256: `f39af4524597bed730ef4704bcd98cb989bfb11f07d54ef866f7a5589a2660dc`
+> Stan na: `2026-08-04T06:35:56Z`
 
 Otwarte: **106** | po terminie: **66** | ALARM: **2**
 Anomalie schedulera (także terminalne): **0**

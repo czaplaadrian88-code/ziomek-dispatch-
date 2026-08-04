@@ -8,6 +8,10 @@ Covers:
 """
 from __future__ import annotations
 
+import json
+
+import pytest
+
 from dispatch_v2 import courier_info as ci
 from dispatch_v2 import telegram_approver as ta
 
@@ -45,6 +49,32 @@ class TestResolveCourier:
     def test_empty_query(self):
         n, c, p, a = ci.resolve_courier_query("")
         assert (n, c, p, a) == (None, None, None, [])
+
+    @pytest.mark.parametrize(
+        "ids",
+        [
+            {"Courier A": True},
+            {"Courier A": 17, "Unrelated": []},
+        ],
+    )
+    def test_malformed_cid_generation_never_discloses_pin(
+        self, tmp_path, monkeypatch, ids
+    ):
+        piny_path = tmp_path / "kurier_piny.json"
+        ids_path = tmp_path / "kurier_ids.json"
+        piny_path.write_text(
+            json.dumps({"1234": "Courier A"}), encoding="utf-8"
+        )
+        ids_path.write_text(json.dumps(ids), encoding="utf-8")
+        monkeypatch.setattr(ci, "PINY_PATH", str(piny_path))
+        monkeypatch.setattr(ci, "IDS_PATH", str(ids_path))
+
+        assert ci.resolve_courier_query("Courier A") == (
+            None,
+            None,
+            None,
+            [],
+        )
 
 
 class TestFormatPin:

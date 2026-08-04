@@ -345,7 +345,8 @@ ETAP4_DECISION_FLAGS = (
     # W1/T2.4 advisory (2026-07-07): stempel would-be-mode (S1/S2/S3) na rekordzie decyzji (shadow).
     "ENABLE_MODE_LAYER_SHADOW",
     # CHOICE-SET (2026-07-21): pełna oceniona pula w shadow_decisions jako
-    # sześciopolowy full_pool_compact. Wyłącznie obserwacja; default OFF.
+    # siedmiopolowy full_pool_compact (7. pole feasibility_reason od 2026-08-04 —
+    # bramka, która wycięła kandydata). Wyłącznie obserwacja; default OFF.
     "ENABLE_FULL_CHOICE_SET_LOG",
     # DECISION-TIME ETA (2026-07-21): osobny append-only log snapshotów ETA
     # wybranego kuriera i puli w chwili decyzji/commitu planu. Log-only,

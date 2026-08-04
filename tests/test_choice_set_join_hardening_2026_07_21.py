@@ -2,7 +2,7 @@
 
 Kontrakty:
 - ENABLE_FULL_CHOICE_SET_LOG OFF usuwa pole, ON loguje pełną pulę sprzed top-N;
-- każdy element full_pool_compact ma dokładnie sześć dozwolonych kluczy;
+- każdy element full_pool_compact ma dokładnie siedem dozwolonych kluczy;
 - LOCATION A i B używają tego samego projection helpera;
 - ENABLE_LEARNING_LOG_DECISION_JOIN wiąże PANEL_AGREE/OVERRIDE z
   shadow.event_id, nie z późniejszym COURIER_ASSIGNED;
@@ -24,10 +24,18 @@ from dispatch_v2 import shadow_dispatcher as SD
 from dispatch_v2.dispatch_pipeline import PipelineResult
 
 
+# Zamrożony kontrakt ledgera. Rozszerzony ŚWIADOMIE 2026-08-04 o siódmy klucz
+# `feasibility_reason` (owner GO): sześciopolowa projekcja mówiła KTÓRY kurier
+# wypadł, ale nie KTÓRA bramka go wycięła, przez co audyt per-bramka musiał
+# zgadywać rodzinę z trzech pól diagnostycznych. To jest jawna zmiana kontraktu,
+# nie obejście ratcheta — zbiór pozostaje domknięty i każdy kolejny klucz nadal
+# wymaga tej samej jawnej decyzji. Kontrakt siódmego pola pokrywa
+# tests/test_full_pool_feasibility_reason_2026_08_04.py.
 COMPACT_KEYS = {
     "cid",
     "score",
     "feasibility_verdict",
+    "feasibility_reason",
     "pos_source",
     "km_to_pickup",
     "r6_bag_size",
@@ -107,6 +115,11 @@ def test_compact_projection_is_shared_by_serializer_locations_a_and_b(monkeypatc
         assert location["pos_source"] == compact["pos_source"]
         assert location["km_to_pickup"] == compact["km_to_pickup"]
         assert location["r6_bag_size"] == compact["r6_bag_size"]
+        # Siódme pole (2026-08-04) należy WYŁĄCZNIE do full_pool_compact.
+        # A i B czytają klucze projekcji jawnie i publikują powód pod własnym,
+        # niezmienionym kluczem `reason` — dosłownie, także dla feasible.
+        assert "feasibility_reason" not in location
+        assert location["reason"] == candidate.feasibility_reason
 
 
 def test_every_selection_result_threads_the_full_pool():
