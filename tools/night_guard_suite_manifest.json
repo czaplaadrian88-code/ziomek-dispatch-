@@ -1,6 +1,6 @@
 {
-  "base_sha": "62f45a52a3735bfcbc262228511ca48aa267ad36",
-  "manifest_version": 43,
+  "base_sha": "7e703c2bda3cce84a8703c30ac87940fcc0e1031",
+  "manifest_version": 44,
   "nodeids": [
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix1_kurier_ids_load_fail_logs_error_and_dedups",
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix2_bag_not_stale_dedup_same_input",
@@ -238,6 +238,33 @@
     "tests/test_a4_upsert_idempotent.py::test_on_idempotent_same_proposal_is_noop",
     "tests/test_a4_upsert_idempotent.py::test_on_no_identity_rebuilds",
     "tests/test_a4_upsert_idempotent.py::test_on_propagates_write_error",
+    "tests/test_a6_g3_resolver_shared_validators.py::test_failsoft_bad_file_partial_roster[courier_ranking]",
+    "tests/test_a6_g3_resolver_shared_validators.py::test_failsoft_bad_file_partial_roster[courier_resolver]",
+    "tests/test_a6_g3_resolver_shared_validators.py::test_failsoft_bad_file_partial_roster[sla_tracker]",
+    "tests/test_a6_g3_resolver_shared_validators.py::test_failsoft_bad_file_partial_roster[telegram_approver]",
+    "tests/test_a6_g3_resolver_shared_validators.py::test_failsoft_missing_files_empty_roster[courier_ranking]",
+    "tests/test_a6_g3_resolver_shared_validators.py::test_failsoft_missing_files_empty_roster[courier_resolver]",
+    "tests/test_a6_g3_resolver_shared_validators.py::test_failsoft_missing_files_empty_roster[sla_tracker]",
+    "tests/test_a6_g3_resolver_shared_validators.py::test_failsoft_missing_files_empty_roster[telegram_approver]",
+    "tests/test_a6_g3_resolver_shared_validators.py::test_grafik_flag_off_source_skipped",
+    "tests/test_a6_g3_resolver_shared_validators.py::test_grafik_flag_on_source_included",
+    "tests/test_a6_g3_resolver_shared_validators.py::test_noncanonical_cid_skipped_all_consumers[courier_ranking]",
+    "tests/test_a6_g3_resolver_shared_validators.py::test_noncanonical_cid_skipped_all_consumers[courier_resolver]",
+    "tests/test_a6_g3_resolver_shared_validators.py::test_noncanonical_cid_skipped_all_consumers[sla_tracker]",
+    "tests/test_a6_g3_resolver_shared_validators.py::test_noncanonical_cid_skipped_all_consumers[telegram_approver]",
+    "tests/test_a6_g3_resolver_shared_validators.py::test_parity_healthy_data_per_consumer[courier_ranking]",
+    "tests/test_a6_g3_resolver_shared_validators.py::test_parity_healthy_data_per_consumer[courier_resolver]",
+    "tests/test_a6_g3_resolver_shared_validators.py::test_parity_healthy_data_per_consumer[sla_tracker]",
+    "tests/test_a6_g3_resolver_shared_validators.py::test_parity_healthy_data_per_consumer[telegram_approver]",
+    "tests/test_a6_g3_resolver_shared_validators.py::test_ratchet_delegates_to_shared_owner[courier_ranking]",
+    "tests/test_a6_g3_resolver_shared_validators.py::test_ratchet_delegates_to_shared_owner[courier_resolver]",
+    "tests/test_a6_g3_resolver_shared_validators.py::test_ratchet_delegates_to_shared_owner[sla_tracker]",
+    "tests/test_a6_g3_resolver_shared_validators.py::test_ratchet_delegates_to_shared_owner[telegram_approver]",
+    "tests/test_a6_g3_resolver_shared_validators.py::test_ratchet_no_raw_strcid_roster_key[courier_ranking]",
+    "tests/test_a6_g3_resolver_shared_validators.py::test_ratchet_no_raw_strcid_roster_key[courier_resolver]",
+    "tests/test_a6_g3_resolver_shared_validators.py::test_ratchet_no_raw_strcid_roster_key[sla_tracker]",
+    "tests/test_a6_g3_resolver_shared_validators.py::test_ratchet_no_raw_strcid_roster_key[telegram_approver]",
+    "tests/test_a6_g3_resolver_shared_validators.py::test_shared_owner_uses_canonical_validator",
     "tests/test_a6_security_pin_kdf.py::test_do_post_bad_pin_401_when_on",
     "tests/test_a6_security_pin_kdf.py::test_do_post_off_no_rate_limit",
     "tests/test_a6_security_pin_kdf.py::test_do_post_rate_limit_429_when_on",
@@ -7420,7 +7447,7 @@
     "tests/test_zombie01_pickup_guard.py::test_picked_up_recent_kept",
     "tests/test_zombie01_pickup_guard.py::test_zombie_assigned_with_stale_pickup_filtered"
   ],
-  "nodeids_sha256": "09ba1e9a0e1cac70abc78ec1ff80bfa7faa899a8ebe7d0778e91a01f82dbba7b",
+  "nodeids_sha256": "e70ccfecbeec589a641750f665997bf57cc4736af03cf22c7ed5d6c20c90cf72",
   "outcome_contracts": {
     "tests/test_canon_static_check_a1.py::test_defer_completion_guard_armed_when_defer_exists": [
       "skipped"
@@ -7544,7 +7571,7 @@
     ]
   },
   "owner": "CTO-Fable-sesja-dzienna-0408",
-  "reason": "Re-seed po merge G4 (A-6/K6+K8, +22 nodeidy); HEAD 62f45a52a3735bfcbc262228511ca48aa267ad36",
+  "reason": "Re-seed po merge G3 iter2 (A-6/K4 konsolidacja, +27 nodeidy); HEAD 7e703c2bda3cce84a8703c30ac87940fcc0e1031",
   "schema_version": 1,
-  "updated_at_utc": "2026-08-04T15:26:15+00:00"
+  "updated_at_utc": "2026-08-04T17:50:58+00:00"
 }
