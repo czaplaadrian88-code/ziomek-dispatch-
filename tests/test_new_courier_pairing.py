@@ -551,3 +551,97 @@ class TestGrafikCidOwnership:
         status = ncp._ensure_grafik_full_name("Darek Osmólski", 543)
         assert _grafik(grafik_env) == {"Darek Osmólski": 543}
         assert status == "healed"
+
+
+# --------------------------------------------------------------------------- #
+# A-6/K7 iter2 — findingi F-1 / F-2 / F-3 ze security-blinda fc6fab872
+# --------------------------------------------------------------------------- #
+
+def _break_root(path, mode):
+    """Uczyn root NIECZYTELNYM w sposob odrozniamy od 'pusty root'."""
+    if mode == "corrupt-json":
+        path.write_text("{ to nie jest json", encoding="utf-8")
+    elif mode == "is-a-directory":
+        path.unlink(missing_ok=True)
+        path.mkdir()
+    elif mode == "not-an-object":
+        path.write_text("[1, 2, 3]", encoding="utf-8")
+    else:  # pragma: no cover
+        raise AssertionError(mode)
+
+
+class TestGrafikUnreadableRootIsRefusal:
+    """F-1: nieczytelny root konfliktu NIE moze byc cicha zgoda na zapis.
+
+    Kazdy przypadek: konflikt istnieje DOKLADNIE w tym roocie, ktory psujemy.
+    Przy czytelnym roocie kontrakt odmawia — po zepsuciu MUSI odmawiac dalej.
+    """
+
+    @pytest.mark.parametrize(
+        "mode", ["corrupt-json", "is-a-directory", "not-an-object"])
+    def test_courier_names_unreadable_refuses(self, grafik_env, mode):
+        grafik_env["names"].write_text(
+            json.dumps({"17": "Someone Else"}), encoding="utf-8")
+        _break_root(grafik_env["names"], mode)
+        assert ncp._ensure_grafik_full_name("Courier A", 17) == "refused"
+        assert _grafik(grafik_env) == {}
+
+    @pytest.mark.parametrize(
+        "mode", ["corrupt-json", "is-a-directory", "not-an-object"])
+    def test_courier_tiers_unreadable_refuses(self, grafik_env, mode):
+        grafik_env["tiers"].write_text(
+            json.dumps({"17": {"name": "Someone Else"}}), encoding="utf-8")
+        _break_root(grafik_env["tiers"], mode)
+        assert ncp._ensure_grafik_full_name("Courier A", 17) == "refused"
+        assert _grafik(grafik_env) == {}
+
+    @pytest.mark.parametrize(
+        "mode", ["corrupt-json", "is-a-directory", "not-an-object"])
+    def test_grafik_root_unreadable_refuses(self, grafik_env, mode):
+        grafik_env["grafik"].write_text(
+            json.dumps({"Other Name": 17}), encoding="utf-8")
+        _break_root(grafik_env["grafik"], mode)
+        assert ncp._ensure_grafik_full_name("Courier A", 17) == "refused"
+
+    def test_unreadable_kurier_ids_refuses(self, grafik_env, monkeypatch):
+        """Dowod POZYTYWNY tez nie moze uchodzic za 'pusty rejestr'."""
+        def boom():
+            raise OSError(5, "EIO")
+        monkeypatch.setattr(ncp, "_load_kurier_ids", boom)
+        assert ncp._ensure_grafik_full_name("Courier A", 17) == "refused"
+        assert _grafik(grafik_env) == {}
+
+
+class TestGrafikCheckedEqualsWritten:
+    """F-2: kontrprzykad recenzenta — sprawdzana i zapisywana reprezentacja."""
+
+    def test_boolean_cid_cannot_hijack_victim_cid(self, grafik_env, monkeypatch):
+        monkeypatch.setattr(
+            ncp, "_load_kurier_ids", lambda: {"Attacker": True, "Victim": 1})
+        assert ncp._ensure_grafik_full_name("Attacker", True) == "refused"
+        assert _grafik(grafik_env) == {}
+
+    @pytest.mark.parametrize("cid", [True, False, 1.0, [1, 2], None, "", "   "])
+    def test_type_gate_refuses_non_canonical_before_any_write(
+        self, grafik_env, monkeypatch, cid
+    ):
+        monkeypatch.setattr(
+            ncp, "_load_kurier_ids", lambda: {"Courier A": cid})
+        assert ncp._ensure_grafik_full_name("Courier A", cid) == "refused"
+        assert _grafik(grafik_env) == {}
+
+    @pytest.mark.parametrize("cid", ["  17  ", "17", 17])
+    def test_realistic_forms_normalize_to_one_written_representation(
+        self, grafik_env, cid
+    ):
+        assert ncp._ensure_grafik_full_name("Courier A", cid) == "healed"
+        assert _grafik(grafik_env) == {"Courier A": 17}
+
+
+class TestGrafikEmptyCidGuard:
+    """F-3: guard pustego CID jest nosny — ma wlasny oracle."""
+
+    def test_none_cid_with_none_in_roster_refuses(self, grafik_env, monkeypatch):
+        monkeypatch.setattr(ncp, "_load_kurier_ids", lambda: {"Ghost": None})
+        assert ncp._ensure_grafik_full_name("Ghost", None) == "refused"
+        assert _grafik(grafik_env) == {}

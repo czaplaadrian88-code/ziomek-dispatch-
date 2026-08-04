@@ -56,7 +56,7 @@ from dispatch_v2.courier_admin import (
     COURIER_NAMES, add_new_courier, derive_alias,
 )
 from dispatch_v2.identity.normalize import norm
-from dispatch_v2.identity.schema import canon_cid
+from dispatch_v2.identity.schema import canonical_courier_id
 
 WARSAW = ZoneInfo("Europe/Warsaw")
 LOG_DIR = "/root/.openclaw/workspace/scripts/logs/"
@@ -170,44 +170,64 @@ GRAFIK_HEALED = "healed"    # dopisano/poprawiono (self-heal)
 GRAFIK_REFUSED = "refused"  # ODMOWA: CID nie należy do tej tożsamości
 
 
+def _read_root_strict(path: str) -> dict:
+    """Treść roota tożsamości albo WYJĄTEK — nigdy ciche `{}` (A-6/K7 iter2, F-1).
+
+    BRAK pliku to TREŚĆ (root pusty) i jest bezpieczny. Każda inna awaria —
+    EIO, uprawnienia, niepoprawny JSON, obiekt innego typu — MUSI podnieść,
+    bo „nie umiem odczytać rootu" nie może być nieodróżnialne od „w roocie nie
+    ma konfliktu". Ten drugi przypadek jest zgodą na zapis, pierwszy nie jest.
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return {}
+    if not isinstance(data, dict):
+        raise ValueError(f"{path}: root tożsamości nie jest obiektem JSON")
+    return data
+
+
 def _cid_identity_set(cid_s: str, kids: dict) -> set:
     """Zbiór tożsamości danego CID wg kanonicznego rejestru kurier_ids.
 
     kurier_ids trzyma też aliasy wtórne (Lekcja #78), więc jeden CID ma zwykle
     kilka kluczy ("Darek os" i "Darek Osmólski"). Porównujemy przez `norm`, bo
-    rejestr bywa zapisany inną wielkością liter niż grafik.
+    rejestr bywa zapisany inną wielkością liter niż grafik, a wartości przez
+    ten sam `canonical_courier_id`, którym bramkujemy wejście — inaczej można
+    dopasować się jedną reprezentacją, a zapisać inną.
     """
-    return {norm(k) for k, v in kids.items() if canon_cid(v) == cid_s}
+    return {norm(k) for k, v in kids.items() if canonical_courier_id(v) == cid_s}
 
 
-def _grafik_ownership_refusal(full_name: str, cid_s: str) -> Optional[str]:
+def _grafik_ownership_refusal(full_name: str, cid_s: str, grafik: dict) -> Optional[str]:
     """None = wolno zapisać; tekst = powód odmowy.
 
     Grafik jest JEDNOZNACZNYM wiązaniem cid↔pełne imię, więc wolno w nim utrwalić
-    wyłącznie wiązanie już potwierdzone w kanonicznym rejestrze tożsamości. Wymóg
-    pozytywnego dowodu własności załatwia przy okazji CID-y niekanoniczne
-    (bool/lista/spacje): żaden taki nie ma właściciela w kurier_ids.
+    wyłącznie wiązanie już potwierdzone w kanonicznym rejestrze tożsamości.
 
     ŚWIADOMIE NIE sprawdzamy `kurier_full_names` — jest kluczowany SKRÓTEM, który
     legalnie koliduje ("Rafał Ja" → Jankowski|Jabłoński). Rozstrzyganie tej
     kolizji to powód istnienia grafiku; traktowanie jej jako konfliktu odmawiałoby
     zapisu realnym kurierom (pomiar 04.08 na żywych danych: 2 z 58).
+
+    Rooty konfliktu czytamy STRICT: nieczytelny root podnosi wyjątek, który
+    wołający zamienia na odmowę (F-1). Dowód własności też — nieczytelny
+    `kurier_ids` nie może uchodzić za pusty rejestr.
     """
-    if not cid_s:
-        return "pusty CID"
     identity = _cid_identity_set(cid_s, _load_kurier_ids())
     if not identity & {norm(full_name), norm(derive_alias(full_name))}:
         return (f"CID {cid_s} nie należy do {full_name!r} wg kurier_ids "
                 f"(właściciele: {sorted(identity) or 'brak'})")
-    owner = _read_json(COURIER_NAMES).get(cid_s)
+    owner = _read_root_strict(COURIER_NAMES).get(cid_s)
     if owner is not None and norm(owner) not in identity:
         return f"courier_names[{cid_s}]={owner!r} spoza tożsamości CID"
-    entry = _read_json(COURIER_TIERS).get(cid_s)
+    entry = _read_root_strict(COURIER_TIERS).get(cid_s)
     if (isinstance(entry, dict) and entry.get("name") is not None
             and norm(entry["name"]) not in identity):
         return f"courier_tiers[{cid_s}].name={entry['name']!r} spoza tożsamości CID"
-    taken = [g for g, c in _read_json(GRAFIK_FULL_NAMES).items()
-             if canon_cid(c) == cid_s and norm(g) != norm(full_name)]
+    taken = [g for g, c in grafik.items()
+             if canonical_courier_id(c) == cid_s and norm(g) != norm(full_name)]
     if taken:
         return f"CID {cid_s} jest już w grafiku związany z {taken!r}"
     return None
@@ -218,24 +238,36 @@ def _ensure_grafik_full_name(full_name: str, cid) -> str:
     dla dispatchu (courier_resolver._load_courier_names, PANEL-CANON #1) i panelu.
     Zwraca GRAFIK_OK / GRAFIK_HEALED / GRAFIK_REFUSED. Atomic (temp+fsync+rename).
 
-    Fail-soft na BŁĄD I/O zostaje (nie blokuj skanu), ale odmowa z powodu konfliktu
-    własności CID jest twarda i widoczna: log ERROR + status REFUSED, który wołający
+    Fail-soft zostaje WYŁĄCZNIE na samym zapisie grafiku (intencja pętli self-heal:
+    błąd dysku nie blokuje skanu). Odmowa z powodu konfliktu własności ORAZ awaria
+    odczytu rootów są twarde i widoczne: log ERROR + status REFUSED, który wołający
     raportuje operatorowi. Bez tego self-heal mógł po cichu związać CID należący do
     innej tożsamości (A-6/K7)."""
+    # Bramka typu PRZED int(cid) (F-2): sprawdzana i zapisywana reprezentacja musi
+    # być ta sama. canonical_courier_id odrzuca bool jawnie — inaczej check liczyłby
+    # się na "True", a zapis utrwalał int(True)==1, przejmując cudzy CID.
+    cid_s = canonical_courier_id(cid)
+    if cid_s is None:
+        _log.error(
+            f"grafik_full_names ODMOWA zapisu {full_name!r} -> {cid!r}: "
+            f"niekanoniczny CID (typ {type(cid).__name__})"
+        )
+        return GRAFIK_REFUSED
+    cid_val = int(cid_s) if cid_s.isdigit() else cid_s
     try:
-        cid_val = int(cid)
-    except (ValueError, TypeError):
-        cid_val = cid
+        grafik = _read_root_strict(GRAFIK_FULL_NAMES)
+        refusal = _grafik_ownership_refusal(full_name, cid_s, grafik)
+    except Exception as e:  # noqa: BLE001
+        # Nieczytelny root != brak konfliktu. Nie wolno zgodzić się na zapis.
+        refusal = f"nie można zweryfikować własności CID: {type(e).__name__}: {e}"
+    if refusal is not None:
+        _log.error(
+            f"grafik_full_names ODMOWA zapisu {full_name!r} -> {cid!r}: {refusal}"
+        )
+        return GRAFIK_REFUSED
     try:
-        cid_s = canon_cid(cid)
-        refusal = _grafik_ownership_refusal(full_name, cid_s)
-        if refusal is not None:
-            _log.error(
-                f"grafik_full_names ODMOWA zapisu {full_name!r} -> {cid!r}: {refusal}"
-            )
-            return GRAFIK_REFUSED
-        data = _read_json(GRAFIK_FULL_NAMES)
-        if canon_cid(data.get(full_name)) == cid_s:
+        data = grafik
+        if canonical_courier_id(data.get(full_name)) == cid_s:
             return GRAFIK_OK  # już poprawne — no-op
         data[full_name] = cid_val
         _d = os.path.dirname(GRAFIK_FULL_NAMES)
