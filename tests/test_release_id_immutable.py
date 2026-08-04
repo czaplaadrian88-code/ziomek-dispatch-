@@ -9,10 +9,15 @@ Kontrakt broniony (naprawa u źródła, ETAP 4 Przykazania #0):
   4. release_id emitowany w telemetrii pulsu (heartbeat) niesie wartość ze startu,
      nawet po odrzuconej próbie mutacji.
 
-MUTATION GUARD: usunięcie/odwrócenie zatrzasku w ``assistant_heartbeat.py`` (linia
-``sys.modules[__name__].__class__ = _ReleaseIdImmutableModule``) sprawia, że
-``test_runtime_mutation_rejected`` oraz ``test_emitted_release_id_survives_mutation_attempt``
-czerwienieją (przypisanie do globala przestaje rzucać AttributeError).
+MUTATION GUARD (obie strony kontraktu):
+  - ZAPIS: usunięcie/odwrócenie zatrzasku w ``assistant_heartbeat.py`` (linia
+    ``sys.modules[__name__].__class__ = _ReleaseIdImmutableModule``) sprawia, że
+    ``test_runtime_mutation_rejected`` oraz
+    ``test_emitted_release_id_survives_mutation_attempt`` czerwienieją (przypisanie
+    do globala przestaje rzucać AttributeError);
+  - ODCZYT: zamiana emittera w ``write_heartbeat`` na ``os.getenv`` czytany przy
+    każdym ticku (dokładne cofnięcie sensu fixu — dryf, który A-5 zamyka) czerwieni
+    ``test_emitted_release_id_ignores_runtime_env_drift``.
 """
 import importlib
 import json
@@ -137,7 +142,14 @@ def _attack_in_subprocess(tmp_path, attack: str) -> dict:
         """
     )
     env = os.environ.copy()
-    scripts_root = env["ZIOMEK_SCRIPTS_ROOT"]
+    # pkgroot bierzemy z modułu, który ten test i tak już zaimportował — nie z env.
+    # `ZIOMEK_SCRIPTS_ROOT` jest OPCJONALNY (conftesty czytają go przez `.get` z
+    # domyślnym kanonem) i kanoniczna komenda suity ani nocny strażnik go NIE ustawiają.
+    # Wyprowadzenie ścieżki z `ahb.__file__` daje tę samą wartość co efektywna
+    # resolucja rodzica (kanon albo symlinkowany pkgroot worktree) i gwarantuje, że
+    # dziecko-subprocess importuje TEN SAM plik modułu co rodzic. Bez `realpath`:
+    # ścieżka ma zostać taka, jaką widzi `sys.path` rodzica.
+    scripts_root = os.path.dirname(os.path.dirname(ahb.__file__))
     env["PYTHONPATH"] = os.pathsep.join(
         part for part in (scripts_root, env.get("PYTHONPATH", "")) if part
     )
@@ -211,3 +223,44 @@ def test_emitted_release_id_survives_mutation_attempt(tmp_path, monkeypatch):
     )
     payload = json.loads(hb.read_text())
     assert payload["model_version"] == original
+
+
+def test_emitted_release_id_ignores_runtime_env_drift(tmp_path, monkeypatch):
+    """MUTATION GUARD ścieżki ODCZYTU: emitter niesie wartość ZATRZAŚNIĘTĄ przy starcie.
+
+    Kontrakt 4 broni się dopiero wtedy, gdy ``write_heartbeat`` czyta zatrzask, a nie
+    ``os.environ`` przy każdym ticku. W repo żyją procesy mutujące env w runtime
+    (``tools/route_reorder_replay.py``, ``tools/golden_decision_replay.py``,
+    ``tools/rebuild_state_from_events.py``), więc dryf jest osiągalny bez ataku.
+    Podmiana emittera na odczyt per-tick czerwieni ten test.
+    """
+    hb = tmp_path / "hb-env-drift.json"
+    monkeypatch.setattr(ahb, "HEARTBEAT_PATH", str(hb))
+    latched = ahb.MODEL_VERSION
+
+    def _tick():
+        ahb.write_heartbeat(
+            optimizer_running=True,
+            queue_depth=0,
+            processed=1,
+            failed=0,
+            worker_alive=True,
+            fallback_active=False,
+        )
+        return json.loads(hb.read_text())["model_version"]
+
+    before = _tick()
+
+    # Wartość MUSI być inna niż zatrzaśnięta i MUSI przechodzić walidację env —
+    # inaczej emitter czytający env per tick i tak wypuściłby fallback i test
+    # przepuściłby mutację.
+    drifted = f"{latched}-DRIFT-RUNTIME"
+    assert drifted != latched
+    assert ahb._RELEASE_ID_PATTERN.fullmatch(drifted)
+    monkeypatch.setenv("ZIOMEK_MODEL_VERSION", drifted)
+
+    after = _tick()
+
+    assert before == latched
+    assert after == latched, "emitter czyta env per tick zamiast zatrzaśniętej wartości"
+    assert after != drifted
