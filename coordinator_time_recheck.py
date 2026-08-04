@@ -24,21 +24,38 @@ import contextlib
 import fcntl
 import hashlib
 import json
-import logging
 import os
 import tempfile
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Callable, Mapping, Optional
 
-
-_log = logging.getLogger(__name__)
+from dispatch_v2 import common as C
+from dispatch_v2.committed_pickup_authority import (
+    COMMITTED_TIME_POLICY_SNAPSHOT_FIELD,
+    MANUAL_CK_AUTHORITY_FLAG,
+    RUTCOM_FORWARD_AUTHORITY_FLAG,
+    CommittedPickupPolicySnapshot,
+    deserialize_coordinator_receipt_policy,
+    serialize_committed_time_policy,
+)
 
 # Obserwowalność (04.08): moduł nie emitował żadnej linii operacyjnej, więc
 # przejęcie i zwolnienie forward-fence'u — najbardziej nieodwracalne operacje
 # rolloutu — były niewidoczne w logu. Emisja jest czystym efektem ubocznym:
 # nigdy nie zmienia wyniku i nie podnosi wyjątku. PII: wyłącznie identyfikatory
 # techniczne (fence_id), zero danych klientów.
+#
+# Iteracja 2: logger MUSI być kanoniczny (``setup_logger`` → ``dispatch.log``).
+# Bare ``logging.getLogger`` z iteracji 1 nie miał w demonie żadnego handlera
+# (root: WARNING, zero handlerów), więc te linie nie powstawały nigdzie — ta sama
+# pułapka co T1 w ``dispatch_pipeline.py`` (2026-05-01).
 _LOG_PREFIX = "RUTCOM_FENCE"
+_log = C.setup_logger(
+    "coordinator_time_recheck",
+    "/root/.openclaw/workspace/scripts/logs/dispatch.log",
+)
 
 
 def _log_fence(event: str, **fields: object) -> None:
@@ -52,18 +69,7 @@ def _log_fence(event: str, **fields: object) -> None:
         )
     except Exception:  # noqa: BLE001 - obserwowalność nie wywraca rolloutu
         pass
-from pathlib import Path
-from typing import Callable, Mapping, Optional
 
-from dispatch_v2 import common as C
-from dispatch_v2.committed_pickup_authority import (
-    COMMITTED_TIME_POLICY_SNAPSHOT_FIELD,
-    MANUAL_CK_AUTHORITY_FLAG,
-    RUTCOM_FORWARD_AUTHORITY_FLAG,
-    CommittedPickupPolicySnapshot,
-    deserialize_coordinator_receipt_policy,
-    serialize_committed_time_policy,
-)
 
 QUEUE_PATH = "/root/.openclaw/workspace/dispatch_state/coordinator_time_recheck.json"
 LOCK_PATH = QUEUE_PATH + ".lock"
