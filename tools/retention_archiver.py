@@ -27,8 +27,19 @@ BEZPIECZEŃSTWO (fail-closed, shadow-first)
     * Zapisy atomowe: temp w katalogu docelowym → fsync → rename. Nigdy edycja w miejscu.
     * Pliki otwarte do ZAPISU przez proces (skan /proc/*/fd) = SKIP z raportem.
     * Każdy błąd w APPLY przerywa bieg (exit 1). W REPORCIE błędy lądują w `errors[]`
-      i dają exit 3 (raport i tak powstaje — jest dowodem dla ownera).
+      i dają exit 3 (raport i tak powstaje — jest dowodem dla ownera). Dotyczy to także
+      plików USZKODZONYCH (ucięty `.gz`): defekt jednego pliku NIE może zabić raportu.
     * Klasy `protected` / `unknown` / `live_state` nie są ruszane w ŻADNYM trybie.
+    * SQLITE: żywej bazy NIE otwiera się w trybie, który tworzy pliki `-wal`/`-shm` obok
+      niej (`mode=ro` je tworzy!). Statystyki czyta `sqlite_connect_readonly` (`immutable=1`),
+      snapshot robi kopię pliku bazy DO ARCHIWUM i dopiero tam ją otwiera — patrz
+      `sqlite_snapshot`. Każde wyjście z tych ścieżek pilnuje `_assert_no_sidecars_created`.
+    * APPLY jest wyłączny: `flock` na `<archive-root>/.od7_apply.lock` (nigdy w żywym
+      korzeniu) — drugi równoległy bieg odmawia startu (exit 4), zamiast dublować manifest.
+
+KODY WYJŚCIA
+    0 = OK · 1 = fail-closed (błąd krytyczny) · 2 = odmowa bramki ACK/argumentów
+    3 = raport powstał, ale są wpisy w `errors[]` · 4 = APPLY zajęty przez inny bieg
 
 UŻYCIE
     retention_archiver.py [--policy P] [--out raport.json] [--text-out raport.md]
@@ -39,6 +50,7 @@ UŻYCIE
 from __future__ import annotations
 
 import argparse
+import fcntl
 import fnmatch
 import gzip
 import hashlib
@@ -47,10 +59,12 @@ import io
 import json
 import os
 import re
+import shutil
 import sqlite3
 import sys
 import tempfile
 import uuid
+import zlib
 from datetime import datetime, timedelta, timezone
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -233,14 +247,34 @@ class FileFact(dict):
     """Fakt o pliku (dict, żeby wprost lądował w raporcie JSON)."""
 
 
+def _match_segments(rel_parts: list[str], pat_parts: list[str]) -> bool:
+    """Dopasowanie ścieżki SEGMENT PO SEGMENCIE: `*` NIE przekracza `/` (jak w powłoce),
+    rekursja wyłącznie przez jawny segment `**`.
+
+    `fnmatch` na całej ścieżce tłumaczy `*` na `.*`, które łyka też `/`, więc reguła
+    pisana pod płaskie pliki dobowe (`world_record/world_record-*.jsonl`) łapała
+    dowolnie zagnieżdżone `world_record/world_record-x/DEEP/leak.jsonl`. Kierunek
+    domyślny musi być WĄSKI: co nie jest jawnie objęte regułą, zostaje `unknown`
+    (a `unknown` nie jest ruszany w żadnym trybie).
+    """
+    if not pat_parts:
+        return not rel_parts
+    head = pat_parts[0]
+    if head == "**":
+        for i in range(len(rel_parts) + 1):
+            if _match_segments(rel_parts[i:], pat_parts[1:]):
+                return True
+        return False
+    if not rel_parts:
+        return False
+    return fnmatch.fnmatchcase(rel_parts[0], head) and _match_segments(rel_parts[1:], pat_parts[1:])
+
+
 def _glob_match(rel: str, pattern: str) -> bool:
-    if pattern.startswith("**/"):
-        tail = pattern[3:]
-        return fnmatch.fnmatch(rel, tail) or fnmatch.fnmatch(os.path.basename(rel), tail) \
-            or fnmatch.fnmatch(rel, pattern)
     if "/" in pattern:
-        return fnmatch.fnmatch(rel, pattern)
-    return fnmatch.fnmatch(os.path.basename(rel), pattern) and "/" not in rel
+        return _match_segments(rel.split("/"), pattern.split("/"))
+    # wzorzec bez '/' = plik LEŻĄCY WPROST w korzeniu (bez podkatalogów)
+    return fnmatch.fnmatchcase(rel, pattern) and "/" not in rel
 
 
 def _date_from_name(name: str) -> datetime | None:
@@ -479,8 +513,18 @@ class Masker:
             dst.write(self.mask_line(line).encode("utf-8"))
 
 
+# Uszkodzony strumień = błąd JEDNEGO pliku, nigdy koniec biegu (kontrakt: errors[] → exit 3).
+# `gzip` przy UCIĘTYM ogonie rzuca EOFError, a przy zepsutym środku `zlib.error` — ŻADEN
+# z nich nie jest podklasą OSError (tylko `gzip.BadGzipFile`, czyli zły nagłówek, nią jest).
+# Realny wyzwalacz: logrotate złapany w trakcie kompresji w skanowanym korzeniu.
+CORRUPT_STREAM_ERRORS = (OSError, EOFError, zlib.error)
+
+
 def detect_pii(path: str, masker: Masker, sample_bytes: int = MASK_SAMPLE_BYTES) -> dict:
-    """Wykrycie PII BEZ ujawniania wartości — zwraca wyłącznie liczniki trafień."""
+    """Wykrycie PII BEZ ujawniania wartości — zwraca wyłącznie liczniki trafień.
+
+    Plik uszkodzony NIE przerywa biegu: zwracamy to, co udało się przeczytać, plus
+    `error` (woła o wpis w `errors[]` → exit 3 → raport i tak powstaje)."""
     hits: dict[str, int] = {}
     opener = gzip.open if path.endswith(".gz") else open
     read = 0
@@ -513,8 +557,9 @@ def detect_pii(path: str, masker: Masker, sample_bytes: int = MASK_SAMPLE_BYTES)
                         hits[f"value:{name}"] = hits.get(f"value:{name}", 0) + n
                 if read >= sample_bytes:
                     break
-    except OSError as exc:
-        return {"error": str(exc)}
+    except CORRUPT_STREAM_ERRORS as exc:
+        return {"sampled_bytes": read, "hits": hits,
+                "error": f"{type(exc).__name__}: {exc}"}
     return {"sampled_bytes": read, "hits": hits}
 
 
@@ -589,7 +634,14 @@ def append_manifest(archive_root: str, record: dict) -> None:
 
 def gzip_copy_verified(src: str, dst: str, masker: Masker | None) -> dict:
     """src → dst.gz atomowo; weryfikacja: sha256 zawartości po dekompresji == sha256
-    tego, co miało trafić do archiwum. Zwraca rekord manifestu (bez pól kontekstowych)."""
+    tego, co miało trafić do archiwum. Zwraca rekord manifestu (bez pól kontekstowych).
+
+    POLA MANIFESTU (różne rzeczy, świadomie): `source_sha256` = skrót BAJTÓW pliku
+    źródłowego, `content_sha256` = skrót TREŚCI, która trafiła do archiwum. Dla źródła
+    już spakowanego (`.gz`) treść jest dekompresowana i REKOMPRESOWANA, a przy maskowaniu
+    dodatkowo zmieniona — wtedy oba skróty z definicji się różnią i porównanie archiwum
+    „bajt w bajt" z oryginalnym `.gz` po `source_sha256` NIE jest możliwe. Gwarantowana
+    (i weryfikowana przed publikacją) jest integralność TREŚCI, nie bajtów kontenera."""
     GATE.check(dst)
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     src_sha, src_size = sha256_file(src)
@@ -646,29 +698,101 @@ def gzip_copy_verified(src: str, dst: str, masker: Masker | None) -> dict:
     }
 
 
+# --------------------------------------------------------------------------- #
+# 7a. SQLite — czytanie żywej bazy BEZ tworzenia czegokolwiek obok niej         #
+# --------------------------------------------------------------------------- #
+# `mode=ro` NIE jest bezzapisowe: baza w trybie WAL wymaga indeksu `-shm` i pliku `-wal`,
+# więc połączenie „read-only" MATERIALIZUJE oba pliki obok bazy i — nie mogąc zrobić
+# checkpointu — ZOSTAWIA je po zamknięciu. To zapis wykonany przez bibliotekę sqlite3,
+# niewidoczny dla WriteGate (gate widzi tylko prymitywy zapisu TEGO modułu).
+# Kanon: statystyki czyta się `immutable=1` (zero plików towarzyszących), a snapshot
+# robi się na KOPII bazy leżącej już w archiwum.
+_SQLITE_SIDECARS = ("-wal", "-shm", "-journal")
+
+
+def _sidecars_present(db_path: str) -> set[str]:
+    return {db_path + suf for suf in _SQLITE_SIDECARS if os.path.exists(db_path + suf)}
+
+
+def _assert_no_sidecars_created(db_path: str, before: set[str], where: str) -> None:
+    """Twardy dowód granicy: po dotknięciu bazy obok ŹRÓDŁA nie przybył żaden plik.
+
+    Prewencja (immutable / kopia) jest pierwsza, ta asercja jest bezpiecznikiem: gdyby
+    ktoś kiedyś wrócił do `mode=ro`, naruszenie wyjdzie GŁOŚNO (fail-closed), zamiast
+    cicho zaśmiecić żywy korzeń."""
+    created = _sidecars_present(db_path) - before
+    if created:
+        raise RuntimeError(
+            f"OD7-SQLITE-SIDECAR: {where} utworzyło pliki obok żywej bazy: "
+            f"{sorted(os.path.basename(p) for p in created)} — to zapis do skanowanego "
+            "korzenia (fail-closed)")
+
+
+def sqlite_connect_readonly(db_path: str) -> sqlite3.Connection:
+    """JEDYNY sposób otwarcia CUDZEJ (żywej) bazy w tym module.
+
+    `immutable=1` = zero blokad, zero `-wal`/`-shm`. Cena jest jawna: połączenie widzi
+    wyłącznie plik główny, więc dane siedzące jeszcze w niescheckpointowanym `-wal` są
+    dla niego niewidoczne (statystyka bywa nieaktualna). Wyższa jest granica „nie piszemy
+    do żywego korzenia", a nieaktualność raportujemy (`wal_pending`), nie ukrywamy."""
+    return sqlite3.connect(f"file:{db_path}?immutable=1", uri=True)
+
+
 def sqlite_snapshot(src_db: str, dst: str) -> dict:
-    """Online backup żywej bazy (czyta, NIE modyfikuje) → gzip w archiwum."""
+    """Snapshot bazy → gzip w archiwum, BEZ otwierania bazy źródłowej.
+
+    Kolejność jest kontraktem: (1) bajtowa kopia pliku bazy do TEMP W ARCHIWUM, potem
+    kopie `-wal`/`-journal` (jeśli są) — czysty odczyt źródła; (2) baza otwierana dopiero
+    NA KOPII, gdzie odzyskuje WAL (dzięki temu snapshot zawiera też świeże dane, których
+    `immutable=1` by nie zobaczył), a wszystkie pliki towarzyszące powstają w archiwum;
+    (3) `PRAGMA integrity_check` — kopia zrobiona w trakcie cudzego checkpointu może być
+    rozspójniona, więc niespójność MUSI zatrzymać bieg zamiast trafić do archiwum;
+    (4) `Connection.backup()` do czystej bazy i dopiero to idzie do gzipa."""
     GATE.check(dst)
     os.makedirs(os.path.dirname(dst), exist_ok=True)
     d = os.path.dirname(dst)
+    src_before = _sidecars_present(src_db)
+    fd, work_db = tempfile.mkstemp(dir=d, prefix=".od7_", suffix=".sqlite.work")
+    os.close(fd)
     fd, tmp_db = tempfile.mkstemp(dir=d, prefix=".od7_", suffix=".sqlite.tmp")
     os.close(fd)
     try:
-        src = sqlite3.connect(f"file:{src_db}?mode=ro", uri=True)
+        GATE.check(work_db)
+        shutil.copyfile(src_db, work_db)                 # 1. najpierw sama baza…
+        source_size = os.path.getsize(src_db)
+        # `-shm` ŚWIADOMIE nie jest kopiowany: to odtwarzalny indeks WAL, a przeniesiona
+        # kopia mogłaby zmylić recovery na naszej kopii. Kopiujemy tylko trwałe dzienniki.
+        for suf in ("-wal", "-journal"):                 # …potem dziennik (tylko rośnie)
+            if os.path.exists(src_db + suf):
+                GATE.check(work_db + suf)
+                shutil.copyfile(src_db + suf, work_db + suf)
+        _assert_no_sidecars_created(src_db, src_before, "sqlite_snapshot (kopia źródła)")
+
+        conn = sqlite3.connect(work_db)                  # 2. otwieramy KOPIĘ, nie oryginał
         try:
-            dstconn = sqlite3.connect(tmp_db)
+            check = conn.execute("PRAGMA integrity_check").fetchone()
+            if not check or check[0] != "ok":            # 3. fail-closed
+                raise RuntimeError(
+                    f"OD7-SQLITE-SNAPSHOT: kopia bazy {src_db} jest niespójna "
+                    f"(integrity_check={check[0] if check else 'brak wyniku'}) — "
+                    "prawdopodobnie checkpoint w trakcie kopiowania; bieg zatrzymany")
+            dstconn = sqlite3.connect(tmp_db)            # 4. czysty, domknięty snapshot
             try:
-                src.backup(dstconn)
+                conn.backup(dstconn)
             finally:
                 dstconn.close()
         finally:
-            src.close()
+            conn.close()
+
         rec = gzip_copy_verified(tmp_db, dst, None)
-        rec["source_size"] = os.path.getsize(src_db)
+        rec["source_size"] = source_size
         rec["snapshot_size"] = os.path.getsize(tmp_db)
         return rec
     finally:
-        _rm_quiet(tmp_db)
+        for path in (work_db, tmp_db):
+            for suf in ("",) + _SQLITE_SIDECARS:
+                _rm_quiet(path + suf)
+        _assert_no_sidecars_created(src_db, src_before, "sqlite_snapshot")
 
 
 def compress_ratio_estimate(path: str, size: int) -> float:
@@ -1176,6 +1300,45 @@ def mask_in_place(path: str, masker: Masker) -> dict:
 
 
 # --------------------------------------------------------------------------- #
+# 10a. Wyłączność APPLY (jeden pisarz archiwum na raz)                          #
+# --------------------------------------------------------------------------- #
+APPLY_LOCK_NAME = ".od7_apply.lock"
+
+
+class ApplyLockBusy(RuntimeError):
+    """Inny bieg APPLY trzyma archiwum — odmowa startu, nie druga kopia tej samej pracy."""
+
+
+def acquire_apply_lock(archive_root: str) -> int:
+    """`flock` na pliku locka W ARCHIVE-ROOT (nigdy w żywym korzeniu — tam nie wolno pisać).
+
+    Ochrona przed powtórzeniem opiera się na manifeście czytanym RAZ na starcie biegu,
+    więc bez wykluczenia wzajemnego dwa równoległe APPLY planują ten sam zbiór akcji
+    i dublują manifest. Lock obejmuje CAŁY bieg: odczyt manifestu → plan → zapisy.
+    Zwraca deskryptor — zamknięcie go zwalnia blokadę (plik locka zostaje, jest pusty
+    poza diagnostyką i nie jest kasowany, bo kasowanie locka jest wyścigiem samo w sobie).
+    """
+    path = os.path.join(archive_root, APPLY_LOCK_NAME)
+    GATE.check(path)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT, 0o600)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError as exc:
+        os.close(fd)
+        raise ApplyLockBusy(
+            f"inny bieg APPLY trzyma blokadę {path} — drugi bieg NIE startuje, bo "
+            "zdublowałby archiwizację i wpisy w manifeście. Poczekaj na zakończenie "
+            "tamtego biegu (albo sprawdź, czy nie został po nim osierocony proces)."
+        ) from exc
+    try:
+        os.ftruncate(fd, 0)
+        os.write(fd, f"pid={os.getpid()} ts={datetime.now(timezone.utc).isoformat()}\n".encode())
+    except OSError:
+        pass
+    return fd
+
+
+# --------------------------------------------------------------------------- #
 # 11. CLI                                                                      #
 # --------------------------------------------------------------------------- #
 def main(argv: list[str] | None = None) -> int:
@@ -1244,7 +1407,11 @@ def main(argv: list[str] | None = None) -> int:
         GATE.allow_root(args.archive_root)
 
     errors: list = []
+    lock_fd: int | None = None
     try:
+        if mode == "apply":
+            # Wyłączność MUSI objąć odczyt manifestu (idempotencja czyta go raz na starcie).
+            lock_fd = acquire_apply_lock(args.archive_root)
         facts = scan_roots(pol, now, errors)
         manifest = read_manifest(args.archive_root)
         open_writes = open_for_write_paths()
@@ -1264,6 +1431,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.pii_scan_limit:
             for item in cands[: args.pii_scan_limit]:
                 det = detect_pii(item["abs_path"], masker)
+                if det.get("error"):
+                    # Uszkodzony plik = wpis w errors[] (exit 3), NIE koniec biegu:
+                    # raport jest dowodem dla ownera i musi powstać.
+                    errors.append({"where": item["rel_path"],
+                                   "error": f"pii-scan: {det['error']}"})
                 if det.get("hits"):
                     binary = item["granularity"] == "sqlite_db"
                     pii_files.append({"rel_path": item["rel_path"], "cls": item["cls"],
@@ -1316,23 +1488,47 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"[OD-7] raport JSON: {args.out}")
             if args.text_out:
                 print(f"[OD-7] raport tekstowy: {args.text_out}")
+    except ApplyLockBusy as exc:
+        print(f"STOP: {exc}", file=sys.stderr)
+        return 4
     except Exception as exc:  # noqa: BLE001 — fail-closed
         print(f"FAIL-CLOSED ({mode}): {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
+    finally:
+        if lock_fd is not None:
+            os.close(lock_fd)
 
     return 3 if errors else 0
 
 
 def sqlite_age_stats(db_path: str, rule: dict, pol: dict, now: datetime, errors: list) -> dict:
-    """Statystyka wieku wierszy (READ-ONLY). Świadomie za flagą --include-sqlite:
-    otwarcie żywej bazy, choćby read-only, to dotknięcie żywego stanu."""
+    """Statystyka wieku wierszy (READ-ONLY, `immutable=1` — patrz `sqlite_connect_readonly`).
+
+    Świadomie za flagą --include-sqlite: dotknięcie żywej bazy, choćby bez zapisu, to
+    dotknięcie żywego stanu. Gdy obok bazy leży niepusty `-wal`, część danych może być
+    jeszcze poza plikiem głównym — mówimy to wprost (`wal_pending` + wpis w `errors[]`),
+    zamiast podawać liczby jako pewne albo — gorzej — otwierać bazę w trybie, który
+    zmaterializowałby `-wal`/`-shm` w skanowanym korzeniu."""
     spec = (rule or {}).get("sqlite") or {}
     table, ts_col = spec.get("table"), spec.get("ts_column")
-    out: dict = {"db": db_path, "table": table, "ts_column": ts_col}
+    out: dict = {"db": db_path, "table": table, "ts_column": ts_col, "read_mode": "immutable"}
+    sidecars_before = _sidecars_present(db_path)
+    wal = db_path + "-wal"
     try:
-        conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        wal_pending = os.path.exists(wal) and os.path.getsize(wal) > 0
+    except OSError:
+        wal_pending = False
+    out["wal_pending"] = wal_pending
+    if wal_pending:
+        out["_note"] = ("baza ma niescheckpointowany -wal; odczyt immutable widzi tylko plik "
+                        "główny, więc liczby mogą być NIEPEŁNE (pełny obraz daje dopiero "
+                        "SQLITE_SNAPSHOT, który pracuje na kopii w archiwum)")
+        errors.append({"where": db_path, "error": "sqlite stats: " + out["_note"]})
+    try:
+        conn = sqlite_connect_readonly(db_path)
     except sqlite3.Error as exc:
         errors.append({"where": db_path, "error": f"sqlite open: {exc}"})
+        _assert_no_sidecars_created(db_path, sidecars_before, "sqlite_age_stats (open)")
         return {**out, "error": str(exc)}
     try:
         cur = conn.cursor()
@@ -1353,6 +1549,7 @@ def sqlite_age_stats(db_path: str, rule: dict, pol: dict, now: datetime, errors:
         out["error"] = str(exc)
     finally:
         conn.close()
+        _assert_no_sidecars_created(db_path, sidecars_before, "sqlite_age_stats")
     return out
 
 

@@ -13,6 +13,8 @@ import importlib.util
 import json
 import os
 import sqlite3
+import subprocess
+import sys
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -784,3 +786,290 @@ def test_report_includes_policy_conflicts_and_space_balance(tmp_path):
     assert bal["freed_live_bytes"] == 0, "archiwizacja sama nie zwalnia żywego dysku"
     assert bal["archive_growth_bytes_est"] > 0
     assert rep["summary"]["archive_now"]["bytes_archive_est"] <= rep["summary"]["archive_now"]["bytes_live"]
+
+
+# --------------------------------------------------------------------------- #
+# 8. ITER2 — defekty z blind-297 (F1 sqlite/WAL · F2 ucięty gzip · F3 lock ·    #
+#    F4 glob przez granice katalogów). Każdy test jest negatywnym oraclem:      #
+#    po cofnięciu poprawki MUSI zaczerwienić.                                   #
+# --------------------------------------------------------------------------- #
+def _wal_db(path, rows=20, keep_open=False):
+    """Baza w trybie WAL. keep_open=True → dane zostają w niescheckpointowanym `-wal`
+    (dokładnie jak żywy events.db pod pracującym silnikiem)."""
+    conn = sqlite3.connect(path)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("CREATE TABLE audit_log (id INTEGER PRIMARY KEY, ts REAL)")
+    conn.executemany("INSERT INTO audit_log (ts) VALUES (?)", [(float(i),) for i in range(rows)])
+    conn.commit()
+    if keep_open:
+        return conn
+    conn.close()
+    return None
+
+
+# --- F1: żadna ścieżka nie tworzy plików obok żywej bazy -------------------- #
+def test_report_with_include_sqlite_writes_only_to_out(tmp_path):
+    """Oracle recenzenta (blind-297 F1): `mode=ro` materializuje `-wal`/`-shm` obok
+    SKANOWANEJ bazy — zapis do żywego korzenia, którego WriteGate nie widzi, bo robi
+    go biblioteka sqlite3, nie ten moduł."""
+    ppath, _, state, _ = _policy(tmp_path)
+    _touch(f"{state}/world_record/world_record-20260101.jsonl", b'{"a":1}\n')
+    _wal_db(f"{state}/events.db")
+    assert sorted(os.listdir(state)) == ["events.db", "world_record"], "baza domknięta czysto"
+
+    before = _tree_snapshot(tmp_path)
+    out = tmp_path / "raport.json"
+    rc = _run(["--policy", ppath, "--include-sqlite", "--out", str(out), "--quiet"])
+    assert rc == 0
+    created = set(_tree_snapshot(tmp_path)) - set(before)
+    assert created == {str(out)}, (
+        "REPORT stworzył pliki poza --out w SKANOWANYM korzeniu: "
+        + repr(sorted(os.path.basename(p) for p in created - {str(out)})))
+    stats = _by_rel(json.loads(out.read_text(encoding="utf-8")), "events.db")["sqlite_stats"]
+    assert stats["read_mode"] == "immutable"
+    assert stats["rows_total"] == 20, "odczyt immutable nadal daje prawdziwe liczby"
+
+
+def test_apply_snapshot_of_cleanly_closed_wal_db_creates_no_sidecars(tmp_path):
+    """Ścieżka APPLY, przypadek z repro recenzenta: baza WAL domknięta czysto (na dysku
+    SAM plik bazy). Otwarcie jej `mode=ro` DOKŁADA `-wal`/`-shm` do skanowanego korzenia
+    i zostawia je po zamknięciu — tu musi nie przybyć ani jeden bajt.
+
+    (Gdy pliki towarzyszące już istnieją, bo silnik trzyma bazę otwartą, naruszenia nie
+    da się zaobserwować z zewnątrz — dlatego oraclem jest właśnie stan czysto domknięty.)"""
+    ppath, _, state, _ = _policy(tmp_path)
+    _, sha = ra.load_policy(ppath)
+    db = os.path.join(state, "events.db")
+    _wal_db(db)
+    assert sorted(os.listdir(state)) == ["events.db"]
+    arch = tmp_path / "arch"
+    arch.mkdir()
+
+    before = _tree_snapshot(state)
+    rc = _run(["--policy", ppath, "--apply", "--ack-token", ra.ack_token(sha),
+               "--archive-root", str(arch), "--quiet"])
+    assert rc == 0
+    after = _tree_snapshot(state)
+    assert set(after) - set(before) == set(), (
+        "APPLY dołożył pliki obok żywej bazy: "
+        + repr(sorted(os.path.basename(p) for p in set(after) - set(before))))
+    assert after == before, "żywy korzeń nietknięty (rozmiar i mtime bez zmian)"
+
+    rec = [m for m in ra.read_manifest(str(arch)) if m["action"] == ra.ACT_SQLITE_SNAPSHOT]
+    restored = tmp_path / "restored.db"
+    with gzip.open(rec[0]["archive_path"], "rb") as gz:
+        restored.write_bytes(gz.read())
+    conn = sqlite3.connect(str(restored))
+    assert conn.execute("SELECT COUNT(*) FROM audit_log").fetchone()[0] == 20
+    conn.close()
+
+
+def test_apply_snapshot_creates_nothing_next_to_live_db_and_captures_wal(tmp_path):
+    """Ścieżka APPLY (bez żadnej flagi opt-in): snapshot pracuje na KOPII w archiwum,
+    więc obok żywej bazy nie przybywa nic — a dane z `-wal` i tak trafiają do archiwum."""
+    ppath, _, state, _ = _policy(tmp_path)
+    _, sha = ra.load_policy(ppath)
+    db = os.path.join(state, "events.db")
+    live_writer = _wal_db(db, rows=20, keep_open=True)      # żywy pisarz trzyma WAL
+    try:
+        assert os.path.exists(db + "-wal")
+        before = sorted(os.listdir(state))
+        db_sha_before = ra.sha256_file(db)
+        arch = tmp_path / "arch"
+        arch.mkdir()
+
+        rc = _run(["--policy", ppath, "--apply", "--ack-token", ra.ack_token(sha),
+                   "--archive-root", str(arch), "--quiet"])
+        assert rc == 0
+        assert sorted(os.listdir(state)) == before, "obok żywej bazy NIE MOŻE nic przybyć"
+        assert ra.sha256_file(db) == db_sha_before, "żywa baza nietknięta bajt w bajt"
+
+        rec = [m for m in ra.read_manifest(str(arch)) if m["action"] == ra.ACT_SQLITE_SNAPSHOT]
+        assert len(rec) == 1
+        restored = tmp_path / "restored.db"
+        with gzip.open(rec[0]["archive_path"], "rb") as gz:
+            restored.write_bytes(gz.read())
+        conn = sqlite3.connect(str(restored))
+        assert conn.execute("SELECT COUNT(*) FROM audit_log").fetchone()[0] == 20, \
+            "snapshot MUSI zawierać dane z niescheckpointowanego -wal"
+        conn.close()
+    finally:
+        live_writer.close()
+    leftovers = [f for f in os.listdir(tmp_path / "arch")
+                 if f.startswith(".od7_") and f != ra.APPLY_LOCK_NAME]
+    assert leftovers == [], f"żadnych plików roboczych po snapshotcie, zostało: {leftovers}"
+
+
+def test_sidecar_guard_reddens_if_readonly_open_regresses_to_mode_ro(tmp_path, monkeypatch):
+    """RATCHET: gdyby ktoś wrócił do `mode=ro` (albo innego trybu tworzącego `-wal`),
+    bezpiecznik ma paść GŁOŚNO, a nie cicho zaśmiecić skanowany korzeń."""
+    ppath, pol, state, _ = _policy(tmp_path)
+    db = os.path.join(state, "events.db")
+    _wal_db(db)
+    p, _ = ra.load_policy(ppath)
+    rule = next(r for r in p["rules"] if r["id"] == "events.db")
+
+    monkeypatch.setattr(ra, "sqlite_connect_readonly",
+                        lambda path: sqlite3.connect(f"file:{path}?mode=ro", uri=True))
+    with pytest.raises(RuntimeError, match="OD7-SQLITE-SIDECAR"):
+        ra.sqlite_age_stats(db, rule, p, datetime.now(timezone.utc), [])
+
+
+def test_sqlite_stats_report_uncheckpointed_wal_instead_of_silently_stale_numbers(tmp_path):
+    """Cena `immutable=1` jest jawna: dane z `-wal` są niewidoczne, więc raport mówi to
+    wprost (`wal_pending` + errors[] + exit 3), zamiast podawać niepełne liczby jako pewne."""
+    ppath, _, state, _ = _policy(tmp_path)
+    live_writer = _wal_db(os.path.join(state, "events.db"), rows=5, keep_open=True)
+    try:
+        before = sorted(os.listdir(state))
+        out = tmp_path / "r.json"
+        rc = _run(["--policy", ppath, "--include-sqlite", "--out", str(out), "--quiet"])
+        assert rc == 3, "niepewne liczby = wpis w errors[], a raport i tak powstaje"
+        assert sorted(os.listdir(state)) == before
+        rep = json.loads(out.read_text(encoding="utf-8"))
+        assert _by_rel(rep, "events.db")["sqlite_stats"]["wal_pending"] is True
+        assert any("wal" in e["error"] for e in rep["errors"])
+    finally:
+        live_writer.close()
+
+
+# --- F2: uszkodzony strumień = błąd jednego pliku, nie koniec biegu --------- #
+_PII_LINES = b"".join(
+    ('{"adres":"ul. Testowa %d/%d","phone":"6%08d","nota":"k%d@example.com"}\n'
+     % (i, i % 90, i, i)).encode("utf-8") for i in range(5000))
+
+
+def _half_gzip(path, payload=_PII_LINES, age_days=200.0, mode="truncate"):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with gzip.open(path, "wb") as fh:
+        fh.write(payload)
+    raw = Path(path).read_bytes()
+    if mode == "truncate":                       # logrotate złapany w trakcie kompresji
+        broken = raw[: len(raw) // 2]
+    else:                                        # zepsuty środek strumienia deflate
+        buf = bytearray(raw)
+        buf[40:80] = b"\x00" * 40
+        broken = bytes(buf)
+    Path(path).write_bytes(broken)
+    ts = time.time() - age_days * DAY
+    os.utime(path, (ts, ts))
+    return path
+
+
+@pytest.mark.parametrize("mode", ["truncate", "corrupt"])
+def test_detect_pii_survives_broken_gzip_and_keeps_partial_evidence(tmp_path, mode):
+    """EOFError (ucięty ogon) i zlib.error (zepsuty środek) NIE są podklasami OSError —
+    stary `except OSError` ich nie łapał i wyjątek leciał aż do końca biegu."""
+    p = _half_gzip(str(tmp_path / "gps_track.jsonl.1.gz"), mode=mode)
+    det = ra.detect_pii(p, _masker(tmp_path))
+    assert det.get("error"), "uszkodzenie MUSI być zaraportowane, nie połknięte"
+    if mode == "truncate":
+        assert det["hits"], "to, co dało się przeczytać, zostaje dowodem w raporcie"
+
+
+def test_truncated_gzip_does_not_kill_report(tmp_path):
+    """Kontrakt modułu: w REPORCIE błąd pliku → errors[] → exit 3, a raport POWSTAJE."""
+    ppath, _, state, _ = _policy(tmp_path)
+    _half_gzip(f"{state}/gps_track.jsonl.1.gz")
+    _touch(f"{state}/world_record/world_record-20260101.jsonl", b'{"a":1}\n')
+    out = tmp_path / "r.json"
+    rc = _run(["--policy", ppath, "--out", str(out), "--quiet"])
+    assert rc == 3, "błąd pojedynczego pliku nie może dać exit 1 bez raportu"
+    assert out.exists(), "raport jest dowodem dla ownera — musi powstać"
+    rep = json.loads(out.read_text(encoding="utf-8"))
+    assert any("pii-scan" in e["error"] for e in rep["errors"])
+    assert _by_rel(rep, "gps_track.jsonl.1.gz")["action"] in (ra.ACT_ARCHIVE, ra.ACT_ARCHIVE_MASKED)
+
+
+# --- F3: wyłączność APPLY --------------------------------------------------- #
+def test_second_apply_is_refused_while_lock_is_held(tmp_path):
+    """Idempotencja opiera się na manifeście czytanym RAZ na starcie — bez wykluczenia
+    wzajemnego dwa biegi planują ten sam zbiór akcji."""
+    ppath, _, state, _ = _policy(tmp_path)
+    _, sha = ra.load_policy(ppath)
+    old = (datetime.now(timezone.utc) - timedelta(days=12)).strftime("%Y%m%d")
+    _touch(f"{state}/world_record/world_record-{old}.jsonl", b'{"a":1}\n')
+    arch = tmp_path / "arch"
+    arch.mkdir()
+
+    ra.GATE = ra.WriteGate("apply")
+    ra.GATE.allow_root(str(arch))
+    held = ra.acquire_apply_lock(str(arch))          # udajemy trwający bieg
+    try:
+        rc = _run(["--policy", ppath, "--apply", "--ack-token", ra.ack_token(sha),
+                   "--archive-root", str(arch), "--quiet"])
+        assert rc == 4, "drugi bieg MUSI odmówić, nie dublować pracy"
+        assert ra.read_manifest(str(arch)) == [], "odmowa = zero wpisów w manifeście"
+    finally:
+        os.close(held)
+    assert os.path.exists(arch / ra.APPLY_LOCK_NAME), "lock leży w ARCHIWUM, nie w żywym korzeniu"
+    # po zwolnieniu blokady bieg przechodzi normalnie
+    assert _run(["--policy", ppath, "--apply", "--ack-token", ra.ack_token(sha),
+                 "--archive-root", str(arch), "--quiet"]) == 0
+    assert len([m for m in ra.read_manifest(str(arch)) if m["action"] == ra.ACT_ARCHIVE]) == 1
+
+
+def test_two_parallel_apply_processes_do_not_duplicate_manifest(tmp_path):
+    """Repro recenzenta 1:1 (dwa procesy naraz) — wcześniej: 2× praca, 2× manifest."""
+    ppath, _, state, _ = _policy(tmp_path)
+    _, sha = ra.load_policy(ppath)
+    day = datetime.now(timezone.utc) - timedelta(days=40)
+    for i in range(12):
+        stamp = (day + timedelta(days=i)).strftime("%Y%m%d")
+        _touch(f"{state}/world_record/world_record-{stamp}.jsonl", b'{"a":1}\n' * 200)
+    arch = tmp_path / "arch"
+    arch.mkdir()
+
+    cmd = [sys.executable, "-B", str(_TOOL_PATH), "--policy", ppath, "--apply",
+           "--ack-token", ra.ack_token(sha), "--archive-root", str(arch), "--quiet"]
+    procs = [subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+             for _ in range(2)]
+    rcs = sorted(p.wait() for p in procs)
+    for p in procs:
+        p.stderr.close()
+
+    man = [m for m in ra.read_manifest(str(arch)) if m["action"] == ra.ACT_ARCHIVE]
+    keys = [(m["root"], m["rel_path"]) for m in man]
+    assert len(keys) == len(set(keys)) == 12, f"manifest zdublowany: {len(keys)} wpisów"
+    assert rcs[0] == 0, "jeden bieg MUSI wykonać pracę"
+    assert rcs[1] in (0, 4), f"drugi bieg: odmowa (4) albo czysty SKIP (0), było {rcs}"
+    assert len({m["run_id"] for m in man}) == 1, "całą paczkę archiwizuje JEDEN bieg"
+
+
+# --- F4: '*' nie przekracza granicy katalogu -------------------------------- #
+def test_star_does_not_cross_directory_boundary_in_real_policy():
+    """Reguły OD-7 są pisane pod PŁASKIE pliki dobowe; `fnmatch` na całej ścieżce robił
+    z nich reguły rekurencyjne (dowolnie zagnieżdżony plik wpadał w klasę archiwizowalną)."""
+    pol, _ = ra.load_policy(os.path.join(os.path.dirname(ra.__file__),
+                                         "retention_od7_policy.json"))
+    assert ra.match_rule(pol, "dispatch_state", "world_record/world_record-x/DEEP/leak.jsonl") is None
+    assert ra.match_rule(pol, "dispatch_state", "observability/candidate_decisions_a/b/c.jsonl") is None
+    assert ra.match_rule(pol, "logs", "reports/sub/dir/anything.bin") is None
+    # …a płaskie trafienia działają dalej
+    assert ra.match_rule(pol, "dispatch_state",
+                         "world_record/world_record-20260101.jsonl")["id"] == "wr.daily"
+    assert ra.match_rule(pol, "dispatch_state",
+                         "observability/candidate_decisions_20260101.jsonl")["id"] == "dec.observability_daily"
+    assert ra.match_rule(pol, "logs", "reports/dzienny.txt")["id"] == "ops.text_logs"
+    assert ra.match_rule(pol, "logs", "watcher.log.1")["id"] == "ops.text_logs"
+
+
+def test_deep_file_under_rule_prefix_is_unknown_not_archivable(tmp_path):
+    ppath, _, state, _ = _policy(tmp_path)
+    _touch(f"{state}/world_record/world_record-x/DEEP/leak.jsonl", b'{"a":1}\n', age_days=200)
+    _, _, plan, _ = _plan_for(tmp_path, ppath)
+    item = _by_rel(plan, "world_record/world_record-x/DEEP/leak.jsonl")
+    assert item["cls"] == "unknown"
+    assert item["action"] == ra.REPORT_UNKNOWN
+    assert item["action"] not in ra.MUTATING_ACTIONS
+
+
+def test_double_star_is_the_only_recursive_marker():
+    assert ra._glob_match("a/b/c.lock", "**/*.lock")
+    assert ra._glob_match("c.lock", "**/*.lock")
+    assert ra._glob_match("backups/a/b.jsonl", "backups/**")
+    assert not ra._glob_match("nie_backups/a.jsonl", "backups/**")
+    assert ra._glob_match("x/__pycache__/y.pyc", "**/__pycache__/**")
+    assert not ra._glob_match("a/b/c.jsonl", "a/*.jsonl")
+    assert ra._glob_match("a/c.jsonl", "a/*.jsonl")
+    assert not ra._glob_match("pod/plik.log", "*.log"), "wzorzec bez '/' = tylko korzeń"
