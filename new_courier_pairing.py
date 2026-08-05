@@ -42,6 +42,7 @@ import json
 import os
 import sys
 import tempfile
+from collections import namedtuple
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 from zoneinfo import ZoneInfo
@@ -55,6 +56,7 @@ from dispatch_v2 import panel_roster
 from dispatch_v2.courier_admin import (
     COURIER_NAMES, add_new_courier, derive_alias,
 )
+from dispatch_v2.identity import schema as identity_schema
 from dispatch_v2.identity.normalize import norm
 from dispatch_v2.identity.schema import canonical_courier_id
 
@@ -333,28 +335,176 @@ def _ensure_grafik_full_name(full_name: str, cid) -> str:
         return GRAFIK_OK  # fail-soft na I/O: nie blokuj scanu
 
 
+def _refers_to_audited_cid(value, cid_s: str) -> bool:
+    """Czy rekord mówi o audytowanej tożsamości — także w formie NIEKANONICZNEJ.
+
+    Formę kanoniczną CID rozstrzyga WYŁĄCZNIE ``identity.schema``; tu pada inne
+    pytanie: „czyj to rekord". Czytelnicy oparci o ``int()``
+    (``manual_overrides._all_name_to_cid``, ``courier_availability._canon_cid``)
+    zwijają ``'017'``, ``' 17 '``, ``'+17'`` i ``17.0`` do TEGO SAMEGO kuriera —
+    więc taki wpis DOTYCZY audytowanej tożsamości i właśnie dlatego jest groźny:
+    writer utrwalił jedną reprezentację, a kanoniczny czytelnik widzi inną albo
+    nie widzi żadnej (klasa K7/G3). Rozstrzygnięcie jest świadomie SZERSZE niż
+    kanon — lepiej zameldować ✗ nad rekordem, który tylko wygląda na nasz, niż
+    przemilczeć rozdarcie własnej tożsamości.
+    """
+    if isinstance(value, bool):  # bool jest podklasą int — nigdy nie jest CID-em
+        return False
+    if canonical_courier_id(value) == cid_s:
+        return True
+    try:
+        cid_num = int(cid_s)
+    except (TypeError, ValueError):
+        return False  # audytowany CID nieliczbowy — tylko dokładne dopasowanie
+    text = str(value).strip()
+    try:
+        return int(text, 10) == cid_num
+    except (TypeError, ValueError):
+        pass
+    try:
+        as_float = float(text)
+    except (TypeError, ValueError):
+        return False
+    return as_float.is_integer() and int(as_float) == cid_num
+
+
+def _refers_to_audited_name(value, names: frozenset) -> bool:
+    """Czy `value` to nazwa audytowanej tożsamości (pełne imię albo alias)."""
+    return isinstance(value, str) and norm(value) in names
+
+
+#: Wynik audytu jednego roota:
+#:   ``store``           = magazyn tak, jak dostaje go czytelnik (``{}`` gdy root
+#:                         nie jest mapą — wtedy czytelnik i tak nic nie odczyta),
+#:   ``healthy``         = rekordy, które zobaczy czytelnik PER REKORD,
+#:   ``identity_broken`` = zepsuty jest rekord audytowanej tożsamości,
+#:   ``unrelated``       = licznik zepsutych rekordów CUDZYCH tożsamości (raport).
+#:
+#: Który z dwóch magazynów podstawić pod check, rozstrzyga KLASA CZYTELNIKA tego
+#: roota, a nie wygoda audytu (A-6/G6 iter2, finding F1 blind review):
+#:   * czytelnik PER REKORD (``identity.roster`` G3, ``courier_info``,
+#:     ``courier_availability``, ``pin_auth``) pomija zepsuty wiersz POJEDYNCZO —
+#:     ``healthy`` jest dokładnie tym, co widzi, a że to podzbiór magazynu, check
+#:     może werdykt tylko ZAOSTRZYĆ,
+#:   * czytelnik KONKURENCYJNY (``worker.resolve_cid`` nad ``kurier_ids``)
+#:     rozstrzyga po WSZYSTKICH wierszach — dla niego zepsuty wiersz nie jest
+#:     niewidzialny: może wygrać score-fallback albo wywołać remis. Podanie mu
+#:     ``healthy`` POLUZOWUJE werdykt względem produkcji, więc jego check MUSI
+#:     liczyć się na ``store``, a walidacja schematu zamyka bramkę osobno przez
+#:     ``identity_broken``.
+_RootScan = namedtuple("_RootScan", "root store healthy identity_broken unrelated")
+
+
+def _scan_root(root: str, store, issue, relates) -> _RootScan:
+    """Rozdziel rekordy roota na zdrowe / zepsute-nasze / zepsute-obce.
+
+    ``issue`` to walidator rekordu z ``identity.schema`` (jedyny owner kształtu
+    rootów), ``relates(key, value)`` odpowiada, czy zepsuty rekord dotyczy
+    audytowanej tożsamości. Root, który nie jest mapą, to „nie umiem tego
+    odczytać", a nie „nie ma tam problemu" — fail-closed, zero rekordów zdrowych
+    i pusty ``store`` (tyle samo widzi czytelnik: ``_load_kurier_ids`` wywraca
+    się na nie-mapie i zwraca ``{}``).
+    """
+    if not isinstance(store, dict):
+        return _RootScan(root, {}, {}, True, 0)
+    healthy, unrelated, identity_broken = {}, 0, False
+    for key, value in store.items():
+        if issue(key, value) is None:
+            healthy[key] = value
+        elif relates(key, value):
+            identity_broken = True
+        else:
+            unrelated += 1
+    return _RootScan(root, store, healthy, identity_broken, unrelated)
+
+
 def verify_courier_wired(cid: int, full_name: str) -> tuple[bool, List[str]]:
-    """Re-read the 4 roster files and confirm the courier is visible everywhere.
+    """Re-read the roster files and confirm the courier is visible everywhere.
 
     Returns (all_ok, checklist_lines). Pure read — safe to call anytime.
+
+    A-6/G6 (K1): każdy czytany root przechodzi walidację SCHEMATU delegowaną do
+    ``identity.schema`` — sama OBECNOŚĆ wpisu (``str(cid) in tiers``,
+    ``alias in full``) nie jest dowodem wpięcia, bo zepsuty rekord (``True``,
+    lista, ``"017"``, wartość złego typu) jest dla kanonicznego czytelnika
+    niewidzialny, a werdykt tego audytu jest ostatnią bramką ``_auto_wire``.
+    Zepsuty rekord DOTYCZĄCY audytowanej tożsamości = check ✗ (fail-closed);
+    zepsuty rekord CUDZY = osobna linia ``⚠ malformed w <root>: N`` bez zmiany
+    ``all_ok`` (to narzędzie diagnostyczne operatora — nie blokuje wpięcia
+    kuriera A z powodu rekordu kuriera B).
+
+    A-6/G6 iter2 (F1): każdy check liczy się na TYM magazynie, który widzi jego
+    czytelnik — patrz ``_RootScan``. Pięć rootów o czytelniku PER REKORD idzie po
+    ``healthy``; ``kurier_ids`` ma czytelnika KONKURENCYJNEGO (``resolve_cid``
+    rozstrzyga po wszystkich wierszach), więc jego check idzie po ``store``.
+    Konsekwencja kontraktowa: obcy zepsuty rekord, który ZMIENIA odpowiedź
+    ``resolve_cid`` dla audytowanego imienia (wygrywa score-fallback albo tworzy
+    remis), daje ✗ — bo odpowiedź czytelnika jest funkcją wszystkich wierszy, nie
+    pojedynczego. Obcy zepsuty rekord, który odpowiedzi NIE zmienia, zostaje przy
+    samej linii ``⚠``.
     """
     from dispatch_v2.daily_accounting.config import EXCLUDED_CIDS
 
-    kids = _read_json(KURIER_IDS)
-    piny = _read_json(KURIER_PINY)
-    tiers = _read_json(COURIER_TIERS)
-    full = _read_json(KURIER_FULL_NAMES)
+    cid_s = str(cid)
     alias = derive_alias(full_name)
+    names = frozenset({norm(full_name), norm(alias)})
+
+    kids = _scan_root(
+        "kurier_ids", _read_json(KURIER_IDS), identity_schema.ids_record_issue,
+        lambda name, cid_v: (_refers_to_audited_name(name, names)
+                             or _refers_to_audited_cid(cid_v, cid_s)))
+    piny = _scan_root(
+        "kurier_piny", _read_json(KURIER_PINY), identity_schema.piny_record_issue,
+        lambda pin, alias_v: _refers_to_audited_name(alias_v, names))
+    tiers = _scan_root(
+        "courier_tiers", _read_json(COURIER_TIERS),
+        identity_schema.tiers_record_issue,
+        lambda cid_k, row: _refers_to_audited_cid(cid_k, cid_s))
+    full = _scan_root(
+        "kurier_full_names", _read_json(KURIER_FULL_NAMES),
+        identity_schema.full_names_record_issue,
+        lambda alias_k, name_v: (_refers_to_audited_name(alias_k, names)
+                                 or _refers_to_audited_name(name_v, names)))
+    # Reverse-check (niżej) czyta cid->imię przez roster + grafik. Roster pomija
+    # niekanoniczny rekord POJEDYNCZO (G3, fail-soft), więc bez tego audytu
+    # zatruta tożsamość znika z rostera i reverse melduje „nie potwierdzam,
+    # nie blokuję" — czyli ✓. Oba roota trzeba więc sprawdzić WPROST.
+    names_root = _scan_root(
+        "courier_names", _read_json(COURIER_NAMES),
+        identity_schema.courier_names_record_issue,
+        lambda cid_k, name_v: (_refers_to_audited_cid(cid_k, cid_s)
+                               or _refers_to_audited_name(name_v, names)))
+    grafik = _scan_root(
+        "grafik_full_names", _read_json(GRAFIK_FULL_NAMES),
+        identity_schema.grafik_record_issue,
+        lambda name_k, cid_v: (_refers_to_audited_name(name_k, names)
+                               or _refers_to_audited_cid(cid_v, cid_s)))
+    scans = [kids, piny, tiers, full, names_root, grafik]
 
     checks = []
-    dispatch_ok = resolve_cid(full_name, kids) == str(cid) or kids.get(full_name) == cid
-    checks.append(("dyspozytornia (resolve_cid)", dispatch_ok))
-    tiers_ok = str(cid) in tiers
-    checks.append(("scoring (courier_tiers, tier=new)", tiers_ok))
-    pin_ok = alias in set(piny.values())
-    checks.append(("apka kuriera (PIN login)", pin_ok))
-    cod_ok = alias in full and cid not in EXCLUDED_CIDS
-    checks.append(("liczenie COD (kurier_full_names)", cod_ok))
+    # Czytelnik dyspozytorni (``worker.resolve_cid`` + ``_load_kurier_ids``, który
+    # nie waliduje NICZEGO) rozstrzyga KONKURENCYJNIE po całym magazynie: exact →
+    # case-insensitive → score, remis ⇒ None. Zepsuty wiersz CUDZY potrafi wygrać
+    # score-fallback albo zafundować remis, więc pytanie „czy dyspozytornia widzi
+    # tego kuriera" wolno zadać WYŁĄCZNIE nad ``kids.store`` — nad ``healthy``
+    # audyt dostawał odpowiedź korzystniejszą niż produkcja i meldował ✓ nad
+    # tożsamością resolwowaną na cudzy/śmieciowy cid albo na nic (F1).
+    dispatch_ok = (resolve_cid(full_name, kids.store) == cid_s
+                   or kids.store.get(full_name) == cid)
+    # Walidacja schematu zamyka tę bramkę osobno: zepsuty rekord WŁASNEJ
+    # tożsamości = ✗ nawet gdy czytelnik akurat trafia (rekord jest rozdarty
+    # między writera i kanonicznych czytelników per rekord).
+    checks.append(("dyspozytornia (resolve_cid)",
+                   dispatch_ok and not kids.identity_broken))
+    tiers_ok = cid_s in tiers.healthy
+    checks.append(("scoring (courier_tiers, tier=new)",
+                   tiers_ok and not tiers.identity_broken))
+    pin_ok = alias in set(piny.healthy.values())
+    checks.append(("apka kuriera (PIN login)",
+                   pin_ok and not piny.identity_broken))
+    cod_ok = alias in full.healthy and cid not in EXCLUDED_CIDS
+    checks.append(("liczenie COD (kurier_full_names)",
+                   cod_ok and not full.identity_broken))
 
     # #2 (2026-06-10): REVERSE. Dispatch używa cid->imię->match_courier(grafik).
     # Forward resolve_cid(imię)->cid przechodzi nawet gdy reverse zatruty skrótem
@@ -376,9 +526,14 @@ def verify_courier_wired(cid: int, full_name: str) -> tuple[bool, List[str]]:
             reverse_ok = (_mc(_disp_name, _sched) == full_name)
     except Exception:  # noqa: BLE001
         reverse_ok = True  # nie blokuj na błędzie introspekcji
-    checks.append(("dispatch reverse (cid->imię->grafik)", reverse_ok))
+    checks.append(("dispatch reverse (cid->imię->grafik)",
+                   reverse_ok and not names_root.identity_broken
+                   and not grafik.identity_broken))
 
     lines = [f"{'✓' if ok else '✗'} {label}" for label, ok in checks]
+    # Zepsuty rekord CUDZEJ tożsamości nie zmienia werdyktu, ale NIE MOŻE zniknąć
+    # w ciszy: operator dostaje licznik per root (nigdy nazwisk ani PIN-ów).
+    lines += [f"⚠ malformed w {s.root}: {s.unrelated}" for s in scans if s.unrelated]
     return all(ok for _, ok in checks), lines
 
 
