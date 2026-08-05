@@ -1,6 +1,6 @@
 {
-  "base_sha": "5ae9c162690cfc45274c7c4efec03b5fdad8f0fe",
-  "manifest_version": 47,
+  "base_sha": "23a81bb8d9b5dec565af2693d73fb7201fa326c6",
+  "manifest_version": 48,
   "nodeids": [
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix1_kurier_ids_load_fail_logs_error_and_dedups",
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix2_bag_not_stale_dedup_same_input",
@@ -6725,6 +6725,37 @@
     "tests/test_state_schema_validator.py::test_synthetic_drift_dict_of_entries_fails",
     "tests/test_state_schema_validator.py::test_synthetic_drift_flat_object_fails",
     "tests/test_state_write_guard.py::script_run",
+    "tests/test_suwak_autonomii_review.py::test_awaria_samego_raportu_md_zostawia_wskaznik_na_istniejacy_snapshot",
+    "tests/test_suwak_autonomii_review.py::test_awaria_snapshotu_nie_wywala_biegu_a_szereg_mowi_prawde",
+    "tests/test_suwak_autonomii_review.py::test_bieg_nie_dotyka_zrodel_ani_nie_pisze_poza_wyjsciem",
+    "tests/test_suwak_autonomii_review.py::test_brak_obu_korpusow_to_rekord_z_null_a_nie_crash",
+    "tests/test_suwak_autonomii_review.py::test_brak_zywej_bazy_przy_swiezej_rotacji_nie_daje_liczby",
+    "tests/test_suwak_autonomii_review.py::test_czytelnik_jest_zarejestrowany_w_shadow_review_daily",
+    "tests/test_suwak_autonomii_review.py::test_harness_bez_flagi_nie_dokłada_out_dir",
+    "tests/test_suwak_autonomii_review.py::test_harness_przekazuje_out_dir_czytelnikowi",
+    "tests/test_suwak_autonomii_review.py::test_indeks_bierze_najwczesniejsza_decyzje_takze_miedzy_rotacjami",
+    "tests/test_suwak_autonomii_review.py::test_join_laczy_po_order_id",
+    "tests/test_suwak_autonomii_review.py::test_liczba1_indeks_bierze_pierwsza_decyzje",
+    "tests/test_suwak_autonomii_review.py::test_liczba1_policzona_recznie",
+    "tests/test_suwak_autonomii_review.py::test_liczba1_rodziny_blokerow",
+    "tests/test_suwak_autonomii_review.py::test_liczba1_segmentacja_puli",
+    "tests/test_suwak_autonomii_review.py::test_liczba2_dekompozycja_nadwyzki_z_niedoboru",
+    "tests/test_suwak_autonomii_review.py::test_liczba2_okno_wspolne_przycina_korpus",
+    "tests/test_suwak_autonomii_review.py::test_liczba2_okno_znanej_puli_raportowane_osobno",
+    "tests/test_suwak_autonomii_review.py::test_liczba2_policzona_recznie",
+    "tests/test_suwak_autonomii_review.py::test_martwa_baza_nie_ozywa_przez_swieza_rotacje",
+    "tests/test_suwak_autonomii_review.py::test_martwy_korpus_decyzji_nie_daje_liczby_tylko_powod",
+    "tests/test_suwak_autonomii_review.py::test_no_series_nie_dopisuje_do_szeregu",
+    "tests/test_suwak_autonomii_review.py::test_pokrycie_puli_nie_liczy_boola_jako_liczby_kurierow",
+    "tests/test_suwak_autonomii_review.py::test_pool_bucket_definicja",
+    "tests/test_suwak_autonomii_review.py::test_pusty_i_brakujacy_korpus_outcomes_daje_null",
+    "tests/test_suwak_autonomii_review.py::test_ratchet_zrodlo_nie_ma_operacji_kasujacych_i_nadpisujacych_szereg",
+    "tests/test_suwak_autonomii_review.py::test_rekord_szeregu_ma_liczby_okna_i_tozsamosc_wejsc",
+    "tests/test_suwak_autonomii_review.py::test_rotacja_gz_wchodzi_do_mianownika",
+    "tests/test_suwak_autonomii_review.py::test_rotacje_wykrywane_globem_bez_smieci",
+    "tests/test_suwak_autonomii_review.py::test_smieciowy_plik_konczacy_sie_liczba_nie_wchodzi_do_mianownika",
+    "tests/test_suwak_autonomii_review.py::test_szereg_jest_append_only",
+    "tests/test_suwak_autonomii_review.py::test_wyjatek_w_liczbie_nie_wywala_biegu",
     "tests/test_task2_czesc_a_panel_diff_terminal_emit.py::script_run",
     "tests/test_telegram_delta_l75.py::test_blind_concurrent_reproduces_shadow_loss",
     "tests/test_telegram_delta_l75.py::test_delta_concurrent_shadow_survives",
@@ -7583,7 +7614,7 @@
     "tests/test_zombie01_pickup_guard.py::test_picked_up_recent_kept",
     "tests/test_zombie01_pickup_guard.py::test_zombie_assigned_with_stale_pickup_filtered"
   ],
-  "nodeids_sha256": "0f5ed46d2ae808384adc45c7988f59eaec7888a3e6412ac31dbc904da831190a",
+  "nodeids_sha256": "c82ff8eed9e9d7be8e2cc4a5e2d9ad29841501a5014191a834f8502fbcb80d1b",
   "outcome_contracts": {
     "tests/test_canon_static_check_a1.py::test_defer_completion_guard_armed_when_defer_exists": [
       "skipped"
@@ -7707,7 +7738,7 @@
     ]
   },
   "owner": "CTO-Fable-297",
-  "reason": "re-seed po merge oracle PIN KDF 5ae9c1626 (+23 nodeidy vs v46: 11 iter1 + 12 iter2)",
+  "reason": "re-seed po merge suwak-czytelnika 23a81bb8d (retry po order-dependent flake test_fix2_gabriel)",
   "schema_version": 1,
-  "updated_at_utc": "2026-08-05T11:22:33+00:00"
+  "updated_at_utc": "2026-08-05T11:54:10+00:00"
 }
