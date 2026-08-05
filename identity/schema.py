@@ -146,9 +146,26 @@ def validate_kurier_ids_root(store) -> Dict:
     """``kurier_ids.json`` = ``{name: cid}`` — rejestr autoryzacyjny.
 
     Deleguje do :func:`validate_courier_ids_store` (istniejący owner tej samej
-    prawdy — celowo bez drugiej kopii reguł).
+    prawdy — celowo bez drugiej kopii reguł), a NA WIERZCHU dokłada regułę
+    PISARZA: każdy rekord musi mieć CID kanoniczny liczbowo
+    (:func:`canonical_numeric_cid`).
+
+    Dlaczego warstwa, a nie zmiana delegata: ``validate_courier_ids_store`` jest
+    kontraktem AUTORYZACJI (``courier_info`` — czytelnik całej generacji) i używa
+    luźnego ``canonical_courier_id``; jego zaostrzenie to osobna bramka. Tutaj
+    natomiast jesteśmy w ścieżce PISARZA (onboarding + recovery, które utrwala
+    bajty z backupu), a docstring ``canonical_numeric_cid`` mówi wprost, że
+    ``-5``, ``"017"``, ``" 17 "``, ``"1_7"`` czyta reader oparty o ``int()`` jako
+    INNĄ tożsamość — więc pisarz nie może ich utrwalić. Bez tej warstwy root
+    rządzący autoryzacją miał najsłabszą regułę z całej piątki (``courier_names``
+    i ``courier_tiers`` odrzucały tę samą klasę defektu). Wykonalność zmierzona
+    na żywych danych: 125/125 wpisów ``kurier_ids`` przechodzi już dziś.
     """
-    return validate_courier_ids_store(_as_mapping(store, "kurier_ids"))
+    validate_courier_ids_store(_as_mapping(store, "kurier_ids"))
+    for _name, cid in store.items():
+        if canonical_numeric_cid(cid) is None:
+            raise ValueError("kurier_ids ma rekord z niekanonicznym liczbowo CID")
+    return store
 
 
 def validate_kurier_piny_root(store) -> Dict:

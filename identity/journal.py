@@ -12,13 +12,27 @@ rozdartą generację i dokładało do niej kolejną tożsamość.
 
 Ten moduł jest kanonicznym ownerem tej transakcji:
 
-  1. **Znacznik (journal)** — przed pierwszym zapisem powstaje trwały plik
+  1. **Backupy** pięciu rootów — z ``fsync`` TREŚCI każdego backupu i ``fsync``
+     KAŻDEGO RÓŻNEGO katalogu backupów (``kurier_full_names`` leży w innym
+     katalogu niż pozostała czwórka). Cały kontrakt leczenia stoi na backupach,
+     więc muszą być trwałe ZANIM powstanie znacznik — inaczej po zaniku zasilania
+     znacznik przeżyje, a materiał do leczenia nie, i stan leczalny degraduje się
+     do trwałego bloku operatorskiego.
+  2. **Znacznik (journal)** — przed pierwszym zapisem powstaje trwały plik
      ``.onboarding-journal.json`` (atomowo + ``fsync`` pliku i katalogu) z
      listą rootów: ścieżka, ścieżka backupu, ``sha256`` stanu PRZED i sha256
      bajtów, które transakcja zamierza zapisać (PO).
-  2. **Zapis** pięciu rootów.
-  3. **Commit = usunięcie znacznika** (durable unlink + ``fsync`` katalogu).
+  3. **Zapis** pięciu rootów.
+  4. **Commit = usunięcie znacznika** (durable unlink + ``fsync`` katalogu).
      Brak znacznika ≡ brak transakcji w locie.
+
+Błąd łapalny (``Exception``) w trakcie zapisu uruchamia rollback W PROCESIE —
+i on też jest WERYFIKOWANY: rooty wracają przez ``atomic_write_bytes`` (nigdy
+``shutil.copy2``, który najpierw obcina cel), każdy sprawdzony ``sha256`` wobec
+stanu PRZED, a znacznik wolno skasować DOPIERO gdy potwierdzone są wszystkie.
+Jeżeli choć jeden root nie wrócił — znacznik ZOSTAJE (jedyny trwały dowód
+rozdarcia) i leci ``JournalError``. Klasa awarii bywa samo-skorelowana: ENOSPC,
+który wywalił zapis roota, wywala też jego odtworzenie.
 
 ``recover_pending`` przy KAŻDYM wejściu do onboardingu:
 
@@ -28,9 +42,10 @@ Ten moduł jest kanonicznym ownerem tej transakcji:
     domykamy commit,
   * MIESZANKA → rozdarta generacja: **rollback do stanu PRZED** z backupów,
   * cokolwiek nieczytelnego / niekompletnego / obcego (sha ≠ PRZED i ≠ PO,
-    brak backupu, backup o innym sha, backup łamiący schemat roota) →
+    brak backupu, backup o innym sha, backup łamiący schemat roota, para
+    ``(root, path)`` spoza ``courier_admin.transaction_roots()``) →
     **FAIL-CLOSED** ``JournalError``; nigdy cicha kontynuacja i nigdy
-    przywrócenie śmiecia.
+    przywrócenie śmiecia. Znacznik przy fail-closed ZOSTAJE.
 
 **Walidatory WSZYSTKICH rootów, nie podzbioru** (lekcja K5): każdy root — i przy
 zapisie, i przy recovery — przechodzi przez walidator schematu z
@@ -109,6 +124,18 @@ def _fsync_dir(path: str) -> None:
         os.close(fd)
 
 
+def _fsync_file(path: str) -> None:
+    """``fsync`` TREŚCI pliku. Backup zrobiony ``shutil.copy2`` siedzi do tej pory
+    wyłącznie w page cache: po zaniku zasilania (deklarowany model awarii) znacznik
+    — utrwalony — przeżyje, a materiał do leczenia może być pusty/urwany, więc stan
+    LECZALNY zdegradowałby się do trwałego bloku operatorskiego."""
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+
+
 def atomic_write_bytes(path: str, payload: bytes) -> None:
     """temp → ``fsync`` → ``rename`` → ``fsync`` katalogu."""
     d = os.path.dirname(path) or "."
@@ -159,9 +186,33 @@ def journal_path_for(anchor_path: str) -> str:
     return os.path.join(os.path.dirname(anchor_path) or ".", JOURNAL_NAME)
 
 
+def _transaction_pairs() -> set:
+    """Dozwolone pary ``(root-id, realpath)`` — CONFINEMENT leczenia.
+
+    Zbiór rootów generacji ma JEDNEGO ownera (``courier_admin.transaction_roots``),
+    więc recovery pyta jego, zamiast wierzyć ścieżkom ze znacznika: uszkodzony albo
+    nieaktualny znacznik nie może skierować ``atomic_write_bytes`` na plik spoza
+    generacji ani kazać zwalidować roota cudzym schematem. Import jest late-bound,
+    bo to ``courier_admin`` importuje ten moduł (kierunek zależności zostaje).
+    """
+    from dispatch_v2 import courier_admin
+
+    return {(root, os.path.realpath(path)) for root, path in courier_admin.transaction_roots()}
+
+
 @contextmanager
 def onboarding_lock(journal_path: str):
-    """``flock(LOCK_EX)`` na całą sekcję krytyczną onboardingu (recovery + zapis)."""
+    """``flock(LOCK_EX)`` na całą sekcję krytyczną onboardingu (recovery + zapis).
+
+    Lockfile (0 B, obok znacznika) jest CELOWO trwały i NIE jest kasowany po
+    zwolnieniu blokady — także po onboardingu odrzuconym w sekcji krytycznej.
+    ``flock`` siedzi na I-WĘŹLE: gdyby posiadacz blokady odlinkował plik, kolejny
+    proces otworzyłby świeży i-węzeł i wszedł RÓWNOLEGLE (dwóch „posiadaczy" tej
+    samej blokady). Walidacja wejścia (kanoniczny CID, alias) biegnie w
+    ``courier_admin.add_new_courier`` PRZED wejściem tutaj, więc śmieciowe
+    wywołanie nie tworzy lockfile'a; kolizje rejestru można sprawdzić dopiero pod
+    blokadą, bo wymagają odczytu generacji.
+    """
     lock_path = journal_path + LOCK_SUFFIX
     d = os.path.dirname(lock_path) or "."
     os.makedirs(d, exist_ok=True)
@@ -244,6 +295,19 @@ def recover_pending(journal_path: str) -> Dict[str, Any]:
     ``committed`` (wszystkie rooty zapisane, padło przed commitem),
     ``healed`` (rozdarta generacja cofnięta do stanu PRZED).
     Każdy inny stan → ``JournalError`` (fail-closed).
+
+    Znacznik jest wpuszczany do leczenia dopiero po CONFINEMENCIE: każda para
+    ``(root, path)`` musi należeć do ``courier_admin.transaction_roots()``
+    (:func:`_transaction_pairs`).
+
+    Root NIEJEDNOZNACZNY (``sha256_before == sha256_after``, czyli transakcja
+    zapisywała mu bajt-w-bajt to, co już tam było — realne po backfillu Z-P1-05,
+    gdy kurier jest w ``kurier_ids``/``courier_names``/``kurier_full_names``, a
+    wypadł z ``courier_tiers``) jest zgodny z OBIEMA stronami transakcji, więc nie
+    tworzy sztucznej „mieszanki": werdykt biorą rooty rozstrzygające. Bez tego
+    crash po WSZYSTKICH pięciu zapisach, ale przed commitem, rozstrzygał się jako
+    ``healed`` (rollback) mimo że transakcja fizycznie się dokończyła — stan był
+    spójny, ale etykieta myląca, a kompletna generacja niepotrzebnie cofana.
     """
     if not os.path.exists(journal_path):
         return {"status": "clean", "roots": []}
@@ -251,24 +315,37 @@ def recover_pending(journal_path: str) -> Dict[str, Any]:
     doc = _read_journal(journal_path)
     entries: List[Dict[str, Any]] = doc["entries"]
 
+    allowed = _transaction_pairs()
+    for entry in entries:
+        if (entry["root"], os.path.realpath(entry["path"])) not in allowed:
+            raise JournalError(
+                f"znacznik kieruje root {entry['root']!r} na ścieżkę spoza transakcji "
+                f"({os.path.basename(entry['path'])}) — leczenie tylko w granicach generacji"
+            )
+
     states = {}
     for entry in entries:
         current = _sha256_file(entry["path"])
-        if current == entry["sha256_before"]:
+        if entry["sha256_before"] == entry["sha256_after"]:
+            states[entry["path"]] = "either" if current == entry["sha256_before"] else None
+        elif current == entry["sha256_before"]:
             states[entry["path"]] = "before"
         elif current == entry["sha256_after"]:
             states[entry["path"]] = "after"
         else:
+            states[entry["path"]] = None
+        if states[entry["path"]] is None:
             raise JournalError(
                 f"root {entry['root']!r} ma bajty spoza transakcji (sha ≠ PRZED i ≠ PO) — "
                 f"recovery nie zgaduje, wymagana decyzja operatora"
             )
 
-    distinct = set(states.values())
+    distinct = set(states.values()) - {"either"}
     if distinct == {"before"}:
         _remove_durable(journal_path)
         return {"status": "aborted", "roots": []}
-    if distinct == {"after"}:
+    if distinct in ({"after"}, set()):
+        # set() = wszystkie rooty niejednoznaczne: docelowe bajty i tak są na dysku.
         _remove_durable(journal_path)
         return {"status": "committed", "roots": [e["root"] for e in entries]}
 
@@ -279,9 +356,18 @@ def recover_pending(journal_path: str) -> Dict[str, Any]:
 
     restored: List[str] = []
     for entry in entries:
-        if states[entry["path"]] == "before":
+        if states[entry["path"]] in ("before", "either"):
             continue
-        atomic_write_bytes(entry["path"], material[entry["path"]])
+        try:
+            atomic_write_bytes(entry["path"], material[entry["path"]])
+        except OSError as e:
+            # Nośnik nie przyjmuje leczenia (ENOSPC/EROFS/EIO). Znacznik ZOSTAJE —
+            # to jedyny trwały dowód rozdarcia — a błąd jest jawny i tego samego
+            # typu co reszta fail-closed (konsument nie musi zgadywać po typie).
+            raise JournalError(
+                f"root {entry['root']!r}: nie udało się przywrócić stanu PRZED "
+                f"({type(e).__name__}); znacznik zostaje, wymagana decyzja operatora"
+            ) from e
         if _sha256_file(entry["path"]) != entry["sha256_before"]:
             raise JournalError(
                 f"root {entry['root']!r}: przywrócenie nie odtworzyło stanu PRZED"
@@ -293,6 +379,45 @@ def recover_pending(journal_path: str) -> Dict[str, Any]:
 
 
 # --- transakcja --------------------------------------------------------------
+
+def _rollback_to_before(doc_entries: List[Dict[str, Any]],
+                        backed_up: set) -> List[str]:
+    """Cofnij rooty do stanu PRZED i ZWERYFIKUJ każdy z nich.
+
+    Zwraca listę root-id, których NIE udało się potwierdzić w stanie PRZED (pusta
+    lista = rollback pełny). Odtwarzanie idzie przez :func:`atomic_write_bytes`
+    (temp → fsync → rename), nigdy ``shutil.copy2``: ``copy2`` NAJPIERW obcina cel,
+    więc porażka w połowie (ENOSPC — ta sama awaria, która wywaliła zapis roota)
+    zostawiłaby root URWANY zamiast starego.
+
+    Backup jest materiałem zaufanym inaczej niż przy ``recover_pending``: powstał
+    chwilę temu, w TYM procesie, z bajtów sprzed transakcji — więc kontrolą jest
+    ``sha256`` względem stanu PRZED, a nie walidator schematu (schemat generacji
+    „przed" to nie jest coś, co ten rollback ma prawo zmieniać).
+    """
+    unconfirmed: List[str] = []
+    for rec in doc_entries:
+        path = rec["path"]
+        if _sha256_file(path) == rec["sha256_before"]:
+            continue                      # root nietknięty (albo już cofnięty)
+        if path not in backed_up:
+            unconfirmed.append(rec["root"])
+            continue
+        try:
+            with open(rec["backup"], "rb") as fh:
+                raw = fh.read()
+            if hashlib.sha256(raw).hexdigest() != rec["sha256_before"]:
+                unconfirmed.append(rec["root"])
+                continue
+            atomic_write_bytes(path, raw)
+        except OSError:
+            unconfirmed.append(rec["root"])
+            continue
+        if _sha256_file(path) != rec["sha256_before"]:
+            unconfirmed.append(rec["root"])
+    return unconfirmed
+
+
 
 def run_transaction(journal_path: str, entries: Iterable[Dict[str, Any]],
                     *, write=None) -> Dict[str, Any]:
@@ -331,12 +456,22 @@ def run_transaction(journal_path: str, entries: Iterable[Dict[str, Any]],
             "sha256_after": hashlib.sha256(canonical_bytes(item["payload"])).hexdigest(),
         })
 
-    backups: List[tuple] = []
+    backed_up: set = set()
     try:
+        # MATERIAŁ DO LECZENIA MUSI BYĆ TRWAŁY, ZANIM POWSTANIE ZNACZNIK: fsync
+        # treści KAŻDEGO backupu i fsync KAŻDEGO RÓŻNEGO katalogu backupów
+        # (kurier_full_names leży w innym katalogu niż pozostałe cztery). Inaczej
+        # po zaniku zasilania znacznik przeżywa, a backup — nie, i stan leczalny
+        # zamienia się w trwały blok operatorski.
+        fsynced_dirs = set()
         for item, rec in zip(items, doc_entries):
             shutil.copy2(item["path"], rec["backup"])
-            backups.append((item["path"], rec["backup"]))
-        _fsync_dir(doc_entries[0]["backup"])
+            _fsync_file(rec["backup"])
+            backed_up.add(item["path"])
+            d = os.path.dirname(os.path.abspath(rec["backup"])) or "."
+            if d not in fsynced_dirs:
+                _fsync_dir(rec["backup"])
+                fsynced_dirs.add(d)
 
         atomic_write_json(journal_path, {
             "version": JOURNAL_VERSION,
@@ -345,14 +480,22 @@ def run_transaction(journal_path: str, entries: Iterable[Dict[str, Any]],
 
         for item in items:
             write(item["path"], item["payload"])
-    except Exception:
-        # Rollback w procesie (parytet ze starym kontraktem) + sprzątnięcie
-        # znacznika: stan wraca do PRZED, więc nie ma czego leczyć po restarcie.
-        for orig, bk in backups:
-            try:
-                shutil.copy2(bk, orig)
-            except Exception:
-                pass
+    except Exception as exc:
+        # Rollback w procesie (parytet ze starym kontraktem), ale WERYFIKOWANY:
+        # znacznik wolno skasować dopiero, gdy KAŻDY root jest potwierdzony w
+        # stanie PRZED. Wcześniej rollback był best-effort (`copy2` w pętli z
+        # `except: pass`), a znacznik znikał bezwarunkowo — przy samo-skorelowanej
+        # klasie awarii (ENOSPC psuje i zapis, i odtworzenie) zostawiało to
+        # ROZDARTĄ generację BEZ ŚLADU, a następne wejście cicho dokładało do niej
+        # kolejną tożsamość. Skoro rollback nie wyszedł: znacznik ZOSTAJE (jedyny
+        # trwały dowód rozdarcia) i lecimy fail-closed.
+        unconfirmed = _rollback_to_before(doc_entries, backed_up)
+        if unconfirmed:
+            raise JournalError(
+                f"zapis generacji padł ({type(exc).__name__}), a rollback NIE cofnął "
+                f"rootów {sorted(unconfirmed)} do stanu PRZED — generacja jest rozdarta, "
+                f"znacznik zostaje do leczenia/decyzji operatora"
+            ) from exc
         _remove_durable(journal_path)
         raise
 
