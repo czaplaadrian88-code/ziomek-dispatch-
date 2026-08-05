@@ -30,3 +30,9 @@ FAILED tests/test_courier_reliability.py::test_reliability_ordering_low_gt_high_
 FAILED tests/test_courier_reliability.py::test_schema_shape_of_output
 FAILED tests/test_courier_reliability.py::test_speed_vs_pred_median
 FAILED tests/test_courier_reliability.py::test_zero_breach_courier
+
+## PO ZMIANIE (bieg 2, kod finalny = commit f9d4d824f)
+23 failed, 7553 passed, 24 skipped, 8 xfailed, 159 warnings in 779.66s (0:12:59)
+
+diff list faili baseline vs bieg2: IDENTYCZNE (delta ZERO)
+delta passed: 7506 -> 7553 = +47 (dokladnie nowe testy archiwizatora)
