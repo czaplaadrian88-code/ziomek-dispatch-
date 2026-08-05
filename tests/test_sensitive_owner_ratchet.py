@@ -1,8 +1,10 @@
 """A-6/G2 — RATCHET wrażliwych operacji na POŚWIADCZENIACH kuriera (test-only).
 
 Bramka: ``engine.a6-ratchet-dict-get-alias`` (reskope na masterze ``c91b7ede8``).
-ITER2: domknięcie 6 findingów blind-review (CONFIRMED_DEFECT, 2026-08-04) —
-patrz sekcja „CO ZMIENIŁA ITER2" na końcu docstringa.
+ITER2: domknięcie 6 findingów blind-review (CONFIRMED_DEFECT, 2026-08-04).
+ITER3: domknięcie 5 findingów drugiego blind-review (CONFIRMED_DEFECT,
+2026-08-04) — snapshot-pin wyjątków + KONTRAKT GRANIC. Patrz sekcje
+„CO ZMIENIŁA ITER2" / „CO ZMIENIŁA ITER3" oraz „CZEGO TEN RATCHET NIE UMIE".
 
 CO CHRONIMY I DLACZEGO
 ----------------------
@@ -26,6 +28,13 @@ ZAMROŻONE LISTY POLITYKI (stan mastera ``c91b7ede8``): ``FROZEN_CRYPTO_OWNERS``
 ``FROZEN_CREDENTIAL_LOCK_OWNERS``, ``FROZEN_MODULE_SCOPE_LOCK_EXEMPT`` — każdy
 wpis ma uzasadnienie przy stałej. Dopisanie wpisu = ŚWIADOMA zmiana polityki
 bezpieczeństwa (owner ACK), nie „poprawka czerwonego testu".
+
+Od iter3 wpis NIE JEST LICENCJĄ: każdy ma przypięty SNAPSHOT dzisiejszych
+trafień (``PINNED_POLICY_HITS``, sygnatura z ``module_hit_signature``), więc
+wyjątek zamraża STATUS QUO — jakiekolwiek nowe trafienie w module-wyjątku jest
+czerwone mimo wyjątku, a trafienie, które zniknęło, każe wpis usunąć. Wpis bez
+pinu jest niemożliwy (``test_every_policy_entry_has_a_snapshot_pin``); jedyne
+zwolnienie (``SNAPSHOT_PIN_WAIVED``) to kanoniczny owner, z uzasadnieniem.
 
 ZAKRES SKANU (discovery, nie enumeracja — lekcja O1 z G3)
 ---------------------------------------------------------
@@ -97,17 +106,71 @@ GRANICE HEURYSTYK (jawnie, żeby nikt ich nie odkrywał metodą prób)
    ALBO w zakresie, który jednocześnie nazywa materiał sekretny
    (``pin``/``password``/``secret``…) i parametr kosztu/soli
    (``salt``/``rounds``/``kdf``/``derive``…; dopasowanie CZŁONEM identyfikatora,
-   bo substring „pin" siedzi w „shipping"). NIE wykrywamy: KDF rozwiniętego bez
-   pętli (``functools.reduce``, rekurencja), „pętli" zapisanej jako
-   comprehension, ani KDF w innym repo. To ŚWIADOMY kompromis: szersza reguła
-   (każdy hash w pętli) dałaby fałszywe alarmy na legalnym haszowaniu kolekcji
-   i rozbroiłaby bramkę.
+   bo substring „pin" siedzi w „shipping"). Od iter3 liczy się także hash
+   WYCIĄGNIĘTY DO HELPERA modułu (``out = _step(out)``) — tym samym punktem
+   stałym po grafie wywołań, co locki. Ścieżka helperowa ma jeden warunek
+   więcej: wynik musi wracać do własnego argumentu (AKUMULATOR), bo to właśnie
+   znaczy „iterowany". Bez tego warunku reguła zapala się na legalnym
+   haszowaniu KOLEKCJI przez helper — zmierzony fałszywy alarm na
+   ``.claude/skills/ziomek-blind-review/driver.py`` (SHA-pin plików w pętli,
+   w funkcji, która mówi „pin" w zupełnie innym znaczeniu).
 4. Dostęp dynamiczny (F5) — NIE próbujemy rozwiązywać ``os.environ``, ``bytes``
    ani ``chr()``. Fail-closed: NIEROZWIĄZYWALNA nazwa w ``getattr(<chroniony
    moduł>, …)`` = finding; ``importlib``/``__import__`` chronionego modułu =
    finding; dynamiczny import o nierozwiązywalnej nazwie = finding TYLKO
    w pliku dotykającym poświadczeń (inaczej fałszywy alarm na legalnym
    ładowaniu modułów po nazwie, np. ``daily_accounting/tests/run_all.py``).
+   „Chroniony moduł" rozpoznajemy też PO ALIASIE ZMIENNEJ (``_M = hashlib``,
+   łańcuchowo, do punktu stałego) i po ``sys.modules["hashlib"]`` — iter3,
+   finding F5 blind-iter2: fail-closed przestawało być fail-closed po jednym
+   przypisaniu.
+
+CZEGO TEN RATCHET NIE UMIE — ZMIERZONE (kontrakt granic, iter3)
+----------------------------------------------------------------
+To NIE jest lista wymówek ani „TODO na kiedyś" — to SPECYFIKACJA NARZĘDZIA.
+Każda pozycja pochodzi z sondy recenzenta (blind iter1 albo blind iter2), ma
+zmierzone DZISIEJSZE zachowanie i pilnuje jej test
+(``test_measured_boundaries_are_still_exactly_this``), więc lista nie może po
+cichu zestarzeć się względem kodu. Statyczna analiza JEDNEGO pliku ma sufit;
+poniżej jest dokładnie ten sufit i narzędzie, które trzeba wziąć zamiast.
+
+1. PRZEPŁYW CROSS-MODUŁ — plik bierze ścieżkę magazynu z innego modułu/configu
+   i sam jej nigdzie nie nazywa (``from storepaths import roster_store``,
+   ``CFG["store"]``). OBIE nogi milczą; noga modułowa NIE domyka tego przypadku
+   (wbrew temu, co docstring iter2 sugerował — finding F3 blind-iter2).
+   Łagodzące: każda dzisiejsza stała ścieżki na masterze zawiera token, a import
+   stałej jest widziany. Właściwe narzędzie: JEDNO źródło ścieżek stanu
+   (moduł-owner ścieżek) + review PR; ratchet nie zastąpi tu przeglądu.
+2. ATRYBUT OBIEKTU / DEKORATOR / REJESTR helperów w nodze PRECYZYJNEJ
+   (``self._path``, ``@_sync``, ``_OPS["take"](fh)``). Domyka je noga MODUŁOWA,
+   a w modułach z wyjątkiem — snapshot-pin (iter3). Poza modułami polityki nie
+   ma tu dziury; wewnątrz nich to pin jest dowodem, nie analiza zakresu.
+3. LOCK SPOZA ``fcntl``: ``os.open(..., O_EXCL)``, ``filelock``/``portalocker``,
+   ``multiprocessing.Lock``/``threading.Lock``; oraz ścieżka magazynu
+   wyprodukowana dopiero w runtime (``os.environ[...]``). Powód jest POMIAROWY
+   (patrz granica 2b): objęcie prymitywów wątkowych zapaliłoby nogę modułową na
+   ``common.py`` i ``gps_server.py``. Właściwe narzędzie: osobna bramka w dniu,
+   w którym pojawi się realny konsument któregoś z tych prymitywów.
+4. KDF BEZ PĘTLI SKŁADNIOWEJ: ``functools.reduce``, rekurencja, comprehension
+   (i, konsekwentnie, hash w helperze bez akumulatora). Rozszerzanie reguły na
+   te formy kosztuje fałszywe alarmy na legalnym haszowaniu kolekcji.
+   Właściwe narzędzie: runtime-guard w ``identity.pin_auth`` (jedyny writer
+   magazynu weryfikujący format rekordu i próg kosztu przy KAŻDYM zapisie) —
+   drugi KDF i tak musi zapisać rekord do magazynu, żeby cokolwiek zmienić.
+5. MODUŁ WSTRZYKNIĘTY Z ZEWNĄTRZ (``def h(mod, …): getattr(mod, env)``) —
+   statycznie nie ma czego rozwinąć; aliasy zmiennych i ``sys.modules[...]``
+   iter3 domyka, ale parametru funkcji nie. Właściwe narzędzie: review PR.
+6. POZA ZASIĘGIEM Z DEFINICJI: inne repo (panel, apka kuriera), pliki
+   niekompilowalne, katalogi-symlinki, korzeniowy ``tests/``. To są świadome
+   granice ZAKRESU, nie heurystyki — patrz sekcja „ZAKRES SKANU".
+7. SAM SNAPSHOT-PIN ma dwie zmierzone granice, obie świadome:
+   (a) ``identity/pin_auth.py`` jest z niego ZWOLNIONY (``SNAPSHOT_PIN_WAIVED``)
+   — drugi protokół blokady dopisany WEWNĄTRZ modułu-ownera nie zapali pinu;
+   pilnuje go oracle ownera (``tests/test_a6_security_pin_kdf.py``) i review,
+   bo zamrożenie ownera zamieniłoby każdą legalną zmianę KDF w czerwony test;
+   (b) sygnatura to WIELOZBIÓR etykiet zakresów, więc zmiana, która JEDNOCZEŚNIE
+   usuwa jedno trafienie i dokłada drugie w zakresie o TEJ SAMEJ nazwie, wyjdzie
+   na zero. Każda zmiana netto (nowe/znikłe trafienie) jest czerwona.
 
 Ratchet jest KONSERWATYWNY: przy niejednoznaczności woli fałszywy alarm niż
 cichego writera (ta sama zasada co ``test_committed_pickup_authority_ratchet``).
@@ -130,6 +193,30 @@ CO ZMIENIŁA ITER2 (6 findingów blind-review, każdy z testem regresyjnym)
 * **F5** — fail-closed na nierozwiązywalny dostęp dynamiczny do chronionych
   modułów (``getattr`` z ``os.environ``/``bytes``/``chr``, ``importlib``).
 
+CO ZMIENIŁA ITER3 (5 findingów drugiego blind-review)
+------------------------------------------------------
+* **F1 (high) — „wpis w wyjątkach = licencja na drugiego lockera"** — fix
+  STRUKTURALNY, nie kolejny warunek: ``PINNED_POLICY_HITS`` przypina dokładną
+  listę i liczbę dzisiejszych TRAFIEŃ obu nóg w każdym module polityki
+  (``module_hit_signature`` patrzy PONIŻEJ agregatu findingów, bo to agregat
+  był wyciszany wpisem). Wszystkie cztery formy recenzenta wstawione do
+  prawdziwego ``courier_admin.py`` (E0/E1/E2/E3) oraz ``_PinyGuard``
+  w ``courier_resolver.py`` są teraz RED.
+* **F2 (medium) — bezterminowy immunitet zamrożonej migracji** — ten sam pin:
+  8 zmierzonych trafień ``_atomic_write_json``, zero trafień krypto. Mutacja M3
+  (nowy lock magazynu KDF w tym pliku) i M2 (wpis staje się martwy) = RED.
+  Rekomendacja dla ownera zapisana przy stałej: ZARCHIWIZOWAĆ plik migracji —
+  to zmiana produkcyjna, świadomie poza zakresem tej bramki.
+* **F4 (medium) — ręczny KDF przez helper** — hash w helperze wołanym z pętli
+  liczy się jak hash w pętli (ten sam taint po grafie wywołań co dla locków),
+  z warunkiem akumulatora, którego wymagał zmierzony fałszywy alarm.
+* **F5 (low) — alias modułu przed ``getattr``** — ``_module_refs`` rozwija
+  aliasy zmiennych do punktu stałego i ``sys.modules[...]``.
+* **F3 (medium) — „granica opisana odwrotnie niż działa"** — sekcja „CZEGO TEN
+  RATCHET NIE UMIE" wyżej + test kontraktu granic, który czerwieni się, gdy
+  pokrycie się zmieni. Cross-moduł jest tam wymieniony jako otwarty, bo taki
+  JEST; noga modułowa go NIE domyka.
+
 HERMETYCZNY: wyłącznie ODCZYT plików repo + skan syntetycznych drzew w
 ``tmp_path``. Zero I/O do ``dispatch_state``/``logs``/``flags.json``, zero
 uruchamiania wstrzykniętego kodu (mutacje są PARSOWANE, nigdy importowane).
@@ -138,6 +225,7 @@ from __future__ import annotations
 
 import ast
 import re
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -222,6 +310,10 @@ CREDENTIAL_TOKENS = frozenset({
     "kdf_path", "pin_kdf", "kdf_store", "pin_auth",
 })
 
+# Ścieżka magazynu KDF — używana w sondach/mutacjach niżej (kod jest wyłącznie
+# PARSOWANY, nigdy wykonywany, więc żaden test nie dotyka żywego pliku).
+_CRED_PATH = "/root/.openclaw/workspace/dispatch_state/kurier_piny_kdf.json"
+
 # ── ZAMROŻONE listy polityki (master c91b7ede8) ──────────────────────────────
 
 # UZASADNIENIE: ``identity/pin_auth`` jest kanonicznym (jedynym) modułem A-6,
@@ -277,6 +369,68 @@ FROZEN_MODULE_SCOPE_LOCK_EXEMPT = {
         "(temp+fsync+rename), a ``fcntl`` jest tam zaimportowany, ale NIE "
         "UŻYWANY (docstring l.13 deklaruje LOCK_EX, którego w kodzie nie ma "
         "— osobny dług, nie ta bramka)."
+    ),
+}
+
+# ── SNAPSHOT-PIN polityki (iter3) ────────────────────────────────────────────
+#
+# PO CO: recenzent blind-iter2 udowodnił (finding F1 „high" + F2 „medium"), że
+# sam WPIS na liście zamrożonej jest LICENCJĄ — do modułu-wyjątku
+# (``courier_admin.py``) dało się wstawić DZIAŁAJĄCY, konkurencyjny protokół
+# ``fcntl.LOCK_EX`` na ``kurier_piny.json`` i bramka szła 81/81 zielono
+# (warianty E1/E2/E3: klasa-context-manager, dekorator, rejestr helperów);
+# analogicznie do zamrożonej migracji dało się dopisać CAŁKIEM NOWY lock na
+# magazynie KDF (mutacja M3). Powód strukturalny: findingi obu nóg są
+# AGREGATEM na moduł, a wpis wycisza agregat — więc dziewiąty lock w module
+# z wpisem jest nieodróżnialny od ósmego.
+#
+# CO ROBIMY: każdy wpis polityki ma PRZYPIĘTY snapshot dzisiejszych TRAFIEŃ
+# (``module_hit_signature``): dokładna lista i liczba trafień nogi lock oraz
+# nogi krypto, per ZAKRES. Porównanie jest RÓWNOŚCIĄ w obie strony:
+#   * jakiekolwiek NOWE trafienie w module-wyjątku ⇒ RED, mimo wyjątku
+#     (wyjątek przestaje być licencją, staje się ZAMROŻENIEM STATUS QUO),
+#   * trafienie, które ZNIKNĘŁO ⇒ RED, bo wpis polityki stał się martwą literą
+#     (to jest brakujący test żywotności dla ``FROZEN_*_OWNERS``, którego
+#     asymetrię recenzent zmierzył mutacją M2).
+# Zmiana pinu = ŚWIADOMA zmiana polityki bezpieczeństwa (owner ACK) razem
+# z pomiarem, a nie „poprawka czerwonego testu".
+PINNED_POLICY_HITS: dict[str, dict[str, tuple[str, ...]]] = {
+    # 8 trafień = 2 wywołania ``fcntl.flock(..., fcntl.LOCK_EX/LOCK_UN)``
+    # (każde: nazwa modułu + atrybut ``flock`` + nazwa modułu + stała ``LOCK_*``)
+    # w JEDNYM zakresie — store pozycji GPS, nie magazyn PIN-ów.
+    "courier_resolver.py": {
+        "lock": ("_save_last_known_pos",) * 8,
+        "crypto": (),
+    },
+    # ZERO trafień: ``import fcntl`` jest tu NIEUŻYWANY (docstring l.13 obiecuje
+    # ``LOCK_EX``, którego w kodzie nie ma). Pin trzyma dokładnie ten stan:
+    # pierwszy realny lock w kanonicznym writerze rosteru = RED, w KAŻDEJ
+    # formie (E0 wprost, E1 klasa-CM, E2 dekorator, E3 rejestr helperów).
+    "courier_admin.py": {
+        "lock": (),
+        "crypto": (),
+    },
+    # 8 trafień w ``_atomic_write_json`` (LOCK_EX + LOCK_UN) — historyczny,
+    # jednorazowy writer LEGACY ``kurier_piny.json`` z 2026-05-05. Dziewiąte
+    # trafienie ALBO jakiekolwiek trafienie krypto = RED.
+    # REKOMENDACJA DLA OWNERA (nie robimy jej w tej bramce, bo to zmiana
+    # produkcyjna): zarchiwizować ten plik poza drzewem repo — wtedy znika
+    # zarówno wpis, jak i pin, a nie zostaje bezterminowy immunitet.
+    "migrations/migrate_couriers_2026-05-05.py": {
+        "lock": ("_atomic_write_json",) * 8,
+        "crypto": (),
+    },
+}
+
+# Wpisy polityki ŚWIADOMIE zwolnione ze snapshot-pinu, z uzasadnieniem.
+SNAPSHOT_PIN_WAIVED = {
+    "identity/pin_auth.py": (
+        "KANONICZNY WŁAŚCICIEL obu operacji — jego zadaniem JEST liczyć KDF "
+        "i brać lock magazynu, więc pin zamieniałby każdą legalną zmianę "
+        "ownera (podniesienie kosztu, rotacja algorytmu) w czerwony test. "
+        "Owner ma własny oracle bezpieczeństwa (tests/test_a6_security_pin_kdf.py) "
+        "oraz anty-pustkę tutaj (test_owner_still_detected_as_*), czyli JEST "
+        "kontrolowany — tylko innym narzędziem niż zamrożenie status quo."
     ),
 }
 
@@ -528,12 +682,60 @@ def _dynamic_import_targets(call: ast.Call,
     return _resolved_strings(call.args[0], aliases)
 
 
+def _subscript_index(node: ast.Subscript) -> ast.AST:
+    """Wyrażenie indeksu (``ast.Index`` zniknął w 3.9+, ale bywa w starszych AST)."""
+    sl: ast.AST = node.slice
+    if sl.__class__.__name__ == "Index":  # pragma: no cover - tylko py<3.9
+        sl = getattr(sl, "value", sl)
+    return sl
+
+
+def _module_path_of(expr: ast.AST, refs: dict[str, str],
+                    aliases: dict[str, set[str]]) -> str | None:
+    """Ścieżka modułu, do którego odnosi się wyrażenie — albo ``None``.
+
+    Rozpoznaje: nazwę związaną importem (``hashlib``, ``_hl``), atrybut na
+    takiej nazwie (``os.path``) oraz ``sys.modules["hashlib"]`` (F5 iter3 —
+    subskrypcja rejestru modułów to zwykłe odwołanie do modułu, tyle że
+    zapisane stringiem, który ``_resolved_strings`` i tak już liczy).
+    """
+    if isinstance(expr, ast.Name):
+        return refs.get(expr.id)
+    if isinstance(expr, ast.Attribute):
+        parts: list[str] = []
+        cur: ast.AST = expr
+        while isinstance(cur, ast.Attribute):
+            parts.append(cur.attr)
+            cur = cur.value
+        if isinstance(cur, ast.Name):
+            base = refs.get(cur.id, cur.id)
+            return ".".join([base] + list(reversed(parts)))
+        return None
+    if isinstance(expr, ast.Subscript):
+        value = expr.value
+        if (isinstance(value, ast.Attribute) and value.attr == "modules"
+                and isinstance(value.value, ast.Name)
+                and refs.get(value.value.id,
+                             value.value.id).split(".")[0] == "sys"):
+            names = _resolved_strings(_subscript_index(expr), aliases)
+            if len(names) == 1:
+                return next(iter(names))
+    return None
+
+
 def _module_refs(tree: ast.AST, aliases: dict[str, set[str]]) -> dict[str, str]:
     """Lokalna nazwa → ścieżka modułu, którą reprezentuje.
 
-    Obejmuje ``import x as y``, ``from x import y``, a także wiązania
+    Obejmuje ``import x as y``, ``from x import y``, wiązania
     ``m = importlib.import_module("hashlib")`` / ``__import__("hashlib")``
-    (bez tego F5 kończyłby się na pierwszym poziomie pośrednictwa)."""
+    (bez tego F5 kończyłby się na pierwszym poziomie pośrednictwa) oraz —
+    od iter3 (finding F5 blind-iter2) — ALIAS MODUŁU PRZEZ ZMIENNĄ:
+    ``_M = hashlib`` / ``_M = sys.modules["hashlib"]``. Alias liczony jest do
+    PUNKTU STAŁEGO (tą samą techniką co ``_string_aliases``), więc łańcuch
+    ``_A = hashlib; _B = _A`` też się rozwija; NIE rozwijamy aliasu przez
+    atrybut obiektu ani modułu wstrzykniętego parametrem funkcji — to spisana
+    granica (patrz „CZEGO TEN RATCHET NIE UMIE" w docstringu modułu).
+    """
     refs: dict[str, str] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -546,31 +748,54 @@ def _module_refs(tree: ast.AST, aliases: dict[str, set[str]]) -> dict[str, str]:
         elif isinstance(node, ast.ImportFrom) and node.module:
             for al in node.names:
                 refs[al.asname or al.name] = f"{node.module}.{al.name}"
+
+    # Wiązania przez wyrażenie: import dynamiczny ORAZ alias modułu (iter3).
+    bindings: list[tuple[list[ast.AST], ast.AST]] = []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Assign) or not isinstance(node.value, ast.Call):
-            continue
-        for module in _dynamic_import_targets(node.value, aliases):
-            for target in node.targets:
-                if isinstance(target, ast.Name):
+        if isinstance(node, ast.Assign):
+            bindings.append((list(node.targets), node.value))
+        elif isinstance(node, ast.AnnAssign) and node.value is not None:
+            bindings.append(([node.target], node.value))
+
+    for _ in range(len(bindings) + 1):
+        changed = False
+        for targets, value in bindings:
+            module = None
+            if isinstance(value, ast.Call):
+                found = _dynamic_import_targets(value, aliases)
+                if len(found) == 1:
+                    module = next(iter(found))
+            else:
+                module = _module_path_of(value, refs, aliases)
+            if not module:
+                continue
+            for target in targets:
+                if isinstance(target, ast.Name) and refs.get(target.id) != module:
                     refs[target.id] = module
+                    changed = True
+        if not changed:
+            break
     return refs
 
 
-def _sensitive_module_of(expr: ast.AST, refs: dict[str, str]) -> str | None:
+def _sensitive_module_of(expr: ast.AST, refs: dict[str, str],
+                         aliases: dict[str, set[str]]) -> str | None:
     """Jeśli wyrażenie odnosi się do chronionego modułu — zwróć jego korzeń."""
-    if isinstance(expr, ast.Name):
-        root = refs.get(expr.id, expr.id).split(".")[0]
-        if root in DYNAMIC_SENSITIVE_MODULES:
-            return root
-    elif isinstance(expr, ast.Attribute):
+    resolved = _module_path_of(expr, refs, aliases)
+    if resolved is None and isinstance(expr, ast.Name):
+        # Nazwa niezwiązana importem może być modułem wprost (``hashlib``
+        # w pliku, który go dostał z zewnątrz) — zachowanie z iter2.
+        resolved = expr.id
+    elif resolved is None and isinstance(expr, ast.Attribute):
         cur: ast.AST = expr
         while isinstance(cur, ast.Attribute):
             cur = cur.value
         if isinstance(cur, ast.Name):
-            root = refs.get(cur.id, cur.id).split(".")[0]
-            if root in DYNAMIC_SENSITIVE_MODULES:
-                return root
-    return None
+            resolved = refs.get(cur.id, cur.id)
+    if resolved is None:
+        return None
+    root = resolved.split(".")[0]
+    return root if root in DYNAMIC_SENSITIVE_MODULES else None
 
 
 def _is_hash_primitive_call(call: ast.Call, refs: dict[str, str]) -> bool:
@@ -590,6 +815,81 @@ def _is_hash_primitive_call(call: ast.Call, refs: dict[str, str]) -> bool:
             if parts[0] in HASH_PRIMITIVE_MODULES and parts[-1] in HASH_PRIMITIVE_NAMES:
                 return True
     return False
+
+
+def _is_accumulator_call(call: ast.Call,
+                         parents: dict[ast.AST, ast.AST]) -> bool:
+    """Czy wynik wywołania wraca do jego WŁASNEGO argumentu (``out = f(out)``)?
+
+    To jest dosłowna definicja „ITEROWANEGO" hasha: runda n+1 zjada wynik
+    rundy n. Rozróżnia KDF (``out = _step(out)``) od haszowania KOLEKCJI
+    przez helper (``actual = sha256_file(f)``), które KDF-em nie jest.
+    """
+    node: ast.AST = call
+    while node in parents:
+        node = parents[node]
+        if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
+            targets = (node.targets if isinstance(node, ast.Assign)
+                       else [node.target])
+            names = {t.id for t in targets if isinstance(t, ast.Name)}
+            used = {s.id for s in ast.walk(call) if isinstance(s, ast.Name)}
+            return bool(names & used)
+        if isinstance(node, (ast.For, ast.AsyncFor, ast.While, ast.FunctionDef,
+                             ast.AsyncFunctionDef, ast.Module)):
+            return False
+    return False
+
+
+def _callee_name(call: ast.Call) -> str | None:
+    """Nazwa wołanej funkcji (``f()`` → ``f``, ``obj.f()`` → ``f``)."""
+    func = call.func
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return None
+
+
+def _hash_helper_functions(tree: ast.AST, refs: dict[str, str]) -> set[str]:
+    """Nazwy funkcji modułu, których WYWOŁANIE liczy hash (F2, iter3).
+
+    Ten sam mechanizm co taint locków z iter1→iter2: punkt stały po grafie
+    wywołań WEWNĄTRZ modułu. Funkcja jest „helperem haszującym", gdy sama woła
+    prymityw haszujący albo woła inną funkcję modułu, która jest helperem.
+    Dzięki temu ``for _ in range(rounds): out = _step(out)`` (finding F4
+    blind-iter2 — najzwyklejszy refaktor „wyciągnij krok do helpera") liczy się
+    jako iterowany hash, dokładnie tak jak liczyłby się hash wpisany w pętlę.
+    """
+    functions = [n for n in ast.walk(tree)
+                 if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
+    local_names = {fn.name for fn in functions}
+    if not local_names:
+        return set()
+
+    direct: set[str] = set()
+    callees: dict[str, set[str]] = {}
+    for fn in functions:
+        called: set[str] = set()
+        for sub in ast.walk(fn):
+            if not isinstance(sub, ast.Call):
+                continue
+            if _is_hash_primitive_call(sub, refs):
+                direct.add(fn.name)
+            name = _callee_name(sub)
+            if name in local_names and name != fn.name:
+                called.add(name)
+        callees.setdefault(fn.name, set()).update(called)
+
+    helpers = set(direct)
+    for _ in range(len(local_names) + 1):
+        grew = False
+        for name, called in callees.items():
+            if name not in helpers and called & helpers:
+                helpers.add(name)
+                grew = True
+        if not grew:
+            break
+    return helpers
 
 
 # ── skaner ───────────────────────────────────────────────────────────────────
@@ -774,7 +1074,7 @@ def _crypto_findings(tree: ast.AST, relpath: str, parents: dict[ast.AST, ast.AST
             continue
         func = node.func
         if isinstance(func, ast.Name) and func.id == "getattr" and len(node.args) >= 2:
-            module = _sensitive_module_of(node.args[0], refs)
+            module = _sensitive_module_of(node.args[0], refs, aliases)
             if module and not _resolved_strings(node.args[1], aliases):
                 kind = "credential-lock" if module in LOCK_MODULE_NAMES else "crypto"
                 add(node, f"getattr({module}, <nazwa nierozwiązywalna statycznie>) "
@@ -794,9 +1094,26 @@ def _crypto_findings(tree: ast.AST, relpath: str, parents: dict[ast.AST, ast.AST
                 add(node, "dynamiczny import o nazwie nierozwiązywalnej statycznie, "
                           "w pliku dotykającym magazynu poświadczeń — fail-closed")
 
-    # (a4) F2 — RĘCZNY KDF: prymityw haszujący w pętli (granice w docstringu).
+    # (a4) F2 — RĘCZNY KDF: prymityw haszujący w pętli — WPROST albo przez
+    #      HELPER modułu (iter3: ten sam taint po grafie wywołań, co dla locków;
+    #      granice w docstringu).
+    hash_helpers = _hash_helper_functions(tree, refs)
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Call) or not _is_hash_primitive_call(node, refs):
+        if not isinstance(node, ast.Call):
+            continue
+        via_helper = False
+        if _is_hash_primitive_call(node, refs):
+            pass
+        elif (_callee_name(node) in hash_helpers
+              and _is_accumulator_call(node, parents)):
+            # ZMIERZONE zwężenie ścieżki helperowej (nie ciche — patrz docstring
+            # „granice", pkt 3): bez warunku akumulatora reguła zapala się na
+            # legalnym haszowaniu KOLEKCJI przez helper w funkcji, która mówi
+            # „pin" w innym znaczeniu (SHA-pin plików w
+            # ``.claude/skills/ziomek-blind-review/driver.py`` — zmierzony
+            # fałszywy alarm na masterze c91b7ede8).
+            via_helper = True
+        else:
             continue
         if not _in_loop(node, parents):
             continue
@@ -807,16 +1124,23 @@ def _crypto_findings(tree: ast.AST, relpath: str, parents: dict[ast.AST, ast.AST
             if not (words & KDF_SECRET_HINTS and words & KDF_COST_HINTS):
                 continue
         add(node, "iterowany prymityw haszujący w zakresie poświadczeń "
-                  "(ręcznie zbudowany KDF)")
+                  "(ręcznie zbudowany KDF"
+                  + (" — hash wyciągnięty do helpera modułu)" if via_helper
+                     else ")"))
 
     return findings
 
 
-def _lock_findings(tree: ast.AST, relpath: str, parents: dict[ast.AST, ast.AST],
-                   aliases: dict[str, set[str]], docstrings: set[ast.AST],
-                   file_touches: bool) -> list[Finding]:
-    findings: list[Finding] = []
+def _lock_sites(tree: ast.AST, aliases: dict[str, set[str]],
+                docstrings: set[ast.AST]) -> tuple[list[ast.AST], bool]:
+    """Surowe TRAFIENIA prymitywu blokady w module + „moduł sięga po fcntl".
 
+    Wydzielone z ``_lock_findings`` w iter3, bo tego samego zbioru trafień
+    używa SNAPSHOT-PIN (``module_hit_signature``): pin porównuje trafienia,
+    a nie findingi — noga modułowa daje JEDEN finding niezależnie od tego, czy
+    locków w module jest jeden czy dziesięć, więc na findingach nowy locker
+    w module-wyjątku byłby niewidoczny (finding F1 blind-iter2).
+    """
     lock_aliases: set[str] = set()
     module_uses_fcntl = False
     for node in ast.walk(tree):
@@ -850,6 +1174,15 @@ def _lock_findings(tree: ast.AST, relpath: str, parents: dict[ast.AST, ast.AST],
                     break
     if lock_sites:
         module_uses_fcntl = True
+    return lock_sites, module_uses_fcntl
+
+
+def _lock_findings(tree: ast.AST, relpath: str, parents: dict[ast.AST, ast.AST],
+                   aliases: dict[str, set[str]], docstrings: set[ast.AST],
+                   file_touches: bool) -> list[Finding]:
+    findings: list[Finding] = []
+
+    lock_sites, module_uses_fcntl = _lock_sites(tree, aliases, docstrings)
 
     # Propagacja taintu jest droga (punkt stały po całym module), a ma sens
     # wyłącznie gdy w pliku W OGÓLE jest jakiś lock — 90 % repo nie ma.
@@ -884,28 +1217,96 @@ def _lock_findings(tree: ast.AST, relpath: str, parents: dict[ast.AST, ast.AST],
     return findings
 
 
+class _Ctx:
+    """Wspólny kontekst analizy jednego modułu (parsowany RAZ)."""
+    __slots__ = ("tree", "parents", "docstrings", "aliases", "refs",
+                 "file_touches")
+
+    def __init__(self, source: str):
+        self.tree = ast.parse(source)
+        self.parents = _parents(self.tree)
+        self.docstrings = _docstring_nodes(self.tree)
+        self.aliases = _string_aliases(self.tree)
+        self.refs = _module_refs(self.tree, self.aliases)
+        self.file_touches = _touches(
+            CREDENTIAL_TOKENS, _identifiers(self.tree),
+            _strings_in(self.tree, self.aliases, self.docstrings))
+
+
 def scan_source(source: str, relpath: str) -> list[Finding]:
     """Znajdź w JEDNYM module: (a) użycia krypto poświadczeń, (b) blokady
     plikowe w zakresie/module dotykającym poświadczeń. Zwraca listę ``Finding``."""
     try:
-        tree = ast.parse(source)
+        ctx = _Ctx(source)
     except SyntaxError:
         # Plik niekompilowalny nie jest konsumentem; kompilowalność pilnują
         # inne bramki (py_compile w workflow deployu).
         return []
 
-    parents = _parents(tree)
-    docstrings = _docstring_nodes(tree)
-    aliases = _string_aliases(tree)
-    refs = _module_refs(tree, aliases)
-    file_touches = _touches(CREDENTIAL_TOKENS, _identifiers(tree),
-                            _strings_in(tree, aliases, docstrings))
-
-    findings = _crypto_findings(tree, relpath, parents, aliases, docstrings,
-                                refs, file_touches)
-    findings += _lock_findings(tree, relpath, parents, aliases, docstrings,
-                               file_touches)
+    findings = _crypto_findings(ctx.tree, relpath, ctx.parents, ctx.aliases,
+                                ctx.docstrings, ctx.refs, ctx.file_touches)
+    findings += _lock_findings(ctx.tree, relpath, ctx.parents, ctx.aliases,
+                               ctx.docstrings, ctx.file_touches)
     return findings
+
+
+# ── SNAPSHOT-PIN: wyjątek zamraża STATUS QUO, nie wydaje licencji ────────────
+
+def module_hit_signature(source: str) -> dict[str, tuple[str, ...]]:
+    """Dokładna LISTA (więc i LICZBA) surowych TRAFIEŃ obu nóg w module.
+
+    Zwraca ``{"lock": (<zakresy trafień blokady>…), "crypto": (<zakresy trafień
+    krypto>…)}`` — posortowane KROTKI etykiet zakresów, z powtórzeniami, więc
+    dopisanie drugiego ``flock`` do TEJ SAMEJ funkcji też zmienia sygnaturę.
+
+    Po co: findingi obu nóg są AGREGATEM (noga modułowa emituje jeden finding
+    na moduł, noga precyzyjna milczy tam, gdzie taint nie dotarł), a wpis
+    w ``FROZEN_MODULE_SCOPE_LOCK_EXEMPT`` / ``FROZEN_CREDENTIAL_LOCK_OWNERS``
+    wycisza właśnie agregat. Sygnatura patrzy PONIŻEJ agregatu — na każde
+    dotknięcie ``fcntl`` i każde trafienie krypto z osobna.
+    """
+    try:
+        ctx = _Ctx(source)
+    except SyntaxError:
+        return {"lock": (), "crypto": ()}
+    sites, _ = _lock_sites(ctx.tree, ctx.aliases, ctx.docstrings)
+    lock = [_scope_label(_enclosing_scope(n, ctx.parents)) for n in sites]
+    crypto: list[str] = []
+    for f in _crypto_findings(ctx.tree, "<snapshot>", ctx.parents, ctx.aliases,
+                              ctx.docstrings, ctx.refs, ctx.file_touches):
+        # F5 dla ``fcntl`` wpada do krypto-przebiegu, ale jest trafieniem LOCKA.
+        (lock if f.kind == "credential-lock" else crypto).append(f.scope)
+    return {"lock": tuple(sorted(lock)), "crypto": tuple(sorted(crypto))}
+
+
+def snapshot_pin_violations(source: str,
+                            pinned: dict[str, tuple[str, ...]]) -> list[str]:
+    """Różnica sygnatury modułu vs PRZYPIĘTY snapshot (czysta funkcja).
+
+    Porównanie jest RÓWNOŚCIĄ wielozbiorów, w obie strony:
+      * NOWE trafienie ⇒ wyjątek/zamrożenie właśnie próbowało zalegalizować
+        coś, czego nie zmierzono, gdy je nadawano (finding F1/F2 blind-iter2);
+      * ZNIKNIĘTE trafienie ⇒ wpis polityki stał się martwą literą i ma zostać
+        usunięty (asymetria, którą recenzent zmierzył mutacją M2).
+    """
+    actual = module_hit_signature(source)
+    out: list[str] = []
+    for leg in ("lock", "crypto"):
+        have = Counter(actual.get(leg, ()))
+        want = Counter(pinned.get(leg, ()))
+        for scope, n in sorted((have - want).items()):
+            out.append(f"NOWE trafienie [{leg}] w zakresie {scope!r} (x{n})")
+        for scope, n in sorted((want - have).items()):
+            out.append(f"ZNIKNĘŁO przypięte trafienie [{leg}] w zakresie "
+                       f"{scope!r} (x{n})")
+    return out
+
+
+def _entries_needing_pin(crypto_owners: dict, lock_owners: dict,
+                         exempt: dict) -> set[str]:
+    """Wpisy polityki, które MUSZĄ mieć przypięty snapshot (bez zwolnionych)."""
+    return ((set(crypto_owners) | set(lock_owners) | set(exempt))
+            - set(SNAPSHOT_PIN_WAIVED))
 
 
 def scan_tree(root: Path) -> list[Finding]:
@@ -1028,6 +1429,249 @@ def test_module_scope_exemptions_are_still_needed(repo_findings):
     stale = sorted(set(FROZEN_MODULE_SCOPE_LOCK_EXEMPT) - set(hits))
     assert not stale, (
         f"wyjątki bez powodu (usuń je z polityki): {stale}")
+
+
+# ── SNAPSHOT-PIN: wyjątek = zamrożenie status quo, nie licencja (iter3) ──────
+
+def test_every_policy_entry_has_a_snapshot_pin():
+    """Nie da się już nadać wyjątku BEZ pomiaru: każdy wpis
+    ``FROZEN_CRYPTO_OWNERS`` / ``FROZEN_CREDENTIAL_LOCK_OWNERS`` /
+    ``FROZEN_MODULE_SCOPE_LOCK_EXEMPT`` musi mieć przypięty snapshot albo
+    JAWNE zwolnienie z uzasadnieniem. To jest strukturalne domknięcie F1/F2:
+    dopisanie modułu do listy zamrożonej bez pinu = RED już na tym teście."""
+    needed = _entries_needing_pin(FROZEN_CRYPTO_OWNERS,
+                                  FROZEN_CREDENTIAL_LOCK_OWNERS,
+                                  FROZEN_MODULE_SCOPE_LOCK_EXEMPT)
+    missing = sorted(needed - set(PINNED_POLICY_HITS))
+    assert not missing, (
+        "wpis polityki bez przypiętego snapshotu trafień (zmierz go: "
+        "module_hit_signature(Path(rel).read_text()) ) — bez pinu wpis jest "
+        f"licencją na drugiego writera: {missing}")
+    stale = sorted(set(PINNED_POLICY_HITS) - needed)
+    assert not stale, (
+        f"pin bez wpisu polityki (usuń go razem z wpisem): {stale}")
+
+
+def test_snapshot_pin_waivers_are_justified():
+    """Zwolnienie z pinu jest dopuszczalne, ale MUSI być plikiem polityki
+    i mieć uzasadnienie — inaczej byłoby cichym obejściem samego pinu."""
+    for rel, reason in sorted(SNAPSHOT_PIN_WAIVED.items()):
+        assert (ROOT / rel).is_file(), f"zwolniony wpis nie istnieje: {rel}"
+        assert len(reason) > 80, f"zwolnienie bez uzasadnienia: {rel}"
+        assert rel in (set(FROZEN_CRYPTO_OWNERS)
+                       | set(FROZEN_CREDENTIAL_LOCK_OWNERS)
+                       | set(FROZEN_MODULE_SCOPE_LOCK_EXEMPT)), (
+            f"zwolnienie dla pliku spoza polityki: {rel}")
+
+
+@pytest.mark.parametrize("rel", sorted(PINNED_POLICY_HITS))
+def test_policy_module_matches_its_pinned_snapshot(rel):
+    """RATCHET PINU: moduł z wpisem polityki ma DOKŁADNIE te trafienia, które
+    zmierzono, gdy wpis nadawano.
+
+    RED tutaj NIE jest „testem do naprawienia": albo ktoś dołożył wrażliwą
+    operację do modułu, który miał wyjątek (⇒ usuń ją albo przenieś do
+    ``identity.pin_auth``), albo powód wpisu zniknął (⇒ usuń wpis wraz z pinem).
+    Zmiana pinu wymaga owner ACK i nowego pomiaru."""
+    source = (ROOT / rel).read_text(encoding="utf-8")
+    violations = snapshot_pin_violations(source, PINNED_POLICY_HITS[rel])
+    assert not violations, (
+        f"{rel}: stan modułu ROZJECHAŁ SIĘ z przypiętym snapshotem polityki:\n  "
+        + "\n  ".join(violations)
+        + f"\n  ZMIERZONE dziś: {module_hit_signature(source)}")
+
+
+def test_frozen_migration_owner_has_no_crypto_hits():
+    """Immunitet zamrożonej migracji dotyczy WYŁĄCZNIE locka LEGACY magazynu:
+    jakiekolwiek trafienie krypto w tym pliku = RED (F2 blind-iter2)."""
+    rel = "migrations/migrate_couriers_2026-05-05.py"
+    sig = module_hit_signature((ROOT / rel).read_text(encoding="utf-8"))
+    assert sig["crypto"] == (), (
+        f"zamrożona migracja liczy krypto poświadczeń: {sig['crypto']}")
+
+
+def test_new_policy_entry_without_pin_is_red():
+    """MUTACJA reguły sprzęgającej: gdyby ktoś dopisał moduł do wyjątków bez
+    pomiaru, ``test_every_policy_entry_has_a_snapshot_pin`` MUSI go zobaczyć."""
+    needed = _entries_needing_pin(
+        FROZEN_CRYPTO_OWNERS, FROZEN_CREDENTIAL_LOCK_OWNERS,
+        dict(FROZEN_MODULE_SCOPE_LOCK_EXEMPT, **{"nowy_writer.py": "bo tak"}))
+    assert sorted(needed - set(PINNED_POLICY_HITS)) == ["nowy_writer.py"]
+
+
+def test_widened_pin_without_real_hits_is_red():
+    """MUTACJA pinu: „poszerzenie" snapshotu na zapas (żeby przyszły lock się
+    zmieścił) jest RED od razu, bo pin to RÓWNOŚĆ, nie górna granica."""
+    rel = "courier_admin.py"
+    widened = {"lock": ("_atomic_write_json",), "crypto": ()}
+    violations = snapshot_pin_violations(
+        (ROOT / rel).read_text(encoding="utf-8"), widened)
+    assert violations and any("ZNIKNĘŁO" in v for v in violations), violations
+
+
+def test_removing_pin_content_makes_real_module_red():
+    """MUTACJA pinu: wyzerowanie przypiętej listy dla modułu, który realnie
+    bierze locki, natychmiast czerwieni (pin nie może być pustą dekoracją)."""
+    rel = "courier_resolver.py"
+    violations = snapshot_pin_violations(
+        (ROOT / rel).read_text(encoding="utf-8"), {"lock": (), "crypto": ()})
+    assert violations and any("NOWE trafienie" in v for v in violations), violations
+
+
+# Warianty recenzenta (blind-iter2, ``probe_exempt_hole.py``): DZIAŁAJĄCY
+# ``fcntl.LOCK_EX`` na ``kurier_piny.json`` wstawiony do kanonicznego writera
+# rosteru — w formach, na które noga precyzyjna jest ślepa, a nogę modułową
+# wycisza wpis wyjątku. Na iter2 każdy z nich dawał „81 passed".
+EXEMPT_MODULE_NEW_LOCKER_VARIANTS = [
+    pytest.param(
+        'def _atomic_write_json(path: str, data: dict) -> None:\n'
+        '    with open(path + ".lock", "w") as _lk:\n'
+        '        fcntl.flock(_lk.fileno(), fcntl.LOCK_EX)\n'
+        '        os.replace(path + ".tmp", path)\n'
+        '        fcntl.flock(_lk.fileno(), fcntl.LOCK_UN)\n',
+        id="E0-natural-flock-w-_atomic_write_json"),
+    pytest.param(
+        'class _FileGuard:\n'
+        '    def __init__(self, target):\n'
+        '        self._target = target\n'
+        '        self._fh = None\n'
+        '    def __enter__(self):\n'
+        '        self._fh = open(self._target + ".lock", "w")\n'
+        '        fcntl.flock(self._fh.fileno(), fcntl.LOCK_EX)\n'
+        '        return self\n'
+        '    def __exit__(self, *exc):\n'
+        '        fcntl.flock(self._fh.fileno(), fcntl.LOCK_UN)\n'
+        '        self._fh.close()\n'
+        '\n'
+        'def _atomic_write_json(path: str, data: dict) -> None:\n'
+        '    with _FileGuard(path):\n'
+        '        os.replace(path + ".tmp", path)\n',
+        id="E1-klasa-context-manager-atrybut"),
+    pytest.param(
+        'def _serialized(fn):\n'
+        '    def wrapper(target, payload):\n'
+        '        with open(target + ".lock", "w") as _lk:\n'
+        '            fcntl.flock(_lk.fileno(), fcntl.LOCK_EX)\n'
+        '            try:\n'
+        '                return fn(target, payload)\n'
+        '            finally:\n'
+        '                fcntl.flock(_lk.fileno(), fcntl.LOCK_UN)\n'
+        '    return wrapper\n'
+        '\n'
+        '@_serialized\n'
+        'def _atomic_write_json(path: str, data: dict) -> None:\n'
+        '    os.replace(path + ".tmp", path)\n',
+        id="E2-dekorator-wrapper"),
+    pytest.param(
+        'def _take(fh):\n'
+        '    fcntl.flock(fh.fileno(), fcntl.LOCK_EX)\n'
+        '\n'
+        'def _drop(fh):\n'
+        '    fcntl.flock(fh.fileno(), fcntl.LOCK_UN)\n'
+        '\n'
+        '_OPS = {"take": _take, "drop": _drop}\n'
+        '\n'
+        'def _atomic_write_json(path: str, data: dict) -> None:\n'
+        '    with open(path + ".lock", "w") as _lk:\n'
+        '        _OPS["take"](_lk)\n'
+        '        os.replace(path + ".tmp", path)\n'
+        '        _OPS["drop"](_lk)\n',
+        id="E3-rejestr-dict-helperow"),
+]
+
+
+def _replace_top_level_def(source: str, name: str, block: str) -> str:
+    """Podmień definicję funkcji top-level na blok (technika recenzenta)."""
+    lines = source.splitlines(keepends=True)
+    start = next(i for i, l in enumerate(lines) if l.startswith(f"def {name}"))
+    end = next(i for i in range(start + 1, len(lines))
+               if lines[i].startswith("def ") or lines[i].startswith("class "))
+    patched = "".join(lines[:start]) + block + "\n\n" + "".join(lines[end:])
+    compile(patched, name, "exec")  # mutacja musi być składniowo poprawna
+    return patched
+
+
+@pytest.mark.parametrize("block", EXEMPT_MODULE_NEW_LOCKER_VARIANTS)
+def test_new_locker_in_exempt_module_is_red_on_pin(block):
+    """F1 blind-iter2 (high) — DOMKNIĘCIE: wpis w
+    ``FROZEN_MODULE_SCOPE_LOCK_EXEMPT`` nie jest już licencją. Każda z czterech
+    zmierzonych przez recenzenta form drugiego lockera magazynu PIN-ów, wstawiona
+    do PRAWDZIWEGO ``courier_admin.py``, rozjeżdża snapshot ⇒ RED."""
+    rel = "courier_admin.py"
+    patched = _replace_top_level_def(
+        (ROOT / rel).read_text(encoding="utf-8"), "_atomic_write_json", block)
+    violations = snapshot_pin_violations(patched, PINNED_POLICY_HITS[rel])
+    assert violations and any("NOWE trafienie" in v for v in violations), (
+        "wyjątek modułowy NADAL jest licencją na drugiego lockera:\n" + block)
+
+
+def test_new_locker_in_second_exempt_module_is_red_on_pin():
+    """Ten sam dowód na DRUGIM module-wyjątku: ``_PinyGuard`` recenzenta
+    (lock na ``KURIER_PINY_PATH`` trzymanej w atrybucie obiektu) dopisany do
+    ``courier_resolver.py``."""
+    rel = "courier_resolver.py"
+    patched = (ROOT / rel).read_text(encoding="utf-8") + (
+        "\n\nclass _PinyGuard:\n"
+        "    def __init__(self, target=KURIER_PINY_PATH):\n"
+        "        self._t = target\n"
+        "    def __enter__(self):\n"
+        "        self._fh = open(self._t + '.lock', 'w')\n"
+        "        fcntl.flock(self._fh.fileno(), fcntl.LOCK_EX)\n"
+        "    def __exit__(self, *e):\n"
+        "        self._fh.close()\n")
+    violations = snapshot_pin_violations(patched, PINNED_POLICY_HITS[rel])
+    assert violations and any("NOWE trafienie" in v for v in violations), violations
+
+
+def test_new_kdf_lock_in_frozen_migration_is_red_on_pin():
+    """F2 blind-iter2 (medium) — DOMKNIĘCIE mutacji M3: dopisanie do ZAMROŻONEJ
+    migracji nowej funkcji biorącej ``fcntl.LOCK_EX`` na magazynie KDF (czyli
+    na własnym pliku ownera ``pin_auth``!) rozjeżdża pin ⇒ RED. Immunitet
+    dotyczy dokładnie ośmiu zmierzonych trafień, nie pliku."""
+    rel = "migrations/migrate_couriers_2026-05-05.py"
+    patched = (ROOT / rel).read_text(encoding="utf-8") + (
+        "\n\ndef rewrite_kdf_store(payload):\n"
+        f"    kdf_path = '{_CRED_PATH}'\n"
+        "    with open(kdf_path + '.lock', 'w') as lk:\n"
+        "        fcntl.flock(lk.fileno(), fcntl.LOCK_EX)\n"
+        "        open(kdf_path, 'w').write(payload)\n")
+    violations = snapshot_pin_violations(patched, PINNED_POLICY_HITS[rel])
+    assert violations and any("NOWE trafienie" in v for v in violations), violations
+
+
+def test_dead_frozen_owner_entry_is_red_on_pin():
+    """Mutacja M2 recenzenta (na iter2: „81 passed", zero sygnału): gdy
+    zamrożona migracja PRZESTANIE brać lock, wpis w
+    ``FROZEN_CREDENTIAL_LOCK_OWNERS`` staje się martwą literą — pin to widzi
+    jako ZNIKNIĘTE trafienia i każe usunąć wpis."""
+    rel = "migrations/migrate_couriers_2026-05-05.py"
+    source = (ROOT / rel).read_text(encoding="utf-8")
+    neutralized = re.sub(r"^(\s*)fcntl\.flock\(", r"\1pass  # flock(",
+                         source, flags=re.M).replace("import fcntl\n", "")
+    compile(neutralized, rel, "exec")
+    violations = snapshot_pin_violations(neutralized, PINNED_POLICY_HITS[rel])
+    assert violations and any("ZNIKNĘŁO" in v for v in violations), violations
+
+
+def test_pin_signature_counts_hits_not_findings(tmp_path):
+    """Jednostkowo — DLACZEGO pin patrzy na trafienia, nie na findingi: noga
+    modułowa emituje JEDEN finding niezależnie od liczby locków, więc dopiero
+    sygnatura odróżnia moduł z jednym lockiem od modułu z dwoma."""
+    one = ("import fcntl\n"
+           f"KDF_PATH = '{_CRED_PATH}'\n"
+           "def a(fh):\n"
+           "    fcntl.flock(fh.fileno(), fcntl.LOCK_EX)\n")
+    two = one + ("def b(fh):\n"
+                 "    fcntl.flock(fh.fileno(), fcntl.LOCK_EX)\n")
+    sig_one = module_hit_signature(one)
+    sig_two = module_hit_signature(two)
+    assert len(sig_two["lock"]) > len(sig_one["lock"])
+    # …a liczba findingów nogi modułowej jest w obu wypadkach identyczna:
+    (tmp_path / "one.py").write_text(one, encoding="utf-8")
+    (tmp_path / "two.py").write_text(two, encoding="utf-8")
+    module_leg = _by_kind(scan_tree(tmp_path), "credential-lock-module")
+    assert len(module_leg["one.py"]) == len(module_leg["two.py"]) == 1
+    assert snapshot_pin_violations(two, sig_one)
 
 
 # ── DISCOVERY (lekcja O1): skan obejmuje drzewo, nie listę modułów ───────────
@@ -1185,8 +1829,6 @@ def test_injected_second_crypto_consumer_is_red(source, tmp_path):
     intruders = {p for p in crypto if p not in FROZEN_CRYPTO_OWNERS}
     assert intruders == {"sneaky_consumer.py"}
 
-
-_CRED_PATH = "/root/.openclaw/workspace/dispatch_state/kurier_piny_kdf.json"
 
 CREDENTIAL_LOCK_EVASIONS = [
     pytest.param(
@@ -1503,6 +2145,105 @@ def test_f2_hand_rolled_kdf_is_red(source, tmp_path):
                                        + source)
 
 
+F2_HELPER_KDF_PROBES = [
+    pytest.param(
+        # Dosłowna sonda K4 recenzenta iter2 (na iter2: kinds=[]).
+        "import hashlib\n"
+        "def _step(b):\n"
+        "    return hashlib.sha256(b).digest()\n"
+        "def derive_pin(pin, salt, rounds=100000):\n"
+        "    out = (salt + pin).encode()\n"
+        "    for _ in range(rounds):\n"
+        "        out = _step(out)\n"
+        "    return out.hex()\n",
+        id="K4-hash-w-helperze-hinty-w-zakresie"),
+    pytest.param(
+        # Wariant K4b: plik JAWNIE nazywa magazyn KDF (na iter2 też kinds=[],
+        # bo warunek pętli był sprawdzany przed file_touches).
+        "import hashlib\n"
+        f"KDF_PATH = '{_CRED_PATH}'\n"
+        "def _step(b):\n"
+        "    return hashlib.sha256(b).digest()\n"
+        "def rehash(material, n):\n"
+        "    while n > 0:\n"
+        "        material = _step(material)\n"
+        "        n -= 1\n"
+        "    return material\n",
+        id="K4b-hash-w-helperze-plik-poswiadczen"),
+    pytest.param(
+        # Łańcuch helperów (punkt stały): _step → _raw → hashlib.
+        "import hmac, hashlib\n"
+        "def _raw(key, msg):\n"
+        "    return hmac.new(key, msg, hashlib.sha256).digest()\n"
+        "def _step(key, msg):\n"
+        "    return _raw(key, msg)\n"
+        "def kdf_pin(pin, salt, rounds=1000):\n"
+        "    out = pin\n"
+        "    for _ in range(rounds):\n"
+        "        out = _step(salt, out)\n"
+        "    return out.hex()\n",
+        id="lancuch-dwoch-helperow-haszujacych"),
+]
+
+
+@pytest.mark.parametrize("source", F2_HELPER_KDF_PROBES)
+def test_f2_hand_rolled_kdf_via_helper_is_red(source, tmp_path):
+    """F2 iter3 (finding F4 blind-iter2): wyciągnięcie kroku haszującego do
+    helpera — najzwyklejszy refaktor — NIE ukrywa już ręcznego KDF. Ten sam
+    mechanizm, którym iter2 domknęła locki: punkt stały po grafie wywołań
+    modułu."""
+    (tmp_path / "sneaky_helper_kdf.py").write_text(source, encoding="utf-8")
+    crypto = _by_kind(scan_tree(tmp_path), "crypto")
+    assert "sneaky_helper_kdf.py" in crypto, (
+        "F2/helper wrócił: iterowany hash przez helper niewidoczny:\n" + source)
+
+
+F5_MODULE_ALIAS_PROBES = [
+    pytest.param(
+        # D1 recenzenta iter2 (na iter2: kinds=[]).
+        "import hashlib, os\n"
+        "_M = hashlib\n"
+        "def h(p, s):\n"
+        "    return getattr(_M, os.environ['KDF'])('sha256', p, s, 1000)\n",
+        id="D1-alias-modulu-przez-zmienna"),
+    pytest.param(
+        # D2 recenzenta iter2 (na iter2: kinds=[]).
+        "import sys, os\n"
+        "def h(p, s):\n"
+        "    return getattr(sys.modules['hashlib'], os.environ['KDF'])"
+        "('sha256', p, s, 1000)\n",
+        id="D2-sys-modules-subskrypcja"),
+    pytest.param(
+        # Alias łańcuchowy — punkt stały ``_module_refs`` rozwija go też.
+        "import hashlib, os\n"
+        "_A = hashlib\n"
+        "_B = _A\n"
+        "def h(p, s):\n"
+        "    return getattr(_B, os.environ['KDF'])('sha256', p, s, 1000)\n",
+        id="alias-lancuchowy-dwustopniowy"),
+    pytest.param(
+        "import sys, os\n"
+        "_M = sys.modules['fcntl']\n"
+        "def w(fh):\n"
+        "    getattr(_M, os.environ['OP'])(fh.fileno(), 2)\n",
+        id="alias-sys-modules-fcntl-przez-zmienna"),
+]
+
+
+@pytest.mark.parametrize("source", F5_MODULE_ALIAS_PROBES)
+def test_f5_module_alias_before_getattr_is_red(source, tmp_path):
+    """F5 iter3 (finding F5 blind-iter2): fail-closed na dynamicznym dostępie
+    przestawało działać po JEDNYM przypisaniu (``_M = hashlib``). Aliasy modułu
+    rozwijamy tym samym punktem stałym, którym iter1 rozwijała aliasy
+    stringów."""
+    (tmp_path / "sneaky_alias.py").write_text(source, encoding="utf-8")
+    findings = scan_tree(tmp_path)
+    kinds = {f.kind for f in findings if f.relpath == "sneaky_alias.py"}
+    assert kinds & {"crypto", "credential-lock"}, (
+        "F5/alias wrócił: dynamiczny dostęp przez alias modułu niewidoczny:\n"
+        + source)
+
+
 F3_CRYPT_PROBES = [
     pytest.param(
         "import crypt\n"
@@ -1714,6 +2455,179 @@ def test_legit_code_is_not_flagged(source, tmp_path):
     (tmp_path / "legit.py").write_text(source, encoding="utf-8")
     findings = scan_tree(tmp_path)
     assert findings == [], f"fałszywy alarm na legalnym kodzie: {findings}"
+
+
+# ── KONTRAKT GRANIC: formy ZMIERZONE jako niedomknięte (iter3) ───────────────
+#
+# To NIE jest lista „do zrobienia kiedyś" ani przyznanie porażki — to
+# SPECYFIKACJA NARZĘDZIA. Każdy wpis pochodzi z sondy recenzenta (blind iter1
+# albo blind iter2), ma zmierzone DZISIEJSZE zachowanie i przypisane właściwe
+# narzędzie (docstring modułu, sekcja „CZEGO TEN RATCHET NIE UMIE").
+#
+# Test poniżej pilnuje KONTRAKTU, nie dziury: jeżeli któraś z tych form zacznie
+# być wykrywana, test czerwieni — i to jest DOBRA WIADOMOŚĆ. Reakcja: przenieś
+# formę do baterii regresyjnych wyżej i skreśl ją z docstringa. Bez tego testu
+# lista granic zestarzałaby się po cichu, a docstring kłamałby (dokładnie ten
+# zarzut recenzent postawił iter2 w findingu F3: „granica opisana ODWROTNIE
+# niż działa").
+MEASURED_BOUNDARIES = [
+    # (1) PRZEPŁYW CROSS-MODUŁ — obie nogi milczą, bo plik nigdzie nie nazywa
+    #     magazynu. Narzędzie: review PR + jedno źródło ścieżek stanu.
+    pytest.param(
+        "import fcntl\n"
+        "from storepaths import roster_store\n"
+        "def save(payload):\n"
+        "    target = roster_store()\n"
+        "    with open(target + '.lock', 'w') as lk:\n"
+        "        fcntl.flock(lk.fileno(), fcntl.LOCK_EX)\n"
+        "        open(target, 'w').write(payload)\n",
+        [], id="X1-cross-modul-sciezka-z-funkcji"),
+    pytest.param(
+        "import fcntl\n"
+        "from common import SECRETS_FILE\n"
+        "def save(payload):\n"
+        "    with open(SECRETS_FILE + '.lock', 'w') as lk:\n"
+        "        fcntl.flock(lk.fileno(), fcntl.LOCK_EX)\n",
+        [], id="X2-cross-modul-stala-bez-tokenu"),
+    pytest.param(
+        "import fcntl, json\n"
+        "CFG = json.load(open('/etc/roster.json'))\n"
+        "def save(payload):\n"
+        "    target = CFG['store']\n"
+        "    with open(target + '.lock', 'w') as lk:\n"
+        "        fcntl.flock(lk.fileno(), fcntl.LOCK_EX)\n",
+        [], id="X3-sciezka-z-configu-runtime"),
+    # (2) ATRYBUT OBIEKTU / DEKORATOR / REJESTR — noga PRECYZYJNA ślepa;
+    #     domyka noga modułowa, a w modułach-wyjątkach snapshot-pin (iter3).
+    pytest.param(
+        "import fcntl\n"
+        "class Store:\n"
+        "    def __init__(self, target):\n"
+        "        self._t = target\n"
+        "    def __enter__(self):\n"
+        "        self._fh = open(self._t + '.lock', 'w')\n"
+        "        fcntl.flock(self._fh.fileno(), fcntl.LOCK_EX)\n"
+        "    def __exit__(self, *e):\n"
+        "        self._fh.close()\n"
+        f"def save(data, path='{_CRED_PATH}'):\n"
+        "    with Store(path):\n"
+        "        open(path, 'w').write(data)\n",
+        ["credential-lock-module"], id="T3-lock-przez-atrybut-self"),
+    pytest.param(
+        "import fcntl\n"
+        f"KDF_PATH = '{_CRED_PATH}'\n"
+        "def _sync(fn):\n"
+        "    def wrapper(target, payload):\n"
+        "        with open(target + '.lock', 'w') as lk:\n"
+        "            fcntl.flock(lk.fileno(), fcntl.LOCK_EX)\n"
+        "            return fn(target, payload)\n"
+        "    return wrapper\n"
+        "@_sync\n"
+        "def write_store(target, payload):\n"
+        "    open(target, 'w').write(payload)\n"
+        "def main():\n"
+        "    write_store(KDF_PATH, '{}')\n",
+        ["credential-lock-module"], id="T4-lock-w-dekoratorze"),
+    pytest.param(
+        "import fcntl\n"
+        f"KDF_PATH = '{_CRED_PATH}'\n"
+        "def _take(fh):\n"
+        "    fcntl.flock(fh.fileno(), fcntl.LOCK_EX)\n"
+        "_OPS = {'take': _take}\n"
+        "def save(data):\n"
+        "    with open(KDF_PATH + '.lock', 'w') as lk:\n"
+        "        _OPS['take'](lk)\n",
+        ["credential-lock-module"], id="T5-helper-wolany-przez-rejestr"),
+    # (3) LOCK SPOZA ``fcntl`` (granica 2b, uzasadnienie POMIAROWE w docstringu)
+    #     + ścieżka magazynu wyprodukowana w runtime.
+    pytest.param(
+        "import os\n"
+        f"KDF_PATH = '{_CRED_PATH}'\n"
+        "def write_kdf(data):\n"
+        "    fd = os.open(KDF_PATH + '.lock', os.O_CREAT | os.O_EXCL | os.O_WRONLY)\n"
+        "    try:\n"
+        "        open(KDF_PATH, 'w').write(data)\n"
+        "    finally:\n"
+        "        os.close(fd)\n",
+        [], id="L4-lockfile-O_EXCL-bez-fcntl"),
+    pytest.param(
+        "import fcntl, os\n"
+        "def w(data):\n"
+        "    p = os.environ['PIN_STORE_PATH']\n"
+        "    with open(p + '.lock', 'w') as lk:\n"
+        "        fcntl.flock(lk.fileno(), fcntl.LOCK_EX)\n"
+        "        open(p, 'w').write(data)\n",
+        [], id="L5-sciezka-magazynu-z-env"),
+    pytest.param(
+        "import filelock\n"
+        f"KDF_PATH = '{_CRED_PATH}'\n"
+        "def write_kdf(data):\n"
+        "    with filelock.FileLock(KDF_PATH + '.lock'):\n"
+        "        open(KDF_PATH, 'w').write(data)\n",
+        [], id="L6-filelock-biblioteka"),
+    pytest.param(
+        "import multiprocessing\n"
+        f"KURIER_PINY_KDF = '{_CRED_PATH}'\n"
+        "_L = multiprocessing.Lock()\n"
+        "def write_kdf(data):\n"
+        "    with _L:\n"
+        "        open(KURIER_PINY_KDF, 'w').write(data)\n",
+        [], id="L7-multiprocessing-lock"),
+    # (4) KDF BEZ PĘTLI SKŁADNIOWEJ — reduce / rekurencja / comprehension.
+    pytest.param(
+        "import hashlib, functools\n"
+        "def derive_pin(pin, salt, rounds=100000):\n"
+        "    out = (salt + pin).encode()\n"
+        "    return functools.reduce(lambda a, _: hashlib.sha256(a).digest(),\n"
+        "                            range(rounds), out).hex()\n",
+        [], id="K1-kdf-przez-functools-reduce"),
+    pytest.param(
+        "import hashlib\n"
+        "def derive_pin(pin_material, salt, rounds):\n"
+        "    if rounds == 0:\n"
+        "        return pin_material\n"
+        "    return derive_pin(hashlib.sha256(salt + pin_material).digest(),\n"
+        "                      salt, rounds - 1)\n",
+        [], id="K2-kdf-przez-rekurencje"),
+    pytest.param(
+        "import hashlib\n"
+        "def derive_pin(pin, salt, rounds=50000):\n"
+        "    acc = [(salt + pin).encode()]\n"
+        "    [acc.append(hashlib.sha256(acc[-1]).digest()) for _ in range(rounds)]\n"
+        "    return acc[-1].hex()\n",
+        [], id="K3-kdf-przez-comprehension"),
+    # (5) MODUŁ WSTRZYKNIĘTY Z ZEWNĄTRZ — statycznie nie ma czego rozwinąć
+    #     (aliasy zmiennych i ``sys.modules[...]`` domyka iter3).
+    pytest.param(
+        "import os\n"
+        "def h(mod, p, s):\n"
+        "    return getattr(mod, os.environ['KDF'])('sha256', p, s, 1000)\n",
+        [], id="D4-modul-wstrzykniety-parametrem"),
+]
+
+
+@pytest.mark.parametrize("source,expected_kinds", MEASURED_BOUNDARIES)
+def test_measured_boundaries_are_still_exactly_this(source, expected_kinds,
+                                                    tmp_path):
+    """KONTRAKT GRANIC (iter3) — mechaniczna weryfikacja docstringa.
+
+    RED tutaj = zmieniło się pokrycie ratchetu. Jeżeli forma zaczęła być
+    WYKRYWANA: przenieś ją do baterii regresyjnych i usuń z listy granic
+    w docstringu. Jeżeli przestała: masz regresję pokrycia. W obu wypadkach
+    dokument i narzędzie mają wrócić do zgodności — bo granica opisana
+    odwrotnie niż działa jest gorsza niż brak opisu."""
+    (tmp_path / "boundary.py").write_text(source, encoding="utf-8")
+    findings = [f for f in scan_tree(tmp_path) if f.relpath == "boundary.py"]
+    assert sorted({f.kind for f in findings}) == sorted(expected_kinds), (
+        "ZMIERZONA granica przestała być tą granicą — zaktualizuj sekcję "
+        'CZEGO TEN RATCHET NIE UMIE w docstringu modułu. '
+        f"Findingi: {findings}")
+
+
+def test_boundary_contract_is_not_empty():
+    """Anty-pustka kontraktu granic: gdyby ktoś wyczyścił listę, docstring
+    obiecywałby „zmierzone granice", których nikt nie mierzy."""
+    assert len(MEASURED_BOUNDARIES) >= 14
 
 
 def test_unrelated_lock_next_to_credential_read_is_module_scope_only(tmp_path):
