@@ -139,7 +139,9 @@ def test_real_policy_loads_and_is_consistent():
     assert len(sha) == 64
     assert pol["classes"]["gps"]["live_days"] == 90
     assert pol["classes"]["gps"]["archive_days"] == 270
-    assert pol["classes"]["world_record"]["live_days"] == 30
+    # P-2 (owner ACK 2026-08-05): polityka zrównana z realnym GC (RETENTION_DAYS=14);
+    # archiwum kopiuje od 11. dnia, więc luka utraty jest zamknięta bez podnoszenia GC.
+    assert pol["classes"]["world_record"]["live_days"] == 14
     assert pol["classes"]["world_record"]["archive_days"] == 365
     assert pol["classes"]["decision_logs"]["archive_days"] == 365
     assert pol["classes"]["events_db"]["live_days"] == 180
