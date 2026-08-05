@@ -248,8 +248,11 @@ CO ZMIENIŁA ITER3 (5 findingów drugiego blind-review)
 * **F2 (medium) — bezterminowy immunitet zamrożonej migracji** — ten sam pin:
   8 zmierzonych trafień ``_atomic_write_json``, zero trafień krypto. Mutacja M3
   (nowy lock magazynu KDF w tym pliku) i M2 (wpis staje się martwy) = RED.
-  Rekomendacja dla ownera zapisana przy stałej: ZARCHIWIZOWAĆ plik migracji —
-  to zmiana produkcyjna, świadomie poza zakresem tej bramki.
+  Rekomendacja dla ownera zapisana przy stałej: ZARCHIWIZOWAĆ plik migracji.
+  **WYKONANA 05.08 (owner ACK)**: ``migrations/migrate_couriers_2026-05-05.py``
+  usunięty z drzewa (archiwum = historia gita), a wraz z nim wpis polityki, pin
+  i trzy testy operujące na tym pliku — immunitet nie jest już bezterminowy, bo
+  nie ma go wcale.
 * **F4 (medium) — ręczny KDF przez helper** — hash w helperze wołanym z pętli
   liczy się jak hash w pętli (ten sam taint po grafie wywołań co dla locków),
   z warunkiem akumulatora, którego wymagał zmierzony fałszywy alarm.
@@ -411,18 +414,25 @@ FROZEN_CREDENTIAL_LOCK_OWNERS = {
         "A-6 P0: jedyny writer magazynu KDF; cykl load→set→write pod "
         "dedykowanym lockfile (serializacja cross-proces lazy re-hash/onboarding)."
     ),
-    # ZMIERZONE w iter2 (noga precyzyjna po naprawie F1 — na iter1 niewidoczne):
-    # ``_atomic_write(path, …)`` bierze własny ``fcntl.LOCK_EX`` na companion
-    # ``.lock`` i JEST wołane z ``KURIER_PINY_PATH`` (l. 392/572) — czyli to
-    # realny, drugi writer LEGACY magazynu ``kurier_piny.json``, dokładnie
-    # w formie „helper bierze lock", którą opisał recenzent. Zamrażamy JAWNIE,
-    # zamiast zwężać regułę: to jednorazowa migracja rosteru z 2026-05-05,
-    # już wykonana, poza ścieżką runtime dispatchu (żaden serwis jej nie
-    # importuje). Usunięcie/archiwizacja pliku ⇒ usuń też ten wpis.
-    "migrations/migrate_couriers_2026-05-05.py": (
-        "Jednorazowa migracja rosteru 2026-05-05 (wykonana, poza runtime): "
-        "_atomic_write pod fcntl.LOCK_EX na kurier_piny.json — historyczny "
-        "writer magazynu LEGACY PIN-ów, zamrożony świadomie."
+    # ZMIERZONE 05.08 na drzewie z G5 (merge ``3f5ebd2e8``, A-6/K5, delta-blind
+    # CLEAN): ``add_new_courier`` (l. 112) woła ``journal.onboarding_lock(...)``,
+    # a prymityw ``fcntl.LOCK_EX`` mieszka w ``identity/journal.py`` — czyli
+    # trafienie widzi WYŁĄCZNIE noga PARY importer–eksporter (dokładnie klasa,
+    # której iter4 nauczyła się widzieć; do iter3 było niewidoczne).
+    # To NIE jest drugi protokół blokady magazynu PIN-ów, tylko JEDEN kanoniczny
+    # lock transakcji onboardingu (znacznik obok ``kurier_ids.json``), pod którym
+    # biegnie cała sekcja krytyczna recovery→odczyt→zapis 5 rootów, w tym legacy
+    # ``kurier_piny.json``. Właścicielem protokołu jest ``identity/journal.py``
+    # (tam żyje ``flock``, tam jest polityka lockfile'a na i-węźle), a
+    # ``courier_admin`` jest jego KLIENTEM — G5 zabrał z tego pliku
+    # ``os``/``fcntl``/``tempfile``/``shutil`` (komentarz l. 23), więc drugiej
+    # kopii polityki blokady już tu nie ma. Wpis NIE jest licencją: pin niżej
+    # zamraża DOKŁADNIE to jedno trafienie w tym jednym zakresie.
+    "courier_admin.py": (
+        "A-6/G5: kanoniczne wejście onboardingu rosteru (CLAUDE.md: "
+        "add_new_courier = jedyne wejście) — cała sekcja krytyczna pod "
+        "identity.journal.onboarding_lock, czyli KLIENT jednego protokołu "
+        "transakcji, nie drugi protokół blokady magazynu PIN-ów."
     ),
 }
 
@@ -437,13 +447,13 @@ FROZEN_MODULE_SCOPE_LOCK_EXEMPT = {
         "kurier_piny.json czytany read-only w innej funkcji "
         "(_load_kurier_piny), bez locka i bez zapisu."
     ),
-    "courier_admin.py": (
-        "kanoniczny onboarding rosteru (CLAUDE.md: add_new_courier = jedyne "
-        "wejście); pisze kurier_piny.json przez _atomic_write_json "
-        "(temp+fsync+rename), a ``fcntl`` jest tam zaimportowany, ale NIE "
-        "UŻYWANY (docstring l.13 deklaruje LOCK_EX, którego w kodzie nie ma "
-        "— osobny dług, nie ta bramka)."
-    ),
+    # USUNIĘTY 05.08 (owner ACK): wpis ``courier_admin.py`` był tu, dopóki moduł
+    # miał NIEUŻYWANY ``import fcntl`` i sam pisał ``kurier_piny.json``. G5
+    # (``3f5ebd2e8``) przeniósł zapis i blokadę do ``identity/journal.py``, więc
+    # noga modułowa nie generuje już dla tego pliku findingu — wpis stał się
+    # martwy (``test_module_scope_exemptions_are_still_needed`` = RED) i musiał
+    # zniknąć. Moduł jest dziś rozstrzygnięty przez
+    # ``FROZEN_CREDENTIAL_LOCK_OWNERS`` (noga precyzyjna, para importer–eksporter).
 }
 
 # ── SNAPSHOT-PIN polityki (iter3) ────────────────────────────────────────────
@@ -476,31 +486,29 @@ PINNED_POLICY_HITS: dict[str, dict[str, tuple[str, ...]]] = {
         "lock": ("_save_last_known_pos",) * 8,
         "crypto": (),
     },
-    # ZERO trafień: ``import fcntl`` jest tu NIEUŻYWANY (docstring l.13 obiecuje
-    # ``LOCK_EX``, którego w kodzie nie ma). Pin trzyma dokładnie ten stan:
-    # pierwszy realny lock w kanonicznym writerze rosteru = RED, w KAŻDEJ
-    # formie (E0 wprost, E1 klasa-CM, E2 dekorator, E3 rejestr helperów).
+    # 1 trafienie ZMIERZONE 05.08 po merge G5 (``3f5ebd2e8``) — i widoczne
+    # WYŁĄCZNIE przez parę importer–eksporter: ``add_new_courier`` (l. 112) woła
+    # ``journal.onboarding_lock(_journal_path())``, a ``fcntl.LOCK_EX`` mieszka
+    # w ``identity/journal.py``. POPRZEDNI STAN (iter3/iter4) to było ZERO trafień
+    # z uzasadnieniem „``import fcntl`` NIEUŻYWANY" — dziś ten import w ogóle nie
+    # istnieje (G5 zabrał ``os``/``fcntl``/``tempfile``/``shutil``, komentarz
+    # l. 23), więc stary komentarz jest nieaktualny w obie strony: nie ma już ani
+    # importu, ani „zera trafień".
+    # Pin trzyma DOKŁADNIE x1 w zakresie ``add_new_courier``, więc RED daje:
+    # drugie wywołanie locka w tym samym zakresie (x1→x2), lock w innej funkcji
+    # tego pliku oraz pierwszy własny ``fcntl`` w KAŻDEJ formie (E0 wprost,
+    # E1 klasa-CM, E2 dekorator, E3 rejestr helperów).
     "courier_admin.py": {
-        "lock": (),
+        "lock": ("add_new_courier",),
         "crypto": (),
     },
-    # 8 trafień w ``_atomic_write_json`` (LOCK_EX + LOCK_UN) — historyczny,
-    # jednorazowy writer LEGACY ``kurier_piny.json`` z 2026-05-05. Dziewiąte
-    # trafienie ALBO jakiekolwiek trafienie krypto = RED.
-    # REKOMENDACJA DLA OWNERA (nie robimy jej w tej bramce, bo to zmiana
-    # produkcyjna): zarchiwizować ten plik poza drzewem repo — wtedy znika
-    # zarówno wpis, jak i pin, a nie zostaje bezterminowy immunitet.
-    # +1 trafienie ZMIERZONE DOPIERO PRZEZ PARĘ (iter4): ``_append_learning_log``
-    # woła ``core.jsonl_appender.append_jsonl`` (realny ``fcntl.LOCK_EX``
-    # w INNYM module), a ładunek zdarzenia zawiera ``pin_assigned`` — czyli
-    # wartość magazynu PIN-ów WPŁYWA do wywołania biorącego blokadę. Do iter3
-    # ta operacja była całkowicie niewidoczna: prymityw mieszka poza plikiem.
-    # (Osobna obserwacja dla ownera, POZA zakresem tej bramki: ta migracja
-    # zapisuje przydzielony PIN jawnym tekstem do learning_log.jsonl.)
-    "migrations/migrate_couriers_2026-05-05.py": {
-        "lock": ("_atomic_write_json",) * 8 + ("_append_learning_log",),
-        "crypto": (),
-    },
+    # USUNIĘTY 05.08 (owner ACK) razem z plikiem: wpis i pin
+    # ``migrations/migrate_couriers_2026-05-05.py`` (8 trafień
+    # ``_atomic_write_json`` + 1 ``_append_learning_log`` przez parę). Komentarz
+    # przy zamrożonym wpisie sam tego wymagał („Usunięcie/archiwizacja pliku ⇒
+    # usuń też ten wpis”), a rekomendacja iter3 (F2: nie zostawiać bezterminowego
+    # immunitetu) została wykonana — plik jednorazowej migracji z 2026-05-05 jest
+    # zarchiwizowany w historii gita, poza drzewem repo.
 }
 
 # ── PIN KSZTAŁTU OWNERA (iter4) ──────────────────────────────────────────────
@@ -1756,7 +1764,9 @@ def _lock_findings(tree: ast.AST, relpath: str, parents: dict[ast.AST, ast.AST],
     # magazynu WPŁYWA do tego wywołania (ten sam silnik taintu). Świadomie NIE
     # używamy tu słabszego „funkcja jest zabrudzona": to dawało zmierzony
     # fałszywy alarm w zamrożonej migracji (``_append_learning_log`` jest
-    # zabrudzona, ale do ``append_jsonl`` wpływa ścieżka LOGA, nie magazynu).
+    # zabrudzona, ale do ``append_jsonl`` wpływa ścieżka LOGA, nie magazynu) —
+    # plik migracji zarchiwizowano 05.08, ale POMIAR zostaje jako uzasadnienie
+    # kryterium: to on wyklucza słabszy wariant reguły.
     for node in imported_lock_calls:
         scope = _enclosing_scope(node, parents)
         direct = _touches(CREDENTIAL_TOKENS, _identifiers(scope),
@@ -2174,14 +2184,15 @@ def test_owner_matches_its_pinned_shape(rel):
         + f"\n  ZMIERZONE dziś: {module_hit_signature(source, rel, index)}")
 
 
-def test_frozen_migration_owner_has_no_crypto_hits():
-    """Immunitet zamrożonej migracji dotyczy WYŁĄCZNIE locka LEGACY magazynu:
-    jakiekolwiek trafienie krypto w tym pliku = RED (F2 blind-iter2)."""
-    rel = "migrations/migrate_couriers_2026-05-05.py"
-    sig = module_hit_signature((ROOT / rel).read_text(encoding="utf-8"), rel,
-                               repo_export_index())
-    assert sig["crypto"] == (), (
-        f"zamrożona migracja liczy krypto poświadczeń: {sig['crypto']}")
+# USUNIĘTY 05.08 (owner ACK, archiwizacja migracji):
+# ``test_frozen_migration_owner_has_no_crypto_hits`` — dotyczył wyłącznie pliku
+# ``migrations/migrate_couriers_2026-05-05.py``, którego już nie ma w drzewie.
+# Dowodzona przez niego MECHANIKA (immunitet dotyczy zmierzonych trafień, nie
+# pliku: trafienie krypto w module z wpisem lock-owner = RED) zostaje pokryta
+# przez pin, który jest RÓWNOŚCIĄ na OBU nogach — ``crypto: ()`` w pinach
+# ``courier_admin.py`` / ``courier_resolver.py`` czerwieni się na pierwszym
+# trafieniu krypto tak samo (``test_removing_pin_content_makes_real_module_red``
+# + ``test_widened_pin_without_real_hits_is_red`` trzymają obie strony równości).
 
 
 def test_new_policy_entry_without_pin_is_red():
@@ -2287,16 +2298,24 @@ def _replace_top_level_def(source: str, name: str, block: str) -> str:
 
 @pytest.mark.parametrize("block", EXEMPT_MODULE_NEW_LOCKER_VARIANTS)
 def test_new_locker_in_exempt_module_is_red_on_pin(block):
-    """F1 blind-iter2 (high) — DOMKNIĘCIE: wpis w
-    ``FROZEN_MODULE_SCOPE_LOCK_EXEMPT`` nie jest już licencją. Każda z czterech
-    zmierzonych przez recenzenta form drugiego lockera magazynu PIN-ów, wstawiona
-    do PRAWDZIWEGO ``courier_admin.py``, rozjeżdża snapshot ⇒ RED."""
+    """F1 blind-iter2 (high) — DOMKNIĘCIE: wpis polityki nie jest licencją.
+    Każda z czterech zmierzonych przez recenzenta form drugiego lockera magazynu
+    PIN-ów, wstawiona do PRAWDZIWEGO ``courier_admin.py``, rozjeżdża snapshot
+    ⇒ RED.
+
+    05.08: moduł jest dziś rozstrzygnięty przez ``FROZEN_CREDENTIAL_LOCK_OWNERS``
+    (po G5 lock bierze ``identity.journal``), a nie przez wyjątek modułowy —
+    dowód jest ten sam i dlatego mierzymy Z INDEKSEM eksportu: pin zawiera
+    trafienie widoczne wyłącznie przez parę importer–eksporter
+    (``add_new_courier``), więc porównanie bez indeksu porównywałoby sygnaturę
+    liczoną inną metodą niż ta, którą pin nadano."""
     rel = "courier_admin.py"
     patched = _replace_top_level_def(
         (ROOT / rel).read_text(encoding="utf-8"), "_atomic_write_json", block)
-    violations = snapshot_pin_violations(patched, PINNED_POLICY_HITS[rel])
+    violations = snapshot_pin_violations(patched, PINNED_POLICY_HITS[rel], rel,
+                                         repo_export_index())
     assert violations and any("NOWE trafienie" in v for v in violations), (
-        "wyjątek modułowy NADAL jest licencją na drugiego lockera:\n" + block)
+        "wpis polityki NADAL jest licencją na drugiego lockera:\n" + block)
 
 
 def test_new_locker_in_second_exempt_module_is_red_on_pin():
@@ -2317,34 +2336,22 @@ def test_new_locker_in_second_exempt_module_is_red_on_pin():
     assert violations and any("NOWE trafienie" in v for v in violations), violations
 
 
-def test_new_kdf_lock_in_frozen_migration_is_red_on_pin():
-    """F2 blind-iter2 (medium) — DOMKNIĘCIE mutacji M3: dopisanie do ZAMROŻONEJ
-    migracji nowej funkcji biorącej ``fcntl.LOCK_EX`` na magazynie KDF (czyli
-    na własnym pliku ownera ``pin_auth``!) rozjeżdża pin ⇒ RED. Immunitet
-    dotyczy dokładnie ośmiu zmierzonych trafień, nie pliku."""
-    rel = "migrations/migrate_couriers_2026-05-05.py"
-    patched = (ROOT / rel).read_text(encoding="utf-8") + (
-        "\n\ndef rewrite_kdf_store(payload):\n"
-        f"    kdf_path = '{_CRED_PATH}'\n"
-        "    with open(kdf_path + '.lock', 'w') as lk:\n"
-        "        fcntl.flock(lk.fileno(), fcntl.LOCK_EX)\n"
-        "        open(kdf_path, 'w').write(payload)\n")
-    violations = snapshot_pin_violations(patched, PINNED_POLICY_HITS[rel])
-    assert violations and any("NOWE trafienie" in v for v in violations), violations
-
-
-def test_dead_frozen_owner_entry_is_red_on_pin():
-    """Mutacja M2 recenzenta (na iter2: „81 passed", zero sygnału): gdy
-    zamrożona migracja PRZESTANIE brać lock, wpis w
-    ``FROZEN_CREDENTIAL_LOCK_OWNERS`` staje się martwą literą — pin to widzi
-    jako ZNIKNIĘTE trafienia i każe usunąć wpis."""
-    rel = "migrations/migrate_couriers_2026-05-05.py"
-    source = (ROOT / rel).read_text(encoding="utf-8")
-    neutralized = re.sub(r"^(\s*)fcntl\.flock\(", r"\1pass  # flock(",
-                         source, flags=re.M).replace("import fcntl\n", "")
-    compile(neutralized, rel, "exec")
-    violations = snapshot_pin_violations(neutralized, PINNED_POLICY_HITS[rel])
-    assert violations and any("ZNIKNĘŁO" in v for v in violations), violations
+# USUNIĘTE 05.08 (owner ACK, archiwizacja migracji) — oba testy operowały na
+# pliku ``migrations/migrate_couriers_2026-05-05.py``, którego nie ma już
+# w drzewie, a dowodzona przez nie MECHANIKA pinu jest dowiedziona bliźniaczo na
+# modułach polityki, które ZOSTAJĄ:
+#  * ``test_new_kdf_lock_in_frozen_migration_is_red_on_pin`` (mutacja M3:
+#    „immunitet dotyczy trafień, nie pliku") ⇢ ``test_new_locker_in_exempt_module
+#    _is_red_on_pin`` (E0–E3 na ``courier_admin.py``) oraz
+#    ``test_new_locker_in_second_exempt_module_is_red_on_pin``
+#    (``_PinyGuard`` na ``courier_resolver.py``) — NOWE trafienie w module
+#    z wpisem polityki = RED;
+#  * ``test_dead_frozen_owner_entry_is_red_on_pin`` (mutacja M2: wpis, który stał
+#    się martwą literą) ⇢ ``test_widened_pin_without_real_hits_is_red``
+#    (ZNIKNĘŁO na ``courier_admin.py``) + ``test_module_scope_exemptions_are_
+#    still_needed`` — druga strona równości pinu żyje dalej. Dowód „na żywo":
+#    dokładnie ta asymetria zaczerwieniła bramkę po G5 i wymusiła usunięcie
+#    martwego wpisu ``courier_admin.py`` z ``FROZEN_MODULE_SCOPE_LOCK_EXEMPT``.
 
 
 def test_pin_signature_counts_hits_not_findings(tmp_path):

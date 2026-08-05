@@ -770,8 +770,14 @@ def test_logrotate_wrapper_manifest_matches_every_jsonl_config_path():
 def test_every_known_rotated_jsonl_writer_uses_shared_appender():
     """Completeness gate for all producer paths behind JSONL_PATHS.
 
-    This list intentionally includes offline timers and the still-executable
-    onboarding migration: any one of them can overlap system logrotate.
+    This list intentionally includes offline timers: any one of them can overlap
+    system logrotate.
+
+    2026-08-05 (owner ACK): ``migrations/migrate_couriers_2026-05-05.py`` was a
+    one-shot roster migration and a learning_log writer; it is archived in git
+    history and no longer in the tree, so its entry is gone from this list. The
+    gate is a completeness list over EXISTING writers — keeping a path to a
+    deleted file would only make it fail on read_text.
     """
     root = Path(__file__).resolve().parents[1]
     writers = {
@@ -780,7 +786,6 @@ def test_every_known_rotated_jsonl_writer_uses_shared_appender():
             "telegram_approver.py",
             "auto_assign_executor.py",
             "shift_notifications/state.py",
-            "migrations/migrate_couriers_2026-05-05.py",
         ),
         "v319c_read_shadow": ("plan_manager.py",),
         "shadow_decisions": ("shadow_dispatcher.py",),
