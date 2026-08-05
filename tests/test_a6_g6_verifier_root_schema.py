@@ -25,11 +25,34 @@ KONTRAKT po naprawie (rekomendacja CTO z reskope, przyjęta):
     reverse-check — bez zmian,
   * na ZDROWYCH plikach linie checklisty są IDENTYCZNE z masterem (parytet).
 
+ITER2 (finding F1 blind review, CONFIRMED_DEFECT):
+  Czytelnicy rootów dzielą się na DWIE klasy i model „liczę check na rekordach
+  zdrowych" jest poprawny tylko dla jednej z nich:
+    * czytelnik PER REKORD (``identity.roster`` G3, ``courier_tiers``,
+      ``kurier_piny``, ``kurier_full_names``) pomija zepsuty wiersz POJEDYNCZO —
+      filtrowanie magazynu przed checkiem może werdykt tylko zaostrzyć,
+    * czytelnik KONKURENCYJNY (``shift_notifications.worker.resolve_cid`` nad
+      ``kurier_ids``) rozstrzyga po WSZYSTKICH wierszach (exact →
+      case-insensitive → score, remis ⇒ ``None``), a jego loader nie waliduje
+      niczego. Zepsuty wiersz NIE jest dla niego niewidzialny: może WYGRAĆ
+      score-fallback albo wywołać remis. Usunięcie go przed checkiem POLUZOWUJE
+      werdykt względem produkcji (fałszywe ✓ nad kurierem, którego dyspozytornia
+      resolwuje na cudzy/śmieciowy cid albo wcale).
+  Dlatego check dyspozytorni liczy się na SUROWYM magazynie — tym, który widzi
+  czytelnik — a wynik walidacji schematu zamyka bramkę wyłącznie przez
+  ``identity_broken``. Testy tego pliku NIE stubują ``resolve_cid``: stub z iter1
+  trafiał tylko dokładnym kluczem, więc score-fallback (jedyne miejsce, gdzie
+  filtrowanie zmienia odpowiedź) nie był pokryty żadnym oraclem.
+
 Ten plik pokrywa: (1) parytet zdrowej ścieżki bajt-w-bajt; (2) oracle negatywny
 per KAŻDY z 6 rootów w obu wariantach (dotyczy tożsamości ✗ / niezwiązany ⚠);
 (3) root nieczytelny/nie-mapa; (4) `_meta` w courier_tiers nie jest defektem;
 (5) RATCHET: każdy czytany root ma walidację delegowaną do ``identity.schema``
-(usunięcie walidacji jednego roota albo kopia inline zamiast delegacji = RED).
+(usunięcie walidacji jednego roota albo kopia inline zamiast delegacji = RED)
++ RATCHET czytelnika konkurencyjnego (powrót checku na ``kids.healthy`` = RED);
+(6) czytelnik konkurencyjny: audyt nigdy nie jest bardziej zielony niż produkcyjny
+``resolve_cid`` (oracle F1 — S1 „obcy zepsuty wygrywa", S2 „remis w pełnym
+magazynie", S3 parytet wartości int).
 
 Hermetyczny: WSZYSTKIE 6 stałych ścieżek zmonkeypatchowane na tmp_path, zero I/O
 do żywego dispatch_state.
@@ -45,6 +68,8 @@ import pytest
 
 from dispatch_v2 import new_courier_pairing as ncp
 from dispatch_v2.identity import schema as identity_schema
+from dispatch_v2.shift_notifications import state as sn_state
+from dispatch_v2.shift_notifications.worker import resolve_cid as real_resolve_cid
 
 
 CID = 9001
@@ -100,19 +125,16 @@ def _healthy() -> dict:
     }
 
 
-def _resolve_cid_stub(name, kids=None):
-    """Zastępnik ``shift_notifications.worker.resolve_cid`` — dokładne trafienie
-    klucza w PRZEKAZANYM rejestrze (verifier podaje rejestr sam), więc odrzucenie
-    zepsutego rekordu realnie zmienia wynik, zamiast być maskowane stałą."""
-    for key, cid in (kids or {}).items():
-        if isinstance(key, str) and key.strip().lower() == (name or "").strip().lower():
-            return str(cid)
-    return None
-
-
 @pytest.fixture
 def verify(tmp_path, monkeypatch):
-    """Zasiej 6 rootów w tmp i zwróć wywoływacz ``verify_courier_wired``."""
+    """Zasiej 6 rootów w tmp i zwróć wywoływacz ``verify_courier_wired``.
+
+    ``resolve_cid`` NIE jest stubowany (iter2). Stub z iter1 trafiał wyłącznie
+    dokładnym kluczem, więc omijał score-fallback ``worker.resolve_cid`` — czyli
+    jedyne miejsce, w którym rekord CUDZY zmienia odpowiedź czytelnika dla
+    audytowanego imienia. Testy mierzą tu produkcyjny resolver (luka dowodowa
+    F1 z blind review).
+    """
     def _run(roots=None, *, cid=CID, full_name=NAME):
         data = _healthy()
         data.update(roots or {})
@@ -125,7 +147,11 @@ def verify(tmp_path, monkeypatch):
                 path.write_text(json.dumps(payload, ensure_ascii=False),
                                 encoding="utf-8")
             monkeypatch.setattr(ncp, const, str(path))
-        monkeypatch.setattr(ncp, "resolve_cid", _resolve_cid_stub)
+        # resolve_cid loguje remis/rozstrzygnięcie do courier_match_debug.jsonl
+        # (stała modułowa wskazująca ŻYWY dispatch_state) — przekieruj do tmp,
+        # żeby prawdziwy resolver nie zależał od write-guarda hermetyzacji.
+        monkeypatch.setattr(sn_state, "MATCH_DEBUG_LOG",
+                            tmp_path / "courier_match_debug.jsonl")
         return ncp.verify_courier_wired(cid, full_name)
     return _run
 
@@ -422,6 +448,25 @@ def test_ratchet_verifier_has_no_inline_cid_form_policy():
             assert banned not in src, f"inline polityka formy CID/PIN: {banned}"
 
 
+def test_ratchet_dispatch_check_is_computed_on_the_whole_store():
+    """RATCHET (F1): check dyspozytorni NIE liczy się na przefiltrowanym magazynie.
+
+    ``kids.healthy`` to odpowiedź na pytanie „które wiersze zobaczy czytelnik
+    PER REKORD". ``resolve_cid`` nie jest takim czytelnikiem — rozstrzyga po
+    całym magazynie, więc podanie mu podzbioru zmienia odpowiedź na
+    KORZYSTNIEJSZĄ niż produkcyjna (iter1: fałszywe ✓). Powrót ``kids.healthy``
+    do ``verify_courier_wired`` = powrót defektu.
+    """
+    used = {node.attr for node in ast.walk(_verify_ast())
+            if isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name) and node.value.id == "kids"}
+    assert "healthy" not in used, (
+        "verify_courier_wired czyta kids.healthy — check dyspozytorni musi "
+        "liczyć się na magazynie, który widzi resolve_cid (kids.store)"
+    )
+    assert "store" in used, "check dyspozytorni nie czyta surowego magazynu"
+
+
 def test_ratchet_schema_record_validators_delegate_cid_decision():
     """RATCHET: walidatory rekordów w ``identity.schema`` rozstrzygają CID przez
     ``canonical_numeric_cid`` — jeden owner formy CID dla writerów (G4/G7),
@@ -438,4 +483,157 @@ def test_ratchet_schema_record_validators_delegate_cid_decision():
         }
         assert "canonical_numeric_cid" in calls, (
             f"{fname} nie deleguje decyzji o CID do canonical_numeric_cid"
+        )
+
+
+# --------------------------------------------------------------------------- #
+# (6) Czytelnik KONKURENCYJNY (kurier_ids -> resolve_cid) — oracle F1
+# --------------------------------------------------------------------------- #
+# Verdykt blind review: check dyspozytorni liczony na PRZEFILTROWANYM magazynie
+# melduje ✓ tam, gdzie PRODUKCYJNY resolve_cid resolwuje audytowane imię na
+# cudzy cid albo na nic. Poniższe scenariusze to oracle negatywny (S1/S2),
+# parytet (S3) i niezmiennik kierunkowy „audyt nigdy nie zieleńszy niż czytelnik".
+
+SHADOW_KEY = "Jan Kow"      # score 30 ('Kowalski'.startswith('Kow')) > ALIAS 'Jan Ko' = 20
+SHADOW_CID = -5             # zepsuta wartość (canonical_numeric_cid -> None)
+
+#: S1 — obcy ZEPSUTY rekord wygrywa score-fallback nad zdrowym rekordem ofiary.
+S1_SHADOW_WINS = {ALIAS: str(CID), SHADOW_KEY: SHADOW_CID}
+#: S2 — obcy ZEPSUTY rekord tworzy REMIS w pełnym magazynie (czytelnik -> None).
+S2_TIE = {SHADOW_KEY: str(CID), SHADOW_KEY + " ": SHADOW_CID}
+#: S3 — ten sam kształt co S1, ale wartości int (dzisiejszy typ w żywym pliku).
+S3_INT_VALUES = {ALIAS: CID, SHADOW_KEY: SHADOW_CID}
+#: Obcy zepsuty rekord, który NIE zmienia odpowiedzi czytelnika (exact match).
+S4_HARMLESS = {ALIAS: CID, NAME: CID, OTHER_ALIAS: ["9002"]}
+
+
+def _reader_sees(store, full_name=NAME):
+    """Odpowiedź PRODUKCYJNEGO czytelnika name->cid na tym samym magazynie.
+
+    Odtwarza dokładnie parę ``_load_kurier_ids`` (``{str(k): str(v)}``, zero
+    walidacji) + ``resolve_cid`` z ``shift_notifications.worker``. To jest
+    definicja „widoczny dla dyspozytorni", względem której mierzymy audyt.
+    """
+    coerced = ({str(k): str(v) for k, v in store.items()}
+               if isinstance(store, dict) else {})
+    return real_resolve_cid(full_name, coerced)
+
+
+def _dispatch_line(lines):
+    return _line_for(lines, ROOT_CHECK["kurier_ids"])
+
+
+def test_reader_ground_truth_malformed_foreign_row_is_not_invisible(monkeypatch,
+                                                                    tmp_path):
+    """FAKT O PRODUKCJI (fundament F1): dla ``resolve_cid`` zepsuty wiersz CUDZY
+    nie jest niewidzialny — wygrywa score-fallback (S1) albo tworzy remis (S2).
+
+    Ten test nie mierzy verifiera. Zamraża zachowanie czytelnika, na którym
+    opiera się cały oracle: gdyby ``resolve_cid`` kiedyś zaczął pomijać wiersze
+    POJEDYNCZO, poniższe asercje zapalą się i trzeba przemyśleć kontrakt audytu.
+    """
+    monkeypatch.setattr(sn_state, "MATCH_DEBUG_LOG",
+                        tmp_path / "courier_match_debug.jsonl")
+    assert _reader_sees({ALIAS: str(CID)}) == str(CID)      # sam zdrowy wiersz
+    assert _reader_sees(S1_SHADOW_WINS) == str(SHADOW_CID)  # zepsuty obcy WYGRYWA
+    assert _reader_sees(S2_TIE) is None                     # remis -> niewidzialny
+    assert _reader_sees(S3_INT_VALUES) == str(SHADOW_CID)
+    assert _reader_sees(S4_HARMLESS) == str(CID)            # exact match nietknięty
+
+
+def test_foreign_malformed_record_hijacking_resolve_cid_fails_closed(verify):
+    """S1: obcy zepsuty rekord WYGRYWA score-fallback → check dyspozytorni ✗.
+
+    ``resolve_cid`` rozstrzyga po CAŁYM magazynie, więc odfiltrowanie zepsutego
+    wiersza przed checkiem daje odpowiedź KORZYSTNIEJSZĄ niż produkcyjna: audyt
+    mówi „✓ dyspozytornia", a dyspozytornia resolwuje to imię na ``-5``.
+    Fałszywe ✓ jest ostatnią bramką ``_auto_wire`` — kończy się DM „kurier
+    wpięty, widoczny w:" nad tożsamością, której realny czytelnik nie widzi.
+    """
+    ok, lines = verify({"kurier_ids": S1_SHADOW_WINS})
+    assert _reader_sees(S1_SHADOW_WINS) != str(CID), "scenariusz stracił sens"
+    assert _dispatch_line(lines).startswith("✗")
+    assert ok is False
+    # Rekord jest nadal RAPORTOWANY jako zepsuty-obcy (licznik bez nazwisk).
+    assert "⚠ malformed w kurier_ids: 1" in lines
+
+
+def test_foreign_malformed_record_causing_tie_fails_closed(verify):
+    """S2: obcy zepsuty rekord tworzy REMIS w pełnym magazynie → check ✗.
+
+    Remis w ``resolve_cid`` = ``None`` = kurier NIEWIDZIALNY dla dyspozytorni.
+    W przefiltrowanym magazynie remisu nie ma (zepsuty wiersz zniknął), więc
+    audyt widział jednoznacznego zwycięzcę i meldował ✓.
+    """
+    ok, lines = verify({"kurier_ids": S2_TIE})
+    assert _reader_sees(S2_TIE) is None, "scenariusz stracił sens"
+    assert _dispatch_line(lines).startswith("✗")
+    assert ok is False
+    assert "⚠ malformed w kurier_ids: 1" in lines
+
+
+def test_foreign_malformed_record_that_changes_nothing_keeps_ok(verify):
+    """Kontrola kierunku: obcy zepsuty rekord, który NIE zmienia odpowiedzi
+    czytelnika (tu: exact match na pełnym imieniu), nie blokuje wpięcia —
+    zostaje sama linia ⚠ (kontrakt „narzędzie diagnostyczne", reskope CTO).
+
+    Bez tego testu naprawa F1 mogłaby zdegenerować się do „każdy ⚠ zeruje
+    all_ok", czyli do zmiany kontraktu, na którą nikt nie dał ACK.
+    """
+    ok, lines = verify({"kurier_ids": S4_HARMLESS})
+    assert _reader_sees(S4_HARMLESS) == str(CID)
+    assert lines[:len(MASTER_LINES)] == MASTER_LINES
+    assert ok is True
+    assert "⚠ malformed w kurier_ids: 1" in lines
+
+
+def test_int_valued_store_with_shadow_row_matches_master(verify):
+    """S3 (parytet, nie regresja): ten sam kształt co S1, ale wartości int —
+    czyli dzisiejszy typ w żywym ``kurier_ids.json`` (125/125 int).
+
+    Tu master, iter1 i iter2 dają TO SAMO ✗: ramię ``resolve_cid(...) == cid_s``
+    porównuje surową wartość (int) ze stringiem, więc na danych int trzyma się
+    wyłącznie ramię ``store.get(full_name) == cid`` (klucz pełnego imienia).
+    Zachowanie odziedziczone po masterze (obserwacja recenzenta, nie finding) —
+    kierunek fail-CLOSED, więc iter2 go NIE zmienia; test zamraża ten stan, żeby
+    ewentualna przyszła zmiana ramienia była świadoma, a nie uboczna.
+    """
+    ok, lines = verify({"kurier_ids": S3_INT_VALUES})
+    assert _dispatch_line(lines).startswith("✗")
+    assert ok is False
+
+
+#: Magazyny kurier_ids do niezmiennika kierunkowego (zdrowe, zepsute, graniczne).
+READER_PARITY_STORES = [
+    pytest.param({ALIAS: str(CID)}, id="healthy-alias-str"),
+    pytest.param({ALIAS: CID, NAME: CID}, id="healthy-alias-and-full-int"),
+    pytest.param({NAME: str(CID)}, id="healthy-full-str"),
+    pytest.param(S1_SHADOW_WINS, id="S1-shadow-malformed-wins"),
+    pytest.param(S2_TIE, id="S2-tie-in-full-store"),
+    pytest.param(S3_INT_VALUES, id="S3-shadow-int-values"),
+    pytest.param(S4_HARMLESS, id="S4-foreign-malformed-harmless"),
+    pytest.param({ALIAS: "0" + str(CID), NAME: CID}, id="own-record-noncanonical"),
+    pytest.param({ALIAS: str(CID), "Ktos Inny": "0" + str(CID)},
+                 id="foreign-row-folding-to-own-cid"),
+    pytest.param({}, id="empty-store"),
+    pytest.param(["nie", "mapa"], id="not-a-mapping"),
+]
+
+
+@pytest.mark.parametrize("store", READER_PARITY_STORES)
+def test_dispatch_check_is_never_greener_than_the_reader(verify, store):
+    """NIEZMIENNIK F1: ✓ dyspozytornia ⇒ produkcyjny ``resolve_cid`` NAPRAWDĘ
+    resolwuje audytowane imię na audytowany cid.
+
+    Implikacja jest jednokierunkowa świadomie: audyt WOLNO mieć ostrzejszy
+    (fail-closed przy zepsutym rekordzie własnej tożsamości albo przy int-owym
+    ramieniu odziedziczonym po masterze), nie wolno mu być ŁAGODNIEJSZY. To jest
+    dokładnie ta własność, którą łamał iter1 — i której nie mierzył żaden test,
+    bo stub ``resolve_cid`` omijał score-fallback.
+    """
+    _ok, lines = verify({"kurier_ids": store})
+    if _dispatch_line(lines).startswith("✓"):
+        assert _reader_sees(store) == str(CID), (
+            f"audyt melduje ✓ dyspozytornia, a czytelnik widzi "
+            f"{_reader_sees(store)!r} zamiast {str(CID)!r}"
         )

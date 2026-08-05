@@ -373,11 +373,26 @@ def _refers_to_audited_name(value, names: frozenset) -> bool:
     return isinstance(value, str) and norm(value) in names
 
 
-#: Wynik audytu jednego roota. ``healthy`` = rekordy, które kanoniczny czytelnik
-#: naprawdę zobaczy (na nich liczone są checki), ``identity_broken`` = zepsuty
-#: jest rekord audytowanej tożsamości, ``unrelated`` = licznik zepsutych rekordów
-#: CUDZYCH tożsamości (raport, bez wpływu na werdykt).
-_RootScan = namedtuple("_RootScan", "root healthy identity_broken unrelated")
+#: Wynik audytu jednego roota:
+#:   ``store``           = magazyn tak, jak dostaje go czytelnik (``{}`` gdy root
+#:                         nie jest mapą — wtedy czytelnik i tak nic nie odczyta),
+#:   ``healthy``         = rekordy, które zobaczy czytelnik PER REKORD,
+#:   ``identity_broken`` = zepsuty jest rekord audytowanej tożsamości,
+#:   ``unrelated``       = licznik zepsutych rekordów CUDZYCH tożsamości (raport).
+#:
+#: Który z dwóch magazynów podstawić pod check, rozstrzyga KLASA CZYTELNIKA tego
+#: roota, a nie wygoda audytu (A-6/G6 iter2, finding F1 blind review):
+#:   * czytelnik PER REKORD (``identity.roster`` G3, ``courier_info``,
+#:     ``courier_availability``, ``pin_auth``) pomija zepsuty wiersz POJEDYNCZO —
+#:     ``healthy`` jest dokładnie tym, co widzi, a że to podzbiór magazynu, check
+#:     może werdykt tylko ZAOSTRZYĆ,
+#:   * czytelnik KONKURENCYJNY (``worker.resolve_cid`` nad ``kurier_ids``)
+#:     rozstrzyga po WSZYSTKICH wierszach — dla niego zepsuty wiersz nie jest
+#:     niewidzialny: może wygrać score-fallback albo wywołać remis. Podanie mu
+#:     ``healthy`` POLUZOWUJE werdykt względem produkcji, więc jego check MUSI
+#:     liczyć się na ``store``, a walidacja schematu zamyka bramkę osobno przez
+#:     ``identity_broken``.
+_RootScan = namedtuple("_RootScan", "root store healthy identity_broken unrelated")
 
 
 def _scan_root(root: str, store, issue, relates) -> _RootScan:
@@ -386,10 +401,12 @@ def _scan_root(root: str, store, issue, relates) -> _RootScan:
     ``issue`` to walidator rekordu z ``identity.schema`` (jedyny owner kształtu
     rootów), ``relates(key, value)`` odpowiada, czy zepsuty rekord dotyczy
     audytowanej tożsamości. Root, który nie jest mapą, to „nie umiem tego
-    odczytać", a nie „nie ma tam problemu" — fail-closed, zero rekordów zdrowych.
+    odczytać", a nie „nie ma tam problemu" — fail-closed, zero rekordów zdrowych
+    i pusty ``store`` (tyle samo widzi czytelnik: ``_load_kurier_ids`` wywraca
+    się na nie-mapie i zwraca ``{}``).
     """
     if not isinstance(store, dict):
-        return _RootScan(root, {}, True, 0)
+        return _RootScan(root, {}, {}, True, 0)
     healthy, unrelated, identity_broken = {}, 0, False
     for key, value in store.items():
         if issue(key, value) is None:
@@ -398,7 +415,7 @@ def _scan_root(root: str, store, issue, relates) -> _RootScan:
             identity_broken = True
         else:
             unrelated += 1
-    return _RootScan(root, healthy, identity_broken, unrelated)
+    return _RootScan(root, store, healthy, identity_broken, unrelated)
 
 
 def verify_courier_wired(cid: int, full_name: str) -> tuple[bool, List[str]]:
@@ -415,6 +432,16 @@ def verify_courier_wired(cid: int, full_name: str) -> tuple[bool, List[str]]:
     zepsuty rekord CUDZY = osobna linia ``⚠ malformed w <root>: N`` bez zmiany
     ``all_ok`` (to narzędzie diagnostyczne operatora — nie blokuje wpięcia
     kuriera A z powodu rekordu kuriera B).
+
+    A-6/G6 iter2 (F1): każdy check liczy się na TYM magazynie, który widzi jego
+    czytelnik — patrz ``_RootScan``. Pięć rootów o czytelniku PER REKORD idzie po
+    ``healthy``; ``kurier_ids`` ma czytelnika KONKURENCYJNEGO (``resolve_cid``
+    rozstrzyga po wszystkich wierszach), więc jego check idzie po ``store``.
+    Konsekwencja kontraktowa: obcy zepsuty rekord, który ZMIENIA odpowiedź
+    ``resolve_cid`` dla audytowanego imienia (wygrywa score-fallback albo tworzy
+    remis), daje ✗ — bo odpowiedź czytelnika jest funkcją wszystkich wierszy, nie
+    pojedynczego. Obcy zepsuty rekord, który odpowiedzi NIE zmienia, zostaje przy
+    samej linii ``⚠``.
     """
     from dispatch_v2.daily_accounting.config import EXCLUDED_CIDS
 
@@ -455,8 +482,18 @@ def verify_courier_wired(cid: int, full_name: str) -> tuple[bool, List[str]]:
     scans = [kids, piny, tiers, full, names_root, grafik]
 
     checks = []
-    dispatch_ok = (resolve_cid(full_name, kids.healthy) == cid_s
-                   or kids.healthy.get(full_name) == cid)
+    # Czytelnik dyspozytorni (``worker.resolve_cid`` + ``_load_kurier_ids``, który
+    # nie waliduje NICZEGO) rozstrzyga KONKURENCYJNIE po całym magazynie: exact →
+    # case-insensitive → score, remis ⇒ None. Zepsuty wiersz CUDZY potrafi wygrać
+    # score-fallback albo zafundować remis, więc pytanie „czy dyspozytornia widzi
+    # tego kuriera" wolno zadać WYŁĄCZNIE nad ``kids.store`` — nad ``healthy``
+    # audyt dostawał odpowiedź korzystniejszą niż produkcja i meldował ✓ nad
+    # tożsamością resolwowaną na cudzy/śmieciowy cid albo na nic (F1).
+    dispatch_ok = (resolve_cid(full_name, kids.store) == cid_s
+                   or kids.store.get(full_name) == cid)
+    # Walidacja schematu zamyka tę bramkę osobno: zepsuty rekord WŁASNEJ
+    # tożsamości = ✗ nawet gdy czytelnik akurat trafia (rekord jest rozdarty
+    # między writera i kanonicznych czytelników per rekord).
     checks.append(("dyspozytornia (resolve_cid)",
                    dispatch_ok and not kids.identity_broken))
     tiers_ok = cid_s in tiers.healthy
