@@ -9,6 +9,7 @@ import sys
 import tempfile
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from contextlib import contextmanager
 from unittest.mock import patch
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -186,11 +187,55 @@ def _make_parser_snap(downstream_status="ok", downstream_reason=None,
 # Testy oczekujące overall=ok muszą izolować cron od stanu hosta → stub healthy summary.
 _HEALTHY_CRON = {"status": "ok", "reason": None, "stale_units": [], "failed_units": [], "units_count": 0}
 
+# De-erozja 2026-08-05 (sesja 341): ta sama klasa co wyżej, drugie źródło stanu hosta.
+# _mp14_build_all_snapshot zaciąga komponent `reconciliation` z ŻYWEGO
+# reconciliation_log.jsonl tej maszyny (get_reconciliation_health). 05.08 host miał
+# 1 ghost + 1 manual alert w 24 h → status=degraded → overall=degraded, więc oba testy
+# oczekujące overall=ok czerwieniały OD STANU PRODUKCJI, nie od logiki agregacji.
+# Fałszywa czerwień zablokowała re-seed manifestu strażnika (fail-closed) — dlatego
+# izolacja hosta jest tu JEDNYM punktem (`_isolated_host`), a nie łatką per test.
+_HEALTHY_RECON = {
+    "last_run_ts": "2026-08-05T00:00:00+00:00",
+    "discrepancies_24h": {
+        "phantoms": 0, "ghosts": 0, "auto_resyncs": 0,
+        "manual_alerts": 0, "hard_cap_hits": 0,
+    },
+    "status": "ok",
+    "endpoint_version": "1",
+}
+
+
+@contextmanager
+def _isolated_host():
+    """Odcina agregator od WSZYSTKICH żywych sygnałów hosta (cron + rekoncyliacja).
+
+    Każdy test oczekujący konkretnego `overall_status` MUSI iść przez ten kontekst —
+    inaczej mierzy stan tej maszyny, nie logikę agregacji.
+    """
+    with patch("dispatch_v2.parser_health_endpoint._mp14_load_cron_summary",
+               return_value=dict(_HEALTHY_CRON)), \
+         patch("dispatch_v2.reconciliation.health_endpoint.get_reconciliation_health",
+               return_value=dict(_HEALTHY_RECON)):
+        yield
+
+
+def test_izolacja_hosta_obejmuje_oba_zywe_zrodla():
+    """Ratchet de-erozji: pod `_isolated_host` snapshot nie zależy od stanu maszyny.
+
+    Oracle negatywny — gdyby doszło TRZECIE żywe źródło bez izolacji (albo ktoś zdjął
+    patcha rekoncyliacji), ten test czerwienieje razem z resztą, zamiast pozwolić
+    kolejnej fałszywej czerwieni zablokować strażnika.
+    """
+    with _isolated_host():
+        snap = _mp14_build_all_snapshot(_make_parser_snap())
+    assert snap["components"]["cron_timers"]["status"] == "ok"
+    assert snap["components"]["reconciliation"]["status"] == "ok"
+    assert snap["overall_status"] == "ok"
+
 
 def test_build_all_snapshot_healthy():
     """Wszystkie sygnały OK → overall_status=ok."""
-    with patch("dispatch_v2.parser_health_endpoint._mp14_load_cron_summary",
-               return_value=dict(_HEALTHY_CRON)):
+    with _isolated_host():
         snap = _mp14_build_all_snapshot(_make_parser_snap())
     assert snap["overall_status"] == "ok"
     assert snap["overall_reason"] is None
@@ -252,10 +297,9 @@ def test_build_all_snapshot_critical_pipeline_silent():
 
 def test_build_all_snapshot_no_worker_heartbeat():
     """worker_age=None → shadow_worker=unknown (NIE error)."""
-    # De-erozja 2026-06-13: izoluj cron od stanu hosta (patrz komentarz przy
-    # test_build_all_snapshot_healthy) — test oczekuje overall=ok.
-    with patch("dispatch_v2.parser_health_endpoint._mp14_load_cron_summary",
-               return_value=dict(_HEALTHY_CRON)):
+    # De-erozja 2026-06-13 + 2026-08-05: izoluj CAŁY stan hosta (cron + rekoncyliacja),
+    # patrz komentarz przy `_isolated_host` — test oczekuje overall=ok.
+    with _isolated_host():
         snap = _mp14_build_all_snapshot(_make_parser_snap(worker_age=None))
     assert snap["components"]["shadow_worker"]["status"] == "unknown"
     assert snap["components"]["shadow_worker"]["age_sec"] is None
