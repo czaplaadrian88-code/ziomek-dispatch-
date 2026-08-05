@@ -1,0 +1,32 @@
+# Regresja OD-7 archiver (sesja 297) — pkgroot 20260805-od7-archiver-297-cto
+
+## BASELINE PRZED (master 06e4d5c39)
+23 failed, 7506 passed, 24 skipped, 8 xfailed, 159 warnings in 822.71s (0:13:42)
+
+## PO ZMIANIE (bieg 1)
+23 failed, 7553 passed, 24 skipped, 8 xfailed, 159 warnings in 803.50s (0:13:23)
+
+## FAILE BASELINE (zastane, niezwiazane — identyczna lista przed i po)
+FAILED tests/test_a2_selection_shadow.py::test_coeff_monotonic_change_rate
+FAILED tests/test_a2_selection_shadow.py::test_coeff_zero_no_change
+FAILED tests/test_a2_selection_shadow.py::test_confidence_gating_low_no_swap
+FAILED tests/test_a2_selection_shadow.py::test_decision_without_alternatives_skipped
+FAILED tests/test_a2_selection_shadow.py::test_feasible_candidates_filter_unit
+FAILED tests/test_a2_selection_shadow.py::test_filtered_candidates_best_effort_and_feasibility
+FAILED tests/test_a2_selection_shadow.py::test_high_coeff_swaps_to_low_breach
+FAILED tests/test_a2_selection_shadow.py::test_key_aware_negative_worse_bucket_no_swap
+FAILED tests/test_a2_selection_shadow.py::test_key_aware_positive_same_bucket_swap
+FAILED tests/test_a2_selection_shadow.py::test_key_bucket_unit
+FAILED tests/test_a2_selection_shadow.py::test_load_reliability_unit
+FAILED tests/test_a2_selection_shadow.py::test_method_field_present
+FAILED tests/test_a2_selection_shadow.py::test_min_gap_below_threshold_no_swap
+FAILED tests/test_a2_selection_shadow.py::test_non_propose_verdict_ignored
+FAILED tests/test_a2_selection_shadow.py::test_reliability_delta_unit
+FAILED tests/test_courier_reliability.py::test_below_min_history_skipped
+FAILED tests/test_courier_reliability.py::test_confidence_tiers
+FAILED tests/test_courier_reliability.py::test_half_breach_lower_reliability
+FAILED tests/test_courier_reliability.py::test_non_delivered_ignored
+FAILED tests/test_courier_reliability.py::test_reliability_ordering_low_gt_high_breach
+FAILED tests/test_courier_reliability.py::test_schema_shape_of_output
+FAILED tests/test_courier_reliability.py::test_speed_vs_pred_median
+FAILED tests/test_courier_reliability.py::test_zero_breach_courier

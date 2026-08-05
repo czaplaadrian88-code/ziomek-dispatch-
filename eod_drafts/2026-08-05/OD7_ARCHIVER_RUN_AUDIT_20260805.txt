@@ -1,0 +1,10 @@
+[OD-7 report] plików=563 (6 309.4 MB), do archiwum teraz=9 (262.5 MB → ~35.1 MB po gzip), konflikty polityki=4, dług rotacji=11, błędy=0
+[OD-7] raport JSON: eod_drafts/2026-08-05/OD7_ARCHIVER_REPORT_20260805.json
+[OD-7] raport tekstowy: eod_drafts/2026-08-05/OD7_ARCHIVER_REPORT_20260805.md
+
+=== AUDYT ZAPISOW (rc=0) — 6 zdarzen ===
+open | /root/worktrees/dispatch_v2/active/20260805-od7-archiver-297-cto/eod_drafts/2026-08-05/.od7_rfgua13n.tmp | None | 655554
+open | 3 | w | 524865
+os.rename | /root/worktrees/dispatch_v2/active/20260805-od7-archiver-297-cto/eod_drafts/2026-08-05/.od7_rfgua13n.tmp | eod_drafts/2026-08-05/OD7_ARCHIVER_REPORT_20260805.json | -1 | -1
+open | /root/worktrees/dispatch_v2/active/20260805-od7-archiver-297-cto/eod_drafts/2026-08-05/.od7_delemfyn.tmp | None | 655554
+os.rename | /root/worktrees/dispatch_v2/active/20260805-od7-archiver-297-cto/eod_drafts/2026-08-05/.od7_delemfyn.tmp | eod_drafts/2026-08-05/OD7_ARCHIVER_REPORT_20260805.md | -1 | -1
