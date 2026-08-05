@@ -7,6 +7,14 @@
 Zawiera: NEGATYWNY ORACLE (reprodukuje defekt: plaintext / brak dławienia),
 MUTATION PROBE (KDF→plaintext oraz usunięcie limitu → oracle RED), PARYTET ON≠OFF.
 
+Sesja 297 (bramka `tests.pin-kdf-oracle-substring-flake`): security-oracle magazynu
+KDF mieszka w `tests/pin_kdf_store_oracle.py` (jedno źródło) i sprawdza KSZTAŁT
+STRUKTURALNY zamiast skanu substringiem całego blobu — skan czerwienił losowo
+~0,56% biegów, bo hex soli/hasha zawierał cyfry PIN-u. Siłę oracle utrzymuje
+`test_mutation_leak_forms_fail_oracle` (katalog `LEAK_FORMS`: 10 realnych form
+wycieku, każda MUSI dać RED), a brak flake'a — `test_oracle_stable_when_kdf_hex_
+contains_pin_digits` + sweep 1000 biegów w `eod_drafts/2026-08-05/pin_oracle_flake_297/`.
+
 Izolacja: wszystkie ścieżki w tmp_path (HERMETIC-GUARD spełniony). ZERO PIN-ów z
 żywego kurier_piny.json — wyłącznie syntetyczne PIN-y w tmp. Żaden test nie loguje
 ani nie asertuje sekretu poza syntetycznym PIN-em użytym lokalnie do weryfikacji.
@@ -19,6 +27,14 @@ import pytest
 from dispatch_v2 import gps_rate_limit as rl
 from dispatch_v2 import gps_server
 from dispatch_v2.identity import pin_auth
+# SECURITY ORACLE magazynu KDF — JEDNO ŹRÓDŁO (`tests/pin_kdf_store_oracle.py`),
+# wspólne z dowodem anty-flake `eod_drafts/2026-08-05/pin_oracle_flake_297/`.
+# Sesja 297: asercje STRUKTURALNE zamiast skanu substringiem całego blobu (losowy
+# hex soli/hasha trafiał 4-cyfrowy PIN w ~0,56% biegów → fałszywa czerwień strażnika).
+from dispatch_v2.tests import pin_kdf_store_oracle as _oracle
+from dispatch_v2.tests.pin_kdf_store_oracle import (
+    assert_no_plaintext_pin_in_store as _no_plaintext_oracle,
+)
 
 
 # ─────────────────────────── PIN KDF — helpers ──────────────────────────────
@@ -28,25 +44,6 @@ def _mk_stores(tmp_path, mapping):
     kdf = tmp_path / "kurier_piny_kdf.json"
     piny.write_text(json.dumps(mapping), encoding="utf-8")
     return str(piny), str(kdf)
-
-
-def _no_plaintext_oracle(kdf_path, pins):
-    """SECURITY ORACLE: magazyn KDF nie zawiera plaintextu PIN-u, każdy rekord ma
-    niezerowy koszt KDF + sól, a sole są RÓŻNE per-user. Raisuje AssertionError gdy
-    naruszone (→ RED pod mutacją KDF→plaintext)."""
-    store = pin_auth._load_json(kdf_path)
-    blob = json.dumps(store)
-    for pin in pins:
-        assert pin not in blob, "PLAINTEXT PIN w magazynie KDF (mutacja/regresja)"
-    salts = []
-    for name, rec in store.items():
-        assert rec.get("kdf") == pin_auth.KDF_NAME, f"{name}: obcy/kdf-less rekord"
-        assert int(rec.get("iter", 0)) >= pin_auth._MIN_ITER_FLOOR, \
-            f"{name}: koszt KDF poniżej floor (osłabienie)"
-        assert len(str(rec.get("salt", ""))) >= pin_auth.SALT_BYTES * 2, \
-            f"{name}: sól za krótka/brak"
-        salts.append(rec["salt"])
-    assert len(salts) == len(set(salts)), "sole NIE są per-user unikatowe"
 
 
 # ─────────────────────────── PIN KDF — oracle ───────────────────────────────
@@ -111,6 +108,50 @@ def test_mutation_plaintext_store_fails_oracle(tmp_path, monkeypatch):
     pin_auth.resolve_pin("1234", piny_path=piny, kdf_path=kdf, use_kdf=True)
     with pytest.raises(AssertionError):
         _no_plaintext_oracle(kdf, ["1234"])
+
+
+# ───────── sesja 297: anty-flake + dowód, że oracle POZOSTAJE oraclem ─────────
+
+def test_oracle_stable_when_kdf_hex_contains_pin_digits(tmp_path, monkeypatch):
+    """REGRESJA FLAKE (bramka `tests.pin-kdf-oracle-substring-flake`): sól/hash to
+    losowy hex, więc cyfry PIN-u wpadają do niego przypadkiem (~0,56% biegów →
+    fałszywa czerwień strażnika CO NOC). Deterministyczna reprodukcja kształtu:
+    wymuszamy sól, której hex ZAWIERA PIN. Stary skan substringiem = RED,
+    nowy oracle strukturalny = PASS (hex wyjścia KDF nie jest wyciekiem)."""
+    pin, name = "1234", "Marcin By"
+    salt = bytes.fromhex("0123456789abcdef0123456789abcdef")
+    assert pin in salt.hex(), "setup: sól ma zawierać cyfry PIN-u (kształt flake'a)"
+
+    class _FixedSecrets:  # tylko `token_bytes` — jedyne API używane przez pin_auth
+        @staticmethod
+        def token_bytes(n):
+            return salt[:n]
+
+    monkeypatch.setattr(pin_auth, "secrets", _FixedSecrets)
+    piny, kdf = _mk_stores(tmp_path, {pin: name})
+    assert pin_auth.resolve_pin(pin, piny_path=piny, kdf_path=kdf, use_kdf=True) == name
+    store = pin_auth._load_json(kdf)
+    assert pin in json.dumps(store), "repro: PIN MUSI być substringiem blobu (stary oracle RED)"
+    assert pin_auth.verify_record(pin, store[name]), "rekord musi być prawdziwym KDF"
+    _no_plaintext_oracle(kdf, [pin])  # NOWY oracle: PASS — zero fałszywej czerwieni
+
+
+@pytest.mark.parametrize("form", sorted(_oracle.LEAK_FORMS))
+def test_mutation_leak_forms_fail_oracle(tmp_path, form):
+    """ORACLE POZOSTAJE ORACLEM: każda REALNA forma wycieku PIN-u do magazynu KDF
+    (plaintext w polu, PIN w nazwie pola/klucza, PIN doklejony do wartości, PIN
+    zakodowany hexem, osłabiony koszt KDF) MUSI sczerwienić oracle. Katalog form =
+    `tests/pin_kdf_store_oracle.LEAK_FORMS` (jedno źródło, wspólne ze sweepem).
+    Kontrola w tym samym teście: czysty magazyn KDF = PASS."""
+    pin, name = "1234", "Marcin By"
+    kdf = str(tmp_path / "kurier_piny_kdf.json")
+    store = {name: pin_auth.make_record(pin)}
+    pin_auth._atomic_write_json(kdf, store)
+    _no_plaintext_oracle(kdf, [pin])  # kontrola: prawdziwy KDF przechodzi
+    _oracle.LEAK_FORMS[form](store, name, pin)
+    pin_auth._atomic_write_json(kdf, store)
+    with pytest.raises(AssertionError):
+        _no_plaintext_oracle(kdf, [pin])
 
 
 def test_parity_on_vs_off_behavioral(tmp_path):

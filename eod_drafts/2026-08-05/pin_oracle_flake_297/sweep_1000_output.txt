@@ -1,0 +1,18 @@
+── MUTACJE (każda forma realnego wycieku MUSI dać RED) ──
+  extra_field                nowy=RED       stary_skan=RED  | Marcin By: obcy/niepełny zestaw pól rekordu: ['hash', 'iter', 'kdf', 'pin_plain', 'salt']
+  hash_is_pin                nowy=RED       stary_skan=RED  | Marcin By: hash nie ma kształtu wyjścia KDF (64 zn. hex)
+  iter_below_floor           nowy=RED       stary_skan=GREEN(przeoczenie)  | Marcin By: koszt KDF poniżej floor (osłabienie)
+  pin_appended_to_hash       nowy=RED       stary_skan=RED  | Marcin By: hash nie ma kształtu wyjścia KDF (64 zn. hex)
+  pin_appended_to_salt       nowy=RED       stary_skan=RED  | Marcin By: sól nie ma kształtu wyjścia KDF (32 zn. hex)
+  pin_as_field_name          nowy=RED       stary_skan=RED  | Marcin By: obcy/niepełny zestaw pól rekordu: ['***', 'hash', 'iter', 'kdf', 'salt']
+  pin_hex_encoded_as_hash    nowy=RED       stary_skan=GREEN(przeoczenie)  | rekord KDF nie jest PBKDF2 dokładnie jednego PIN-u (trafień: 0) — hash/salt nie pochodzą z KDF
+  pin_in_kdf_label           nowy=RED       stary_skan=RED  | Marcin By: obcy/zmodyfikowany znacznik kdf
+  pin_in_store_key           nowy=RED       stary_skan=RED  | 'Marcin By (***)': PIN w KLUCZU magazynu (wyciek)
+  salt_is_pin                nowy=RED       stary_skan=RED  | Marcin By: sól nie ma kształtu wyjścia KDF (32 zn. hex)
+MUTACJE: 10/10 RED → OK
+
+── SWEEP ANTY-FLAKE ──
+runs=1000 couriers/run=2 seed=297 czas=259.8s
+STARY oracle (skan substringiem)  : 6 czerwieni (0.60% biegów)
+NOWY oracle (strukturalny)        : 0 czerwieni (0.00% biegów)
+WERDYKT: OK — 0 fałszywych czerwieni + oracle nadal łapie każdy wyciek
