@@ -112,7 +112,7 @@ def test_liczba1_policzona_recznie(decisions):
     bazowy true = {e3} = 1/4 = 25 % · D true = {e1, e3} = 2/4 = 50 %
     D' true = {e1} = 1/4 = 25 % · auto_route=AUTO = {e1} = 1/4 = 25 %
     """
-    l1, manifest, idx = M.compute_liczba1([decisions], 48.0)
+    l1, manifest, idx = M.compute_liczba1(decisions, 48.0)
     assert l1["available"] is True
     it = l1["intake"]
     assert (it["records_read"], it["duplicates_dropped"], it["excluded_lifecycle"],
@@ -132,7 +132,7 @@ def test_liczba1_policzona_recznie(decisions):
 
 def test_liczba1_segmentacja_puli(decisions):
     """pool>=3 = {e1(5), e3(3), e7(4)}; pool<=2 = {e2(2)}. Granica 3 jest częścią definicji."""
-    l1, _, _ = M.compute_liczba1([decisions], 48.0)
+    l1, _, _ = M.compute_liczba1(decisions, 48.0)
     assert l1["pool_ge3"]["n"] == 3 and l1["pool_le2"]["n"] == 1 and l1["pool_unknown"]["n"] == 0
     assert l1["pool_ge3"]["would_auto_assign_d"]["pct"] == pytest.approx(200.0 / 3)
     assert l1["pool_le2"]["would_auto_assign_d"]["pct"] == pytest.approx(0.0)
@@ -146,7 +146,7 @@ def test_pool_bucket_definicja():
 
 
 def test_liczba1_rodziny_blokerow(decisions):
-    l1, _, _ = M.compute_liczba1([decisions], 48.0)
+    l1, _, _ = M.compute_liczba1(decisions, 48.0)
     bl = l1["blockers_d"]
     assert bl["n_blocked"] == 2 and bl["n_with_reasons"] == 1
     assert bl["families_any"] == {"scarcity_pool": 1, "pos_not_informed": 1}
@@ -155,23 +155,58 @@ def test_liczba1_rodziny_blokerow(decisions):
 
 def test_liczba1_indeks_bierze_pierwsza_decyzje(decisions):
     """Zamówienie 100 ma dwie decyzje (e1 auto-gotowa, e7 nie) — kanonem jest PIERWSZA."""
-    l1, _, idx = M.compute_liczba1([decisions], 48.0)
+    l1, _, idx = M.compute_liczba1(decisions, 48.0)
     assert idx["100"]["would_auto_assign_d"] is True
     assert l1["orders"] == {"distinct": 3, "with_multiple_decisions": 1, "max_decisions_per_order": 2}
 
 
 # ───────────────────────── rotacje ─────────────────────────
 
+# Nazwy, które REALNIE potrafią leżeć obok korpusu: rotowany lock pisarza
+# (`core/jsonl_rotation.py` tworzy `<baza>.append.lock`), kopie operatorskie, pliki tymczasowe.
+# Żaden z nich nie jest korpusem decyzji, także wtedy gdy kończy się kropką i liczbą.
+ROTATION_JUNK_SUFFIXES = (
+    ".append.lock", ".append.lock.1", ".bak", ".bak.1", ".old.7", ".save.12.gz",
+    ".tmp", ".tmp.3", ".1.zst", ".1.bak", "-20260804", ".gz",
+)
+
+
 def test_rotacje_wykrywane_globem_bez_smieci(tmp_path):
+    """RATCHET WHITELIST: korpusem jest wyłącznie `<baza>.<N>` i `<baza>.<N>.gz`.
+
+    Filtr blacklistowy (`\\.(\\d+)(\\.gz)?$` przez `.search()` na całej ścieżce) wpuszczał
+    całą klasę `<baza>.<cokolwiek>.<N>` — jedna kopia operatorska albo jeden rotowany lock
+    cicho przesuwał OBIE liczby ownera, bo plik wpisywał się w manifest jak pełna rotacja.
+    """
     base = tmp_path / "shadow_decisions.jsonl"
     base.write_text("{}\n")
     for suffix in (".1", ".2.gz", ".10"):
         (tmp_path / ("shadow_decisions.jsonl" + suffix)).write_text("x")
-    (tmp_path / "shadow_decisions.jsonl.append.lock").write_text("")
+    for suffix in ROTATION_JUNK_SUFFIXES:
+        (tmp_path / ("shadow_decisions.jsonl" + suffix)).write_text("x")
     got = M.discover_decision_files(str(base))
     assert [os.path.basename(p) for p in got] == [
         "shadow_decisions.jsonl", "shadow_decisions.jsonl.1",
         "shadow_decisions.jsonl.2.gz", "shadow_decisions.jsonl.10"]
+    for suffix in ROTATION_JUNK_SUFFIXES:
+        assert M.rotation_index(str(base), str(base) + suffix) is None, suffix
+    assert M.rotation_index(str(base), str(base) + ".7") == 7
+    assert M.rotation_index(str(base), str(base) + ".7.gz") == 7
+
+
+def test_smieciowy_plik_konczacy_sie_liczba_nie_wchodzi_do_mianownika(tmp_path):
+    """NEGATYWNY ORACLE (parytet z composerem): śmieć NIE MOŻE ruszyć żadnej z dwóch liczb."""
+    czysty = _write_jsonl(tmp_path / "shadow_decisions.jsonl", DECISIONS_ROWS)
+    wzorzec, _, wzorzec_idx = M.compute_liczba1(czysty, 48.0)
+    for suffix, oid in ((".append.lock.1", "oLOCK"), (".bak.1", "oBAK"), (".old.7", "oOLD")):
+        _write_jsonl(tmp_path / ("shadow_decisions.jsonl" + suffix), [
+            _dec("2026-08-02T23:59:00Z", "smiec" + oid, oid, would_auto_assign=True,
+                 would_auto_assign_d=True, would_auto_assign_dprime=True,
+                 auto_route="AUTO", pool_feasible_count=8)])
+    l1, manifest, idx = M.compute_liczba1(czysty, 48.0)
+    assert l1["intake"] == wzorzec["intake"] and l1["global"] == wzorzec["global"]
+    assert idx == wzorzec_idx and "oLOCK" not in idx and "oBAK" not in idx
+    assert [os.path.basename(m["path"]) for m in manifest] == ["shadow_decisions.jsonl"]
 
 
 def test_rotacja_gz_wchodzi_do_mianownika(tmp_path):
@@ -179,9 +214,81 @@ def test_rotacja_gz_wchodzi_do_mianownika(tmp_path):
     gz = str(tmp_path / "shadow_decisions.jsonl.1.gz")
     with gzip.open(gz, "wt", encoding="utf-8") as fh:
         fh.write(json.dumps(DECISIONS_ROWS[1], ensure_ascii=False) + "\n")
-    l1, _, _ = M.compute_liczba1(M.discover_decision_files(base), 48.0)
+    l1, _, _ = M.compute_liczba1(base, 48.0)
     assert l1["intake"]["decisions"] == 2
     assert l1["global"]["would_auto_assign_d"]["pct"] == pytest.approx(50.0)
+
+
+def test_brak_zywej_bazy_przy_swiezej_rotacji_nie_daje_liczby(tmp_path):
+    """NEGATYWNY ORACLE fail-closed: świeża rotacja BEZ pliku bazowego = strumień stanął.
+
+    Plik żywy rozpoznajemy po ŚCIEŻCE BAZOWEJ, nie po pozycji na liście: bez tego najnowsza
+    rotacja awansuje na "bazę", przechodzi kontrolę świeżości i produkuje liczbę dnia
+    z korpusu, do którego nikt już nie pisze (dokładnie to, czemu ma zapobiegać próg 48 h).
+    """
+    base = str(tmp_path / "shadow_decisions.jsonl")
+    _write_jsonl(tmp_path / "shadow_decisions.jsonl.1", DECISIONS_ROWS)  # mtime = teraz
+    assert [os.path.basename(p) for p in M.discover_decision_files(base)] == [
+        "shadow_decisions.jsonl.1"]
+
+    l1, manifest, idx = M.compute_liczba1(base, 48.0)
+    assert l1["available"] is False
+    assert "korpusu bazowego" in l1["reason"] and idx == {}
+
+    # KONTROLA POZYTYWNA: ta sama rotacja + OBECNA świeża baza → liczba powstaje.
+    _write_jsonl(tmp_path / "shadow_decisions.jsonl", DECISIONS_ROWS)
+    l1b, _, idxb = M.compute_liczba1(base, 48.0)
+    assert l1b["available"] is True and l1b["intake"]["decisions"] == 4 and idxb
+
+
+def test_martwa_baza_nie_ozywa_przez_swieza_rotacje(tmp_path):
+    """Baza sprzed 40 dni + świeża rotacja: liczba NADAL nie powstaje (powód: MARTWY)."""
+    base = _write_jsonl(tmp_path / "shadow_decisions.jsonl", DECISIONS_ROWS)
+    _write_jsonl(tmp_path / "shadow_decisions.jsonl.1", DECISIONS_ROWS[:1])
+    old = time.time() - 40 * 86400
+    os.utime(base, (old, old))
+    l1, _, idx = M.compute_liczba1(base, 48.0)
+    assert l1["available"] is False and "MARTWY" in l1["reason"] and idx == {}
+
+
+def test_indeks_bierze_najwczesniejsza_decyzje_takze_miedzy_rotacjami(tmp_path):
+    """ŚWIADOMA różnica metodologii vs composer 04.08 (decyzja CTO 05.08): PIERWSZA = w CZASIE.
+
+    Pliki wczytywane są od najnowszego, więc "pierwszy napotkany rekord" dawał dla zamówienia
+    rozpiętego na granicy rotacji decyzję PÓŹNIEJSZĄ (przekierowanie) i przesuwał macierz
+    joinu "auto-gotowe × zgodność" — przy zdaniu w raporcie, że brana jest pierwsza.
+    """
+    base = _write_jsonl(tmp_path / "shadow_decisions.jsonl", [
+        _dec("2026-08-05T10:00:00Z", "nowa", "o1", would_auto_assign_d=True,
+             auto_route="AUTO", pool_feasible_count=9),
+        # rekord BEZ `ts` nie może wygrać z rekordem o znanym czasie
+        {"event_id": "bez_ts", "order_id": "o2", "would_auto_assign_d": True,
+         "auto_route": "AUTO", "pool_feasible_count": 9},
+        _dec("2026-08-05T09:00:00Z", "o2_pierwsza", "o2", would_auto_assign_d=False,
+             auto_route="MANUAL", pool_feasible_count=2),
+    ])
+    _write_jsonl(tmp_path / "shadow_decisions.jsonl.1", [
+        _dec("2026-08-04T09:00:00Z", "stara", "o1", would_auto_assign_d=False,
+             auto_route="MANUAL", pool_feasible_count=1)])
+
+    l1, _, idx = M.compute_liczba1(base, 48.0)
+    assert idx["o1"] == {"would_auto_assign_d": False, "auto_route": "MANUAL",
+                         "pool_feasible_count": 1}
+    assert idx["o2"] == {"would_auto_assign_d": False, "auto_route": "MANUAL",
+                         "pool_feasible_count": 2}
+    assert l1["orders"] == {"distinct": 2, "with_multiple_decisions": 2,
+                            "max_decisions_per_order": 2}
+
+
+def test_pokrycie_puli_nie_liczy_boola_jako_liczby_kurierow(tmp_path):
+    """Jedna definicja pokrycia puli = ta sama, której używają kubełki (`pool_bucket`)."""
+    base = _write_jsonl(tmp_path / "shadow_decisions.jsonl", DECISIONS_ROWS + [
+        _dec("2026-08-02T14:00:00Z", "e8", "105", would_auto_assign_d=True,
+             auto_route="AUTO", pool_feasible_count=True)])
+    l1, _, _ = M.compute_liczba1(base, 48.0)
+    assert l1["intake"]["decisions"] == 5 and l1["pool_unknown"]["n"] == 1
+    assert l1["coverage"]["pool_feasible_count"] == 4
+    assert l1["coverage"]["pool_feasible_count"] == l1["pool_ge3"]["n"] + l1["pool_le2"]["n"]
 
 
 # ───────────────────────── LICZBA 2 ─────────────────────────
@@ -248,7 +355,7 @@ def test_liczba2_okno_znanej_puli_raportowane_osobno(outcomes):
 
 def test_join_laczy_po_order_id(decisions, outcomes):
     """W oknie 01-02.08 wspólne są 100 (auto-gotowe D, agree=T) i 101 (nie-auto, agree=F)."""
-    l1, _, idx = M.compute_liczba1([decisions], 48.0)
+    l1, _, idx = M.compute_liczba1(decisions, 48.0)
     _, _, rows = M.compute_liczba2(outcomes, 48.0)
     join = M.compute_join(rows, idx, ("2026-08-01", "2026-08-02"))
     assert join["n_joined"] == 2
@@ -264,7 +371,7 @@ def test_martwy_korpus_decyzji_nie_daje_liczby_tylko_powod(tmp_path, decisions):
     """NEGATYWNY ORACLE: strumień sprzed 40 dni NIE MOŻE wyprodukować Liczby 1."""
     old = time.time() - 40 * 86400
     os.utime(decisions, (old, old))
-    l1, manifest, idx = M.compute_liczba1([decisions], 48.0)
+    l1, manifest, idx = M.compute_liczba1(decisions, 48.0)
     assert l1["available"] is False and "MARTWY" in l1["reason"]
     assert idx == {} and manifest[0]["skipped"]
 
@@ -312,12 +419,44 @@ def test_wyjatek_w_liczbie_nie_wywala_biegu(tmp_path, monkeypatch, decisions, ou
     assert seria["liczba2"]["global"]["agree_pct"] == pytest.approx(50.0)
 
 
-def test_awaria_snapshotu_nie_wywala_biegu(tmp_path, monkeypatch, decisions, outcomes):
+def test_awaria_snapshotu_nie_wywala_biegu_a_szereg_mowi_prawde(tmp_path, monkeypatch,
+                                                                decisions, outcomes):
+    """Szereg jest APPEND-ONLY, więc linia MUSI powstać PO wszystkich zapisach snapshotu.
+
+    Odwrotna kolejność utrwalała rekord `status=OK` ze wskaźnikiem na snapshot, który nie
+    powstał — a linii szeregu z założenia nie da się już poprawić ani skasować. Sprawdzamy
+    TREŚĆ linii, nie tylko exit i istnienie pliku (na tym potknęła się poprzednia bramka).
+    """
+    out_dir = tmp_path / "raport" / "2026-08-05"
     monkeypatch.setattr(M, "write_atomic", lambda *a, **kw: (_ for _ in ()).throw(OSError("read-only fs")))
-    code = M.main(["--no-telegram", "--out-dir", str(tmp_path / "raport" / "2026-08-05"),
+    code = M.main(["--no-telegram", "--out-dir", str(out_dir),
                    "--decisions", decisions, "--outcomes", outcomes])
     assert code == 0
-    assert (tmp_path / "raport" / M.SERIES_FILENAME).exists()
+    seria_path = tmp_path / "raport" / M.SERIES_FILENAME
+    assert seria_path.exists()
+    seria = json.loads(seria_path.read_text().strip())
+    assert seria["status"] == "DEGRADED"
+    assert any("snapshot" in d for d in seria["degraded"])
+    # nie wolno wskazywać pliku, który nie powstał
+    assert seria["snapshot"] is None
+    assert not (out_dir / M.SNAPSHOT_JSON).exists()
+
+
+def test_awaria_samego_raportu_md_zostawia_wskaznik_na_istniejacy_snapshot(
+        tmp_path, monkeypatch, decisions, outcomes):
+    """Gdy JSON snapshotu POWSTAŁ, a padł tylko raport MD — wskaźnik jest prawdziwy, status DEGRADED."""
+    def boom(*a, **kw):
+        raise RuntimeError("render padł")
+
+    monkeypatch.setattr(M, "render_md", boom)
+    out_dir = tmp_path / "raport" / "2026-08-05"
+    assert M.main(["--no-telegram", "--out-dir", str(out_dir),
+                   "--decisions", decisions, "--outcomes", outcomes]) == 0
+    seria = json.loads((tmp_path / "raport" / M.SERIES_FILENAME).read_text().strip())
+    assert seria["status"] == "DEGRADED"
+    assert seria["snapshot"] == str(out_dir / M.SNAPSHOT_JSON)
+    assert os.path.exists(seria["snapshot"])
+    assert not (out_dir / M.SNAPSHOT_MD).exists()
 
 
 # ───────────────────────── szereg czasowy / read-only ─────────────────────────

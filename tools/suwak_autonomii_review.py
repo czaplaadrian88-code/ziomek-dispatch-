@@ -23,6 +23,13 @@ niezgód. Różnice implementacyjne (NIE metodologiczne) opisane w RAPORCIE sesj
     hardcode dawał cichy brak dnia w oknie;
   * wynik = APPEND do szeregu czasowego + snapshot dnia, zamiast nadpisywanego raportu.
 
+JEDNA ŚWIADOMA RÓŻNICA METODOLOGICZNA vs 04.08 (decyzja CTO, sesja 297, do zgłoszenia
+ownerowi): indeks joinu bierze decyzję NAJWCZEŚNIEJSZĄ W CZASIE (`ts`), a nie pierwszą
+napotkaną. Composer składał pliki od najnowszego i brał pierwszy trafiony rekord, więc dla
+zamówienia rozpiętego na dwie rotacje wybierał decyzję PÓŹNIEJSZĄ — sprzecznie z własną
+deklaracją. Kierunek: poprawność (zdanie w raporcie ownera ma być prawdziwe). Różnica
+ujawnia się WYŁĄCZNIE na zamówieniach z decyzjami po obu stronach granicy rotacji.
+
 Kontrakt (identyczny z resztą czytelników `shadow_review_daily`):
   * 100 % READ-ONLY wobec źródeł: `dispatch_state/`, `scripts/logs/` i `flags.json` są
     WYŁĄCZNIE czytane. Zapis idzie tylko do `--out-dir` / `--series-path` (pod systemd
@@ -89,7 +96,12 @@ GATE_FIELDS = {
 }
 
 # Rotacje logrotate: shadow_decisions.jsonl.1, .2, .2.gz ... (delaycompress).
-_ROTATION_RE = re.compile(r"\.(\d+)(\.gz)?$")
+# WHITELIST (kanoniczny kształt rotacji), NIE blacklista po końcówce ścieżki: katalog logów
+# jest współdzielony z plikami, które korpusem NIE są (`<baza>.append.lock` powstaje w
+# core/jsonl_rotation.py, kopie operatorskie `<baza>.bak`), a każdy z nich może zostać
+# obrócony do `<baza>.<cokolwiek>.<N>`. Dopasowanie na SAMEJ NAZWIE pliku, nie na końcu
+# ścieżki — inaczej taki plik cicho wchodzi do MIANOWNIKA obu liczb.
+_ROTATION_SUFFIX_RE = r"\.(\d+)(\.gz)?"
 
 
 # ───────────────────────── narzędzia ─────────────────────────
@@ -168,6 +180,13 @@ def pool_bucket(v):
     return ">=3" if v >= 3 else "<=2"
 
 
+def _ts_order_key(rec):
+    """Klucz chronologiczny rekordu decyzji; brak/nie-tekstowy `ts` ląduje na końcu."""
+    ts = rec.get("ts")
+    ts = ts if isinstance(ts, str) else ""
+    return (ts == "", ts)
+
+
 def day_range(days):
     d = sorted(x for x in days if x)
     return (d[0], d[-1], len(set(d))) if d else (None, None, 0)
@@ -194,36 +213,56 @@ def corpus_state(path, max_age_h):
     return True, "", meta
 
 
+def rotation_index(base, path):
+    """Numer rotacji `path` względem `base`, albo None gdy to NIE jest rotacja korpusu.
+
+    Korpusem jest wyłącznie `<baza>.<N>` i `<baza>.<N>.gz` — nic więcej. `<baza>.bak.1`,
+    `<baza>.append.lock.1`, `<baza>.old.7`, `<baza>.tmp` to pliki obce i mają zwrócić None.
+    """
+    m = re.fullmatch(re.escape(os.path.basename(base)) + _ROTATION_SUFFIX_RE,
+                     os.path.basename(path))
+    return int(m.group(1)) if m else None
+
+
 def discover_decision_files(base):
     """Bazowy log + rotacje (.1, .2, .2.gz ...), od najnowszej do najstarszej.
 
     Composer miał trzy ścieżki na sztywno; 05.08 `.2.gz` już nie istniało (logrotate
     `daily/rotate 30/size 100M`), więc hardcode po cichu zawężał okno. Kanonem jest
-    to, co logrotate faktycznie zostawił na dysku.
+    to, co logrotate faktycznie zostawił na dysku — ale TYLKO w kanonicznym kształcie
+    rotacji (patrz `rotation_index`).
     """
     files = []
     if os.path.exists(base):
         files.append((0, base))
     for path in glob.glob(base + ".*"):
-        m = _ROTATION_RE.search(path)
-        if not m:
-            continue  # .append.lock, .tmp itp. — nie są korpusem
-        files.append((int(m.group(1)), path))
+        n = rotation_index(base, path)
+        if n is None:
+            continue  # .append.lock(.1), .bak(.1), .tmp itp. — nie są korpusem
+        files.append((n, path))
     files.sort(key=lambda x: x[0])
     return [p for _, p in files]
 
 
 # ───────────────── LICZBA 1: gotowość auto-assign ─────────────────
 
-def compute_liczba1(paths, max_age_h):
-    """Zwraca (wynik, manifest, indeks order_id→decyzja). Wynik ma `reason` gdy null."""
+def compute_liczba1(base, max_age_h):
+    """Zwraca (wynik, manifest, indeks order_id→decyzja). Wynik ma `reason` gdy null.
+
+    `base` to KANONICZNA ścieżka żywego logu i jedyne wejście — rotacje dobierane są tutaj,
+    więc wołający nie może sparować bazy z cudzą listą plików. Tożsamość pliku żywego bierze
+    się z porównania ze ścieżką bazową, NIGDY z pozycji w liście: gdy bazy nie ma, najnowszym
+    plikiem jest ROTACJA i liczba powstałaby ze strumienia, do którego nikt już nie pisze.
+    """
+    paths = discover_decision_files(base)
+    base_key = os.path.realpath(base)
     manifest, recs, bad_total = [], [], 0
     live_seen = False
     reasons = []
     for path in paths:
         alive, why, meta = corpus_state(path, max_age_h)
         # Rotacje SĄ z definicji stare — próg świeżości dotyczy pliku BAZOWEGO (żywego).
-        is_base = path == paths[0] if paths else False
+        is_base = os.path.realpath(path) == base_key
         if is_base and not alive:
             reasons.append(why)
             meta["skipped"] = why
@@ -243,13 +282,14 @@ def compute_liczba1(paths, max_age_h):
         if is_base:
             live_seen = True
 
-    if not recs:
-        reason = "; ".join(reasons) or "brak rekordów decyzji w dostępnych plikach"
-        return {"available": False, "reason": reason}, manifest, {}
     if not live_seen:
         # Same rotacje bez żywego pliku bazowego = strumień zatrzymany. Liczba z takiego
         # korpusu opisywałaby przeszłość udając dzień dzisiejszy → nie powstaje.
-        reason = "; ".join(reasons) or f"brak żywego korpusu bazowego: {paths[0] if paths else '?'}"
+        # Sprawdzane PRZED pustką korpusu, bo brak żywej bazy jest przyczyną, nie skutkiem.
+        reason = "; ".join(reasons) or f"brak żywego korpusu bazowego: {base}"
+        return {"available": False, "reason": reason}, manifest, {}
+    if not recs:
+        reason = "; ".join(reasons) or "brak rekordów decyzji w dostępnych plikach"
         return {"available": False, "reason": reason}, manifest, {}
 
     # dedupe po event_id (rotacja nie powinna duplikować, ale sprawdzamy jawnie)
@@ -275,8 +315,11 @@ def compute_liczba1(paths, max_age_h):
 
     coverage = {k: sum(1 for r in decisions if k in r) for k in GATE_FIELDS}
     coverage["auto_route"] = sum(1 for r in decisions if "auto_route" in r)
+    # JEDNA definicja pokrycia puli — ta sama, której używają kubełki (`pool_bucket`).
+    # `isinstance(True, int)` jest prawdą, więc test na typ liczbowy zaliczał do pokrycia
+    # rekordy z boolem, które w segmentacji siedzą w kubełku "unknown".
     coverage["pool_feasible_count"] = sum(
-        1 for r in decisions if isinstance(r.get("pool_feasible_count"), (int, float))
+        1 for r in decisions if pool_bucket(r.get("pool_feasible_count")) != "unknown"
     )
 
     def bucket_stats(rows):
@@ -335,11 +378,14 @@ def compute_liczba1(paths, max_age_h):
     result["coverage"] = coverage
 
     # indeks order_id → decyzja, do joinu z outcomes. Zamówienie może mieć kilka decyzji
-    # (NEW_ORDER + przekierowania) — bierzemy PIERWSZĄ (pierwotną decyzję dyspozytorską),
-    # bo to ona odpowiada pytaniu "czy Ziomek zrobiłby to sam".
+    # (NEW_ORDER + przekierowania) — bierzemy PIERWSZĄ W CZASIE (pierwotną decyzję
+    # dyspozytorską), bo to ona odpowiada pytaniu "czy Ziomek zrobiłby to sam".
+    # Kolejność WCZYTANIA jest od najnowszego pliku, więc "pierwszy napotkany" byłby dla
+    # zamówienia rozpiętego na dwie rotacje decyzją PÓŹNIEJSZĄ — dlatego sortujemy po `ts`.
+    # Rekordy bez `ts` idą na koniec: nie mogą wygrać z rekordem o znanym czasie.
     idx = {}
     per_order = Counter()
-    for r in decisions:
+    for r in sorted(decisions, key=_ts_order_key):
         oid = r.get("order_id")
         if oid is None:
             continue
@@ -802,7 +848,8 @@ def render_md(day, l1, l2, join, manifest, started, finished, series_path):
         A("")
         o = l1.get("orders", {}) if l1.get("available") else {}
         A(f"Join po `order_id`; zamówienie może mieć kilka decyzji (przekierowania) — brana jest "
-          f"**pierwsza** decyzja dyspozytorska. Zamówień z >1 decyzją: {o.get('with_multiple_decisions')} "
+          f"**najwcześniejsza w czasie** (najmniejszy `ts`, także gdy leży w innej rotacji niż "
+          f"pozostałe). Zamówień z >1 decyzją: {o.get('with_multiple_decisions')} "
           f"z {o.get('distinct')} (max {o.get('max_decisions_per_order')} decyzji na zamówienie).")
         A("")
         A(f"Zgodność **wśród decyzji auto-gotowych (D)**: {fmt_pct(join['agree_given_auto_ready_pct'])} "
@@ -882,8 +929,7 @@ def run(args):
     manifest = []
     # FAIL-SOFT: każdy człon liczony osobno; wyjątek degraduje LICZBĘ, nie cały przegląd cienia.
     try:
-        paths = discover_decision_files(args.decisions)
-        l1, man1, dec_idx = compute_liczba1(paths, args.max_corpus_age_hours)
+        l1, man1, dec_idx = compute_liczba1(args.decisions, args.max_corpus_age_hours)
         manifest += man1
     except Exception as exc:
         warn(f"LICZBA 1 nie powstała: {type(exc).__name__}: {exc}")
@@ -909,14 +955,6 @@ def run(args):
     snapshot_json = os.path.join(out_dir, SNAPSHOT_JSON)
     record = build_series_record(day, started, finished, l1, l2, join, manifest, snapshot_json)
 
-    if not args.no_series:
-        try:
-            append_series(series_path, record)
-        except Exception as exc:
-            warn(f"nie dopisano do szeregu {series_path}: {type(exc).__name__}: {exc}")
-            record["status"] = "DEGRADED"
-            record["degraded"].append(f"series: {type(exc).__name__}")
-
     payload = {
         "schema": SNAPSHOT_SCHEMA,
         "day": day,
@@ -930,13 +968,30 @@ def run(args):
         "join_wspolne_zamowienia": join,
         "manifest": manifest,
     }
+    # KOLEJNOŚĆ JEST KONTRAKTEM: najpierw WSZYSTKIE zapisy snapshotu, dopiero na końcu linia
+    # szeregu. Szereg jest append-only, więc jego linii nie da się później poprawić — gdyby
+    # powstała pierwsza, utrwaliłaby status "OK" i wskaźnik na snapshot, który nie powstał.
+    snapshot_written = False
     try:
         write_atomic(snapshot_json, json.dumps(payload, ensure_ascii=False, indent=2))
+        snapshot_written = True
         write_atomic(os.path.join(out_dir, SNAPSHOT_MD),
                      render_md(day, l1, l2, join, manifest, started, finished, series_path))
     except Exception as exc:
         warn(f"nie zapisano snapshotu dnia w {out_dir}: {type(exc).__name__}: {exc}")
         record["status"] = "DEGRADED"
+        record["degraded"].append(f"snapshot: {type(exc).__name__}: {exc}")
+        # Wskaźnik zostaje TYLKO gdy plik faktycznie istnieje (padł np. sam raport MD).
+        if not snapshot_written:
+            record["snapshot"] = None
+
+    if not args.no_series:
+        try:
+            append_series(series_path, record)
+        except Exception as exc:
+            warn(f"nie dopisano do szeregu {series_path}: {type(exc).__name__}: {exc}")
+            record["status"] = "DEGRADED"
+            record["degraded"].append(f"series: {type(exc).__name__}")
 
     l1txt = (f"{fmt_pct(record['liczba1']['pct'])} auto(D) n={record['liczba1']['n']}"
              if record["liczba1"].get("pct") is not None else f"BRAK ({record['liczba1'].get('reason')})")
