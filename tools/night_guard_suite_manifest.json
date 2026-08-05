@@ -1,6 +1,6 @@
 {
-  "base_sha": "540d4c79848b276f3434b0684037e673f9ab0160",
-  "manifest_version": 51,
+  "base_sha": "5d5e96e89beff95d0c2659f5177bbed8ec791f22",
+  "manifest_version": 52,
   "nodeids": [
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix1_kurier_ids_load_fail_logs_error_and_dedups",
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix2_bag_not_stale_dedup_same_input",
@@ -3479,6 +3479,7 @@
     "tests/test_health_all_aggregator.py::test_cron_summary_failed_unit_degraded",
     "tests/test_health_all_aggregator.py::test_cron_summary_long_running_skip_stale_check",
     "tests/test_health_all_aggregator.py::test_cron_summary_stale_unit_degraded",
+    "tests/test_health_all_aggregator.py::test_izolacja_hosta_obejmuje_oba_zywe_zrodla",
     "tests/test_health_all_aggregator.py::test_worst_status_all_ok",
     "tests/test_health_all_aggregator.py::test_worst_status_critical_dominates",
     "tests/test_health_all_aggregator.py::test_worst_status_empty_returns_ok",
@@ -5400,6 +5401,12 @@
     "tests/test_pln_resort_within_tier_2026_06_17.py::test_quality_off_high_pln_wins_despite_r6",
     "tests/test_pln_resort_within_tier_2026_06_17.py::test_quality_on_late_pickup_penalty",
     "tests/test_pln_resort_within_tier_2026_06_17.py::test_quality_on_r6_penalty_flips_to_clean",
+    "tests/test_pool_feasible_durable_in_eta_log.py::test_brak_liczby_w_decyzji_daje_none_a_nie_wyjatek",
+    "tests/test_pool_feasible_durable_in_eta_log.py::test_istniejace_pola_nietkniete",
+    "tests/test_pool_feasible_durable_in_eta_log.py::test_klucze_istnieja_takze_bez_dopasowanej_decyzji",
+    "tests/test_pool_feasible_durable_in_eta_log.py::test_pool_feasible_jest_zapisane_do_wiersza",
+    "tests/test_pool_feasible_durable_in_eta_log.py::test_pool_total_tez_trwaly_gdy_kontekst_istnieje",
+    "tests/test_pool_feasible_durable_in_eta_log.py::test_zero_jest_zerem_a_nie_brakiem",
     "tests/test_pos_hierarchy_k16.py::test_char_assigned_pickup_coords",
     "tests/test_pos_hierarchy_k16.py::test_char_gps_fresh_in_bbox",
     "tests/test_pos_hierarchy_k16.py::test_char_gps_out_of_bbox_falls_through_to_no_gps",
@@ -8033,7 +8040,7 @@
     "tests/test_zombie01_pickup_guard.py::test_picked_up_recent_kept",
     "tests/test_zombie01_pickup_guard.py::test_zombie_assigned_with_stale_pickup_filtered"
   ],
-  "nodeids_sha256": "03bcf5344e69d69b0a512cc7b98cb30c7dd901ec6ea4bde0a8eb01b09af515aa",
+  "nodeids_sha256": "927985867b632ca594dae2975cf7899a581965ef06c41ee6a16d09a2ddc10c48",
   "outcome_contracts": {
     "tests/test_canon_static_check_a1.py::test_defer_completion_guard_armed_when_defer_exists": [
       "skipped"
@@ -8156,8 +8163,8 @@
       "skipped"
     ]
   },
-  "owner": "CTO-Fable-297",
-  "reason": "re-seed po merge OD-7 cc784b406 + polityka P-1/P-2/P-3 540d4c798 (retry: 1. bieg odrzucony bo CTO edytowal polityke w trakcie seeda — lekcja odnotowana)",
+  "owner": "CTO-fable-341",
+  "reason": "re-seed po merge fix pool_feasible (+6) i izolacji stanu hosta w tescie agregatora (+1)",
   "schema_version": 1,
-  "updated_at_utc": "2026-08-05T13:49:11+00:00"
+  "updated_at_utc": "2026-08-05T17:38:15+00:00"
 }
