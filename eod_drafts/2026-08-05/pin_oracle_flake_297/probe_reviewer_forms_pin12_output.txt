@@ -1,0 +1,15 @@
+PIN syntetyczny: 12 cyfr (seed=297)
+sonda                              wyciek  NOWY   STARY  PIN dosł.  F(KDF)  msg
+pin_prefix_of_salt                 True    RED    RED    True       True    PIN w magazynie KDF w postaci dosłowna (wyciek) — pole swobodne (sól/ite
+pin_middle_of_salt                 True    RED    RED    True       True    PIN w magazynie KDF w postaci dosłowna (wyciek) — pole swobodne (sól/ite
+pin_suffix_of_salt                 True    RED    RED    True       True    PIN w magazynie KDF w postaci dosłowna (wyciek) — pole swobodne (sól/ite
+pin_hexencoded_in_salt             True    RED    GREEN  False      True    PIN w magazynie KDF w postaci hex-ASCII (wyciek) — pole swobodne (sól/it
+pin_reversed_in_salt               True    RED    GREEN  False      True    PIN w magazynie KDF w postaci odwrócona (wyciek) — pole swobodne (sól/it
+pin_in_iter_value                  True    RED    GREEN  False      True    Marcin By: iter != kontraktowy PBKDF2_ITERATIONS (osłabienie kosztu ALBO
+pin_split_salt_and_key             True    RED    GREEN  False      True    'Marcin By #***': fragment PIN-u (>= 4 zn.) w KLUCZU magazynu (wyciek cz
+extra_record_not_a_map             True    RED    RED    True       True    kontrakt oracle: 1 PIN-ów vs 2 rekordów (przekaż PEŁNY zbiór PIN-ów maga
+nested_legacy_pin                  True    RED    RED    True       True    Marcin By: obcy/niepełny zestaw pól rekordu: ['hash', 'iter', 'kdf', 'le
+uppercase_hex_salt (NIE wyciek)    False   RED    GREEN  False      True    Marcin By: sól nie ma kształtu wyjścia KDF (32 zn. hex)
+
+REALNE WYCIEKI przepuszczone przez NOWY: 0 — (brak)
+OSŁABIENIE vs STARY (stary RED, nowy GREEN): 0 — (brak)

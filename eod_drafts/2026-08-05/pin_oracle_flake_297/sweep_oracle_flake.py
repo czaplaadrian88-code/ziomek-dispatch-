@@ -2,13 +2,21 @@
 """Sesja 297 — DOWÓD ANTY-FLAKE dla security-oracle `_no_plaintext_oracle`
 (bramka `tests.pin-kdf-oracle-substring-flake`).
 
-Pętla N (default 1000) niezależnych biegów: dla losowych PIN-ów (4-6 cyfr) i losowych
-soli buduje ŚWIEŻY magazyn KDF (prawdziwe `pin_auth.make_record`, PBKDF2 200k) i liczy:
+Pętla N (default 1000) niezależnych biegów: dla losowych SYNTETYCZNYCH PIN-ów o
+długości `MIN_ORACLE_PIN_LEN` (kontrakt anty-flake oracle) i losowych soli buduje
+ŚWIEŻY magazyn KDF (prawdziwe `pin_auth.make_record`, PBKDF2 200k) i liczy:
 
-  * ile razy czerwieni NOWY oracle strukturalny (`tests/test_a6_security_pin_kdf.py`)
-    → oczekiwane 0 (zero fałszywych czerwieni),
-  * ile razy zaczerwieniłby STARY skan substringiem `pin not in json.dumps(store)`
-    → oczekiwane ~0,5-1% (to jest źródło flake'a nocnego strażnika).
+  * ile razy czerwieni PEŁNY oracle (`tests/pin_kdf_store_oracle.py`, asercje A-G
+    ze SKANEM DOSŁOWNYM włącznie) → oczekiwane 0,
+  * ile razy zaczerwieniłby SAM skan dosłowny `pin not in json.dumps(store)` na
+    tych samych syntetycznych PIN-ach → oczekiwane 0 (to dowód, że przywrócenie
+    skanu w iter2 NIE przywraca flake'a),
+  * DIAGNOSTYKA ŹRÓDŁA FLAKE'A: ile razy skan dosłowny trafiłby PIN 4-cyfrowy
+    (produkcyjna długość, `identity/schema.PIN_LENGTH`) w tym samym losowym
+    hexie → oczekiwane ~0,5-1% (to była fałszywa czerwień nocnego strażnika).
+
+Wniosek kontrolowany przez ten skrypt: źródłem flake'a była DŁUGOŚĆ PIN-u, a nie
+idea skanu dosłownego — dlatego oracle iter2 skan ma i egzekwuje długość PIN-u.
 
 Uruchomienie (venv dispatch, dowolny katalog roboczy):
     /root/.openclaw/venvs/dispatch/bin/python \
@@ -57,25 +65,27 @@ from dispatch_v2.tests.pin_kdf_store_oracle import (  # noqa: E402
     assert_no_plaintext_pin_in_store as _no_plaintext_oracle,
 )
 
+PROD_PIN_LEN = 4  # identity/schema.PIN_LENGTH — długość, która dawała flake
 
-def _random_pins(rnd, count):
-    """Unikatowe PIN-y 4-6 cyfrowe (kształt jak w `kurier_piny.json`)."""
+
+def _random_pins(rnd, count, length):
+    """Unikatowe SYNTETYCZNE PIN-y bramki (długość = kontrakt anty-flake)."""
     pins = set()
     while len(pins) < count:
-        n = rnd.choice((4, 4, 4, 5, 6))  # produkcja: dominują 4-cyfrowe
-        pins.add("".join(rnd.choice("0123456789") for _ in range(n)))
+        pins.add("".join(rnd.choice("0123456789") for _ in range(length)))
     return sorted(pins)
 
 
-def sweep(runs, couriers, seed):
+def sweep(runs, couriers, seed, pin_len):
     rnd = random.Random(seed)
     new_red = []
-    old_red = 0
+    scan_red = 0       # sam skan dosłowny na PIN-ach syntetycznych (>= MIN_ORACLE_PIN_LEN)
+    prod_scan_red = 0  # DIAGNOSTYKA: skan dosłowny na PIN-ie 4-cyfrowym
     t0 = time.time()
     with tempfile.TemporaryDirectory(dir=str(_HERE.parent), prefix=".sweep-") as tmp:
         base = Path(tmp)
         for i in range(runs):
-            pins = _random_pins(rnd, couriers)
+            pins = _random_pins(rnd, couriers, pin_len)
             names = [f"Kurier {j}" for j in range(couriers)]
             d = base / f"run{i}"
             d.mkdir()
@@ -85,27 +95,31 @@ def sweep(runs, couriers, seed):
             for pin in pins:
                 pin_auth.resolve_pin(pin, piny_path=str(piny), kdf_path=str(kdf),
                                      use_kdf=True)
-            # (1) NOWY oracle strukturalny.
+            # (1) PEŁNY oracle A-G (ze skanem dosłownym).
             try:
                 _no_plaintext_oracle(str(kdf), pins)
             except AssertionError as e:
-                new_red.append((i, str(e)))
-            # (2) STARY skan substringiem (tylko POMIAR, nie asercja).
+                new_red.append((i, str(e).splitlines()[0]))
             blob = json.dumps(pin_auth._load_json(str(kdf)))
+            # (2) sam skan dosłowny na tych samych syntetycznych PIN-ach.
             if any(p in blob for p in pins):
-                old_red += 1
+                scan_red += 1
+            # (3) DIAGNOSTYKA: ten sam skan, ale PIN produkcyjnej długości.
+            prod_pins = _random_pins(rnd, couriers, PROD_PIN_LEN)
+            if any(p in blob for p in prod_pins):
+                prod_scan_red += 1
             for f in (piny, kdf, Path(str(kdf) + pin_auth.LOCK_SUFFIX)):
                 if f.exists():
                     f.unlink()
             d.rmdir()
-    return new_red, old_red, time.time() - t0
+    return new_red, scan_red, prod_scan_red, time.time() - t0
 
 
-def mutations():
+def mutations(pin):
     """DOWÓD, ŻE ORACLE POZOSTAŁ ORACLEM: dla każdej formy wycieku z katalogu
     `LEAK_FORMS` (to samo źródło, które parametryzuje bramkę testową) oracle MUSI
     być RED — i osobno: czy STARY skan substringiem w ogóle by ją złapał."""
-    pin, name = "1234", "Marcin By"
+    name = "Marcin By"
     rows = []
     with tempfile.TemporaryDirectory(dir=str(_HERE.parent), prefix=".mut-") as tmp:
         kdf = str(Path(tmp) / "kurier_piny_kdf.json")
@@ -117,7 +131,7 @@ def mutations():
                 _no_plaintext_oracle(kdf, [pin])
                 verdict, msg = "GREEN (!!)", ""
             except AssertionError as e:
-                verdict, msg = "RED", str(e)
+                verdict, msg = "RED", str(e).splitlines()[0]
             old_catches = pin in json.dumps(store)
             rows.append((form, verdict, old_catches, msg))
     return rows
@@ -129,9 +143,11 @@ def main():
     ap.add_argument("--couriers", type=int, default=2, help="rekordów w magazynie / bieg")
     ap.add_argument("--seed", type=int, default=297)
     a = ap.parse_args()
+    pin_len = _oracle.MIN_ORACLE_PIN_LEN
 
     print("── MUTACJE (każda forma realnego wycieku MUSI dać RED) ──")
-    mut = mutations()
+    rnd = random.Random(a.seed)
+    mut = mutations("".join(rnd.choice("0123456789") for _ in range(pin_len)))
     for form, verdict, old_catches, msg in mut:
         print(f"  {form:26s} nowy={verdict:9s} stary_skan={'RED' if old_catches else 'GREEN(przeoczenie)'}"
               f"  | {msg}")
@@ -140,12 +156,14 @@ def main():
           f"→ {'OK' if mut_ok else 'ORACLE OSŁABIONY'}\n")
 
     print("── SWEEP ANTY-FLAKE ──")
-    new_red, old_red, dt = sweep(a.runs, a.couriers, a.seed)
-    print(f"runs={a.runs} couriers/run={a.couriers} seed={a.seed} czas={dt:.1f}s")
-    print(f"STARY oracle (skan substringiem)  : {old_red} czerwieni "
-          f"({old_red / a.runs * 100:.2f}% biegów)")
-    print(f"NOWY oracle (strukturalny)        : {len(new_red)} czerwieni "
+    new_red, scan_red, prod_scan_red, dt = sweep(a.runs, a.couriers, a.seed, pin_len)
+    print(f"runs={a.runs} couriers/run={a.couriers} seed={a.seed} pin_len={pin_len} czas={dt:.1f}s")
+    print(f"PEŁNY oracle A-G (PIN {pin_len} cyfr)        : {len(new_red)} czerwieni "
           f"({len(new_red) / a.runs * 100:.2f}% biegów)")
+    print(f"sam skan dosłowny (PIN {pin_len} cyfr)       : {scan_red} czerwieni "
+          f"({scan_red / a.runs * 100:.2f}% biegów)")
+    print(f"DIAGNOZA: skan dosłowny (PIN {PROD_PIN_LEN} cyfry)  : {prod_scan_red} czerwieni "
+          f"({prod_scan_red / a.runs * 100:.2f}% biegów) ← źródło flake'a")
     for i, msg in new_red[:10]:
         print(f"  RED@{i}: {msg}")
     ok = not new_red and mut_ok

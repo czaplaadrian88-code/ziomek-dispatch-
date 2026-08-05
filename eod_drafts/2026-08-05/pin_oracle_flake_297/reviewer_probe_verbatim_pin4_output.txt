@@ -1,0 +1,14 @@
+sonda                              wyciek  NOWY   STARY  PIN dosl.  F(KDF)  msg
+pin_prefix_of_salt                 True    RED    RED    True       True    kontrakt anty-flake oracle: bramka MUSI używać SYNTETYCZNYCH PIN-ów o 
+pin_middle_of_salt                 True    RED    RED    True       True    kontrakt anty-flake oracle: bramka MUSI używać SYNTETYCZNYCH PIN-ów o 
+pin_suffix_of_salt                 True    RED    RED    True       True    kontrakt anty-flake oracle: bramka MUSI używać SYNTETYCZNYCH PIN-ów o 
+pin_hexencoded_in_salt             True    RED    GREEN  False      True    kontrakt anty-flake oracle: bramka MUSI używać SYNTETYCZNYCH PIN-ów o 
+pin_reversed_in_salt               True    RED    GREEN  False      True    kontrakt anty-flake oracle: bramka MUSI używać SYNTETYCZNYCH PIN-ów o 
+pin_in_iter_value                  True    RED    RED    True       True    kontrakt anty-flake oracle: bramka MUSI używać SYNTETYCZNYCH PIN-ów o 
+pin_split_salt_and_key             True    RED    GREEN  False      True    kontrakt anty-flake oracle: bramka MUSI używać SYNTETYCZNYCH PIN-ów o 
+extra_record_not_a_map             True    RED    RED    True       True    kontrakt anty-flake oracle: bramka MUSI używać SYNTETYCZNYCH PIN-ów o 
+nested_legacy_pin                  True    RED    RED    True       True    kontrakt anty-flake oracle: bramka MUSI używać SYNTETYCZNYCH PIN-ów o 
+uppercase_hex_salt (NIE wyciek)    False   RED    GREEN  False      True    kontrakt anty-flake oracle: bramka MUSI używać SYNTETYCZNYCH PIN-ów o 
+
+OSLABIENIE vs STARY (stary RED, nowy GREEN): 0 -> 
+REALNE WYCIEKI przepuszczone przez NOWY:     0 -> 
