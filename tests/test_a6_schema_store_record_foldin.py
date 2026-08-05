@@ -27,14 +27,17 @@ Pokrycie tego pliku:
       store-walidatora w OBIE strony (zaostrzenie i poluzowanie). Na masterze-przed
       te testy są czerwone (store-walidator ma własną kopię reguły).
   (2) PARYTET — korpus poprawnych i WSZYSTKICH klas zepsucia per root.
-  (3) RATCHET STRUKTURALNY — ciało store-walidatora (i wspólnej instalacji, przez
-      którą on przechodzi) MUSI mieć DOKŁADNIE kształt delegacji; każda dodatkowa
-      instrukcja lub wywołanie = RED. Plus: każdy root z ``ROOT_VALIDATORS`` ma
-      opisany fold-in.
+  (3) RATCHET STRUKTURALNY — ciało store-walidatora (i całej instalacji, przez
+      którą przechodzi ścieżka pisarza) MUSI mieć DOKŁADNIE pinowany kształt;
+      każda dodatkowa instrukcja lub wywołanie = RED. Pinowana jest też TOŻSAMOŚĆ
+      obiektu (własna, nieowinięta funkcja modułu), bo ratchet czyta ŹRÓDŁO, a
+      dekorator uruchamia inny kod, niż źródło pokazuje. Plus: każdy root
+      z ``ROOT_VALIDATORS`` ma opisany fold-in.
   (4) GRANICE — ``validate_courier_ids_store`` bez zmian semantyki, a
       ``validate_kurier_ids_root`` nadal go woła PONAD delegacją.
-  (5) ORACLE RÓWNOWAŻNOŚCI — na GENEROWANYM korpusie: werdykt store-walidatora
-      ⟺ werdykt warstwy per-rekord (poza regułami poziomu generacji). Łapie
+  (5) ORACLE RÓWNOWAŻNOŚCI — na GENEROWANYM korpusie: werdykt ⟺ werdykt warstwy
+      per-rekord (poza regułami poziomu generacji), sprawdzany na OBU wejściach:
+      store-walidatorze i ``validate_root`` (jedyne wejście PISARZA). Łapie
       dodatkową restrykcję niezależnie od tego, w którym module ona mieszka.
 
 Sekcje (3) i (5) powstały w iter2, po blind-review sesji 297: pierwotny ratchet
@@ -43,6 +46,13 @@ stałych magazynów — recenzent zmierzył, że jeden helper module-level (w ty
 albo w innym module) przywraca drugą kopię polityki przy 192 zielonych testach.
 Szczegóły i dowody: ``RAPORT_ITER2.md``.
 
+Iter3 domyka trzy dziury TRWAŁOŚCI zmierzone w delta-blind #2 (dowody:
+``RAPORT_ITER3.md``): bramka mierzyła tylko wejście ``_store_validator``, choć
+pisarz wchodzi przez ``validate_root`` (F1-R2); ratchet dawał się oślepić
+wrapperem, bo ``inspect.getsource`` podąża za ``__wrapped__`` (F2-R2); progi
+bramki na jakość korpusu liczyły się z tych samych pul, które miały chronić
+(F3-R2). Kod produkcyjny nie zmienił się ani o bajt — dziury były w bramce.
+
 Hermetyczny: czysty unit na literałach, zero I/O do ``dispatch_state``.
 """
 from __future__ import annotations
@@ -50,6 +60,7 @@ from __future__ import annotations
 import ast
 import copy
 import inspect
+import os
 import random
 import textwrap
 
@@ -302,13 +313,27 @@ def _expected_store_body_src(root: str) -> str:
     return delegation
 
 
-#: Wspólna instalacja, przez którą przechodzi KAŻDY store-walidator. To jedyne
-#: pozostałe węzły ich grafu wywołań (poza ``*_record_issue`` — kanonicznym
-#: ownerem reguły — i nietykalnym ``validate_courier_ids_store``), więc polityka
-#: kształtu rekordu przeniesiona „w dół" tutaj też musi być RED. Kształt pinujemy
-#: tak samo strukturalnie: typ kontenera + iteracja + przekład „rekord zepsuty"
-#: na fail-closed ``ValueError``, zero reguł kształtu.
+#: Wspólna instalacja ścieżki pisarza: ``validate_root`` — JEDYNE wejście, przez
+#: które ``identity/journal.py`` (zapis generacji i recovery po crashu) w ogóle
+#: wchodzi do schematu — oraz dwa węzły, przez które przechodzi KAŻDY
+#: store-walidator. Poza nimi w grafie wywołań zostają już tylko
+#: ``*_record_issue`` (kanoniczny owner reguły) i nietykalny
+#: ``validate_courier_ids_store``, więc polityka kształtu rekordu przeniesiona
+#: „w dół" albo „w górę" tutaj też musi być RED. Kształt pinujemy strukturalnie:
+#: rozdział na walidatory + fail-closed na nieznanym roocie, typ kontenera,
+#: iteracja i przekład „rekord zepsuty" na ``ValueError`` — zero reguł kształtu.
+#:
+#: ``validate_root`` dołożył iter3: delta-blind #2 zmierzył, że druga kopia
+#: polityki położona TAM zostawia całą bramkę zieloną (F1-R2) — ratchet pinował
+#: tylko obiekty zwracane przez ``_store_validator``, a produkcja ich nie woła
+#: bezpośrednio.
 SHARED_PLUMBING = {
+    "validate_root": (
+        'validator = ROOT_VALIDATORS.get(root)\n'
+        'if validator is None:\n'
+        '    raise ValueError(f"nieznany root generacji: {root!r}")\n'
+        'return validator(store)'
+    ),
     "_as_mapping": (
         'if not isinstance(store, dict):\n'
         '    raise ValueError(f"{root} nie jest mapą")\n'
@@ -322,6 +347,59 @@ SHARED_PLUMBING = {
         'return store'
     ),
 }
+
+
+def _pinned_function(attr_name: str):
+    """Obiekt, którego ciało pinuje ratchet — MUSI być własną, NIEOWINIĘTĄ funkcją
+    ``identity.schema``.
+
+    To nie jest ozdoba, tylko warunek sensowności całego ratchetu: ratchet czyta
+    ŹRÓDŁO, a wrapper uruchamia kod, którego w tym źródle nie ma. Delta-blind #2
+    (F2-R2) zmierzył dwa warianty:
+
+    * (A) dekorator z ``functools.wraps`` — ``inspect.getsource`` woła
+      ``inspect.unwrap``, więc ratchet parsuje źródło funkcji WEWNĘTRZNEJ i widzi
+      czystą delegację, choć wywołanie rzuca; ślad: niepuste ``__wrapped__``;
+    * (B) rebind ``validate_x = _tighten(validate_x)`` BEZ ``functools.wraps`` —
+      ``__wrapped__`` nie powstaje, ale wrapper zdradza się tożsamością:
+      ``__qualname__`` = ``_tighten.<locals>.wrapper``.
+
+    Dlatego pinujemy tożsamość obiektu, a nie tylko jego tekst: funkcja (nie
+    dowolny ``callable``), bez ``__wrapped__``, z tego modułu, o kwalifikowanej
+    nazwie DOKŁADNIE równej nazwie atrybutu (to samo zamyka wariant B, bo
+    ``<locals>`` nigdy się nie zgodzi) i z kodem skompilowanym z pliku tego
+    modułu pod tą samą nazwą (to zamyka podmianę ``__qualname__``/``__name__``
+    na wrapperze). Store-walidator i wspólna instalacja nie mają prawa być
+    owinięte — nie ma legalnego powodu, dla którego ta warstwa miałaby robić
+    cokolwiek poza delegacją.
+    """
+    fn = getattr(SCH, attr_name)
+    assert inspect.isfunction(fn), (
+        f"{attr_name}: nie jest funkcją modułu, tylko {type(fn).__name__} — "
+        f"ratchet pinuje źródło, więc obiekt musi być tą samą rzeczą, która się wykonuje"
+    )
+    assert getattr(fn, "__wrapped__", None) is None, (
+        f"{attr_name}: funkcja jest OWINIĘTA (__wrapped__) — dekorator wykonuje kod, "
+        f"którego ratchet nie widzi (inspect.getsource podąża za __wrapped__). "
+        f"Ta warstwa ma być czystą delegacją, więc wrapper jest z definicji zakazany"
+    )
+    assert fn.__module__ == SCH.__name__, (
+        f"{attr_name}: funkcja pochodzi z modułu {fn.__module__}, nie z {SCH.__name__}"
+    )
+    assert fn.__qualname__ == attr_name, (
+        f"{attr_name}: kwalifikowana nazwa to {fn.__qualname__!r} — pod nazwą modułową "
+        f"podstawiono inny obiekt (np. wrapper z '<locals>')"
+    )
+    assert fn.__code__.co_name == attr_name, (
+        f"{attr_name}: kod obiektu został skompilowany pod nazwą "
+        f"{fn.__code__.co_name!r} — __qualname__ nie opisuje tego, co się wykonuje"
+    )
+    assert (os.path.realpath(fn.__code__.co_filename)
+            == os.path.realpath(SCH.__file__)), (
+        f"{attr_name}: kod obiektu pochodzi z pliku {fn.__code__.co_filename} — "
+        f"owner reguł kształtu rootów to WYŁĄCZNIE {SCH.__file__}"
+    )
+    return fn
 
 
 def _code_ast(fn) -> ast.Module:
@@ -342,15 +420,22 @@ def _body_shape(stmts) -> list:
     return [ast.dump(node) for node in stmts]
 
 
+def _pinned_body_shape(attr_name: str) -> list:
+    """Kształt ciała obiektu o SPRAWDZONEJ tożsamości — jedyna droga, którą
+    ratchet czyta źródło (żeby nie dało się go nakarmić cudzym tekstem)."""
+    return _body_shape(_code_ast(_pinned_function(attr_name)).body[0].body)
+
+
 @pytest.mark.parametrize("root", sorted(FOLDED))
 def test_ratchet_store_validator_body_is_exactly_delegation(root):
     """RATCHET (a): ciało store-walidatora = DOKŁADNIE delegacja do warstwy rekordu.
 
     Nie „nie zawiera zakazanych nazw", tylko „jest dokładnie tym kształtem" —
     ratchetu nie da się oślepić helperem, bo helper trzeba z tego ciała wywołać,
-    a to już jest inny kształt.
+    a to już jest inny kształt. Nie da się go też oślepić wrapperem: obiekt musi
+    najpierw przejść ``_pinned_function`` (iter3, F2-R2).
     """
-    actual = _body_shape(_code_ast(_store_validator(root)).body[0].body)
+    actual = _pinned_body_shape(FOLDED[root][0])
     expected = _body_shape(ast.parse(_expected_store_body_src(root)).body)
     assert actual == expected, (
         f"{root}: ciało store-walidatora przestało być czystą delegacją do "
@@ -360,16 +445,18 @@ def test_ratchet_store_validator_body_is_exactly_delegation(root):
 
 
 @pytest.mark.parametrize("helper", sorted(SHARED_PLUMBING))
-def test_ratchet_shared_plumbing_body_is_exactly_iteration(helper):
-    """RATCHET (a2): wspólna instalacja nie przemyca reguły kształtu rekordu.
+def test_ratchet_shared_plumbing_body_is_exactly_pinned_shape(helper):
+    """RATCHET (a2): instalacja ścieżki pisarza nie przemyca reguły kształtu rekordu.
 
-    Bez tego duplikat polityki dałoby się schować o piętro niżej — w kodzie, przez
-    który i tak przechodzi każdy store-walidator.
+    Bez tego duplikat polityki dałoby się schować piętro niżej (wspólny kod, przez
+    który i tak przechodzi każdy store-walidator) albo piętro WYŻEJ — w
+    ``validate_root``, czyli w jedynym miejscu, którym pisarz w ogóle wchodzi do
+    schematu (``identity/journal.py:237``).
     """
-    actual = _body_shape(_code_ast(getattr(SCH, helper)).body[0].body)
+    actual = _pinned_body_shape(helper)
     expected = _body_shape(ast.parse(SHARED_PLUMBING[helper]).body)
     assert actual == expected, (
-        f"{helper}: wspólna instalacja store-walidatorów zmieniła kształt — "
+        f"{helper}: instalacja store-walidatorów zmieniła kształt — "
         f"reguła kształtu rekordu należy WYŁĄCZNIE do warstwy *_record_issue.\n"
         f"oczekiwany kształt:\n{SHARED_PLUMBING[helper]}"
     )
@@ -379,11 +466,13 @@ def test_ratchet_every_root_validator_is_folded_in():
     """RATCHET: każdy root z ``ROOT_VALIDATORS`` ma opisany fold-in.
 
     Dołożenie szóstego roota bez delegacji do warstwy per-rekord = RED (ten sam
-    wzorzec kompletności co ratchet ROOT_VALIDATORS w bramce G5).
+    wzorzec kompletności co ratchet ROOT_VALIDATORS w bramce G5). Wpis w mapie
+    musi być tą samą, nieowiniętą funkcją, którą pinuje ratchet ciała — inaczej
+    ``validate_root`` wołałby coś innego, niż bramka przeczytała.
     """
     assert set(SCH.ROOT_VALIDATORS) == set(FOLDED)
     for root, (store_name, record_name) in FOLDED.items():
-        assert SCH.ROOT_VALIDATORS[root] is getattr(SCH, store_name)
+        assert SCH.ROOT_VALIDATORS[root] is _pinned_function(store_name)
         assert callable(getattr(SCH, record_name))
 
 
@@ -457,6 +546,51 @@ ORACLE_VALUE_POOL = (
 
 ORACLE_NON_DICT_STORES = ([], "1234", None, 7, [("Jan Ko", 900)], set(), (("a", 1),))
 
+#: WYMIAR ROZMIARU GENERACJI (iter3, F2-R2). Korpus z pul ma maksymalnie 4 rekordy
+#: w magazynie (``rng.randint(2, 4)``), więc restrykcja poziomu generacji typu
+#: ``len(store) > 4`` — najprostsza reguła, jaką da się dołożyć OBOK warstwy
+#: rekordu — leżała poza jego zasięgiem. Magazyny poniżej są ZDROWE wg warstwy
+#: rekordu swojego roota (i wg kontraktu autoryzacji dla ``kurier_ids``), więc
+#: każde odrzucenie ich przez store-walidatora albo przez ``validate_root`` jest
+#: rozjazdem, który oracle musi zobaczyć. Rozmiary 0 i 1 są już w korpusie
+#: (``{}`` + 936 magazynów jednorekordowych).
+ORACLE_GENERATION_SIZES = (5, 50)
+
+_HEALTHY_RECORD_FACTORY = {
+    "kurier_piny": lambda i: (f"{1000 + i}", f"Alias {i}"),
+    "courier_tiers": lambda i: (str(900 + i), {"tier": "gold"}),
+    "courier_names": lambda i: (str(900 + i), f"Kurier {i}"),
+    "kurier_full_names": lambda i: (f"Alias {i}", f"Imie Nazwisko {i}"),
+    "kurier_ids": lambda i: (f"Kurier {i}", str(900 + i)),
+}
+
+#: Rekord zepsuty WYŁĄCZNIE regułą per-rekord, dokładany do dużego magazynu:
+#: bez niego „duży" znaczyłoby w korpusie zawsze „zdrowy" i restrykcja odwrotna
+#: (zgubiona delegacja dla dużych generacji) byłaby niewidoczna.
+_BROKEN_RECORD = {
+    "kurier_piny": ("12345", "Jan Ko"),
+    "courier_tiers": ("017", {}),
+    "courier_names": ("017", "Jan Ko"),
+    "kurier_full_names": ("   ", "Jan Kowalski"),
+    "kurier_ids": ("Zly Ktos", "017"),
+}
+
+
+def _sized_stores() -> list:
+    """Magazyny o rozmiarach z ``ORACLE_GENERATION_SIZES`` — zdrowe i zdrowe+1
+    zepsuty rekord — dla KAŻDEGO roota (korpus jest wspólny, więc każdy root
+    widzi też duże magazyny pozostałych)."""
+    stores = []
+    for root in sorted(FOLDED):
+        factory = _HEALTHY_RECORD_FACTORY[root]
+        broken_key, broken_value = _BROKEN_RECORD[root]
+        for size in ORACLE_GENERATION_SIZES:
+            healthy = dict(factory(i) for i in range(size))
+            stores.append(healthy)
+            stores.append({**copy.deepcopy(healthy),
+                           broken_key: copy.deepcopy(broken_value)})
+    return stores
+
 
 def _generated_corpus() -> list:
     """Korpus wejść wspólny dla wszystkich rootów (każdy root widzi każdy kształt).
@@ -476,6 +610,7 @@ def _generated_corpus() -> list:
         for _ in range(rng.randint(2, 4)):
             store[rng.choice(ORACLE_KEY_POOL)] = copy.deepcopy(rng.choice(ORACLE_VALUE_POOL))
         cases.append(store)
+    cases.extend(_sized_stores())
     return cases
 
 
@@ -494,6 +629,29 @@ def _expected_verdict(root: str, store) -> str:
     return "ok"
 
 
+def _oracle_mismatches(root: str, entry) -> list:
+    """Wszystkie wejścia korpusu, na których ``entry`` nie zgadza się z warstwą
+    rekordu. ``entry`` = wołalne wejście do schematu roota (store-walidator albo
+    ``validate_root``) — mierzymy ZACHOWANIE, więc jest obojętne, w którym module
+    i pod jaką nazwą mieszka kod, który je realizuje."""
+    mismatches = []
+    for store in _generated_corpus():
+        probe = copy.deepcopy(store)
+        expected = _expected_verdict(root, probe)
+        try:
+            returned = entry(probe)
+        except ValueError:
+            actual = "ValueError"
+        except Exception as exc:  # kontrakt: fail-closed to ValueError, nic innego
+            actual = f"{type(exc).__name__}: {exc}"
+        else:
+            actual = "ok" if returned is probe else "ok-bez-zwrotu-store"
+        if actual != expected:
+            mismatches.append(f"{_case_repr(probe)}: warstwa rekordu={expected}, "
+                              f"wejście={actual}")
+    return mismatches
+
+
 @pytest.mark.parametrize("root", sorted(FOLDED))
 def test_oracle_store_verdict_equals_record_layer_on_generated_corpus(root):
     """ORACLE (b): werdykt store-walidatora ⟺ werdykt warstwy per-rekord.
@@ -503,26 +661,33 @@ def test_oracle_store_verdict_equals_record_layer_on_generated_corpus(root):
     i odwrotnie: zgubiona delegacja daje ``ok`` tam, gdzie rekord jest zepsuty.
     Oba kierunki są tu RED.
     """
-    validator = _store_validator(root)
-    mismatches = []
-    for store in _generated_corpus():
-        probe = copy.deepcopy(store)
-        expected = _expected_verdict(root, probe)
-        try:
-            returned = validator(probe)
-        except ValueError:
-            actual = "ValueError"
-        except Exception as exc:  # kontrakt: fail-closed to ValueError, nic innego
-            actual = f"{type(exc).__name__}: {exc}"
-        else:
-            actual = "ok" if returned is probe else "ok-bez-zwrotu-store"
-        if actual != expected:
-            mismatches.append(f"{_case_repr(probe)}: warstwa rekordu={expected}, "
-                              f"store-walidator={actual}")
+    mismatches = _oracle_mismatches(root, _store_validator(root))
     assert not mismatches, (
         f"{root}: {len(mismatches)} rozjazdów store↔rekord na korpusie "
         f"({len(_generated_corpus())} wejść) — store-walidator ma regułę, której "
         f"nie ma {FOLDED[root][1]} (albo odwrotnie).\n  "
+        + "\n  ".join(mismatches[:10])
+    )
+
+
+@pytest.mark.parametrize("root", sorted(FOLDED))
+def test_oracle_writer_entry_verdict_equals_record_layer_on_generated_corpus(root):
+    """ORACLE (b2): to samo, ale przez WEJŚCIE PISARZA — ``validate_root``.
+
+    Iter3, F1-R2. ``identity/journal.py:237`` (``_validate_payload``, zapis
+    generacji i recovery po crashu) NIE woła store-walidatora bezpośrednio: cała
+    ścieżka pisarza przechodzi przez ``SCH.validate_root(root, store)``. Oracle
+    mierzący wyłącznie ``_store_validator`` zostawiał więc wolne miejsce na drugą
+    kopię polityki dokładnie tam, gdzie odruchowo dokłada się regułę „na poziomie
+    całej generacji" — a wtedy pisarz odrzuca rekord, który verifier
+    (``*_record_issue``) uznaje za zdrowy. To jest ten sam rozjazd, przeciwko
+    któremu powstała ta bramka, więc jego wejście musi być mierzone wprost.
+    """
+    mismatches = _oracle_mismatches(root, lambda store: SCH.validate_root(root, store))
+    assert not mismatches, (
+        f"{root}: {len(mismatches)} rozjazdów pisarz↔rekord na korpusie "
+        f"({len(_generated_corpus())} wejść) — validate_root ma regułę, której nie "
+        f"ma {FOLDED[root][1]} (albo odwrotnie).\n  "
         + "\n  ".join(mismatches[:10])
     )
 
@@ -532,23 +697,90 @@ def _case_repr(store) -> str:
     return text if len(text) <= 120 else text[:117] + "..."
 
 
+# --------------------------------------------------------------------------- #
+# Bramka na SAM KORPUS — progi STAŁE, nie liczone z pul (iter3, F3-R2)
+# --------------------------------------------------------------------------- #
+# Poprzednia wersja tej bramki mierzyła korpus jego własnymi pulami
+# (``len(first) >= len(ORACLE_KEY_POOL) * len(ORACLE_VALUE_POOL)`` i „czy korpus
+# pokrywa pule"), więc próg malał razem z zawężaną pulą, a pokrycie było prawdziwe
+# dla KAŻDEJ puli. Delta-blind #2 zmierzył: usunięcie trzech kluczy z puli
+# przechodziło na zielono i pozwalało — w tym samym commicie — przepchnąć
+# restrykcję na usuniętej formie. Dlatego progi są teraz LITERAŁAMI (pomiar
+# 2026-08-05 minus ~10% zapasu), a pokrycie sprawdzamy względem ZAMROŻONEJ listy
+# form granicznych: skasowanie którejkolwiek z nich z puli jest RED niezależnie
+# od tego, jak duży zostanie korpus.
+MIN_CORPUS_CASES = 1130                     # zmierzone: 1264
+MIN_HEALTHY_STORES = {                      # zmierzone: 88 / 27 / 331 / 86 / 47
+    "courier_names": 79,
+    "courier_tiers": 24,
+    "kurier_full_names": 297,
+    "kurier_ids": 77,
+    "kurier_piny": 42,
+}
+MIN_BROKEN_STORES = {                       # zmierzone: 1176 / 1237 / 933 / 1178 / 1217
+    "courier_names": 1058,
+    "courier_tiers": 1113,
+    "kurier_full_names": 839,
+    "kurier_ids": 1060,
+    "kurier_piny": 1095,
+}
+
+#: Formy graniczne, na których stoją reprodukcje blind-review (PIN z zerem
+#: wiodącym, CID z zerem wiodącym, CID ze spacjami/podkreślnikiem/znakiem, klucz
+#: ``_meta``, ``bool``/``float``/``None`` jako klucz, unicode-cyfry, formy puste).
+#: Lista jest ZAMROŻONA i celowo NIE jest wyprowadzana z pul — to ona bramkuje
+#: zawężanie pul, a nie odwrotnie.
+FROZEN_BOUNDARY_KEYS = (
+    "0123", "0000", "1234", "9999", "123", "12345", "12a4", "12 4", "١٢٣٤",
+    "900", "017", "0", "00", " 900 ", "9_0_0", "+17", "-5", "1.5",
+    "", "   ", "_meta", 900, 0, -5, True, False, 1.5, None,
+)
+FROZEN_BOUNDARY_VALUES = (
+    "Jan Ko", "", "   ", "0123", "017", "900", " 900 ", "9_0_0", "+17", "1234",
+    "١٢٣٤", 900, 0, -5, 1.5, True, False, None, {}, {"tier": "gold"}, [], ["Jan"],
+)
+
+
 def test_oracle_corpus_is_deterministic_and_non_vacuous():
-    """Korpus oracle'a: powtarzalny, pokrywający obie pule i NIE jednostronny.
+    """Korpus oracle'a: powtarzalny, dostatecznie duży, dwustronny i pokrywający
+    ZAMROŻONE formy graniczne oraz wymiar rozmiaru generacji.
 
     Zawężenie korpusu albo doprowadzenie go do stanu „same magazyny zepsute" to
-    droga do cichego oślepienia oracle'a — dlatego jest ona tu bramkowana.
+    droga do cichego oślepienia oracle'a — dlatego jest ona tu bramkowana, i to
+    progami niezależnymi od tego, co zostanie w pulach.
     """
     first, second = _generated_corpus(), _generated_corpus()
     assert first == second, "korpus oracle'a przestał być deterministyczny"
-    assert len(first) >= len(ORACLE_KEY_POOL) * len(ORACLE_VALUE_POOL)
+    assert len(first) >= MIN_CORPUS_CASES, (
+        f"korpus skurczył się do {len(first)} wejść (próg stały: {MIN_CORPUS_CASES})")
 
-    covered_keys = {repr(k) for s in first if isinstance(s, dict) for k in s}
-    covered_values = {repr(v) for s in first if isinstance(s, dict) for v in s.values()}
+    stores = [s for s in first if isinstance(s, dict)]
+    covered_keys = {repr(k) for s in stores for k in s}
+    covered_values = {repr(v) for s in stores for v in s.values()}
+    missing_keys = sorted(repr(k) for k in FROZEN_BOUNDARY_KEYS
+                          if repr(k) not in covered_keys)
+    missing_values = sorted(repr(v) for v in FROZEN_BOUNDARY_VALUES
+                            if repr(v) not in covered_values)
+    assert not missing_keys, f"korpus stracił zamrożone formy graniczne (klucze): {missing_keys}"
+    assert not missing_values, f"korpus stracił zamrożone formy graniczne (wartości): {missing_values}"
+
+    # generator ma naprawdę emitować całe swoje pule (to inne stwierdzenie niż
+    # powyższe: pilnuje generatora, nie zawartości pul)
     assert {repr(k) for k in ORACLE_KEY_POOL} <= covered_keys
     assert {repr(v) for v in ORACLE_VALUE_POOL} <= covered_values
 
     for root in sorted(FOLDED):
         verdicts = [_expected_verdict(root, s) for s in first]
         healthy = verdicts.count("ok")
-        assert healthy >= 20, f"{root}: korpus prawie bez magazynów zdrowych ({healthy})"
-        assert len(verdicts) - healthy >= 20, f"{root}: korpus bez magazynów zepsutych"
+        assert healthy >= MIN_HEALTHY_STORES[root], (
+            f"{root}: korpus ma {healthy} magazynów zdrowych, próg stały "
+            f"{MIN_HEALTHY_STORES[root]} — zawężenie pul oślepia oracle'a")
+        assert len(verdicts) - healthy >= MIN_BROKEN_STORES[root], (
+            f"{root}: korpus ma {len(verdicts) - healthy} magazynów zepsutych, "
+            f"próg stały {MIN_BROKEN_STORES[root]}")
+        for size in ORACLE_GENERATION_SIZES:
+            assert any(len(s) >= size and _expected_verdict(root, s) == "ok"
+                       for s in stores), (
+                f"{root}: korpus stracił wymiar rozmiaru generacji — brak ZDROWEGO "
+                f"magazynu o co najmniej {size} rekordach, więc restrykcja na "
+                f"rozmiarze generacji byłaby niewidoczna")
