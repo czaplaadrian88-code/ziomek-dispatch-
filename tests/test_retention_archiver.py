@@ -12,6 +12,7 @@ import gzip
 import importlib.util
 import json
 import os
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -931,6 +932,182 @@ def test_sqlite_stats_report_uncheckpointed_wal_instead_of_silently_stale_number
         assert any("wal" in e["error"] for e in rep["errors"])
     finally:
         live_writer.close()
+
+
+# --- N1 (delta-blind #2): GORĄCY dziennik rollback `-journal` --------------- #
+# `immutable=1` nie odzyskuje ŻADNEGO dziennika. Przy `-wal` plik główny jest starszą,
+# ale ZATWIERDZONĄ prawdą (liczby prawdziwe-ale-niepełne, wolno je podać z adnotacją).
+# Przy `-journal` (tryb rollback = DOMYŚLNY `DELETE`) w pliku głównym siedzą strony DO
+# WYCOFANIA — liczby są FAŁSZYWE, więc nie mogą się w raporcie pojawić w ogóle.
+def _delete_mode_db(path, rows=200):
+    """Baza w DOMYŚLNYM trybie rollback (DELETE); po commicie dziennika NIE MA na dysku."""
+    base = time.time() - 300 * DAY
+    conn = sqlite3.connect(path)
+    conn.execute("PRAGMA journal_mode=DELETE")
+    conn.execute("CREATE TABLE audit_log (id INTEGER PRIMARY KEY, ts REAL, payload TEXT)")
+    conn.executemany("INSERT INTO audit_log (ts, payload) VALUES (?, ?)",
+                     [(base + i, "x" * 200) for i in range(rows)])
+    conn.commit()
+    conn.close()
+    assert not os.path.exists(path + "-journal"), "setup: czysty commit nie zostawia dziennika"
+    return base
+
+
+def _crash_writer_leaving_hot_journal(path, base, rows=4000):
+    """Pisarz ginie PRZED commitem (`os._exit`): zostaje GORĄCY `-journal`, a w pliku
+    głównym — dzięki `PRAGMA cache_size=1` — leżą już zrzucone strony do wycofania."""
+    writer = (
+        "import sqlite3, os\n"
+        f"c = sqlite3.connect({path!r}, isolation_level=None)\n"
+        "c.execute('PRAGMA journal_mode=DELETE')\n"
+        "c.execute('PRAGMA cache_size=1')\n"
+        "c.execute('BEGIN')\n"
+        "c.executemany('INSERT INTO audit_log (ts, payload) VALUES (?, ?)',\n"
+        f"              [({base!r} + 1000 + i, 'y' * 200) for i in range({rows})])\n"
+        "c.execute('SELECT COUNT(*) FROM audit_log')\n"
+        "os._exit(9)\n"
+    )
+    subprocess.run([sys.executable, "-c", writer], capture_output=True, check=False)
+    assert os.path.exists(path + "-journal"), "setup: gorący -journal nie powstał"
+
+
+def _hot_journal_db(state, rows=200):
+    db = os.path.join(state, "events.db")
+    _crash_writer_leaving_hot_journal(db, _delete_mode_db(db, rows=rows))
+    return db
+
+
+def _rows_after_recovery(db, workdir):
+    """PRAWDA = to, co widzi czytelnik, który POPRAWNIE wycofa gorący dziennik.
+    Odzyskiwanie robimy na KOPII — żywego źródła nie wolno tknąć nawet w teście."""
+    cp = os.path.join(str(workdir), "truth.db")
+    shutil.copyfile(db, cp)
+    shutil.copyfile(db + "-journal", cp + "-journal")
+    conn = sqlite3.connect(cp)
+    try:
+        return conn.execute("SELECT COUNT(*) FROM audit_log").fetchone()[0]
+    finally:
+        conn.close()
+
+
+def test_hot_rollback_journal_is_never_published_as_a_number(tmp_path):
+    """Oracle recenzenta (delta-blind #2, N1): przy gorącym `-journal` `immutable=1`
+    liczy strony, które poprawny czytelnik MUSI wycofać. Liczba nie może wyjść na
+    zewnątrz ani jako pewna, ani z adnotacją — ma NIE POWSTAĆ."""
+    ppath, pol, state, _ = _policy(tmp_path)
+    db = _hot_journal_db(state)
+    truth = _rows_after_recovery(db, tmp_path)
+    assert truth == 200, f"setup: prawdą jest 200 wierszy, jest {truth}"
+    p, _ = ra.load_policy(ppath)
+    rule = next(r for r in p["rules"] if r["id"] == "events.db")
+
+    errors: list = []
+    stats = ra.sqlite_age_stats(db, rule, p, datetime.now(timezone.utc), errors)
+
+    assert stats["rollback_journal_present"] is True
+    assert stats["rows_total"] is None, (
+        f"opublikowano liczbę {stats['rows_total']} przy prawdzie {truth} — "
+        "przy dzienniku rollback liczba jest FAŁSZYWA, nie niepełna")
+    assert stats["rows_older_than_live_window"] is None
+    assert "-journal" in stats["_note"] and "FAŁSZYWE" in stats["_note"]
+    assert len(errors) == 1 and errors[0]["where"] == db
+    assert "tables" not in stats, "bazy nie otwieramy: schemat też podlega wycofaniu"
+
+
+def test_report_with_hot_rollback_journal_exits_3_with_report_but_without_numbers(tmp_path):
+    """Ta sama granica end-to-end: raport POWSTAJE (dowód dla ownera), kończy się exit 3,
+    nie zawiera żadnej liczby wierszy i nie dokłada nic obok żywej bazy."""
+    ppath, _, state, _ = _policy(tmp_path)
+    db = _hot_journal_db(state)
+    assert _rows_after_recovery(db, tmp_path) == 200
+    before = _tree_snapshot(state)
+
+    out = tmp_path / "r.json"
+    rc = _run(["--policy", ppath, "--include-sqlite", "--out", str(out), "--quiet"])
+    assert rc == 3, "błąd w errors[] = exit 3, ale raport i tak powstaje"
+    assert out.exists()
+    assert _tree_snapshot(state) == before, "żywy korzeń nietknięty (nazwy, rozmiary, mtime)"
+
+    stats = _by_rel(json.loads(out.read_text(encoding="utf-8")), "events.db")["sqlite_stats"]
+    assert stats["rows_total"] is None and stats["rollback_journal_present"] is True
+    assert stats["wal_pending"] is False, "to NIE jest przypadek WAL — powód musi być właściwy"
+    rep = json.loads(out.read_text(encoding="utf-8"))
+    assert len(rep["errors"]) == 1 and "-journal" in rep["errors"][0]["error"]
+    # Żadna liczba policzona na niewycofanych stronach nie wychodzi do raportu — ani jako
+    # `rows_*`, ani bokiem (np. lista tabel przeczytana z pliku głównego).
+    assert [v for k, v in stats.items() if k.startswith("rows")] == [None, None]
+    assert not [k for k, v in stats.items() if isinstance(v, int) and not isinstance(v, bool)]
+    assert "tables" not in stats
+
+
+def test_snapshot_of_hot_journal_db_recovers_the_true_number_in_the_archive(tmp_path):
+    """Adnotacja z raportu obiecuje ownerowi, że pełny obraz daje SQLITE_SNAPSHOT — ta
+    obietnica musi być mierzona, nie deklarowana: snapshot kopiuje bazę WRAZ z dziennikiem
+    i odzyskuje ją NA KOPII w archiwum, więc daje 200 (prawdę po wycofaniu), a nie 216."""
+    ppath, _, state, _ = _policy(tmp_path)
+    _, sha = ra.load_policy(ppath)
+    db = _hot_journal_db(state)
+    truth = _rows_after_recovery(db, tmp_path)
+    arch = tmp_path / "arch"
+    arch.mkdir()
+    before = _tree_snapshot(state)
+
+    rc = _run(["--policy", ppath, "--apply", "--ack-token", ra.ack_token(sha),
+               "--archive-root", str(arch), "--quiet"])
+    assert rc == 0
+    assert _tree_snapshot(state) == before, "APPLY nie dotyka ani bazy, ani cudzego dziennika"
+
+    rec = [m for m in ra.read_manifest(str(arch)) if m["action"] == ra.ACT_SQLITE_SNAPSHOT]
+    assert len(rec) == 1
+    restored = tmp_path / "restored.db"
+    with gzip.open(rec[0]["archive_path"], "rb") as gz:
+        restored.write_bytes(gz.read())
+    conn = sqlite3.connect(str(restored))
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM audit_log").fetchone()[0] == truth == 200
+    finally:
+        conn.close()
+
+
+def test_delete_mode_db_with_clean_journal_publishes_numbers_normally(tmp_path):
+    """Kontrola przeciw nadgorliwości: ta sama baza w trybie DELETE, ale po czystym
+    commicie (dziennika NIE MA) — liczby są prawdziwe, więc raport je podaje, exit 0."""
+    ppath, _, state, _ = _policy(tmp_path)
+    db = os.path.join(state, "events.db")
+    _delete_mode_db(db, rows=200)
+    assert sorted(os.listdir(state)) == ["events.db"]
+
+    out = tmp_path / "r.json"
+    assert _run(["--policy", ppath, "--include-sqlite", "--out", str(out), "--quiet"]) == 0
+    stats = _by_rel(json.loads(out.read_text(encoding="utf-8")), "events.db")["sqlite_stats"]
+    assert stats["rollback_journal_present"] is False and stats["wal_pending"] is False
+    assert stats["read_mode"] == "immutable"
+    assert stats["rows_total"] == 200, "czysta baza = liczby publikowane normalnie"
+    assert stats["rows_older_than_live_window"] == 200
+    assert sorted(os.listdir(state)) == ["events.db"], "odczyt nie dołożył dziennika"
+
+
+def test_stats_redden_if_incompleteness_check_regresses_to_wal_only(tmp_path):
+    """RATCHET: gdyby warunek niepełności wrócił do samego `-wal` (stan iter2), narzędzie
+    znów CICHO poda liczbę fałszywą. Mutant MUSI odtworzyć defekt — inaczej oracle wyżej
+    byłby pusty i nie pilnowałby niczego."""
+    ppath, _, state, _ = _policy(tmp_path)
+    db = _hot_journal_db(state)
+    truth = _rows_after_recovery(db, tmp_path)
+    p, _ = ra.load_policy(ppath)
+    rule = next(r for r in p["rules"] if r["id"] == "events.db")
+
+    canonical = ra._sqlite_journal_state
+    try:                                    # mutacja: „istniejący -journal" znika z warunku
+        ra._sqlite_journal_state = lambda path: {**canonical(path), "rollback_journal": False}
+        errors: list = []
+        stats = ra.sqlite_age_stats(db, rule, p, datetime.now(timezone.utc), errors)
+    finally:
+        ra._sqlite_journal_state = canonical
+
+    assert stats["rows_total"] is not None and stats["rows_total"] != truth, (
+        "mutant nie odtworzył defektu — scenariusz przestał być groźny, oracle do przeglądu")
+    assert not errors and not stats.get("_note"), "defekt polegał na CISZY: brak ujawnienia"
 
 
 # --- F2: uszkodzony strumień = błąd jednego pliku, nie koniec biegu --------- #

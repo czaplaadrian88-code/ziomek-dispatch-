@@ -34,6 +34,10 @@ BEZPIECZEŃSTWO (fail-closed, shadow-first)
       niej (`mode=ro` je tworzy!). Statystyki czyta `sqlite_connect_readonly` (`immutable=1`),
       snapshot robi kopię pliku bazy DO ARCHIWUM i dopiero tam ją otwiera — patrz
       `sqlite_snapshot`. Każde wyjście z tych ścieżek pilnuje `_assert_no_sidecars_created`.
+      Ceną `immutable=1` jest pominięcie KAŻDEGO dziennika, więc statystyki publikują
+      liczbę tylko wtedy, gdy plik główny jest zatwierdzoną prawdą — rozstrzyga
+      `_sqlite_journal_state` (patrz tam: `-wal` = prawdziwe-ale-niepełne → podajemy
+      z jawną adnotacją; `-journal` = możliwe strony DO WYCOFANIA → liczb NIE podajemy).
     * APPLY jest wyłączny: `flock` na `<archive-root>/.od7_apply.lock` (nigdy w żywym
       korzeniu) — drugi równoległy bieg odmawia startu (exit 4), zamiast dublować manifest.
 
@@ -728,13 +732,44 @@ def _assert_no_sidecars_created(db_path: str, before: set[str], where: str) -> N
             "korzenia (fail-closed)")
 
 
+def _sqlite_journal_state(db_path: str) -> dict:
+    """JEDYNY właściciel odpowiedzi: „czy sam plik główny bazy jest dziś prawdą?".
+
+    `immutable=1` z definicji NIE robi odzyskiwania i pomija OBA trwałe dzienniki
+    z `_SQLITE_SIDECARS`, więc rozstrzyga to, co leży na dysku obok bazy — nie to, co
+    widzi połączenie. Te dwa dzienniki znaczą jednak DWIE różne rzeczy i dlatego mają
+    dwie różne odpowiedzi (patrz `sqlite_age_stats`):
+
+    * niepusty `-wal` (tryb WAL) — plik główny jest SPÓJNYM, zatwierdzonym obrazem bazy,
+      tylko STARSZYM: świeże transakcje siedzą jeszcze w WAL. Liczby z pliku głównego są
+      PRAWDZIWE-ale-NIEPEŁNE → wolno je podać, o ile niepełność jest jawnie oznaczona.
+    * istniejący `-journal` (tryb rollback: DOMYŚLNY `DELETE`, a także `PERSIST`/`TRUNCATE`)
+      — w trybie rollback sqlite pisze NOWE strony wprost do pliku głównego, a oryginały
+      odkłada do dziennika. Leżący obok dziennik oznacza więc, że w pliku głównym mogą
+      siedzieć strony, które poprawny czytelnik MUSI WYCOFAĆ. Liczby są wtedy FAŁSZYWE,
+      nie niepełne → nie wolno ich podać (`sqlite_age_stats` ich nie publikuje).
+
+    Kierunek zawężający jest świadomy: `PERSIST` zostawia dziennik z wyzerowanym nagłówkiem,
+    a `TRUNCATE` pusty plik — po zatwierdzeniu nie są „gorące", ale odróżnienie ich wymaga
+    interpretowania nagłówka dziennika, czyli zgadywania o cudzym stanie. Wybieramy odmowę
+    podania liczby zamiast ryzyka podania liczby fałszywej; snapshot (kopia + odzyskanie
+    dziennika W ARCHIWUM) daje pełny obraz i tą ścieżką nic nie tracimy."""
+    wal = db_path + "-wal"
+    try:
+        wal_pending = os.path.exists(wal) and os.path.getsize(wal) > 0
+    except OSError:
+        wal_pending = False
+    return {"wal_pending": wal_pending,
+            "rollback_journal": os.path.exists(db_path + "-journal")}
+
+
 def sqlite_connect_readonly(db_path: str) -> sqlite3.Connection:
     """JEDYNY sposób otwarcia CUDZEJ (żywej) bazy w tym module.
 
     `immutable=1` = zero blokad, zero `-wal`/`-shm`. Cena jest jawna: połączenie widzi
-    wyłącznie plik główny, więc dane siedzące jeszcze w niescheckpointowanym `-wal` są
-    dla niego niewidoczne (statystyka bywa nieaktualna). Wyższa jest granica „nie piszemy
-    do żywego korzenia", a nieaktualność raportujemy (`wal_pending`), nie ukrywamy."""
+    wyłącznie plik główny i NIE odzyskuje żadnego dziennika. Wyższa jest granica „nie
+    piszemy do żywego korzenia", a skutki tej ceny ujawniamy, nie ukrywamy — o tym, czy
+    plik główny wolno dziś uznać za prawdę, rozstrzyga `_sqlite_journal_state`."""
     return sqlite3.connect(f"file:{db_path}?immutable=1", uri=True)
 
 
@@ -1505,20 +1540,41 @@ def sqlite_age_stats(db_path: str, rule: dict, pol: dict, now: datetime, errors:
     """Statystyka wieku wierszy (READ-ONLY, `immutable=1` — patrz `sqlite_connect_readonly`).
 
     Świadomie za flagą --include-sqlite: dotknięcie żywej bazy, choćby bez zapisu, to
-    dotknięcie żywego stanu. Gdy obok bazy leży niepusty `-wal`, część danych może być
-    jeszcze poza plikiem głównym — mówimy to wprost (`wal_pending` + wpis w `errors[]`),
-    zamiast podawać liczby jako pewne albo — gorzej — otwierać bazę w trybie, który
-    zmaterializowałby `-wal`/`-shm` w skanowanym korzeniu."""
+    dotknięcie żywego stanu. Kontrakt liczb ma jedno zdanie: **albo liczba jest prawdziwa,
+    albo jej nieprawdziwość jest jawna**. Stan dzienników rozstrzyga `_sqlite_journal_state`
+    i z niego wynikają dwie różne odpowiedzi:
+
+    * `-journal` (dziennik rollback) obok bazy → plik główny może zawierać strony DO
+      WYCOFANIA, których `immutable=1` nie cofa. Liczba byłaby FAŁSZYWA, więc NIE POWSTAJE
+      w ogóle (`rows_total=None`) — bazy nawet nie otwieramy (schemat z pliku głównego
+      podlega temu samemu wycofaniu). Powód idzie do `errors[]`, więc bieg kończy się
+      exit 3, a raport i tak powstaje jako dowód dla ownera.
+    * niepusty `-wal` → liczby z pliku głównego są prawdziwe, ale niepełne; podajemy je
+      z jawną adnotacją (`wal_pending` + wpis w `errors[]`).
+
+    Czego NIE robimy w żadnym z tych przypadków: nie otwieramy bazy w trybie, który
+    zmaterializowałby `-wal`/`-shm` w skanowanym korzeniu — pełny obraz daje wyłącznie
+    SQLITE_SNAPSHOT, pracujący na kopii leżącej już w archiwum."""
     spec = (rule or {}).get("sqlite") or {}
     table, ts_col = spec.get("table"), spec.get("ts_column")
     out: dict = {"db": db_path, "table": table, "ts_column": ts_col, "read_mode": "immutable"}
     sidecars_before = _sidecars_present(db_path)
-    wal = db_path + "-wal"
-    try:
-        wal_pending = os.path.exists(wal) and os.path.getsize(wal) > 0
-    except OSError:
-        wal_pending = False
+    journals = _sqlite_journal_state(db_path)
+    wal_pending = journals["wal_pending"]
     out["wal_pending"] = wal_pending
+    out["rollback_journal_present"] = journals["rollback_journal"]
+    if journals["rollback_journal"]:
+        out["read_mode"] = "brak odczytu (dziennik rollback)"
+        out["rows_total"] = None
+        out["rows_older_than_live_window"] = None
+        out["_note"] = ("obok bazy leży dziennik rollback (-journal): plik główny może zawierać "
+                        "strony DO WYCOFANIA, a odczyt immutable ich nie cofa, więc liczby byłyby "
+                        "FAŁSZYWE — nie są publikowane (rows_total=None). Pełny, spójny obraz daje "
+                        "SQLITE_SNAPSHOT (kopia bazy z dziennikiem + odzyskanie w archiwum)")
+        errors.append({"where": db_path, "error": "sqlite stats: " + out["_note"]})
+        _assert_no_sidecars_created(db_path, sidecars_before,
+                                    "sqlite_age_stats (dziennik rollback)")
+        return out
     if wal_pending:
         out["_note"] = ("baza ma niescheckpointowany -wal; odczyt immutable widzi tylko plik "
                         "główny, więc liczby mogą być NIEPEŁNE (pełny obraz daje dopiero "
