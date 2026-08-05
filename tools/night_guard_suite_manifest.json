@@ -1,6 +1,6 @@
 {
-  "base_sha": "e81cb079511738b47858d0a8d9733aa73cd6e8df",
-  "manifest_version": 46,
+  "base_sha": "5ae9c162690cfc45274c7c4efec03b5fdad8f0fe",
+  "manifest_version": 47,
   "nodeids": [
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix1_kurier_ids_load_fail_logs_error_and_dedups",
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix2_bag_not_stale_dedup_same_input",
@@ -384,15 +384,38 @@
     "tests/test_a6_security_pin_kdf.py::test_flood_throttled_when_on",
     "tests/test_a6_security_pin_kdf.py::test_gps_server_resolve_pin_off_parity",
     "tests/test_a6_security_pin_kdf.py::test_gps_server_resolve_pin_on_lazy_rehash",
+    "tests/test_a6_security_pin_kdf.py::test_mutation_leak_forms_fail_oracle[extra_field]",
+    "tests/test_a6_security_pin_kdf.py::test_mutation_leak_forms_fail_oracle[hash_is_pin]",
+    "tests/test_a6_security_pin_kdf.py::test_mutation_leak_forms_fail_oracle[iter_below_floor]",
+    "tests/test_a6_security_pin_kdf.py::test_mutation_leak_forms_fail_oracle[pin_appended_to_hash]",
+    "tests/test_a6_security_pin_kdf.py::test_mutation_leak_forms_fail_oracle[pin_appended_to_salt]",
+    "tests/test_a6_security_pin_kdf.py::test_mutation_leak_forms_fail_oracle[pin_as_field_name]",
+    "tests/test_a6_security_pin_kdf.py::test_mutation_leak_forms_fail_oracle[pin_embedded_in_salt]",
+    "tests/test_a6_security_pin_kdf.py::test_mutation_leak_forms_fail_oracle[pin_hex_encoded_as_hash]",
+    "tests/test_a6_security_pin_kdf.py::test_mutation_leak_forms_fail_oracle[pin_hexencoded_in_salt]",
+    "tests/test_a6_security_pin_kdf.py::test_mutation_leak_forms_fail_oracle[pin_in_iter_value]",
+    "tests/test_a6_security_pin_kdf.py::test_mutation_leak_forms_fail_oracle[pin_in_kdf_label]",
+    "tests/test_a6_security_pin_kdf.py::test_mutation_leak_forms_fail_oracle[pin_in_store_key]",
+    "tests/test_a6_security_pin_kdf.py::test_mutation_leak_forms_fail_oracle[pin_prefix_of_salt]",
+    "tests/test_a6_security_pin_kdf.py::test_mutation_leak_forms_fail_oracle[pin_reversed_in_salt]",
+    "tests/test_a6_security_pin_kdf.py::test_mutation_leak_forms_fail_oracle[pin_split_salt_and_key]",
+    "tests/test_a6_security_pin_kdf.py::test_mutation_leak_forms_fail_oracle[pin_suffix_of_salt]",
+    "tests/test_a6_security_pin_kdf.py::test_mutation_leak_forms_fail_oracle[salt_is_pin]",
     "tests/test_a6_security_pin_kdf.py::test_mutation_plaintext_store_fails_oracle",
     "tests/test_a6_security_pin_kdf.py::test_mutation_removed_limit_fails_oracle",
+    "tests/test_a6_security_pin_kdf.py::test_mutation_salt_derived_from_pin_fails_independence_probe",
+    "tests/test_a6_security_pin_kdf.py::test_mutation_salt_derived_from_pin_fails_store_oracle",
     "tests/test_a6_security_pin_kdf.py::test_off_no_throttle",
     "tests/test_a6_security_pin_kdf.py::test_off_resolve_is_legacy_byte_parity",
     "tests/test_a6_security_pin_kdf.py::test_on_old_pin_dual_read_then_lazy_rehash",
     "tests/test_a6_security_pin_kdf.py::test_on_wrong_pin_rejected_no_bypass",
+    "tests/test_a6_security_pin_kdf.py::test_oracle_rejects_short_pin_fail_closed",
+    "tests/test_a6_security_pin_kdf.py::test_oracle_stable_when_kdf_hex_contains_pin_digits",
     "tests/test_a6_security_pin_kdf.py::test_parity_on_vs_off_behavioral",
     "tests/test_a6_security_pin_kdf.py::test_per_ip_scope_throttles",
+    "tests/test_a6_security_pin_kdf.py::test_record_shape_is_pin_length_independent",
     "tests/test_a6_security_pin_kdf.py::test_resolve_via_scan_post_migration",
+    "tests/test_a6_security_pin_kdf.py::test_salt_is_independent_of_pin",
     "tests/test_a6_security_pin_kdf.py::test_salt_per_user_differs_and_cost_nonzero",
     "tests/test_a6_security_pin_kdf.py::test_security_oracle_no_plaintext_in_store",
     "tests/test_a6_security_pin_kdf.py::test_sliding_window_recovers",
@@ -7560,7 +7583,7 @@
     "tests/test_zombie01_pickup_guard.py::test_picked_up_recent_kept",
     "tests/test_zombie01_pickup_guard.py::test_zombie_assigned_with_stale_pickup_filtered"
   ],
-  "nodeids_sha256": "3afb9dccf203700814f060bbb381634e8ed0fe548c2e0fc9e3557df92ac27f28",
+  "nodeids_sha256": "0f5ed46d2ae808384adc45c7988f59eaec7888a3e6412ac31dbc904da831190a",
   "outcome_contracts": {
     "tests/test_canon_static_check_a1.py::test_defer_completion_guard_armed_when_defer_exists": [
       "skipped"
@@ -7683,8 +7706,8 @@
       "skipped"
     ]
   },
-  "owner": "CTO-Fable-296",
-  "reason": "Re-seed po merge G6 e81cb0795 (A-6/K1 iter1+iter2, delta-blind CLEAN; konflikt schema.py rozstrzygniety unia): +70 nodeidow (68 test_a6_g6_verifier_root_schema + 2 test_new_courier_pairing)",
+  "owner": "CTO-Fable-297",
+  "reason": "re-seed po merge oracle PIN KDF 5ae9c1626 (+23 nodeidy vs v46: 11 iter1 + 12 iter2)",
   "schema_version": 1,
-  "updated_at_utc": "2026-08-05T02:28:49+00:00"
+  "updated_at_utc": "2026-08-05T11:22:33+00:00"
 }
