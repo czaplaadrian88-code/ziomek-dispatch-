@@ -1,0 +1,26 @@
+── MUTACJE (każda forma realnego wycieku MUSI dać RED) ──
+  extra_field                nowy=RED       stary_skan=RED  | Marcin By: obcy/niepełny zestaw pól rekordu: ['hash', 'iter', 'kdf', 'pin_plain', 'salt']
+  hash_is_pin                nowy=RED       stary_skan=RED  | Marcin By: hash nie ma kształtu wyjścia KDF (64 zn. hex)
+  iter_below_floor           nowy=RED       stary_skan=GREEN(przeoczenie)  | Marcin By: iter != kontraktowy PBKDF2_ITERATIONS (osłabienie kosztu ALBO cyfry sekretu w parametrze KDF)
+  pin_appended_to_hash       nowy=RED       stary_skan=RED  | Marcin By: hash nie ma kształtu wyjścia KDF (64 zn. hex)
+  pin_appended_to_salt       nowy=RED       stary_skan=RED  | Marcin By: sól nie ma kształtu wyjścia KDF (32 zn. hex)
+  pin_as_field_name          nowy=RED       stary_skan=RED  | Marcin By: obcy/niepełny zestaw pól rekordu: ['***', 'hash', 'iter', 'kdf', 'salt']
+  pin_embedded_in_salt       nowy=RED       stary_skan=RED  | PIN w magazynie KDF w postaci dosłowna (wyciek) — pole swobodne (sól/iter/klucz) niesie sekret
+  pin_hex_encoded_as_hash    nowy=RED       stary_skan=GREEN(przeoczenie)  | rekord KDF nie jest PBKDF2 dokładnie jednego PIN-u (trafień: 0) — hash/salt nie pochodzą z KDF
+  pin_hexencoded_in_salt     nowy=RED       stary_skan=GREEN(przeoczenie)  | PIN w magazynie KDF w postaci hex-ASCII (wyciek) — pole swobodne (sól/iter/klucz) niesie sekret
+  pin_in_iter_value          nowy=RED       stary_skan=GREEN(przeoczenie)  | Marcin By: iter != kontraktowy PBKDF2_ITERATIONS (osłabienie kosztu ALBO cyfry sekretu w parametrze KDF)
+  pin_in_kdf_label           nowy=RED       stary_skan=RED  | Marcin By: obcy/zmodyfikowany znacznik kdf
+  pin_in_store_key           nowy=RED       stary_skan=RED  | 'Marcin By (***)': PIN w KLUCZU magazynu w postaci dosłowna (wyciek)
+  pin_prefix_of_salt         nowy=RED       stary_skan=RED  | PIN w magazynie KDF w postaci dosłowna (wyciek) — pole swobodne (sól/iter/klucz) niesie sekret
+  pin_reversed_in_salt       nowy=RED       stary_skan=GREEN(przeoczenie)  | PIN w magazynie KDF w postaci odwrócona (wyciek) — pole swobodne (sól/iter/klucz) niesie sekret
+  pin_split_salt_and_key     nowy=RED       stary_skan=GREEN(przeoczenie)  | 'Marcin By #***': fragment PIN-u (>= 4 zn.) w KLUCZU magazynu (wyciek częściowy)
+  pin_suffix_of_salt         nowy=RED       stary_skan=RED  | PIN w magazynie KDF w postaci dosłowna (wyciek) — pole swobodne (sól/iter/klucz) niesie sekret
+  salt_is_pin                nowy=RED       stary_skan=RED  | Marcin By: sól nie ma kształtu wyjścia KDF (32 zn. hex)
+MUTACJE: 17/17 RED → OK
+
+── SWEEP ANTY-FLAKE ──
+runs=1000 couriers/run=2 seed=297 pin_len=12 czas=315.5s
+PEŁNY oracle A-G (PIN 12 cyfr)        : 0 czerwieni (0.00% biegów)
+sam skan dosłowny (PIN 12 cyfr)       : 0 czerwieni (0.00% biegów)
+DIAGNOZA: skan dosłowny (PIN 4 cyfry)  : 7 czerwieni (0.70% biegów) ← źródło flake'a
+WERDYKT: OK — 0 fałszywych czerwieni + oracle nadal łapie każdy wyciek

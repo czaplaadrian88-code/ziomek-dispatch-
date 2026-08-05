@@ -1,0 +1,5 @@
+PIN dlugosci 12, 300 biegow uczciwej produkcji:
+  stary skan doslowny  -> 0 czerwieni (0.00%)
+mutant 'sol wyprowadzona z PIN-u' (PIN czytelny w pliku):
+  stary skan doslowny  -> RED
+  nowy oracle A-F      -> RED
