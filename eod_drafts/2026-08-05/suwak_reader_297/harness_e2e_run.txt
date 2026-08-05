@@ -1,0 +1,16 @@
+READERS: ['b_route', 'bundle_calib', 'pending_resweep', 'reassignment', 'suwak_autonomii']
+# Dobowy przegląd cienia — 2026-08-05
+
+Start 2026-08-05T08:13:34Z · koniec 2026-08-05T08:13:36Z · próg świeżości korpusu 48.0 h
+
+| czytelnik | status | korpus (MB / wiek) | werdykt / powód |
+|---|---|---|---|
+| suwak_autonomii | OK | — | ➤ WERDYKT: SUWAK OK / LICZBA1 19.72% auto(D) n=1552 / LICZBA2 zgodnosc pool<=2 28.64% (n=419) vs pool>=3 66.91% (n=1381) |
+
+## Świadomie nieuruchamiane
+
+- **objm_lexr6_smoke_verdict** (dispatch-objm-lexr6-smoke-verdict.service) — brak przełącznika --no-telegram (send_admin_alert bezwarunkowy, objm_lexr6_smoke_verdict.py:37). Poza tym to werdykt JEDNORAZOWEGO smoke-testu z 26.06, nie odczyt cykliczny — właściwym domknięciem jest bramka, nie timer.
+- **pickup_slip_monitor** (dispatch-pickup-slip-review.service) — to NIE jest czytelnik, tylko PISARZ — dopisuje wyniki do dispatch_state/pickup_slip_monitor.jsonl (pickup_slip_monitor.py:175-181), co łamie kontrakt read-only tego joba. Poza tym jest zbędny: własny timer dispatch-pickup-slip-monitor.timer ŻYJE i chodzi codziennie 22:30 UTC (--days 3). Wypalony one-shot ...-review z 04.07 był jednorazowym biegiem na szerszym oknie (--days 6), a nie odczytem cyklicznym.
+- **ziomek_time_route_review** (ziomek-time-route-review.service) — brak --no-telegram (_telegram() bezwarunkowe). Dodatkowo jego PISARZ ziomek-time-route-monitor ma MONITOR_STOP_AFTER=2026-07-10 (minęło) i chodzi mimo wygaszenia — właściwa naprawa to WYŁĄCZENIE pisarza za ACK, nie ożywianie czytelnika.
+
+Pełne wyjścia: `/root/worktrees/dispatch_v2/active/20260805-suwak-reader-297-cto/eod_drafts/2026-08-05/suwak_reader_297/harness_e2e/2026-08-05/<czytelnik>.log`, maszynowo `summary.json`.

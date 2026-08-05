@@ -1,0 +1,5 @@
+# BASELINE (master 06e4d5c39, PRZED zmiana)
+7529 passed, 24 skipped, 8 xfailed, 159 warnings in 819.21s (0:13:39)
+
+# PO ZMIANIE (galaz wt/suwak-reader-297-cto-20260805)
+7554 passed, 24 skipped, 8 xfailed, 159 warnings in 765.14s (0:12:45)

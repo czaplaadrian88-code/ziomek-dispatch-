@@ -1,0 +1,50 @@
+{
+  "generated_at": "2026-08-05T08:13:34Z",
+  "finished_at": "2026-08-05T08:13:36Z",
+  "out_dir": "/root/worktrees/dispatch_v2/active/20260805-suwak-reader-297-cto/eod_drafts/2026-08-05/suwak_reader_297/harness_e2e/2026-08-05",
+  "max_corpus_age_hours": 48.0,
+  "dry_run": false,
+  "readers": [
+    {
+      "name": "suwak_autonomii",
+      "argv": [
+        "/root/.openclaw/venvs/dispatch/bin/python",
+        "-m",
+        "dispatch_v2.tools.suwak_autonomii_review",
+        "--no-telegram",
+        "--out-dir",
+        "/root/worktrees/dispatch_v2/active/20260805-suwak-reader-297-cto/eod_drafts/2026-08-05/suwak_reader_297/harness_e2e/2026-08-05"
+      ],
+      "note": "SUWAK AUTONOMII (2 liczby ownera z 19.07) — jedyny czytelnik z DWOMA źródłami (scripts/logs/shadow_decisions.jsonl + rotacje ORAZ dispatch_state/outcomes_clean_shadow.jsonl), więc świeżość każdego z nich sprawdza SAM i raportuje jako null+powód. Bramka korpusu harnessu (jedna ścieżka na czytelnika) wycięłaby go z szeregu czasowego przy uschnięciu JEDNEGO źródła — a dziura w szeregu jest gorsza niż rekord z jawnym powodem. Wynik: append do <out-dir>/../suwak_autonomii.jsonl + snapshot dnia.",
+      "status": "OK",
+      "corpus": null,
+      "detail": "",
+      "log": "/root/worktrees/dispatch_v2/active/20260805-suwak-reader-297-cto/eod_drafts/2026-08-05/suwak_reader_297/harness_e2e/2026-08-05/suwak_autonomii.log",
+      "duration_s": 1.6,
+      "exit_code": 0,
+      "verdict_line": "➤ WERDYKT: SUWAK OK | LICZBA1 19.72% auto(D) n=1552 | LICZBA2 zgodnosc pool<=2 28.64% (n=419) vs pool>=3 66.91% (n=1381)"
+    }
+  ],
+  "excluded": [
+    {
+      "name": "objm_lexr6_smoke_verdict",
+      "unit": "dispatch-objm-lexr6-smoke-verdict.service",
+      "reason": "brak przełącznika --no-telegram (send_admin_alert bezwarunkowy, objm_lexr6_smoke_verdict.py:37). Poza tym to werdykt JEDNORAZOWEGO smoke-testu z 26.06, nie odczyt cykliczny — właściwym domknięciem jest bramka, nie timer."
+    },
+    {
+      "name": "pickup_slip_monitor",
+      "unit": "dispatch-pickup-slip-review.service",
+      "reason": "to NIE jest czytelnik, tylko PISARZ — dopisuje wyniki do dispatch_state/pickup_slip_monitor.jsonl (pickup_slip_monitor.py:175-181), co łamie kontrakt read-only tego joba. Poza tym jest zbędny: własny timer dispatch-pickup-slip-monitor.timer ŻYJE i chodzi codziennie 22:30 UTC (--days 3). Wypalony one-shot ...-review z 04.07 był jednorazowym biegiem na szerszym oknie (--days 6), a nie odczytem cyklicznym."
+    },
+    {
+      "name": "ziomek_time_route_review",
+      "unit": "ziomek-time-route-review.service",
+      "reason": "brak --no-telegram (_telegram() bezwarunkowe). Dodatkowo jego PISARZ ziomek-time-route-monitor ma MONITOR_STOP_AFTER=2026-07-10 (minęło) i chodzi mimo wygaszenia — właściwa naprawa to WYŁĄCZENIE pisarza za ACK, nie ożywianie czytelnika."
+    }
+  ],
+  "contract": {
+    "read_only": "zero zapisów poza out_dir",
+    "telegram": "wyłączony bezwarunkowo (--no-telegram); czytelnik bez przełącznika nie jest wołany",
+    "fail_closed": "brak/martwy/nieustalony korpus = brak werdyktu, nie cichy default"
+  }
+}
