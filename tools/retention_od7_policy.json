@@ -1,0 +1,281 @@
+{
+  "policy_version": "OD-7/2026-08-03",
+  "policy_source": "/root/.claude/projects/-root/memory/owner-decisions-od1-od8-program-2026-08-03.md (wiersz OD-7, Adrian 2026-08-03 ~15:0xZ, sesja 293)",
+  "_doc": "JEDYNE zrodlo polityki ARCHIWIZACJI OD-7 dla tools/retention_archiver.py. Liczby w sekcji `classes` sa CYTATEM decyzji ownera - nie wolno ich zmieniac bez nowej decyzji. Sekcja `rules` = mapowanie realnych plikow na klasy (moje doprecyzowanie, jawnie oznaczone per regula polem `basis`).",
+  "_ownership": "Ten plik jest kanonicznym ownerem polityki ARCHIWUM (kopia do archiwum + wygasanie archiwum + maskowanie). NIE jest ownerem kasowania ZYWYCH plikow - kazda regula deklaruje `live_delete_owner` (mechanizm, ktory juz dzis kasuje zywy plik). Archiwizator NIGDY nie kasuje zywego pliku, ktorego ownerem jest inny mechanizm (zakaz konkurencyjnych writerow, CLAUDE.md 'NAPRAWA U ZRODLA').",
+  "_relation_z04": "tools/state_retention_prune.py + tools/retention_manifest.json (galaz z04-retention, bramka state.retention-prune-z04) to owner PRUNE'u artefaktow BEZ zadnego GC. Zakres rozlaczny: prune kasuje, archiwizator kopiuje do archiwum ZANIM ktokolwiek skasuje. Przy merge obu galezi: sprawdzic, czy zaden artefakt nie ma jednoczesnie enabled=true w prune i live_delete_owner=archiver tutaj.",
+
+  "roots": {
+    "dispatch_state": "/root/.openclaw/workspace/dispatch_state",
+    "logs": "/root/.openclaw/workspace/scripts/logs"
+  },
+
+  "default_margin_days": 3,
+  "sqlite_snapshot_every_days": 30,
+
+  "classes": {
+    "gps": {
+      "owner_quote": "GPS 3 mies. zywe -> 9 mies. archiwum -> kasacja",
+      "live_days": 90,
+      "archive_days": 270,
+      "pii_mask_days": 90,
+      "archivable": true
+    },
+    "world_record": {
+      "owner_quote": "world_record + logi decyzji: 1 mies. zywe -> archiwum 12 mies.",
+      "live_days": 30,
+      "archive_days": 365,
+      "pii_mask_days": 90,
+      "archivable": true
+    },
+    "decision_logs": {
+      "owner_quote": "world_record + logi decyzji: 1 mies. zywe -> archiwum 12 mies.",
+      "live_days": 30,
+      "archive_days": 365,
+      "pii_mask_days": 90,
+      "archivable": true
+    },
+    "events_db": {
+      "owner_quote": "events.db: 6 mies. zywe -> archiwum bezterminowo",
+      "live_days": 180,
+      "archive_days": null,
+      "pii_mask_days": null,
+      "archivable": true,
+      "_note": "archive_days=null = archiwum BEZTERMINOWE (nigdy nie wygasa). pii_mask_days=null: events.db to log zdarzen silnika, maskowanie wymaga osobnej analizy schematu (pytanie do ownera P-4)."
+    },
+    "ops_logs": {
+      "owner_quote": "maskowanie adresow/PII w logach po 3 mies.",
+      "live_days": null,
+      "archive_days": null,
+      "pii_mask_days": 90,
+      "archivable": false,
+      "_note": "Logi operacyjne bez klauzuli archiwum w OD-7. Jedyna akcja: MASK po 90 dniach. Kasowanie zostaje przy logrotate."
+    },
+    "live_state": {
+      "owner_quote": null,
+      "live_days": null,
+      "archive_days": null,
+      "pii_mask_days": null,
+      "archivable": false,
+      "_note": "Zywy stan operacyjny (JSON stanu, konfiguracja, locki). NIGDY nie ruszany - kopie zapasowe robi restic (dispatch-restic-backup.timer)."
+    },
+    "protected": {
+      "owner_quote": null,
+      "live_days": null,
+      "archive_days": null,
+      "pii_mask_days": null,
+      "archivable": false,
+      "_note": "Twarde VETO z RETENCJA-RAPORT.md 5.1/5.2 (otwarte bramki / czytelnik wraca). Raportowane, NIGDY nie ruszane w zadnym trybie."
+    },
+    "unknown": {
+      "owner_quote": null,
+      "live_days": null,
+      "archive_days": null,
+      "pii_mask_days": null,
+      "archivable": false,
+      "_note": "Poza literalnym zakresem OD-7. Raportowane, NIGDY nie ruszane. Przeklasyfikowanie = decyzja ownera."
+    }
+  },
+
+  "exclude_globs": [
+    "**/*.lock",
+    "**/*.append.lock",
+    "**/__pycache__/**",
+    "**/*.pyc",
+    "**/*.py",
+    "**/*.sh",
+    "**/*.patch",
+    "**/*.db-wal",
+    "**/*.db-shm",
+    "**/*.tmp",
+    "backups/**",
+    "_backup_new_courier_deploy_2026-06-06/**",
+    "staged_token_rotation/**"
+  ],
+
+  "rules": [
+    {
+      "id": "protected.shadow_decisions",
+      "root": "logs",
+      "globs": ["shadow_decisions.jsonl", "shadow_decisions.jsonl.*", "shadow_decisions.stage_timings.jsonl", "shadow_decisions.stage_timings.jsonl.*"],
+      "class": "protected",
+      "granularity": "any",
+      "live_delete_owner": "logrotate:/etc/logrotate.d/dispatch-v2 (GRUPA B, rotate 30)",
+      "basis": "RETENCJA-RAPORT.md 5.1 TWARDE VETO: jedyne zrodlo pomiarow no-GPS i PLN dla 5 otwartych bramek (nogps.*, pln.pp-snapshot-*, audit.pln-tiebreak).",
+      "_note": "Klasa OD-7 bylaby decision_logs, ale VETO z 03.08 jest silniejsze: dopoki bramki otwarte, nie ruszamy NICZEGO na tym strumieniu - takze archiwizacji (kopia poza serwer = eksport PII przed maskowaniem). Do decyzji ownera: P-1."
+    },
+    {
+      "id": "protected.gate_corpora",
+      "root": "dispatch_state",
+      "globs": ["b_route_shadow.jsonl*", "bundle_calib_shadow_l0.jsonl*", "pending_global_resweep.jsonl*", "reassignment_shadow.jsonl*", "lex_committed_window_shadow.jsonl*"],
+      "class": "protected",
+      "granularity": "any",
+      "live_delete_owner": "brak (strumienie bez rotacji)",
+      "basis": "RETENCJA-RAPORT.md 5.2 VETO CZASOWE: czytelnik shadow_review_daily wraca; 5.1: bramki engine.lex-window-*.",
+      "_note": "Poza literalnym OD-7 (to nie GPS/world_record/events.db). Nie ruszamy do werdyktu czytelnika."
+    },
+    {
+      "id": "gps.world_position_history",
+      "root": "dispatch_state",
+      "globs": ["fleet_position_history.jsonl", "fleet_position_history.jsonl.*", "gps_delivery_truth.jsonl", "gps_delivery_truth.jsonl.*"],
+      "class": "gps",
+      "granularity": "auto",
+      "live_delete_owner": "brak",
+      "competing_gc": null,
+      "basis": "Historia pozycji kuriera = dane GPS wprost z OD-7."
+    },
+    {
+      "id": "gps.quality_shadow",
+      "root": "dispatch_state",
+      "globs": ["gps_quality_shadow.jsonl", "gps_quality_shadow.jsonl.*", "courier_gps_commitment_shadow.jsonl", "courier_gps_commitment_shadow.jsonl.*", "gps_positions_pwa.json.merge_shadow.jsonl*"],
+      "class": "gps",
+      "granularity": "auto",
+      "live_delete_owner": "brak",
+      "competing_gc": null,
+      "basis": "Strumienie jakosci/commitmentu GPS - dane pozycyjne kuriera (RETENCJA-RAPORT 5.3: gps_quality_shadow konsumowany operacyjnie przez courier_speed_build)."
+    },
+    {
+      "id": "gps.positions_live",
+      "root": "dispatch_state",
+      "globs": ["gps_positions.json", "gps_positions_pwa.json"],
+      "class": "gps",
+      "granularity": "live_state",
+      "live_delete_owner": "tools/gps_positions_gc.py (cron 04:50, TTL 24h)",
+      "competing_gc": {"deletes_after_days": 1},
+      "basis": "Zywy snapshot pozycji; TTL 24h < 3 mies. OD-7 => KONFLIKT POLITYKI raportowany, ale to snapshot stanu (nie historia) - archiwizacja snapshotu nie ma sensu."
+    },
+    {
+      "id": "gps.history_table",
+      "root": "dispatch_state",
+      "globs": ["courier_api.db"],
+      "class": "gps",
+      "granularity": "sqlite_db",
+      "sqlite": {"table": "gps_history", "ts_column": "recorded_at", "ts_is_epoch": true},
+      "live_delete_owner": "brak (bramka state.retention-prune-z04 = HOLD)",
+      "competing_gc": null,
+      "basis": "Tabela gps_history w courier_api.db - 3 mies. zywe wg OD-7. Kasowanie wierszy = HOLD (okna replay fail03/sequential_replay nieustalone, RETENCJA-RAPORT 5.3). Archiwizacja = snapshot bazy, bez kasowania."
+    },
+    {
+      "id": "wr.daily",
+      "root": "dispatch_state",
+      "globs": ["world_record/world_record-*.jsonl"],
+      "class": "world_record",
+      "granularity": "sealed_dated",
+      "date_from": "name",
+      "live_delete_owner": "world_record.py:_gc (RETENTION_DAYS=14, GC przy pierwszym zapisie dnia)",
+      "competing_gc": {"deletes_after_days": 14},
+      "basis": "Wprost z OD-7 (world_record). KONFLIKT: OD-7 daje 30 dni zycia, kod kasuje po 14 - archiwizacja MUSI wyprzedzic GC."
+    },
+    {
+      "id": "dec.observability_daily",
+      "root": "dispatch_state",
+      "globs": ["observability/candidate_decisions_*.jsonl", "observability/fleet_filter_*.jsonl"],
+      "class": "decision_logs",
+      "granularity": "sealed_dated",
+      "date_from": "name",
+      "live_delete_owner": "observability/log_rotation.py --retention-days 14 (dispatch-log-rotation.timer 03:00)",
+      "competing_gc": {"deletes_after_days": 14},
+      "basis": "Dobowe logi decyzji selekcji/filtra floty = 'logi decyzji' z OD-7. KONFLIKT jak wyzej (14 < 30)."
+    },
+    {
+      "id": "dec.eta_log",
+      "root": "dispatch_state",
+      "globs": ["decision_eta_log.jsonl", "decision_eta_log.jsonl.*"],
+      "class": "decision_logs",
+      "granularity": "auto",
+      "live_delete_owner": "core/jsonl_rotation.py + /etc/logrotate-dispatch-v2-jsonl.conf (rotate 30, maxage 30)",
+      "competing_gc": {"deletes_after_days": 30},
+      "basis": "Log decyzji ETA wprost z OD-7."
+    },
+    {
+      "id": "dec.learning",
+      "root": "dispatch_state",
+      "globs": ["learning_log.jsonl", "learning_log.jsonl.*", "assignment_episode.jsonl", "assignment_episode.jsonl.*", "decision_outcomes.jsonl", "decision_outcomes.jsonl.*", "backfill_decisions_outcomes_v1.jsonl*"],
+      "class": "decision_logs",
+      "granularity": "auto",
+      "live_delete_owner": "logrotate:/etc/logrotate.d/dispatch-v2 GRUPA B (learning_log, rotate 30); pozostale: brak",
+      "competing_gc": {"deletes_after_days": 30},
+      "basis": "Korpus uczenia zbudowany z decyzji silnika = 'logi decyzji' OD-7. To jest strumien, ktorego utrate (pool_feasible sprzed 23.07) opisuje brief 297."
+    },
+    {
+      "id": "dec.plan_recheck",
+      "root": "dispatch_state",
+      "globs": ["plan_recheck_log.jsonl", "plan_recheck_log.jsonl.*"],
+      "class": "decision_logs",
+      "granularity": "auto",
+      "live_delete_owner": "logrotate GRUPA B-2 (rotate 30)",
+      "competing_gc": {"deletes_after_days": 30},
+      "basis": "Log decyzji rekalkulacji planu."
+    },
+    {
+      "id": "events.db",
+      "root": "dispatch_state",
+      "globs": ["events.db"],
+      "class": "events_db",
+      "granularity": "sqlite_db",
+      "sqlite": {"table": null, "ts_column": null},
+      "live_delete_owner": "core/event_bus cleanup (dispatch-event-bus-cleanup.timer 04:00: processed 48h, audit_log 90d)",
+      "competing_gc": {"deletes_after_days": 2},
+      "basis": "Wprost z OD-7. KONFLIKT NAJOSTRZEJSZY: OD-7 daje 6 mies. zycia + archiwum bezterminowe, a cleanup kasuje przetworzone po 48h. Archiwizacja = snapshot online (Connection.backup), NIGDY kasowanie wierszy."
+    },
+    {
+      "id": "state.live_operational",
+      "root": "dispatch_state",
+      "globs": ["*_state.json", "*_state.json.*", "orders_state.json", "orders_state.json.prev", "pending_pool.json", "pending_proposals.json", "postponed_proposals.json", "courier_last_pos.json", "live_eta_snapshot.json", "ops_snapshot.json", "loadgov_snapshot.json", "global_alloc.json", "schedule_today.json", "schedule_today_backup.json"],
+      "class": "live_state",
+      "granularity": "live_state",
+      "live_delete_owner": "wlasciciel modulu (atomic replace w miejscu); kopie: restic (dispatch-restic-backup.timer)",
+      "basis": "Zywy stan operacyjny - snapshot 'teraz', nie historia. Poza zakresem OD-7. Regula jest OSTATNIA przed ops.text_logs, wiec reguly danych (GPS/world_record/decyzje) maja pierwszenstwo."
+    },
+    {
+      "id": "ops.text_logs",
+      "root": "logs",
+      "globs": ["*.log", "*.log.*", "*.txt", "*.jsonl", "*.jsonl.*", "reports/*"],
+      "class": "ops_logs",
+      "granularity": "auto",
+      "live_delete_owner": "logrotate:/etc/logrotate.d/dispatch-v2 GRUPA A/B (rotate 14/30)",
+      "competing_gc": {"deletes_after_days": 14},
+      "basis": "OD-7 klauzula maskowania: 'maskowanie adresow/PII w logach po 3 mies.'. Bez klauzuli archiwum => tylko MASK."
+    }
+  ],
+
+  "archive_root_candidates": [
+    "/mnt/storagebox/archive",
+    "/mnt/storagebox/server-archives"
+  ],
+
+  "pii": {
+    "_doc": "Przepis maskowania (RODO art. 5 / OD-7). REDACT = wartosc znika bezpowrotnie. PSEUDONYMIZE = HMAC-SHA256 z sola z env OD7_PII_SALT (join zachowany, tozsamosc nie). WYKLUCZENIA maja PIERWSZENSTWO nad wszystkim - chronia telemetrie silnika przed zamaskowaniem (nazwy flag, klucze *_id, wspolrzedne).",
+    "redact_token": "[PII-REDACTED]",
+    "pseudonym_prefix": "pii_",
+    "_key_regex_exclude_doc": "Regexy case-SENSITIVE (bez re.I) - inaczej '^[A-Z0-9_]{4,}$' zjadloby KAZDY klucz i maskowanie stalo by sie no-opem.",
+    "key_regex_exclude": [
+      "^[A-Z][A-Z0-9_]{3,}$",
+      "^(enable|ENABLE)_",
+      "(_shadow|_SHADOW)$",
+      "^(flag|FLAG)_",
+      "^has_",
+      "_count$",
+      "_lat$",
+      "_lon$",
+      "_lng$"
+    ],
+    "_key_patterns_doc": "Wzorce sa REGEXAMI dopasowywanymi do klucza sprowadzonego do malych liter. Granice sa istotne: goly podciag 'lokal' trafial w 'lokalka_zamowienia_*.csv' (nazwa marki), a wiec maskowal telemetrie zamiast PII (znalezione w biegu 05.08).",
+    "key_patterns_redact": [
+      "(^|_)adres", "address", "ulica", "(^|_|\\b)street(\\b|_|$)", "kod_poczt", "postal", "(^|_)zip(_|$)",
+      "phone", "telefon", "e?_?mail",
+      "klient", "customer_name", "customer_address", "recipient", "odbiorca", "nadawca",
+      "building", "(^|_)lokal(_|$)", "mieszkanie", "apartment", "door_code", "kod_domofon", "uwagi_klienta"
+    ],
+    "key_patterns_pseudonymize": [
+      "courier_name", "kurier_name", "restaurant_name", "nazwa_restauracji",
+      "customer_id", "client_id", "address_id", "adres_id"
+    ],
+    "value_patterns": [
+      {"name": "email", "regex": "[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}"},
+      {"name": "phone_pl", "regex": "(?<![0-9])(?:\\+48[ -]?)?[0-9]{3}[ -]?[0-9]{3}[ -]?[0-9]{3}(?![0-9])"},
+      {"name": "postal_pl", "regex": "(?<![0-9])[0-9]{2}-[0-9]{3}(?![0-9])"},
+      {"name": "street_pl", "regex": "(?:ul\\.|ulica|al\\.|aleja|os\\.|pl\\.)\\s*[^,;\"']{2,40}?\\s[0-9]+[A-Za-z]?(?:/[0-9]+[A-Za-z]?)?"}
+    ]
+  }
+}
