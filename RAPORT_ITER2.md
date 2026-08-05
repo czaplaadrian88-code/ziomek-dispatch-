@@ -1,11 +1,18 @@
 # RAPORT ITER2 (sesja 297) — OD-7 archiver: zamknięcie 4 findingów blind-297
 
 * **Gałąź:** `wt/od7-archiver-297-cto-20260805` · **baza:** `06e4d5c39` · **iter1:** `f9d4d824f`
-  (+ `3afc9ec88` docs) · **iter2:** `PENDING_SHA`
+  (+ `3afc9ec88` docs)
+* **KANDYDAT ITER2 (pełny SHA):** `5575cb14e0cfd017475dd5e8dcb129bcd60b2523`
+  (`fix(tools/OD-7 iter2): zamkniecie 4 findingow blind-297 …`; ten raport dopina do niego
+  osobny commit dokumentacyjny — kod recenzuj po SHA powyżej)
 * **Werdykt wejściowy:** `/root/artifacts/blind-297/od7/verdict.json` → `CONFIRMED_DEFECT`
   (F1 high, F2 medium, F3 medium-low, F4 low; rdzeń + 6 granic POTWIERDZONE)
 * **Pliki zmienione:** `tools/retention_archiver.py`, `tests/test_retention_archiver.py` (nic więcej;
   ledger `process_debt_gate` NIETKNIĘTY — należy do CTO)
+* **sha256 plików kandydata** (do weryfikacji bundla przez recenzenta):
+  `tools/retention_archiver.py` = `592a249e1940f0265d3c6e33f1a8cf101ae3bbcac28e467b2e6b1b38d1e49c38` ·
+  `tests/test_retention_archiver.py` = `598fe4370620aaaf39b28ff396b0f8954971c6b4b21ed8b7983d886c334d5bde` ·
+  `tools/retention_od7_policy.json` = `26e6d0856dc65a219976c9fd535f0f4701f75bb94b8ae50790b401c0209a0112` (BEZ ZMIAN vs iter1)
 * **Żywe ścieżki w tej iteracji:** ZERO biegów. Wszystkie sondy i testy na drzewach syntetycznych
   (`tmp_path` / katalog roboczy poza repo). Kanoniczna polityka jest tylko CZYTANA (bez skanu korzeni).
 
