@@ -139,6 +139,14 @@ def validate_courier_ids_store(store) -> Dict:
 #
 # Każdy walidator: zwraca store gdy zdrowy, rzuca ``ValueError`` gdy nie.
 # Komunikaty NIGDY nie zawierają nazwisk ani PIN-ów (parytet z raportami A-6).
+#
+# FOLD-IN (bramka engine.a6-schema-validators-fold-in): kształt POJEDYNCZEGO
+# rekordu rozstrzyga WYŁĄCZNIE warstwa ``*_record_issue`` (sekcja niżej, A-6/G6).
+# Store-walidator odpowiada już tylko za poziom generacji: typ kontenera,
+# iterację i przekład „rekord zepsuty" na fail-closed ``ValueError``. Zanim
+# powstała ta delegacja, ta sama reguła (forma CID, forma PIN-u, wyjątek
+# ``_meta``, niepustość nazw) żyła w DWÓCH kopiach — pisarz (journal) i audyt
+# (verifier) mogły się rozjechać po zmianie tylko jednej z nich.
 
 PIN_LENGTH = 4  # forma mintowana przez _generate_unique_pin (1000..9999)
 
@@ -146,6 +154,17 @@ PIN_LENGTH = 4  # forma mintowana przez _generate_unique_pin (1000..9999)
 def _as_mapping(store, root: str) -> Dict:
     if not isinstance(store, dict):
         raise ValueError(f"{root} nie jest mapą")
+    return store
+
+
+def _validate_records(root: str, store, record_issue) -> Dict:
+    """Cały ``store`` roota przez regułę per rekord — fail-closed na pierwszym
+    zepsutym wierszu (generacja jest niepodzielna: pisarz nie utrwala roota,
+    którego choć jeden rekord jest poza schematem)."""
+    for key, value in _as_mapping(store, root).items():
+        issue = record_issue(key, value)
+        if issue is not None:
+            raise ValueError(f"{root}: {issue}")
     return store
 
 
@@ -167,12 +186,13 @@ def validate_kurier_ids_root(store) -> Dict:
     rządzący autoryzacją miał najsłabszą regułę z całej piątki (``courier_names``
     i ``courier_tiers`` odrzucały tę samą klasę defektu). Wykonalność zmierzona
     na żywych danych: 125/125 wpisów ``kurier_ids`` przechodzi już dziś.
+
+    Regułę PISARZA trzyma ``ids_record_issue`` (fold-in) — tu zostaje wyłącznie
+    kolejność: najpierw kontrakt autoryzacji nad CAŁĄ generacją, potem kształt
+    rekordów.
     """
     validate_courier_ids_store(_as_mapping(store, "kurier_ids"))
-    for _name, cid in store.items():
-        if canonical_numeric_cid(cid) is None:
-            raise ValueError("kurier_ids ma rekord z niekanonicznym liczbowo CID")
-    return store
+    return _validate_records("kurier_ids", store, ids_record_issue)
 
 
 def validate_kurier_piny_root(store) -> Dict:
@@ -182,51 +202,22 @@ def validate_kurier_piny_root(store) -> Dict:
     ``pin_auth.resolve_pin`` (dokładne trafienie klucza): ``PIN_LENGTH`` cyfr
     ASCII. Alias — niepusty string (to on wiąże PIN z tożsamością).
     """
-    for pin, alias in _as_mapping(store, "kurier_piny").items():
-        if (
-            not isinstance(pin, str)
-            or len(pin) != PIN_LENGTH
-            or not pin.isascii()
-            or not pin.isdigit()
-        ):
-            raise ValueError("kurier_piny ma klucz PIN spoza formy 4 cyfr ASCII")
-        if not isinstance(alias, str) or not alias.strip():
-            raise ValueError("kurier_piny ma PIN bez aliasu tożsamości")
-    return store
+    return _validate_records("kurier_piny", store, piny_record_issue)
 
 
 def validate_courier_tiers_root(store) -> Dict:
     """``courier_tiers.json`` = ``{cid: {...}}`` + opcjonalny blok ``_meta``."""
-    for cid, row in _as_mapping(store, "courier_tiers").items():
-        if cid == "_meta":
-            if not isinstance(row, dict):
-                raise ValueError("courier_tiers: blok _meta nie jest obiektem")
-            continue
-        if canonical_numeric_cid(cid) is None:
-            raise ValueError("courier_tiers ma niekanoniczny klucz CID")
-        if not isinstance(row, dict):
-            raise ValueError("courier_tiers ma rekord kuriera, który nie jest obiektem")
-    return store
+    return _validate_records("courier_tiers", store, tiers_record_issue)
 
 
 def validate_courier_names_root(store) -> Dict:
     """``courier_names.json`` = ``{cid: krótka nazwa panelowa}``."""
-    for cid, name in _as_mapping(store, "courier_names").items():
-        if canonical_numeric_cid(cid) is None:
-            raise ValueError("courier_names ma niekanoniczny klucz CID")
-        if not isinstance(name, str) or not name.strip():
-            raise ValueError("courier_names ma CID bez nazwy")
-    return store
+    return _validate_records("courier_names", store, courier_names_record_issue)
 
 
 def validate_kurier_full_names_root(store) -> Dict:
     """``daily_accounting/kurier_full_names.json`` = ``{alias: pełne imię}``."""
-    for alias, full_name in _as_mapping(store, "kurier_full_names").items():
-        if not isinstance(alias, str) or not alias.strip():
-            raise ValueError("kurier_full_names ma pusty alias")
-        if not isinstance(full_name, str) or not full_name.strip():
-            raise ValueError("kurier_full_names ma alias bez pełnego imienia")
-    return store
+    return _validate_records("kurier_full_names", store, full_names_record_issue)
 
 
 #: root-id -> walidator. Owner mapy jest JEDEN; ``identity.journal`` odkrywa z
@@ -248,6 +239,9 @@ def validate_root(root: str, store):
     if validator is None:
         raise ValueError(f"nieznany root generacji: {root!r}")
     return validator(store)
+
+
+# --------------------------------------------------------------------------- #
 # Schemat POJEDYNCZEGO rekordu roota tożsamości (A-6/G6, K1)
 # --------------------------------------------------------------------------- #
 # ``validate_courier_ids_store`` odpowiada na pytanie AUTORYZACJI: „czy tej
