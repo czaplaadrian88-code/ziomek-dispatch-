@@ -243,6 +243,16 @@ def extract_row(sla_rec, shadow_index):
         "was_czasowka": sla_rec.get("was_czasowka"),
         "n_shadow_records": 0,
         "shadow_ts": None,
+        # REŻIM OBCIĄŻENIA — TRWALE, z decyzji (sesja 341, 2026-08-05).
+        # Decyzja zna te liczby (`pool_feasible_count` idzie niżej jako cecha modelu R3),
+        # więc rekord kalibracyjny zapisuje je u ŹRÓDŁA. Przedtem korpus
+        # `outcomes_clean_shadow.jsonl` doklejał `pool_feasible` joinem po `oid`
+        # z `backfill_decisions_outcomes_v1.jsonl`, który jest co noc odtwarzany od zera
+        # z okna ostatnich dni → pokrycie było 8,8% (1800/20462) i malało z rotacją źródła.
+        # None = decyzji nie dopasowano albo stary rekord bez pola; 0 = REALNIE zero
+        # wykonalnych (best-effort) i jest informacją, nie brakiem danych.
+        "pool_feasible": None,
+        "pool_total": None,
         # ETA R3 shadow (tylko gdy ENABLE_ETA_R3_SHADOW): korekta residualna obok bazy OSRM.
         # corrected = predicted_delivery_min + residual_pred; error_min = real − corrected
         # (analogicznie do eta bazowej real − predicted_delivery_min). ZERO wpływu na decyzje.
@@ -278,6 +288,14 @@ def extract_row(sla_rec, shadow_index):
         row["strategy"] = plan.get("strategy")
         row["verdict"] = rec.get("verdict")
         row["shadow_ts"] = chosen_ts.isoformat()
+        # Jeden właściciel liczby: `pool_feasible_count` z decyzji (shadow_dispatcher).
+        # `auto_route_context.auto_route_pool_feasible` to TA SAMA liczba w tym samym
+        # rekordzie (zmierzone 05.08: 483 zgodne / 0 rozjazdów), więc nie jest tu
+        # czytana — kontrakt ma JEDNO wejście. `pool_total` istnieje wyłącznie w
+        # kontekście auto-route, więc pochodzi stamtąd.
+        row["pool_feasible"] = rec.get("pool_feasible_count")
+        row["pool_total"] = (rec.get("auto_route_context") or {}).get(
+            "auto_route_pool_total")
 
         pred_dt = _parse_dt(pred_deliv_at)
         if pred_dt is not None and delivered_at is not None:

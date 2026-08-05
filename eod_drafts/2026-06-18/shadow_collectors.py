@@ -36,8 +36,18 @@ for r in ETA:
     oid=norm(r.get("oid") or r.get("order_id"))
     a=agree(r); e=num(r.get("eta_error_min")); bs=num(r.get("bag_size"))
     lc=load_ctx.get(oid,{})
+    # KANONICZNE ŹRÓDŁO pool_feasible = własne pole rekordu ETA (od sesji 341, 05.08.2026;
+    # eta_calibration_logger zapisuje je w momencie powstania rekordu).
+    # SHIM MIGRACYJNY: rekordy sprzed tej zmiany własnego pola nie mają, więc dla nich
+    # (i TYLKO dla nich) zostaje stary join po oid z backfillem. Backfill jest co noc
+    # odtwarzany od zera z krótkiego okna — to jest właśnie przyczyna, dla której
+    # pokrycie wynosiło 8,8% (1800/20462). Shim ma termin usunięcia: bramka
+    # data.pool-feasible-durable-shim (due 20.08.2026, po 14 dniach nowych danych).
+    pf=num(r.get("pool_feasible"))
+    if pf is None:
+        pf=lc.get("pool_feasible")
     rec={"oid":oid,"day":(r.get("logged_at") or "")[:10],"agree":a,"eta_error_min":e,
-         "bag_size":bs,"pool_feasible":lc.get("pool_feasible"),"sla_ok":r.get("sla_ok"),
+         "bag_size":bs,"pool_feasible":pf,"sla_ok":r.get("sla_ok"),
          "restaurant":r.get("restaurant"),"hour":num(r.get("hour_warsaw"))}
     out.append(rec)
 with open(f"{DS}/outcomes_clean_shadow.jsonl","w") as f:
