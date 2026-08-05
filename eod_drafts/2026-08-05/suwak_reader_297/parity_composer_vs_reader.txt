@@ -1,0 +1,55 @@
+composer: /root/artifacts/suwak-composer-20260804/suwak_2_liczby.py (OUT_DIR przepiety na scratch, zero nadpisania artefaktow 04.08)
+reader  : dispatch_v2/tools/suwak_autonomii_review.py (sesja 297)
+composer generated: 2026-08-05T08:07:08+00:00  reader generated: 2026-08-05T08:06:28Z
+
+OK    L1.global.would_auto_assign 
+OK    L1.global.would_auto_assign_d 
+OK    L1.global.would_auto_assign_dprime 
+OK    L1.global.auto_route_AUTO 
+OK    L1.global.auto_route_dist 
+OK    L1.global.n 
+OK    L1.pool_ge3.n 
+OK    L1.pool_ge3.d 
+OK    L1.pool_le2.n 
+OK    L1.pool_le2.d 
+OK    L1.pool_unknown.n 
+OK    L1.pool_unknown.d 
+OK    L1.window 
+OK    L1.coverage 
+OK    L1.intake.records_read 
+OK    L1.intake.duplicates_dropped 
+OK    L1.intake.excluded_lifecycle 
+OK    L1.intake.excluded_missing_gate_fields 
+OK    L1.intake.decisions 
+OK    L1.intake.bad_lines 
+OK    L1.blockers.families_any 
+OK    L1.blockers.families_first 
+OK    L1.blockers.counts 
+OK    L1.orders 
+OK    L2.full.global 
+OK    L2.full.pool_ge3 
+OK    L2.full.pool_le2 
+OK    L2.full.pool_unknown 
+OK    L2.full.scarcity 
+OK    L2.full.split 
+OK    L2.full.coverage 
+OK    L2.overlap.global 
+OK    L2.overlap.pool_ge3 
+OK    L2.overlap.pool_le2 
+OK    L2.overlap.pool_unknown 
+OK    L2.overlap.scarcity 
+OK    L2.overlap.split 
+OK    L2.overlap.coverage 
+OK    L2.window 
+OK    L2.pool_known_window 
+OK    L2.weekly_trend 
+OK    JOIN.n_joined 
+OK    JOIN.matrix 
+OK    JOIN.auto_ready_d 
+OK    JOIN.agree_given_auto_ready_pct 
+OK    JOIN.agree_given_not_auto_ready_pct 
+OK    JOIN.candidates_outcomes_in_window 
+OK    JOIN.decisions_indexed 
+OK    MANIFEST.sha256 (te same pliki, te same hashe) 
+
+PARITY_ALL_EQUAL = True

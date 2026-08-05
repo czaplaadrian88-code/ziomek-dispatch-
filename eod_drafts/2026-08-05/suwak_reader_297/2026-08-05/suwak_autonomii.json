@@ -1,0 +1,461 @@
+{
+  "schema": "suwak_autonomii.2_liczby.v1",
+  "day": "2026-08-05",
+  "generated_utc": "2026-08-05T08:06:28Z",
+  "read_started_utc": "2026-08-05T08:06:26Z",
+  "mode": "READ_ONLY",
+  "status": "OK",
+  "series_path": "/root/worktrees/dispatch_v2/active/20260805-suwak-reader-297-cto/eod_drafts/2026-08-05/suwak_reader_297/suwak_autonomii.jsonl",
+  "liczba1_auto_assign": {
+    "available": true,
+    "reason": null,
+    "global": {
+      "n": 1551,
+      "would_auto_assign": {
+        "n": 1551,
+        "true": 16,
+        "pct": 1.0315925209542232
+      },
+      "would_auto_assign_d": {
+        "n": 1551,
+        "true": 306,
+        "pct": 19.729206963249517
+      },
+      "would_auto_assign_dprime": {
+        "n": 1551,
+        "true": 273,
+        "pct": 17.60154738878143
+      },
+      "auto_route_AUTO": {
+        "n": 1551,
+        "true": 156,
+        "pct": 10.058027079303676
+      },
+      "auto_route_dist": {
+        "ACK": 724,
+        "ALERT": 671,
+        "AUTO": 156
+      }
+    },
+    "pool_ge3": {
+      "n": 1074,
+      "would_auto_assign": {
+        "n": 1074,
+        "true": 16,
+        "pct": 1.48975791433892
+      },
+      "would_auto_assign_d": {
+        "n": 1074,
+        "true": 273,
+        "pct": 25.41899441340782
+      },
+      "would_auto_assign_dprime": {
+        "n": 1074,
+        "true": 273,
+        "pct": 25.41899441340782
+      },
+      "auto_route_AUTO": {
+        "n": 1074,
+        "true": 139,
+        "pct": 12.942271880819368
+      },
+      "auto_route_dist": {
+        "ACK": 494,
+        "ALERT": 441,
+        "AUTO": 139
+      }
+    },
+    "pool_le2": {
+      "n": 477,
+      "would_auto_assign": {
+        "n": 477,
+        "true": 0,
+        "pct": 0.0
+      },
+      "would_auto_assign_d": {
+        "n": 477,
+        "true": 33,
+        "pct": 6.918238993710692
+      },
+      "would_auto_assign_dprime": {
+        "n": 477,
+        "true": 0,
+        "pct": 0.0
+      },
+      "auto_route_AUTO": {
+        "n": 477,
+        "true": 17,
+        "pct": 3.5639412997903563
+      },
+      "auto_route_dist": {
+        "ACK": 230,
+        "ALERT": 230,
+        "AUTO": 17
+      }
+    },
+    "pool_unknown": {
+      "n": 0,
+      "would_auto_assign": {
+        "n": 0,
+        "true": 0,
+        "pct": null
+      },
+      "would_auto_assign_d": {
+        "n": 0,
+        "true": 0,
+        "pct": null
+      },
+      "would_auto_assign_dprime": {
+        "n": 0,
+        "true": 0,
+        "pct": null
+      },
+      "auto_route_AUTO": {
+        "n": 0,
+        "true": 0,
+        "pct": null
+      },
+      "auto_route_dist": {}
+    },
+    "blockers_d": {
+      "n_blocked": 1245,
+      "n_with_reasons": 1147,
+      "families_any": {
+        "pos_not_informed": 703,
+        "late_pickup_extension": 294,
+        "late_pickup_redirect": 276,
+        "score_distrust_ceiling": 246,
+        "scarcity_pool": 172,
+        "new_courier_ramp": 113,
+        "late_pickup_committed": 66,
+        "paczka_firmowe": 54,
+        "plan_sla_violations": 51,
+        "best_effort": 51,
+        "pos_from_store": 47,
+        "shift_end_edge": 12
+      },
+      "families_first": {
+        "pos_not_informed": 615,
+        "late_pickup_redirect": 168,
+        "new_courier_ramp": 110,
+        "score_distrust_ceiling": 69,
+        "paczka_firmowe": 54,
+        "pos_from_store": 44,
+        "scarcity_pool": 25,
+        "late_pickup_committed": 21,
+        "plan_sla_violations": 14,
+        "shift_end_edge": 12,
+        "late_pickup_extension": 12,
+        "best_effort": 3
+      }
+    },
+    "window": {
+      "day_first": "2026-07-28",
+      "day_last": "2026-08-05",
+      "days_distinct": 9
+    },
+    "intake": {
+      "records_read": 1610,
+      "duplicates_dropped": 0,
+      "excluded_lifecycle": 59,
+      "excluded_missing_gate_fields": 0,
+      "decisions": 1551,
+      "bad_lines": 0,
+      "files_read": 2
+    },
+    "coverage": {
+      "would_auto_assign": 1551,
+      "would_auto_assign_d": 1551,
+      "would_auto_assign_dprime": 1551,
+      "auto_route": 1551,
+      "pool_feasible_count": 1551
+    },
+    "orders": {
+      "distinct": 1551,
+      "with_multiple_decisions": 0,
+      "max_decisions_per_order": 1
+    }
+  },
+  "liczba2_zgodnosc_redystrybucja": {
+    "available": true,
+    "reason": null,
+    "full": {
+      "scarcity_decomposition": {
+        "baseline_disagree_rate_pct": 33.091962346125996,
+        "le2_disagree_rate_pct": 71.36038186157518,
+        "le2_disagree_observed": 299,
+        "le2_disagree_expected_at_baseline": 138.7,
+        "le2_disagree_excess_scarcity": 160.3,
+        "excess_share_of_le2_disagreements_pct": 53.62698253168297,
+        "excess_share_of_measured_disagreements_pct": 21.20961346160477,
+        "measured_disagreements": 756
+      },
+      "label": "pełne okno outcomes",
+      "global": {
+        "n_records": 20462,
+        "n_agree_known": 20462,
+        "agree": 11675,
+        "disagree": 8787,
+        "agree_pct": 57.05698367705992,
+        "disagree_pct": 42.94301632294008
+      },
+      "pool_ge3": {
+        "n_records": 1381,
+        "n_agree_known": 1381,
+        "agree": 924,
+        "disagree": 457,
+        "agree_pct": 66.908037653874,
+        "disagree_pct": 33.091962346125996
+      },
+      "pool_le2": {
+        "n_records": 419,
+        "n_agree_known": 419,
+        "agree": 120,
+        "disagree": 299,
+        "agree_pct": 28.639618138424822,
+        "disagree_pct": 71.36038186157518
+      },
+      "pool_unknown": {
+        "n_records": 18662,
+        "n_agree_known": 18662,
+        "agree": 10631,
+        "disagree": 8031,
+        "agree_pct": 56.96602722109099,
+        "disagree_pct": 43.03397277890901
+      },
+      "pool_coverage_pct": 8.796794057276903,
+      "disagreement_split": {
+        "total": 8787,
+        "from_pool_le2": 299,
+        "from_pool_le2_pct": 3.4027540685102995,
+        "from_pool_ge3": 457,
+        "from_pool_ge3_pct": 5.200864914077615,
+        "from_pool_unknown": 8031,
+        "from_pool_unknown_pct": 91.39638101741208
+      }
+    },
+    "overlap": {
+      "scarcity_decomposition": {
+        "baseline_disagree_rate_pct": 32.67813267813268,
+        "le2_disagree_rate_pct": 72.24489795918367,
+        "le2_disagree_observed": 177,
+        "le2_disagree_expected_at_baseline": 80.1,
+        "le2_disagree_excess_scarcity": 96.9,
+        "excess_share_of_le2_disagreements_pct": 54.767556462471724,
+        "excess_share_of_measured_disagreements_pct": 21.88229682586342,
+        "measured_disagreements": 443
+      },
+      "label": "okno wspólne z shadow_decisions 2026-07-28..2026-08-05",
+      "global": {
+        "n_records": 1545,
+        "n_agree_known": 1545,
+        "agree": 908,
+        "disagree": 637,
+        "agree_pct": 58.77022653721683,
+        "disagree_pct": 41.22977346278317
+      },
+      "pool_ge3": {
+        "n_records": 814,
+        "n_agree_known": 814,
+        "agree": 548,
+        "disagree": 266,
+        "agree_pct": 67.32186732186732,
+        "disagree_pct": 32.67813267813268
+      },
+      "pool_le2": {
+        "n_records": 245,
+        "n_agree_known": 245,
+        "agree": 68,
+        "disagree": 177,
+        "agree_pct": 27.755102040816325,
+        "disagree_pct": 72.24489795918367
+      },
+      "pool_unknown": {
+        "n_records": 486,
+        "n_agree_known": 486,
+        "agree": 292,
+        "disagree": 194,
+        "agree_pct": 60.08230452674897,
+        "disagree_pct": 39.91769547325103
+      },
+      "pool_coverage_pct": 68.54368932038835,
+      "disagreement_split": {
+        "total": 637,
+        "from_pool_le2": 177,
+        "from_pool_le2_pct": 27.786499215070645,
+        "from_pool_ge3": 266,
+        "from_pool_ge3_pct": 41.75824175824176,
+        "from_pool_unknown": 194,
+        "from_pool_unknown_pct": 30.4552590266876
+      }
+    },
+    "weekly_trend": [
+      {
+        "week": "2026-W20",
+        "n": 2866,
+        "agree_pct": 49.79064898813677,
+        "pool_known": 0,
+        "pool_le2_share_pct": null
+      },
+      {
+        "week": "2026-W21",
+        "n": 1446,
+        "agree_pct": 62.24066390041494,
+        "pool_known": 0,
+        "pool_le2_share_pct": null
+      },
+      {
+        "week": "2026-W22",
+        "n": 1605,
+        "agree_pct": 65.10903426791278,
+        "pool_known": 0,
+        "pool_le2_share_pct": null
+      },
+      {
+        "week": "2026-W23",
+        "n": 1692,
+        "agree_pct": 52.4822695035461,
+        "pool_known": 0,
+        "pool_le2_share_pct": null
+      },
+      {
+        "week": "2026-W24",
+        "n": 1667,
+        "agree_pct": 56.56868626274745,
+        "pool_known": 0,
+        "pool_le2_share_pct": null
+      },
+      {
+        "week": "2026-W25",
+        "n": 1601,
+        "agree_pct": 53.65396627108058,
+        "pool_known": 0,
+        "pool_le2_share_pct": null
+      },
+      {
+        "week": "2026-W26",
+        "n": 1604,
+        "agree_pct": 57.35660847880299,
+        "pool_known": 0,
+        "pool_le2_share_pct": null
+      },
+      {
+        "week": "2026-W27",
+        "n": 1622,
+        "agree_pct": 56.72009864364981,
+        "pool_known": 0,
+        "pool_le2_share_pct": null
+      },
+      {
+        "week": "2026-W28",
+        "n": 1739,
+        "agree_pct": 57.274295572167915,
+        "pool_known": 0,
+        "pool_le2_share_pct": null
+      },
+      {
+        "week": "2026-W29",
+        "n": 1459,
+        "agree_pct": 63.6737491432488,
+        "pool_known": 0,
+        "pool_le2_share_pct": null
+      },
+      {
+        "week": "2026-W30",
+        "n": 1409,
+        "agree_pct": 58.907026259758695,
+        "pool_known": 554,
+        "pool_le2_share_pct": 23.465703971119133
+      },
+      {
+        "week": "2026-W31",
+        "n": 1411,
+        "agree_pct": 57.12260807937633,
+        "pool_known": 1104,
+        "pool_le2_share_pct": 21.3768115942029
+      },
+      {
+        "week": "2026-W32",
+        "n": 341,
+        "agree_pct": 62.17008797653959,
+        "pool_known": 142,
+        "pool_le2_share_pct": 37.32394366197183
+      }
+    ],
+    "window": {
+      "day_first": "2026-05-17",
+      "day_last": "2026-08-05",
+      "days_distinct": 81
+    },
+    "pool_known_window": {
+      "day_first": "2026-07-23",
+      "day_last": "2026-08-04",
+      "days_distinct": 13,
+      "records": 1800,
+      "share_of_corpus_pct": 8.796794057276903
+    }
+  },
+  "join_wspolne_zamowienia": {
+    "available": true,
+    "reason": null,
+    "n_joined": 1526,
+    "candidates_outcomes_in_window": 1545,
+    "decisions_indexed": 1551,
+    "auto_ready_d": 303,
+    "auto_ready_d_pct": 19.85583224115334,
+    "auto_and_agree": 223,
+    "auto_and_agree_pct_of_all": 14.613368283093054,
+    "agree_given_auto_ready_pct": 73.5973597359736,
+    "agree_given_not_auto_ready_pct": 56.00981193785773,
+    "matrix": {
+      "auto=T,agree=T": 223,
+      "auto=T,agree=F": 80,
+      "auto=F,agree=T": 685,
+      "auto=F,agree=F": 538
+    }
+  },
+  "manifest": [
+    {
+      "path": "/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl",
+      "present": true,
+      "size_bytes": 36922104,
+      "mtime_utc": "2026-08-05T08:05:35Z",
+      "age_hours": 0.0,
+      "sha256": "5e9b77c3e81c78ebad3fdc3c665236b0be75f23e78a764ee406cc14d1420e15c",
+      "hashed_bytes": 36922104,
+      "records": 382,
+      "bad_lines": 0,
+      "day_first": "2026-08-03",
+      "day_last": "2026-08-05",
+      "days_distinct": 3
+    },
+    {
+      "path": "/root/.openclaw/workspace/scripts/logs/shadow_decisions.jsonl.1",
+      "present": true,
+      "size_bytes": 138994886,
+      "mtime_utc": "2026-08-03T00:00:04Z",
+      "age_hours": 56.1,
+      "sha256": "25bd08ac8c519601be1ec20f082b1464895fb201d791a909ef55cdd886e68d11",
+      "hashed_bytes": 138994886,
+      "records": 1228,
+      "bad_lines": 0,
+      "day_first": "2026-07-28",
+      "day_last": "2026-08-02",
+      "days_distinct": 6
+    },
+    {
+      "path": "/root/.openclaw/workspace/dispatch_state/outcomes_clean_shadow.jsonl",
+      "present": true,
+      "size_bytes": 3612418,
+      "mtime_utc": "2026-08-05T04:40:01Z",
+      "age_hours": 3.4,
+      "sha256": "1f5cb84edac27d2bbf40e037c16f23c1b99c522512fdd45b15a82fc84db64c55",
+      "hashed_bytes": 3612418,
+      "records": 20462,
+      "bad_lines": 0,
+      "day_first": "2026-05-17",
+      "day_last": "2026-08-05",
+      "days_distinct": 81
+    }
+  ]
+}

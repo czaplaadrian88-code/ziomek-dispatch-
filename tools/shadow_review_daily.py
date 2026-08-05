@@ -44,7 +44,7 @@ class Reader:
     """Jeden czytelnik cienia + kontrakt jego korpusu."""
 
     def __init__(self, name, argv, corpus, corpus_from_unit=None,
-                 corpus_env=None, timeout=900, note=""):
+                 corpus_env=None, timeout=900, note="", out_dir_flag=None):
         self.name = name
         self.argv = argv
         self.corpus = corpus                    # ścieżka stała albo None gdy z unitu
@@ -52,6 +52,10 @@ class Reader:
         self.corpus_env = corpus_env            # ENV do przekazania czytelnikowi
         self.timeout = timeout
         self.note = note
+        # Czytelnik, który sam produkuje TRWAŁY artefakt (nie tylko stdout do <nazwa>.log),
+        # dostaje katalog dnia tą flagą. Bez tego pisałby we własny default, czyli POZA
+        # sandbox systemd (ReadWritePaths = tylko katalog raportów) — job by się wywalił.
+        self.out_dir_flag = out_dir_flag
 
 
 READERS = [
@@ -84,6 +88,19 @@ READERS = [
         corpus=f"{STATE}/reassignment_shadow.jsonl",
         timeout=1800,
         note="korpus 91 MB — najdłuższy bieg w zestawie",
+    ),
+    Reader(
+        name="suwak_autonomii",
+        argv=["-m", "dispatch_v2.tools.suwak_autonomii_review", "--no-telegram"],
+        corpus=None,
+        out_dir_flag="--out-dir",
+        note="SUWAK AUTONOMII (2 liczby ownera z 19.07) — jedyny czytelnik z DWOMA źródłami "
+             "(scripts/logs/shadow_decisions.jsonl + rotacje ORAZ dispatch_state/"
+             "outcomes_clean_shadow.jsonl), więc świeżość każdego z nich sprawdza SAM i "
+             "raportuje jako null+powód. Bramka korpusu harnessu (jedna ścieżka na czytelnika) "
+             "wycięłaby go z szeregu czasowego przy uschnięciu JEDNEGO źródła — a dziura w "
+             "szeregu jest gorsza niż rekord z jawnym powodem. Wynik: append do "
+             "<out-dir>/../suwak_autonomii.jsonl + snapshot dnia.",
     ),
 ]
 
@@ -200,6 +217,11 @@ def run_reader(reader: Reader, out_dir: str, max_age_h: float, dry: bool):
         "exit_code": None,
     }
 
+    argv = list(reader.argv)
+    if reader.out_dir_flag:
+        argv += [reader.out_dir_flag, out_dir]
+        res["argv"] = [VENV_PY] + argv
+
     corpus = reader.corpus
     env_extra = {}
     if reader.corpus_from_unit:
@@ -231,7 +253,7 @@ def run_reader(reader: Reader, out_dir: str, max_age_h: float, dry: bool):
     log_path = os.path.join(out_dir, f"{reader.name}.log")
     t0 = time.time()
     try:
-        proc = subprocess.run([VENV_PY] + reader.argv, cwd=SCRIPTS, env=env,
+        proc = subprocess.run([VENV_PY] + argv, cwd=SCRIPTS, env=env,
                               capture_output=True, text=True, timeout=reader.timeout)
         out = proc.stdout or ""
         err = proc.stderr or ""
