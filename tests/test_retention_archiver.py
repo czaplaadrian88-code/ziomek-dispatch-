@@ -16,6 +16,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -903,7 +904,11 @@ def test_apply_snapshot_creates_nothing_next_to_live_db_and_captures_wal(tmp_pat
 
 def test_sidecar_guard_reddens_if_readonly_open_regresses_to_mode_ro(tmp_path, monkeypatch):
     """RATCHET: gdyby ktoś wrócił do `mode=ro` (albo innego trybu tworzącego `-wal`),
-    bezpiecznik ma paść GŁOŚNO, a nie cicho zaśmiecić skanowany korzeń."""
+    regres ma wyjść GŁOŚNO, a nie cicho zaśmiecić skanowany korzeń.
+
+    Po iter4 „głośno" na ścieżce REPORT znaczy: wpis w `errors[]` + exit 3 + jawne wskazanie
+    WŁASNOŚCI (nasz deskryptor trzymał `-wal`/`-shm`) — a nie wyjątek, bo wyjątek zabijał cały
+    raport także wtedy, gdy pliki utworzył CUDZY proces (delta-blind #3, F1)."""
     ppath, pol, state, _ = _policy(tmp_path)
     db = os.path.join(state, "events.db")
     _wal_db(db)
@@ -912,8 +917,272 @@ def test_sidecar_guard_reddens_if_readonly_open_regresses_to_mode_ro(tmp_path, m
 
     monkeypatch.setattr(ra, "sqlite_connect_readonly",
                         lambda path: sqlite3.connect(f"file:{path}?mode=ro", uri=True))
-    with pytest.raises(RuntimeError, match="OD7-SQLITE-SIDECAR"):
-        ra.sqlite_age_stats(db, rule, p, datetime.now(timezone.utc), [])
+    errors: list = []
+    out = ra.sqlite_age_stats(db, rule, p, datetime.now(timezone.utc), errors)
+
+    assert out["sidecars_arrived"] == ["events.db-shm", "events.db-wal"]
+    assert out["sidecars_arrived_by_us"] is True, (
+        "regres do mode=ro MUSI być rozpoznany jako NASZ zapis (deskryptor), nie jako cudzy ruch")
+    accusing = [e for e in errors if "to zapis TEGO narzędzia" in e["error"]]
+    assert len(accusing) == 1, f"brak głośnego wpisu o własnym zapisie: {errors}"
+    assert "OD7-SQLITE-SIDECAR" in accusing[0]["error"]
+    # …i realna szkoda, przed którą ratchet broni: pliki ZOSTAJĄ w skanowanym korzeniu
+    assert sorted(os.path.basename(x) for x in ra._sidecars_present(db)) == \
+        ["events.db-shm", "events.db-wal"]
+
+
+# --- F1 (delta-blind #3): CUDZY proces materializuje -wal/-shm --------------- #
+# Baza w trybie WAL tworzy pliki towarzyszące przy KAŻDYM cudzym połączeniu i kasuje je przy
+# jego zamknięciu, więc sam ZBIÓR NAZW obok bazy zmienia się bez naszego udziału. Stary
+# bezpiecznik czytał tylko tę różnicę: 9/40 biegów REPORT ginęło z exit 1 BEZ raportu,
+# a komunikat oskarżał narzędzie o zapis do żywego korzenia.
+_FOREIGN_HOLDER = """
+import os, sqlite3, sys, time
+db, ready, release = sys.argv[1], sys.argv[2], sys.argv[3]
+conn = sqlite3.connect(db, isolation_level=None)
+conn.execute('SELECT COUNT(*) FROM audit_log').fetchone()   # materializuje -wal/-shm
+open(ready, 'w').close()
+for _ in range(2000):
+    if os.path.exists(release):
+        break
+    time.sleep(0.005)
+conn.close()                                                # czyste zamknięcie je KASUJE
+"""
+
+# Cudzy czytelnik ZSYNCHRONIZOWANY z biegiem narzędzia: podłącza się dopiero, gdy widzi, że
+# proces z `pidfile` trzyma otwartą bazę (czyli DOKŁADNIE w oknie odczytu), i trzyma połączenie
+# jeszcze chwilę po tym, jak narzędzie bazę zamknie. Dzięki temu przejście brak→obecny wypada
+# w oknie kontroli w KAŻDYM biegu — bez tego wyścig trafia się w ~1/10 biegów i e2e byłoby
+# oraclem pozornym. Sam scenariusz jest realny: tak zachowuje się silnik czytający events.db.
+_FOREIGN_READER_TRIGGERED = """
+import os, sqlite3, sys, time
+db, pidfile, stop = sys.argv[1], sys.argv[2], sys.argv[3]
+
+def holds_db():
+    try:
+        pid = open(pidfile).read().strip()
+    except OSError:
+        return False
+    if not pid:
+        return False
+    d = '/proc/%s/fd' % pid
+    try:
+        fds = os.listdir(d)
+    except OSError:
+        return False
+    for fd in fds:
+        try:
+            if os.readlink(os.path.join(d, fd)) == db:
+                return True
+        except OSError:
+            continue
+    return False
+
+while not os.path.exists(stop):
+    if not holds_db():
+        time.sleep(0.0002)
+        continue
+    conn = sqlite3.connect(db, isolation_level=None)      # materializuje -wal/-shm
+    conn.execute('SELECT COUNT(*) FROM audit_log').fetchone()
+    while holds_db() and not os.path.exists(stop):
+        time.sleep(0.001)
+    time.sleep(0.005)                                     # trzymaj tuż poza oknem odczytu
+    conn.close()                                          # czyste zamknięcie je KASUJE
+"""
+
+
+def _start_foreign_holder(db, tmp_path, tag):
+    """OBCY proces (nie wątek!) trzymający otwarte połączenie do bazy. Zwraca (proc, release)."""
+    ready = str(tmp_path / f"ready_{tag}")
+    release = str(tmp_path / f"release_{tag}")
+    proc = subprocess.Popen([sys.executable, "-c", _FOREIGN_HOLDER, db, ready, release],
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    for _ in range(1000):
+        if os.path.exists(ready):
+            assert os.path.exists(db + "-wal"), "obcy proces miał zmaterializować -wal"
+            return proc, release
+        time.sleep(0.01)
+    proc.kill()
+    proc.wait()
+    raise AssertionError("obcy proces nie zdążył otworzyć bazy")
+
+
+def _stop_foreign_holder(proc, release):
+    Path(release).touch()
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+
+
+def test_report_survives_foreign_process_creating_sidecars_and_says_who_did_it(tmp_path, monkeypatch):
+    """F1: przybycie `-wal`/`-shm` od CUDZEGO procesu nie może zabić raportu ani zostać
+    przypisane narzędziu. Deterministycznie: obcy proces podłącza się DOKŁADNIE w oknie
+    między pomiarem „przed" a kontrolą po odczycie."""
+    ppath, _, state, _ = _policy(tmp_path)
+    db = os.path.join(state, "events.db")
+    _wal_db(db, rows=20)
+    assert ra._sidecars_present(db) == set(), "start: baza domknięta czysto"
+    p, _ = ra.load_policy(ppath)
+    rule = next(r for r in p["rules"] if r["id"] == "events.db")
+    started = []
+    real_connect = ra.sqlite_connect_readonly
+
+    def _connect_with_foreign_arrival(path):
+        started.append(_start_foreign_holder(db, tmp_path, "stats"))
+        return real_connect(path)
+
+    monkeypatch.setattr(ra, "sqlite_connect_readonly", _connect_with_foreign_arrival)
+    errors: list = []
+    try:
+        out = ra.sqlite_age_stats(db, rule, p, datetime.now(timezone.utc), errors)
+    finally:
+        for proc, release in started:
+            _stop_foreign_holder(proc, release)
+
+    assert out["rows_total"] == 20, "liczby z immutable=1 są nadal prawdziwe — publikujemy je"
+    assert out["sidecars_arrived"] == ["events.db-shm", "events.db-wal"]
+    assert out["sidecars_arrived_by_us"] is False
+    sidecar_errs = [e["error"] for e in errors if "OD7-SQLITE-SIDECAR" in e["error"]]
+    assert len(sidecar_errs) == 1, f"przybycie ma być odnotowane DOKŁADNIE raz: {errors}"
+    assert "INNY proces" in sidecar_errs[0]
+    assert "to zapis TEGO narzędzia" not in sidecar_errs[0], (
+        "komunikat NIE MOŻE oskarżać narzędzia o cudzy zapis (fałszywy alarm incydentu)")
+
+
+def test_report_cli_always_produces_a_report_with_a_foreign_reader_in_background(tmp_path):
+    """Oracle recenzenta #3 w skali suity (e2e przez CLI, prawdziwy drugi proces):
+    cudzy czytelnik podłącza się w pętli, a REPORT ma ZAWSZE zostawić raport — dopuszczalne
+    kody to 0 (czysto) albo 3 (przybycie odnotowane w errors[]), nigdy 1 bez raportu."""
+    ppath, _, state, _ = _policy(tmp_path)
+    db = os.path.join(state, "events.db")
+    _wal_db(db, rows=400000)
+    pidfile = tmp_path / "cli.pid"
+    pidfile.write_text("")
+    stop = tmp_path / "reader.stop"
+    reader = subprocess.Popen(
+        [sys.executable, "-c", _FOREIGN_READER_TRIGGERED, db, str(pidfile), str(stop)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    runs = 6
+    codes, arrivals, missing = [], 0, []
+    try:
+        for i in range(runs):
+            out = tmp_path / f"raport_{i}.json"
+            proc = subprocess.Popen(
+                [sys.executable, "-B", str(_TOOL_PATH), "--policy", ppath, "--include-sqlite",
+                 "--pii-scan-limit", "0", "--out", str(out), "--quiet"],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            pidfile.write_text(str(proc.pid))
+            _, err = proc.communicate(timeout=120)
+            pidfile.write_text("")
+            codes.append(proc.returncode)
+            if not out.exists():
+                missing.append((proc.returncode, err.strip()))
+                continue
+            rep = json.loads(out.read_text(encoding="utf-8"))
+            if any("OD7-SQLITE-SIDECAR" in e["error"] for e in rep["errors"]):
+                arrivals += 1
+    finally:
+        stop.touch()
+        try:
+            reader.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            reader.kill()
+            reader.wait()
+
+    assert missing == [], f"REPORT zginął bez raportu w {len(missing)}/{runs} biegów: {missing[:2]}"
+    assert set(codes) <= {0, 3}, f"cudzy ruch obok bazy nie może dawać fail-closed: {codes}"
+    assert arrivals >= 1, (
+        "scenariusz się nie odtworzył (0 przybyć sidecarów) — ten oracle byłby pozorny")
+    print(f"[F1] biegów z odnotowanym przybyciem sidecarów: {arrivals}/{runs}")
+
+
+def test_readonly_connection_holds_no_sidecar_descriptor(tmp_path):
+    """RATCHET trybu połączenia oparty na sygnale zależnym WYŁĄCZNIE od nas (nie na cudzym
+    ruchu w katalogu): kanoniczne `immutable=1` nie tworzy ani nie otwiera żadnego pliku
+    towarzyszącego; kontrola pozytywna pokazuje, że sonda nie jest ślepa — `mode=ro` widać."""
+    db = str(tmp_path / "events.db")
+    _wal_db(db, rows=5)
+
+    conn = ra.sqlite_connect_readonly(db)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM audit_log").fetchone()[0] == 5
+        assert ra._sidecars_open_by_this_process(db) == set(), "immutable=1 nie otwiera sidecarów"
+        assert ra._sidecars_present(db) == set(), "immutable=1 nie tworzy sidecarów"
+    finally:
+        conn.close()
+
+    ro = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+    try:
+        ro.execute("SELECT COUNT(*) FROM audit_log").fetchone()
+        assert ra._sidecars_open_by_this_process(db) == {"events.db-shm", "events.db-wal"}
+    finally:
+        ro.close()
+
+
+def test_apply_snapshot_stops_on_foreign_arrival_but_stops_accusing_the_tool(tmp_path, monkeypatch):
+    """APPLY zostaje fail-closed (kopia mogła powstać w połowie cudzej transakcji), ale
+    komunikat przestaje kłamać: `sqlite_snapshot` źródła nie otwiera, więc nie mógł tych
+    plików utworzyć."""
+    ppath, _, state, _ = _policy(tmp_path)
+    db = os.path.join(state, "events.db")
+    _wal_db(db, rows=20)
+    arch = tmp_path / "arch"
+    arch.mkdir()
+    ra.GATE = ra.WriteGate("apply")
+    ra.GATE.allow_root(str(arch))
+    started = []
+    real_gzip = ra.gzip_copy_verified
+
+    def _gzip_with_foreign_arrival(src, dst, masker):
+        started.append(_start_foreign_holder(db, tmp_path, "apply"))   # trzyma połączenie
+        return real_gzip(src, dst, masker)
+
+    monkeypatch.setattr(ra, "gzip_copy_verified", _gzip_with_foreign_arrival)
+    try:
+        with pytest.raises(RuntimeError) as exc:
+            ra.sqlite_snapshot(db, str(arch / "events.db.gz"))
+    finally:
+        for proc, release in started:
+            _stop_foreign_holder(proc, release)
+    msg = str(exc.value)
+    assert "OD7-SQLITE-SIDECAR" in msg and "fail-closed" in msg
+    assert "INNY proces" in msg
+    assert "to zapis TEGO narzędzia" not in msg, "koniec fałszywego oskarżenia narzędzia"
+
+
+def test_apply_snapshot_survives_a_foreign_connection_that_closes(tmp_path, monkeypatch):
+    """…a przejściowy cudzy ruch (połączenie, które zaraz się zamyka) nie przerywa już
+    biegu APPLY: czekamy `SIDECAR_SETTLE_SECONDS`, aż `-wal`/`-shm` znikną."""
+    ppath, _, state, _ = _policy(tmp_path)
+    db = os.path.join(state, "events.db")
+    _wal_db(db, rows=20)
+    arch = tmp_path / "arch"
+    arch.mkdir()
+    ra.GATE = ra.WriteGate("apply")
+    ra.GATE.allow_root(str(arch))
+    real_gzip = ra.gzip_copy_verified
+
+    started = []
+
+    def _gzip_with_transient_foreign(src, dst, masker):
+        proc, release = _start_foreign_holder(db, tmp_path, "transient")
+        started.append((proc, release))
+        rec = real_gzip(src, dst, masker)
+        # zwolnienie DOPIERO po PIERWSZEJ próbie bezpiecznika → bieg wchodzi w okno settle
+        # i musi z niego wyjść bez błędu, kiedy cudze połączenie się domknie
+        threading.Timer(0.15, lambda: Path(release).touch()).start()
+        return rec
+
+    monkeypatch.setattr(ra, "gzip_copy_verified", _gzip_with_transient_foreign)
+    try:
+        rec = ra.sqlite_snapshot(db, str(arch / "events.db.gz"))
+    finally:
+        for proc, release in started:
+            _stop_foreign_holder(proc, release)
+    assert rec["source_sha256"], "snapshot MUSI dojść do skutku mimo przejściowego cudzego ruchu"
+    assert ra._sidecars_present(db) == set()
 
 
 def test_sqlite_stats_report_uncheckpointed_wal_instead_of_silently_stale_numbers(tmp_path):

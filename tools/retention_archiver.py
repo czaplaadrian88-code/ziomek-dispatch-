@@ -33,7 +33,11 @@ BEZPIECZEŃSTWO (fail-closed, shadow-first)
     * SQLITE: żywej bazy NIE otwiera się w trybie, który tworzy pliki `-wal`/`-shm` obok
       niej (`mode=ro` je tworzy!). Statystyki czyta `sqlite_connect_readonly` (`immutable=1`),
       snapshot robi kopię pliku bazy DO ARCHIWUM i dopiero tam ją otwiera — patrz
-      `sqlite_snapshot`. Każde wyjście z tych ścieżek pilnuje `_assert_no_sidecars_created`.
+      `sqlite_snapshot`. Wyjścia z tych ścieżek pilnuje `_sidecar_arrival`: przybycie plików
+      obok bazy jest RAPORTOWANE, a zarzut „zapisało to narzędzie" stawiamy WYŁĄCZNIE
+      z dowodu własności (`_sidecars_open_by_this_process` — nasz deskryptor), bo w trybie
+      WAL sidecary materializuje i kasuje KAŻDE cudze połączenie. W REPORCIE reakcją jest
+      wpis w `errors[]` (raport ma powstać zawsze), w APPLY — zatrzymanie biegu.
       Ceną `immutable=1` jest pominięcie KAŻDEGO dziennika, więc statystyki publikują
       liczbę tylko wtedy, gdy plik główny jest zatwierdzoną prawdą — rozstrzyga
       `_sqlite_journal_state` (patrz tam: `-wal` = prawdziwe-ale-niepełne → podajemy
@@ -67,6 +71,7 @@ import shutil
 import sqlite3
 import sys
 import tempfile
+import time
 import uuid
 import zlib
 from datetime import datetime, timedelta, timezone
@@ -712,24 +717,119 @@ def gzip_copy_verified(src: str, dst: str, masker: Masker | None) -> dict:
 # Kanon: statystyki czyta się `immutable=1` (zero plików towarzyszących), a snapshot
 # robi się na KOPII bazy leżącej już w archiwum.
 _SQLITE_SIDECARS = ("-wal", "-shm", "-journal")
+# APPLY: zanim przybycie plików obok bazy uznamy za powód zatrzymania biegu, dajemy CUDZEMU
+# połączeniu chwilę na zamknięcie (czyste zamknięcie kasuje `-wal`/`-shm`). Koszt płacimy
+# WYŁĄCZNIE wtedy, gdy coś przybyło — normalny bieg nie czeka ani milisekundy.
+SIDECAR_SETTLE_SECONDS = 1.0
+SIDECAR_SETTLE_PROBES = 5
 
 
 def _sidecars_present(db_path: str) -> set[str]:
     return {db_path + suf for suf in _SQLITE_SIDECARS if os.path.exists(db_path + suf)}
 
 
-def _assert_no_sidecars_created(db_path: str, before: set[str], where: str) -> None:
-    """Twardy dowód granicy: po dotknięciu bazy obok ŹRÓDŁA nie przybył żaden plik.
+def _sidecars_open_by_this_process(db_path: str) -> set[str]:
+    """JEDYNY dowód WŁASNOŚCI pliku towarzyszącego: czy trzyma go NASZ deskryptor.
 
-    Prewencja (immutable / kopia) jest pierwsza, ta asercja jest bezpiecznikiem: gdyby
-    ktoś kiedyś wrócił do `mode=ro`, naruszenie wyjdzie GŁOŚNO (fail-closed), zamiast
-    cicho zaśmiecić żywy korzeń."""
-    created = _sidecars_present(db_path) - before
-    if created:
-        raise RuntimeError(
-            f"OD7-SQLITE-SIDECAR: {where} utworzyło pliki obok żywej bazy: "
-            f"{sorted(os.path.basename(p) for p in created)} — to zapis do skanowanego "
-            "korzenia (fail-closed)")
+    Sama obecność `-wal`/`-shm` obok bazy nie mówi NIC o tym, kto je stworzył — baza w trybie
+    WAL (taki jest żywy `events.db`) materializuje je przy KAŻDYM cudzym połączeniu i kasuje
+    przy jego zamknięciu, więc zbiór nazw obok bazy zmienia się bez naszego udziału. To, co
+    leży w NASZEJ tablicy deskryptorów, nie zależy od nikogo poza nami — i tylko na tym wolno
+    oprzeć zarzut „to narzędzie zapisało do skanowanego korzenia".
+
+    Zmierzone (`/proc/self/fd`, baza WAL domknięta czysto): `mode=ro` (regres) trzyma `-wal`
+    i `-shm` otwarte przez cały czas życia połączenia i ZOSTAWIA je po zamknięciu; kanoniczne
+    `immutable=1` nie otwiera żadnego; pliki cudzego procesu nie pojawiają się w naszej
+    tablicy nigdy. Wywoływać PRZED `close()` — po zamknięciu dowód znika."""
+    raw = {db_path + suf for suf in _SQLITE_SIDECARS}
+    real = {os.path.realpath(db_path) + suf for suf in _SQLITE_SIDECARS}
+    out: set[str] = set()
+    try:
+        fds = os.listdir("/proc/self/fd")
+    except OSError:                     # brak /proc = brak dowodu własności (patrz niżej)
+        return out
+    for fd in fds:
+        try:
+            target = os.readlink(os.path.join("/proc/self/fd", fd))
+        except OSError:                 # deskryptor zamknięty w trakcie skanu
+            continue
+        if target in raw or target in real or os.path.realpath(target) in real:
+            out.add(os.path.basename(target))
+    return out
+
+
+def _sidecar_arrival(db_path: str, before: set[str], where: str,
+                     ours_open: set[str] | frozenset = frozenset()) -> dict | None:
+    """JEDYNY właściciel odpowiedzi „co znaczy przybycie `-wal`/`-shm`/`-journal` obok bazy".
+
+    Różnica ZBIORU NAZW przed/po jest obserwacją katalogu WSPÓŁDZIELONEGO, więc sama w sobie
+    NIE jest dowodem naszego zapisu (delta-blind #3, F1: cudzy czytelnik podłączający się co
+    20 ms generował przejścia brak→obecny w 46/200 prób BEZ udziału narzędzia). Dowodem
+    własności jest wyłącznie `_sidecars_open_by_this_process`; brak dowodu = nie oskarżamy.
+
+    Ta funkcja tylko OPISUJE fakt i mówi, czyj jest — jak zareagować, decyduje ścieżka:
+    REPORT robi wpis w `errors[]` (raport musi powstać zawsze), APPLY zatrzymuje bieg."""
+    arrived = {os.path.basename(p) for p in (_sidecars_present(db_path) - before)}
+    if not arrived:
+        return None
+    ours = sorted(arrived & set(ours_open))
+    names = sorted(arrived)
+    if ours:
+        msg = (f"OD7-SQLITE-SIDECAR: {where} — obok żywej bazy przybyły pliki {names}, "
+               f"a NASZ deskryptor trzymał otwarte {ours}: to zapis TEGO narzędzia do "
+               "skanowanego korzenia (regres trybu połączenia — kanonem jest immutable=1)")
+    else:
+        msg = (f"OD7-SQLITE-SIDECAR: {where} — obok żywej bazy przybyły pliki {names} "
+               "w trakcie naszego biegu, ale ŻADNEGO nie trzymał nasz deskryptor, a nasze "
+               "połączenie (immutable=1) ich nie tworzy: utworzył je INNY proces korzystający "
+               "z tej bazy (WAL materializuje je przy każdym połączeniu i kasuje przy jego "
+               "zamknięciu)")
+    return {"arrived": names, "ours": ours, "by_us": bool(ours), "message": msg}
+
+
+def _note_sidecar_arrival(db_path: str, before: set[str], where: str,
+                          ours_open: set[str], errors: list, out: dict) -> None:
+    """REPORT: przybycie plików obok bazy to FAKT DO RAPORTU, nigdy koniec biegu.
+
+    Wyjątek na tej ścieżce zabijał CAŁY raport (zapis `--out`/`--text-out` następuje dopiero
+    po pętli akcji), robił to LOSOWO (9/40 biegów przy jednym cudzym czytelniku) i przy okazji
+    FAŁSZYWIE oskarżał narzędzie o zapis do żywego korzenia. Liczby policzone przez
+    `immutable=1` pozostają prawdziwe (starsze), więc raport powstaje — z jawnym wpisem
+    w `errors[]` i exit 3. Dowiedziony zapis WŁASNY też idzie tą drogą: jest opisany ostrzej
+    w treści komunikatu, ale nie kosztuje ownera raportu."""
+    arrival = _sidecar_arrival(db_path, before, where, ours_open)
+    if arrival is None:
+        return
+    out["sidecars_arrived"] = arrival["arrived"]
+    out["sidecars_arrived_by_us"] = arrival["by_us"]
+    errors.append({"where": db_path, "error": arrival["message"]})
+
+
+def _fail_closed_on_sidecar_arrival(db_path: str, before: set[str], where: str) -> None:
+    """APPLY: przybycie plików obok bazy zatrzymuje bieg — ale komunikat przestaje kłamać.
+
+    Powodem zatrzymania NIE jest już „narzędzie zapisało do żywego korzenia" (`sqlite_snapshot`
+    źródła w ogóle nie otwiera, więc nie mogło ich utworzyć), tylko: obok kopiowanej bazy ktoś
+    właśnie pracuje, a kopia mogła powstać w połowie cudzej transakcji. Bieg APPLY jest
+    nadzorowany i wznawialny (idempotencja przez manifest), więc odmowa jest tańsza niż
+    archiwum ze zerwanej kopii — dlatego twardy błąd tu ZOSTAJE (inaczej niż w REPORCIE).
+
+    RETRY jest świadomy: czyste zamknięcie cudzego połączenia kasuje `-wal`/`-shm`, więc
+    najpierw dajemy mu `SIDECAR_SETTLE_SECONDS`; jeśli pliki znikną, przybycie było cudze
+    i przejściowe, a bieg leci dalej (to usuwa fałszywe przerwania zmierzone przez recenzenta
+    #3: 6/25 wywołań). Dowiedziony zapis WŁASNY (deskryptor) przerywa bieg NATYCHMIAST, bez
+    czekania — bo to realne naruszenie granicy, a nie cudzy ruch."""
+    arrival = _sidecar_arrival(db_path, before, where,
+                               _sidecars_open_by_this_process(db_path))
+    if arrival is None:
+        return
+    if not arrival["by_us"]:
+        for _ in range(SIDECAR_SETTLE_PROBES):
+            time.sleep(SIDECAR_SETTLE_SECONDS / SIDECAR_SETTLE_PROBES)
+            arrival = _sidecar_arrival(db_path, before, where)
+            if arrival is None:
+                return
+    raise RuntimeError(arrival["message"] + " — bieg APPLY zatrzymany (fail-closed)")
 
 
 def _sqlite_journal_state(db_path: str) -> dict:
@@ -801,7 +901,7 @@ def sqlite_snapshot(src_db: str, dst: str) -> dict:
             if os.path.exists(src_db + suf):
                 GATE.check(work_db + suf)
                 shutil.copyfile(src_db + suf, work_db + suf)
-        _assert_no_sidecars_created(src_db, src_before, "sqlite_snapshot (kopia źródła)")
+        _fail_closed_on_sidecar_arrival(src_db, src_before, "sqlite_snapshot (kopia źródła)")
 
         conn = sqlite3.connect(work_db)                  # 2. otwieramy KOPIĘ, nie oryginał
         try:
@@ -827,7 +927,7 @@ def sqlite_snapshot(src_db: str, dst: str) -> dict:
         for path in (work_db, tmp_db):
             for suf in ("",) + _SQLITE_SIDECARS:
                 _rm_quiet(path + suf)
-        _assert_no_sidecars_created(src_db, src_before, "sqlite_snapshot")
+        _fail_closed_on_sidecar_arrival(src_db, src_before, "sqlite_snapshot")
 
 
 def compress_ratio_estimate(path: str, size: int) -> float:
@@ -1559,6 +1659,7 @@ def sqlite_age_stats(db_path: str, rule: dict, pol: dict, now: datetime, errors:
     table, ts_col = spec.get("table"), spec.get("ts_column")
     out: dict = {"db": db_path, "table": table, "ts_column": ts_col, "read_mode": "immutable"}
     sidecars_before = _sidecars_present(db_path)
+    ours_open: set[str] = set()
     journals = _sqlite_journal_state(db_path)
     wal_pending = journals["wal_pending"]
     out["wal_pending"] = wal_pending
@@ -1572,8 +1673,8 @@ def sqlite_age_stats(db_path: str, rule: dict, pol: dict, now: datetime, errors:
                         "FAŁSZYWE — nie są publikowane (rows_total=None). Pełny, spójny obraz daje "
                         "SQLITE_SNAPSHOT (kopia bazy z dziennikiem + odzyskanie w archiwum)")
         errors.append({"where": db_path, "error": "sqlite stats: " + out["_note"]})
-        _assert_no_sidecars_created(db_path, sidecars_before,
-                                    "sqlite_age_stats (dziennik rollback)")
+        _note_sidecar_arrival(db_path, sidecars_before, "sqlite_age_stats (dziennik rollback)",
+                              ours_open, errors, out)
         return out
     if wal_pending:
         out["_note"] = ("baza ma niescheckpointowany -wal; odczyt immutable widzi tylko plik "
@@ -1584,7 +1685,8 @@ def sqlite_age_stats(db_path: str, rule: dict, pol: dict, now: datetime, errors:
         conn = sqlite_connect_readonly(db_path)
     except sqlite3.Error as exc:
         errors.append({"where": db_path, "error": f"sqlite open: {exc}"})
-        _assert_no_sidecars_created(db_path, sidecars_before, "sqlite_age_stats (open)")
+        _note_sidecar_arrival(db_path, sidecars_before, "sqlite_age_stats (open)",
+                              _sidecars_open_by_this_process(db_path), errors, out)
         return {**out, "error": str(exc)}
     try:
         cur = conn.cursor()
@@ -1604,8 +1706,12 @@ def sqlite_age_stats(db_path: str, rule: dict, pol: dict, now: datetime, errors:
         errors.append({"where": db_path, "error": f"sqlite query: {exc}"})
         out["error"] = str(exc)
     finally:
+        # dowód własności zbieramy PRZED close() — po zamknięciu deskryptory znikają,
+        # a wraz z nimi jedyny sygnał odróżniający NASZ zapis od cudzego ruchu
+        ours_open |= _sidecars_open_by_this_process(db_path)
         conn.close()
-        _assert_no_sidecars_created(db_path, sidecars_before, "sqlite_age_stats")
+        _note_sidecar_arrival(db_path, sidecars_before, "sqlite_age_stats",
+                              ours_open, errors, out)
     return out
 
 
