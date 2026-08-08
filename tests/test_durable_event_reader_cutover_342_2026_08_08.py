@@ -155,9 +155,38 @@ def _observation() -> dict:
     }
 
 
-def _setup_committed_cutover(tmp_path, monkeypatch) -> None:
-    from tests.test_rutcom_committed_authority_491578 import _isolate_durable_bus
+def _isolate_durable_bus(tmp_path, monkeypatch) -> None:
+    from dispatch_v2 import lifecycle_downstream
 
+    events_db = tmp_path / "events.db"
+    with sqlite3.connect(events_db) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE events (
+                event_id TEXT PRIMARY KEY,
+                event_type TEXT NOT NULL,
+                order_id TEXT,
+                courier_id TEXT,
+                payload TEXT,
+                created_at TEXT NOT NULL,
+                processed_at TEXT,
+                status TEXT DEFAULT 'pending'
+            );
+            CREATE INDEX idx_events_status ON events(status);
+            CREATE TABLE processed_events (
+                event_id TEXT PRIMARY KEY,
+                processed_at TEXT NOT NULL
+            );
+            """
+        )
+    monkeypatch.setattr(EVENT_BUS, "_db_path", lambda: str(events_db))
+    monkeypatch.setattr(EVENT_BUS, "_audit_log_initialized", False)
+    monkeypatch.setattr(EVENT_BUS, "_state_apply_outbox_initialized", False)
+    monkeypatch.setattr(EVENT_BUS, "_state_apply_outbox_db_path", None)
+    monkeypatch.setattr(lifecycle_downstream, "apply", lambda _event: None)
+
+
+def _setup_committed_cutover(tmp_path, monkeypatch) -> None:
     _isolate_durable_bus(tmp_path, monkeypatch)
     state_path = tmp_path / "orders_state.json"
     state_path.write_text("{}", encoding="utf-8")
