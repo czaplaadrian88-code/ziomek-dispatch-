@@ -1,6 +1,6 @@
 {
-  "base_sha": "5d5e96e89beff95d0c2659f5177bbed8ec791f22",
-  "manifest_version": 52,
+  "base_sha": "ee6e8b0511b123a2240eb26e74c06e053b8e4631",
+  "manifest_version": 53,
   "nodeids": [
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix1_kurier_ids_load_fail_logs_error_and_dedups",
     "tests/test_a1_silent_killers_cross_codebase.py::test_fix2_bag_not_stale_dedup_same_input",
@@ -2547,6 +2547,12 @@
     "tests/test_drive_speed_overshoot_tz.py::test_summer_parity_zoneinfo_equals_fixed_offset",
     "tests/test_drive_speed_overshoot_tz.py::test_tool_uses_zoneinfo",
     "tests/test_drive_speed_overshoot_tz.py::test_winter_bias_zoneinfo_and_mutation",
+    "tests/test_durable_event_reader_cutover_342_2026_08_08.py::test_mutation_removing_legacy_reader_reproduces_cutover_loss",
+    "tests/test_durable_event_reader_cutover_342_2026_08_08.py::test_reader_first_accepts_legacy_and_current_exact_shapes",
+    "tests/test_durable_event_reader_cutover_342_2026_08_08.py::test_reader_first_current_shape_requires_nonempty_text_fingerprint",
+    "tests/test_durable_event_reader_cutover_342_2026_08_08.py::test_reader_first_full_drain_applies_rows_from_both_writers[current]",
+    "tests/test_durable_event_reader_cutover_342_2026_08_08.py::test_reader_first_full_drain_applies_rows_from_both_writers[legacy]",
+    "tests/test_durable_event_reader_cutover_342_2026_08_08.py::test_reader_first_shape_registry_is_closed_and_exact",
     "tests/test_e7_bugab_flip_pack.py::test_bug_a_shadow_computed_before_flag_gate",
     "tests/test_e7_bugab_flip_pack.py::test_bug_b_shadow_computed_before_flag_gate_and_extreme_marker",
     "tests/test_e7_bugab_flip_pack.py::test_decision_flag_flags_json_wins",
@@ -8040,7 +8046,7 @@
     "tests/test_zombie01_pickup_guard.py::test_picked_up_recent_kept",
     "tests/test_zombie01_pickup_guard.py::test_zombie_assigned_with_stale_pickup_filtered"
   ],
-  "nodeids_sha256": "927985867b632ca594dae2975cf7899a581965ef06c41ee6a16d09a2ddc10c48",
+  "nodeids_sha256": "a3efb9b07b759f38d956d6d072983111118af895586b6c42751286fabfc82616",
   "outcome_contracts": {
     "tests/test_canon_static_check_a1.py::test_defer_completion_guard_armed_when_defer_exists": [
       "skipped"
@@ -8163,8 +8169,8 @@
       "skipped"
     ]
   },
-  "owner": "CTO-fable-341",
-  "reason": "re-seed po merge fix pool_feasible (+6) i izolacji stanu hosta w tescie agregatora (+1)",
+  "owner": "codex-main-342",
+  "reason": "reader-first durable envelope cutover; 4 RED baseline, full legacy/current drain",
   "schema_version": 1,
-  "updated_at_utc": "2026-08-05T17:38:15+00:00"
+  "updated_at_utc": "2026-08-08T09:24:28+00:00"
 }
