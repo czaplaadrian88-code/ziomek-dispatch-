@@ -42,6 +42,11 @@ COMMITTED_PICKUP_AUTHORITY_FLAGS = (
 )
 COMMITTED_PICKUP_EVENT_ID_MARKER = "_PICKUP_TIME_UPDATED_COMMITTED_"
 COMMITTED_TIME_POLICY_SNAPSHOT_FIELD = "committed_time_policy_snapshot"
+# Odcisk payloadu ZRODLOWEGO dopisywany przez durable bridge do kazdej koperty
+# (``durable_event_apply``). Nazwa mieszka TUTAJ, razem z pozostalymi polami
+# transportowymi, bo to ten modul zamyka zbior dozwolonych kluczy koperty
+# (``_DURABLE_EVENT_KEYS``) — most tylko ja importuje.
+SOURCE_PAYLOAD_FINGERPRINT_FIELD = "source_payload_fingerprint"
 AUTHORITY_PROOF_SCHEMA = "committed_pickup_authority.v1"
 TIME_EVENT_CAS_SCHEMA = "time_update_cas.v1"
 TIME_EVENT_CAS_SCHEMA_FIELD = "time_event_cas_schema"
@@ -95,7 +100,38 @@ _DURABLE_EVENT_KEYS = _SEMANTIC_EVENT_KEYS | frozenset(
         "czasowka_reclaim_shadow_authorized",
         "czasowka_reclaim_live_authorized",
         COMMITTED_TIME_POLICY_SNAPSHOT_FIELD,
+        # Odcisk payloadu ZRODLOWEGO jest czescia tozsamosci durable eventu
+        # Bez niego dwie obserwacje rozniace sie wylacznie deklarowanym czasem
+        # dostawaly jedna tozsamosc, a rozjazd wychodzil
+        # jako „event_id collision", czyli BRAK zdarzenia). Most dopisuje go do
+        # KAZDEJ koperty, wiec proof musi go znac; jego wartosc jest objeta
+        # atestacja tak samo jak markery.
+        SOURCE_PAYLOAD_FINGERPRINT_FIELD,
     }
+)
+# Wiersz outboxu utrwalony przed wprowadzeniem odcisku nosi kopertę o jeden
+# klucz krótszą i własną, poprawną atestację policzoną z tej właśnie koperty.
+# Deploy trafia w taki wiersz, gdy podczas przełączenia kolejka ma cokolwiek
+# `pending`. Odrzucenie takiej koperty kończy się `superseded` TERMINALNIE, bo
+# ponowna emisja tej samej obserwacji WZNAWIA ten sam wiersz (ten sam zamiar) —
+# czyli committed czas czasówki nie ma już żadnej drogi do stanu.
+#
+# Dlatego prawomocnych kształtów koperty transportowej jest DWA i jest to
+# ZAMKNIĘTA lista porównywana nadal przez RÓWNOŚĆ, nigdy przez zawieranie:
+# równość blokuje jednocześnie doklejenie pola do koperty i wycięcie z niej
+# pola przy poprawnej atestacji. Nowy kształt musi dopisać się TUTAJ (a test
+# przypina długość tej listy, więc nie da się jej powiększyć po cichu).
+#
+# Usunięcie kształtu legacy wymaga osobnej bramki długu oraz mechanicznego
+# dowodu, że w `state_apply_outbox` nie istnieje już żaden nie-terminalny
+# wiersz utrwalony przez starego writera. Do tego czasu czytnik pozostaje
+# addytywny; sam upływ czasu nie jest dowodem bezpiecznej emerytury kontraktu.
+_LEGACY_DURABLE_EVENT_KEYS = _DURABLE_EVENT_KEYS - frozenset(
+    {SOURCE_PAYLOAD_FINGERPRINT_FIELD}
+)
+_ACCEPTED_DURABLE_EVENT_SHAPES = (
+    _DURABLE_EVENT_KEYS,
+    _LEGACY_DURABLE_EVENT_KEYS,
 )
 _AUTHORITY_PAYLOAD_EXACT_KEYS = frozenset(
     {
@@ -2113,15 +2149,30 @@ def _event_envelope_matches(
     ``event_id`` i dwoma markerami transportowymi. Są akceptowane wyłącznie,
     gdy exact rekord SQLite został już niezależnie zweryfikowany przez caller.
     Żaden alias lifecycle ani dowolne pole top-level nie może zostać przemycone.
+
+    Prawomocnych kształtów koperty transportowej jest DWA
+    (``_ACCEPTED_DURABLE_EVENT_SHAPES``: z odciskiem payloadu źródłowego i bez
+    niego — wiersz zastany od starego writera). Porównanie pozostaje
+    RÓWNOŚCIĄ wobec tej zamkniętej listy; zawieranie wpuściłoby zarówno kopertę
+    z doklejonym polem, jak i kopertę z wyciętym markerem polityki.
     """
     if set(event) == set(expected_event):
         return dict(event) == dict(expected_event)
-    if not durable_attestation_verified or set(event) != _DURABLE_EVENT_KEYS:
+    if not durable_attestation_verified or not any(
+        set(event) == shape for shape in _ACCEPTED_DURABLE_EVENT_SHAPES
+    ):
         return False
     if any(
         event.get(key) != expected_event.get(key)
         for key in _SEMANTIC_EVENT_KEYS
     ):
+        return False
+    if SOURCE_PAYLOAD_FINGERPRINT_FIELD in event and not (
+        isinstance(event.get(SOURCE_PAYLOAD_FINGERPRINT_FIELD), str)
+        and event.get(SOURCE_PAYLOAD_FINGERPRINT_FIELD)
+    ):
+        # Kształt z odciskiem musi nieść odcisk niepusty; kształt legacy nie ma
+        # tego klucza w ogóle (zbiór kluczy jest już związany wyżej).
         return False
     return bool(
         isinstance(event.get("event_id"), str)
